@@ -1,0 +1,476 @@
+"""
+Basic tests for loop.spec.md dual-loop implementation.
+
+Tests the core components: IdealState, Verifier, and phase nodes.
+"""
+
+import pytest
+from app.progenitor.state.ideal_state import (
+    IdealState,
+    IdealStateBuilder,
+    SuccessCriterion,
+    AntiCriterion,
+    QualityBar,
+    StopCondition,
+    CriterionType,
+)
+from app.progenitor.state.verifier import Verifier, VerificationReport
+
+
+class TestIdealState:
+    """Test ideal state models and builder."""
+
+    def test_ideal_state_creation(self):
+        """Test creating an ideal state."""
+        ideal_state = IdealState(
+            task_description="Test task",
+            success_criteria=[
+                SuccessCriterion(
+                    id="test_1",
+                    description="Test passes",
+                    criterion_type=CriterionType.FUNCTIONAL,
+                    rank=1,
+                    measurement="Run tests",
+                    target_score=0.8,
+                )
+            ],
+            stop_conditions=[
+                StopCondition(condition_type="min_score", threshold=0.8),
+                StopCondition(condition_type="max_iterations", threshold=5),
+            ],
+        )
+
+        assert ideal_state.task_description == "Test task"
+        assert len(ideal_state.success_criteria) == 1
+        assert len(ideal_state.stop_conditions) == 2
+        assert ideal_state.version == 1
+
+    def test_ideal_state_refinement(self):
+        """Test refining an ideal state."""
+        ideal_state = IdealState(
+            task_description="Test task",
+            success_criteria=[],
+        )
+
+        # Add criterion
+        ideal_state.add_success_criterion(
+            SuccessCriterion(
+                id="new_criterion",
+                description="New requirement",
+                criterion_type=CriterionType.QUALITY,
+                rank=1,
+                measurement="Check quality",
+                target_score=0.9,
+            )
+        )
+
+        assert len(ideal_state.success_criteria) == 1
+
+        # Refine
+        refined = ideal_state.refine({"task_description": "Updated task"})
+        assert refined.version == 2
+        assert refined.task_description == "Updated task"
+
+    def test_stop_conditions(self):
+        """Test stop condition checking."""
+        ideal_state = IdealState(
+            task_description="Test",
+            stop_conditions=[
+                StopCondition(condition_type="min_score", threshold=0.8),
+                StopCondition(condition_type="max_iterations", threshold=3),
+            ],
+        )
+
+        # Should not stop at iteration 1 with low score
+        should_stop, reasons = ideal_state.check_stop_conditions(
+            current_score=0.5,
+            iteration=1,
+            elapsed_time=10,
+            tool_calls=5,
+        )
+        assert not should_stop
+
+        # Should stop when score threshold met
+        should_stop, reasons = ideal_state.check_stop_conditions(
+            current_score=0.85,
+            iteration=1,
+            elapsed_time=10,
+            tool_calls=5,
+        )
+        assert should_stop
+        assert "score" in reasons[0].lower()
+
+        # Should stop at max iterations
+        should_stop, reasons = ideal_state.check_stop_conditions(
+            current_score=0.5,
+            iteration=3,
+            elapsed_time=10,
+            tool_calls=5,
+        )
+        assert should_stop
+        assert "iteration" in reasons[0].lower()
+
+
+class TestVerifier:
+    """Test verification system."""
+
+    @pytest.mark.asyncio
+    async def test_basic_verification(self):
+        """Test basic verification without LLM."""
+        verifier = Verifier()
+
+        ideal_state = IdealState(
+            task_description="Test task",
+            success_criteria=[
+                SuccessCriterion(
+                    id="output_exists",
+                    description="Output exists",
+                    criterion_type=CriterionType.FUNCTIONAL,
+                    rank=1,
+                    measurement="Check output is not empty",
+                    target_score=0.5,
+                )
+            ],
+        )
+
+        output = "Some test output"
+        context = {"completed": True}
+
+        report = await verifier.verify(
+            ideal_state=ideal_state,
+            output=output,
+            iteration=1,
+            context=context,
+        )
+
+        assert isinstance(report, VerificationReport)
+        assert report.iteration == 1
+        assert len(report.criterion_scores) == 1
+        assert report.overall_score > 0
+
+    @pytest.mark.asyncio
+    async def test_anti_criterion_violations(self):
+        """Test anti-criterion checking."""
+        verifier = Verifier()
+
+        ideal_state = IdealState(
+            task_description="Test",
+            success_criteria=[
+                SuccessCriterion(
+                    id="works",
+                    description="Works",
+                    criterion_type=CriterionType.FUNCTIONAL,
+                    rank=1,
+                    measurement="Heuristic",
+                    target_score=0.5,
+                )
+            ],
+            anti_criteria=[
+                AntiCriterion(
+                    id="no_verbose",
+                    description="Avoid verbose output",
+                    severity=1.0,
+                    detection="Check length",
+                )
+            ],
+        )
+
+        # Very long output should trigger violation
+        output = "x" * 6000
+        context = {}
+
+        report = await verifier.verify(
+            ideal_state=ideal_state,
+            output=output,
+            iteration=1,
+            context=context,
+        )
+
+        assert len(report.anti_criterion_violations) > 0
+        assert report.overall_score < 1.0  # Penalty applied
+
+    def test_verification_report_summary(self):
+        """Test compact verification summary."""
+        report = VerificationReport(
+            iteration=1,
+            timestamp="2025-01-20T12:00:00Z",
+            criterion_scores=[],
+            overall_score=0.85,
+            passed=True,
+            gaps=[],
+            next_actions=[],
+            summary="Test passed",
+        )
+
+        summary = report.to_compact_summary()
+        assert "0.85" in summary
+        assert "PASS" in summary
+
+
+class TestIdealStateBuilder:
+    """Test ideal state builder."""
+
+    @pytest.mark.asyncio
+    async def test_build_default_ideal_state(self):
+        """Test building a default ideal state without LLM."""
+        builder = IdealStateBuilder(llm_client=None)
+
+        ideal_state = builder._create_default_ideal_state("Build a Python script")
+
+        assert ideal_state.task_description == "Build a Python script"
+        assert len(ideal_state.success_criteria) > 0
+        assert len(ideal_state.stop_conditions) > 0
+
+
+class TestArtefactTracking:
+    """Test artefact tracking per loop.spec.md."""
+
+    def test_state_has_artefact_fields(self):
+        """Test that ProgenitorState has artefact tracking fields."""
+        from app.progenitor.state.models import ProgenitorState
+        import typing
+
+        # Check TypedDict has required fields
+        hints = typing.get_type_hints(ProgenitorState)
+        assert "artefacts" in hints
+        assert "best_artefact" in hints
+        assert "best_artefact_score" in hints
+        assert "task_id" in hints
+        assert "verification_reports" in hints
+
+    def test_run_id_generation(self):
+        """Test run_id generation utility."""
+        from app.progenitor.state.models import generate_run_id
+
+        run_id = generate_run_id()
+        assert run_id.startswith("run_")
+        assert len(run_id) == 16  # "run_" + 12 hex chars
+
+        # Test uniqueness
+        run_id2 = generate_run_id()
+        assert run_id != run_id2
+
+
+class TestVerificationSummary:
+    """Test verification summary in response per loop.spec.md."""
+
+    def test_compact_verification_summary_format(self):
+        """Test that verification report produces compact summary."""
+        report = VerificationReport(
+            iteration=3,
+            timestamp="2026-01-20T12:00:00Z",
+            criterion_scores=[],
+            anti_criterion_violations=[],
+            overall_score=0.75,
+            passed=False,
+            gaps=["Missing feature X", "Performance below target"],
+            next_actions=["Add feature X"],
+            summary="Partial success",
+        )
+
+        summary = report.to_compact_summary()
+        assert "0.75" in summary
+        assert "FAIL" in summary or "partial" in summary.lower()
+
+
+class TestPlanExperiment:
+    """Test PLAN phase experiment generation per loop.spec.md."""
+
+    def test_parse_experiment(self):
+        """Test experiment parsing from LLM response."""
+        from app.progenitor.nodes.planner import _parse_experiment
+
+        response = """
+EXPERIMENT: Add caching layer to reduce latency
+EXPECTED MEASURABLE OUTCOME: Response time drops below 100ms
+VERIFICATION METHOD: Run benchmark tests and measure p95 latency
+"""
+
+        result = _parse_experiment(response)
+
+        assert "caching" in result["experiment"].lower()
+        assert "100ms" in result["expected_outcome"]
+        assert "benchmark" in result["verification_method"].lower()
+
+    def test_select_best_approach_with_gaps(self):
+        """Test approach selection considers gaps."""
+        from app.progenitor.nodes.planner import _select_best_approach
+
+        approaches = [
+            {"name": "approach_1", "description": "Improve UI styling"},
+            {"name": "approach_2", "description": "Fix latency and performance issues"},
+        ]
+
+        # Verification with performance gap should select approach_2
+        last_verification = {
+            "gaps": ["Performance below target", "High latency"]
+        }
+
+        selected = _select_best_approach(approaches, last_verification)
+        assert selected["name"] == "approach_2"
+
+
+class TestExecutePhase:
+    """Test EXECUTE phase per loop.spec.md BUILD → EXECUTE → VERIFY flow."""
+
+    @pytest.mark.asyncio
+    async def test_execute_node_no_tools(self):
+        """Test execute node when no tools are pending."""
+        from app.progenitor.nodes import execute
+
+        # Mock tool registry
+        class MockRegistry:
+            def get_tool(self, name):
+                return None
+
+        node_fn = execute.create_node(MockRegistry())
+
+        state = {
+            "current_work_item": {"id": "test", "status": "pending"},
+            "last_iteration_output": {"result": "some output"},
+            "work_item_completed": True,
+        }
+
+        result = await node_fn(state)
+
+        assert result.get("execution_completed") is True
+        assert result.get("execution_result") is not None
+
+    @pytest.mark.asyncio
+    async def test_execute_node_with_pending_tools(self):
+        """Test execute node with pending tool calls."""
+        from app.progenitor.nodes import execute
+
+        # Mock tool registry
+        class MockRegistry:
+            def get_tool(self, name):
+                return None  # Tool not found
+
+        node_fn = execute.create_node(MockRegistry())
+
+        state = {
+            "current_work_item": {"id": "test", "status": "in_progress"},
+            "last_iteration_output": {"result": "build output"},
+            "work_item_completed": False,
+            "pending_tool_calls": [
+                {"tool": "unknown_tool", "arguments": {}},
+            ],
+        }
+
+        result = await node_fn(state)
+
+        assert result.get("execution_completed") is True
+        # Should report error for unknown tool
+        exec_result = result.get("last_iteration_output", {})
+        assert exec_result.get("all_succeeded") is False
+
+
+class TestIdealStateRefinement:
+    """Test ideal state refinement with anti-criteria from violations."""
+
+    def test_extract_anti_criteria_from_violations(self):
+        """Test that violations become anti-criteria."""
+        from app.progenitor.state.ideal_state import IdealStateBuilder
+
+        # Create builder without LLM (won't call generate)
+        builder = IdealStateBuilder(llm_client=None)
+
+        violations = [
+            {"description": "Output was too verbose", "severity": 0.8},
+            {"description": "Response time exceeded limit", "severity": 1.0},
+        ]
+
+        existing_ids = set()
+
+        new_anti = builder._extract_anti_criteria_from_violations(violations, existing_ids)
+
+        assert len(new_anti) == 2
+        assert "verbose" in new_anti[0].description.lower()
+        assert "response time" in new_anti[1].description.lower()
+
+    def test_ideal_state_add_anti_criterion(self):
+        """Test adding anti-criteria to ideal state."""
+        ideal_state = IdealState(
+            task_description="Test",
+            anti_criteria=[],
+        )
+
+        ideal_state.add_anti_criterion(AntiCriterion(
+            id="anti_test",
+            description="Avoid fluff",
+            severity=1.0,
+            detection="Check for redundancy",
+        ))
+
+        assert len(ideal_state.anti_criteria) == 1
+        assert ideal_state.anti_criteria[0].id == "anti_test"
+
+
+class TestLoopSpecConformance:
+    """Tests ensuring implementation matches loop.spec.md exactly."""
+
+    def test_inner_loop_phases_exist(self):
+        """Test all inner loop phases are implemented."""
+        from app.progenitor.nodes import (
+            observe, think, execute, verify_loop, learn
+        )
+        from app.progenitor.nodes import planner  # PLAN phase
+
+        # All phases should have create_node function
+        assert hasattr(observe, "create_node")
+        assert hasattr(think, "create_node")
+        assert hasattr(planner, "create_node")  # PLAN
+        assert hasattr(execute, "create_node")  # EXECUTE
+        assert hasattr(verify_loop, "create_node")  # VERIFY
+        assert hasattr(learn, "create_node")
+
+    def test_graph_has_execute_node(self):
+        """Test that dual loop graph includes EXECUTE node."""
+        from app.progenitor.graph_dual_loop import create_progenitor_graph
+        # Just verify the import works - full graph creation needs mocks
+        assert callable(create_progenitor_graph)
+
+    def test_verification_report_has_required_fields(self):
+        """Test VerificationReport matches loop.spec.md contract."""
+        # Per spec: "Every iteration produces:
+        # - Score per criterion
+        # - Pass/fail summary
+        # - Evidence or heuristic notes
+        # - Gaps and next actions"
+
+        report = VerificationReport(
+            iteration=1,
+            timestamp="2026-01-20T12:00:00Z",
+            criterion_scores=[],  # Score per criterion
+            overall_score=0.8,
+            passed=True,  # Pass/fail summary
+            gaps=["Gap 1"],  # Gaps
+            next_actions=["Action 1"],  # Next actions
+            summary="Test",  # Evidence/notes
+        )
+
+        assert hasattr(report, "criterion_scores")
+        assert hasattr(report, "passed")
+        assert hasattr(report, "gaps")
+        assert hasattr(report, "next_actions")
+
+    def test_artefact_tracking_fields(self):
+        """Test Task State has artefact tracking per loop.spec.md."""
+        # Per spec Task State: "Artefacts, Verification reports, Lessons learned"
+        from app.progenitor.state.models import ProgenitorState
+
+        # ProgenitorState is a TypedDict, check it allows these fields
+        state: ProgenitorState = {
+            "artefacts": [],
+            "verification_reports": [],
+            "lessons_learned": [],
+            "best_artefact": None,
+            "best_artefact_score": 0.0,
+        }
+
+        assert "artefacts" in state
+        assert "lessons_learned" in state
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
