@@ -64,11 +64,19 @@ def create_node(
             if last_verification:
                 logger.info(f"Refining ideal state (iteration {iteration})")
 
+                # Handle both dict and VerificationReport objects
+                if hasattr(last_verification, "model_dump"):
+                    verification_dict = last_verification.model_dump()
+                elif isinstance(last_verification, dict):
+                    verification_dict = last_verification
+                else:
+                    verification_dict = {"gaps": [], "anti_criterion_violations": []}
+
                 iteration_results = {
-                    "verification": last_verification,
+                    "verification": verification_dict,
                     "output": last_output,
-                    "gaps": last_verification.get("gaps", []),
-                    "violations": last_verification.get("anti_criterion_violations", []),
+                    "gaps": verification_dict.get("gaps", []),
+                    "violations": verification_dict.get("anti_criterion_violations", []),
                 }
 
                 ideal_state = await ideal_state_builder.refine_from_iteration(

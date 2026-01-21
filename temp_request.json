@@ -1,0 +1,10 @@
+{
+  "stream": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Build a hello world A2A agent under app/agents directory. It should be a basic agent that responds with hello world."
+    }
+  ],
+  "model": "progenitor-v1"
+}

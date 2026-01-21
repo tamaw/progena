@@ -1,5 +1,5 @@
 {
-  "command": "copilot",
+  "command": "c:\\Users\\me\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli\\copilot.bat",
   "default_flags": ["--yolo"],
   "timeout": 300,
   "model": "claude-haiku-4.5",

@@ -75,7 +75,6 @@ class ProgenitorLoop:
         state["run_id"] = run_id  # New run ID for this session
 
         logger.info(f"Starting perpetual loop (run_id: {run_id})")
-        print(f"Starting perpetual loop (run_id: {run_id})")
 
         while self.running:
             try:
@@ -99,6 +98,7 @@ class ProgenitorLoop:
                     ):
                         # Process graph events
                         for node_name, node_output in event.items():
+                            logger.info(f"GRAPH EVENT: node={node_name}, output_keys={list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)}")
                             if isinstance(node_output, dict):
                                 state.update(node_output)
 
@@ -141,13 +141,11 @@ class ProgenitorLoop:
                 break
             except Exception as e:
                 logger.error(f"Loop error: {e}", exc_info=True)
-                print(f"Loop error: {e}")
                 await asyncio.sleep(backoff)
 
         # Final checkpoint before shutdown
         await self._checkpoint_state(state)
         logger.info("Loop terminated")
-        print("Loop terminated")
 
     async def _get_input(self, timeout: float) -> Optional[str]:
         """Get user input with timeout."""
@@ -162,7 +160,7 @@ class ProgenitorLoop:
     async def _send_output(self, message: str) -> None:
         """Send output to the user."""
         await self._output_queue.put(message)
-        print(f"[Progenitor] {message}")
+        logger.info("Queued output message for client")
 
     async def _check_pending_work(self, state: dict[str, Any]) -> bool:
         """Check if there's pending work in backlog or schedule."""

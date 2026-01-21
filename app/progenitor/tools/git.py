@@ -5,6 +5,7 @@ One worktree per work item for isolated build operations.
 """
 
 import asyncio
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Optional, Any
 import uuid
 
 from ..runtime.time_utils import format_timestamp
+
+logger = logging.getLogger(__name__)
 
 
 class GitWorktreeManager:
@@ -39,10 +42,14 @@ class GitWorktreeManager:
             branch_name = f"progenitor/{work_item_id}/{uuid.uuid4().hex[:8]}"
 
         # Create the worktree with a new branch
-        await self._run_git(
+        result = await self._run_git(
             ["worktree", "add", "-b", branch_name, str(worktree_path)],
             cwd=self.repo_path
         )
+
+        if result["returncode"] != 0:
+            logger.error(f"Failed to create worktree: {result['stderr']}")
+            raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
 
         return worktree_path
 
@@ -178,19 +185,44 @@ class GitWorktreeManager:
         self,
         args: list[str],
         cwd: Path,
+        timeout: float = 30.0,
     ) -> dict[str, Any]:
-        """Run a git command."""
-        process = await asyncio.create_subprocess_exec(
-            "git", *args,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        """Run a git command with timeout."""
+        logger.info(f"GIT: Running git {' '.join(args)} in {cwd}")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git", *args,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
-        stdout, stderr = await process.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout
+                )
+                logger.info(f"GIT: Command completed with code {process.returncode}")
+                if stderr:
+                    logger.warning(f"GIT stderr: {stderr.decode()[:200]}")
+            except asyncio.TimeoutError:
+                logger.error(f"GIT: Command timed out after {timeout}s")
+                process.kill()
+                return {
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": f"Command timed out after {timeout} seconds",
+                }
 
-        return {
-            "returncode": process.returncode,
-            "stdout": stdout.decode() if stdout else "",
-            "stderr": stderr.decode() if stderr else "",
-        }
+            return {
+                "returncode": process.returncode,
+                "stdout": stdout.decode() if stdout else "",
+                "stderr": stderr.decode() if stderr else "",
+            }
+        except Exception as e:
+            logger.error(f"GIT: Exception running command: {e}")
+            return {
+                "returncode": -1,
+                "stdout": "",
+                "stderr": str(e),
+            }

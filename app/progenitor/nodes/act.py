@@ -213,24 +213,36 @@ async def _execute_build(
     worktrees_dir: Path,
 ) -> tuple[dict | None, str | None]:
     """Execute a build operation via Copilot CLI."""
+    logger.info(f"BUILD: Starting build for work item {work_item.id}")
     capabilities = work_item.context.get("capabilities", [])
 
+    # Get item_type value safely (might be enum or string)
+    item_type_value = work_item.item_type.value if hasattr(work_item.item_type, 'value') else str(work_item.item_type)
+    logger.info(f"BUILD: item_type={item_type_value}, capabilities={capabilities}")
+
     # Generate build spec
+    logger.info("BUILD: Generating build spec...")
     spec = await llm_client.generate_build_spec(
-        item_type=work_item.item_type.value,
+        item_type=item_type_value,
         description=work_item.description,
         capabilities=capabilities,
     )
+    logger.info(f"BUILD: spec generated, length={len(str(spec))}")
 
     # Generate prompt for Copilot
     prompt = llm_client.prompts.get_copilot_task_prompt(spec)
+    logger.info(f"BUILD: Generated copilot prompt, length={len(prompt)}")
 
     # Run Copilot
+    # If worktree_path is None, use the main project directory (parent of worktrees_dir)
+    working_dir = Path(work_item.worktree_path) if work_item.worktree_path else worktrees_dir.parent
+    logger.info(f"BUILD: Running copilot in {working_dir}")
     build_result = await copilot_cli.build(
         work_item_id=work_item.id,
-        worktree_path=Path(work_item.worktree_path) if work_item.worktree_path else worktrees_dir,
+        worktree_path=working_dir,
         prompt=prompt,
     )
+    logger.info(f"BUILD: Copilot completed, success={build_result.get('success')}")
 
     result = {"build_result": build_result, "spec": spec}
 

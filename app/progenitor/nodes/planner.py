@@ -2,6 +2,7 @@
 Planner Node - Generates work items for complex tasks.
 """
 
+import logging
 from datetime import datetime
 from typing import Callable, Coroutine, Any
 import uuid
@@ -14,6 +15,8 @@ from ..state.models import (
     DecisionAction,
 )
 from ..runtime.time_utils import utcnow_isoformat
+
+logger = logging.getLogger(__name__)
 
 
 def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
@@ -113,6 +116,31 @@ async def _plan_from_ideal_state(
     backlog = list(state.get("backlog", []))
     last_verification = state.get("last_verification_report")
 
+    # Get decision to determine work item type
+    decision = state.get("current_decision")
+    decision_action = None
+    if decision:
+        if hasattr(decision, "action"):
+            action = decision.action
+            decision_action = action.value if hasattr(action, 'value') else str(action)
+        elif isinstance(decision, dict):
+            action = decision.get("action", "answer_directly")
+            decision_action = action.value if hasattr(action, 'value') else str(action)
+
+    # Determine work item type based on decision action
+    if decision_action == "build_agent":
+        item_type = WorkItemType.BUILD_AGENT
+    elif decision_action == "build_mcp":
+        item_type = WorkItemType.BUILD_MCP
+    elif decision_action == "upgrade":
+        item_type = WorkItemType.UPGRADE
+    elif decision_action in ("call_agent", "delegate"):
+        item_type = WorkItemType.A2A_CALL
+    elif decision_action == "call_tool":
+        item_type = WorkItemType.MCP_CALL
+    else:
+        item_type = WorkItemType.DIRECT_ANSWER
+
     # Select best approach based on gaps (if any) or use first approach
     chosen_approach = _select_best_approach(approaches, last_verification)
 
@@ -122,7 +150,18 @@ async def _plan_from_ideal_state(
     # Extract key context for planning
     task_description = ideal_state_dict.get("task_description", "")
     success_criteria = ideal_state_dict.get("success_criteria", [])
-    gaps = last_verification.get("gaps", []) if last_verification else []
+
+    # Handle last_verification as either dict or VerificationReport
+    if last_verification:
+        if hasattr(last_verification, "model_dump"):
+            verif_dict = last_verification.model_dump()
+        elif isinstance(last_verification, dict):
+            verif_dict = last_verification
+        else:
+            verif_dict = {"gaps": []}
+        gaps = verif_dict.get("gaps", [])
+    else:
+        gaps = []
 
     try:
         # Generate experiment with expected measurable outcome
@@ -151,10 +190,10 @@ Define:
         # Parse experiment details
         experiment_details = _parse_experiment(response)
 
-        # Create work item with experiment context
+        # Create work item with experiment context and correct type
         work_item = WorkItem(
             id=str(uuid.uuid4()),
-            item_type=WorkItemType.DIRECT_ANSWER,
+            item_type=item_type,
             status=WorkItemStatus.PENDING,
             description=f"Experiment: {experiment_details.get('name', chosen_approach.get('name', 'approach'))}",
             context={
@@ -165,9 +204,12 @@ Define:
                 "verification_method": experiment_details.get("verification_method", "Score against criteria"),
                 "targeted_gaps": gaps[:3] if gaps else [],
                 "plan_output": response,
+                "capabilities": state.get("current_decision", {}).get("target_capabilities", []) if isinstance(state.get("current_decision"), dict) else [],
             },
         )
         backlog.append(work_item)
+        logger.info(f"PLANNER: Created work item id={work_item.id}, type={item_type}, status={work_item.status}")
+        logger.info(f"PLANNER: Backlog now has {len(backlog)} items")
 
         # Log planning with experiment details
         await state_manager.log_decision({
@@ -186,10 +228,10 @@ Define:
         }
 
     except Exception as e:
-        # Fallback - create simple experiment work item
+        # Fallback - create simple experiment work item with correct type
         work_item = WorkItem(
             id=str(uuid.uuid4()),
-            item_type=WorkItemType.DIRECT_ANSWER,
+            item_type=item_type,
             status=WorkItemStatus.PENDING,
             description=f"Execute approach: {chosen_approach.get('name', 'default')}",
             context={
@@ -197,6 +239,7 @@ Define:
                 "approach": chosen_approach,
                 "experiment": "Execute selected approach",
                 "expected_outcome": "Verification score improves",
+                "capabilities": state.get("current_decision", {}).get("target_capabilities", []) if isinstance(state.get("current_decision"), dict) else [],
             },
         )
         backlog.append(work_item)
@@ -218,8 +261,16 @@ def _select_best_approach(approaches: list[dict], last_verification) -> dict:
     if not last_verification:
         return approaches[0]
 
+    # Handle last_verification as either dict or VerificationReport
+    if hasattr(last_verification, "model_dump"):
+        verif_dict = last_verification.model_dump()
+    elif isinstance(last_verification, dict):
+        verif_dict = last_verification
+    else:
+        return approaches[0]
+
     # If there are gaps, prefer approaches that address them
-    gaps = last_verification.get("gaps", [])
+    gaps = verif_dict.get("gaps", [])
     if gaps:
         for approach in approaches:
             desc = approach.get("description", "").lower()
