@@ -66,7 +66,7 @@ venv.bak/
 # Project specific
 state/*.json
 !state/.gitkeep
-logs/*.jsonl
+logs/
 !logs/.gitkeep
 worktrees/*
 !worktrees/.gitkeep

@@ -9,6 +9,7 @@ The builder actuator for all build operations:
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 from datetime import datetime
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..runtime.time_utils import utcnow_isoformat
+
+logger = logging.getLogger(__name__)
 
 
 class CopilotCLI:
@@ -67,6 +70,8 @@ class CopilotCLI:
 
         # Resolve command
         cmd = self._build_command(prompt, target_path)
+        logger.info(f"COPILOT: Building command for work item {work_item_id}")
+        logger.info(f"COPILOT: cmd={cmd[:3]}... in {worktree_path}")
 
         # Log the invocation
         invocation_log = {
@@ -79,7 +84,9 @@ class CopilotCLI:
 
         try:
             # Run Copilot CLI
+            logger.info(f"COPILOT: Running command...")
             result = await self._run_command(cmd, cwd=worktree_path)
+            logger.info(f"COPILOT: Command completed with returncode={result['returncode']}")
 
             # Get git diff
             diff_result = await self._get_diff(worktree_path)

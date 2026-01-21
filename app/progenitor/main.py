@@ -6,6 +6,7 @@ Runs as a continuous LangGraph loop inside a Docker container.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import signal
@@ -34,6 +35,7 @@ class Progenitor:
     def __init__(self, config: Optional[ProgenitorConfig] = None):
         self.config = config or get_config(PROJECT_ROOT, CONFIG_DIR)
         self.running = False
+        self._shutdown_started = False
 
         # Use paths from configuration
         self.state_dir = self.config.storage.state_dir
@@ -49,6 +51,7 @@ class Progenitor:
         self.tool_registry = ToolRegistry(self.state_dir / "registry.json")
         self.graph = None
         self.loop_runner = None
+        self._background_tasks: list[asyncio.Task] = []
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -117,33 +120,108 @@ class Progenitor:
         On graceful shutdown, it persists state before exiting.
         """
         self.running = True
-        print("Progenitor starting...")
+
+        logger.info("Progenitor starting...")
 
         await self.initialize()
-        print("Progenitor initialized. Entering perpetual loop.")
+        logger.info("Progenitor initialized. Entering perpetual loop.")
+
+        loop_task = asyncio.create_task(self.loop_runner.run_forever())  # type: ignore[arg-type]
+        stdin_task = asyncio.create_task(self._stdin_listener())
+        output_task = asyncio.create_task(self._output_writer())
+        self._background_tasks = [loop_task, stdin_task, output_task]
 
         try:
-            await self.loop_runner.run_forever()  # type: ignore[union-attr]
+            done, pending = await asyncio.wait(
+                self._background_tasks,
+                return_when=asyncio.FIRST_EXCEPTION,
+            )
+
+            for task in pending:
+                task.cancel()
+
+            for task in done:
+                if exc := task.exception():
+                    raise exc
+
         except asyncio.CancelledError:
-            print("Progenitor loop cancelled.")
+            logger.info("Progenitor loop cancelled.")
             raise
         finally:
             await self.shutdown()
 
     async def shutdown(self) -> None:
         """Graceful shutdown."""
-        print("Progenitor shutting down...")
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        logger.info("Progenitor shutting down...")
         self.running = False
+
+        # Stop loop runner so the main loop exits promptly
+        if self.loop_runner:
+            self.loop_runner.stop()
+
+        # Cancel background tasks cleanly
+        for task in self._background_tasks:
+            if task.cancelled():
+                continue
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._background_tasks.clear()
 
         # Persist final state
         await self.state_manager.commit_state()
-        print("State persisted. Goodbye.")
+        logger.info("State persisted. Goodbye.")
+
+    async def _stdin_listener(self) -> None:
+        """Read user messages from stdin and enqueue them for processing."""
+        while not self._shutdown_started:
+            try:
+                line = await asyncio.to_thread(sys.stdin.readline)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.error(f"Stdin listener error: {exc}", exc_info=True)
+                await asyncio.sleep(0.1)
+                continue
+
+            if not line:
+                await asyncio.sleep(0.05)
+                continue
+
+            raw = line.strip()
+            if not raw:
+                continue
+
+            try:
+                payload = json.loads(raw)
+                content = payload.get("content") or payload.get("message")
+                if payload.get("type") == "user_message" and payload.get("content"):
+                    content = payload["content"]
+            except json.JSONDecodeError:
+                content = raw
+
+            if content:
+                await self.loop_runner.enqueue_input(str(content))  # type: ignore[union-attr]
+
+    async def _output_writer(self) -> None:
+        """Write assistant outputs to stdout as JSON lines for the client."""
+        while not self._shutdown_started:
+            message = await self.loop_runner.get_output(timeout=0.1)  # type: ignore[union-attr]
+            if not message:
+                continue
+
+            payload = {"type": "assistant_message", "content": message}
+            sys.stdout.write(json.dumps(payload) + "\n")
+            sys.stdout.flush()
 
 
 def setup_signal_handlers(progenitor: Progenitor) -> None:
     """Set up graceful shutdown handlers."""
     def handle_signal(signum, frame):
-        print(f"\nReceived signal {signum}. Initiating graceful shutdown...")
+        if progenitor._shutdown_started:
+            return
+        logger.info(f"Received signal {signum}. Initiating graceful shutdown...")
         progenitor.running = False
         # Create a new event loop for shutdown if needed
         try:
@@ -169,11 +247,9 @@ async def main() -> None:
     try:
         await progenitor.run()
     except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        logger.info("Interrupted by user.")
     except Exception as e:
-        print(f"Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"Fatal error: {e}")
     finally:
         await progenitor.shutdown()
 

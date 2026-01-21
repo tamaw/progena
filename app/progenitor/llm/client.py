@@ -148,12 +148,19 @@ class LLMClient:
         full_messages.extend(messages)
 
         async def _do_chat():
+            adjusted_temp = 1.0 if (self.config.provider == "azure" and temperature != 1) else temperature
+
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "messages": full_messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
+                "temperature": adjusted_temp,
             }
+
+            # Azure 2024-preview models reject max_tokens; use max_completion_tokens there
+            if self.config.provider == "azure":
+                kwargs["max_completion_tokens"] = max_tokens
+            else:
+                kwargs["max_tokens"] = max_tokens
 
             if response_format:
                 kwargs["response_format"] = response_format
@@ -252,6 +259,35 @@ Generate a list of work items to fulfill this request.
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.7,
+        )
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> str:
+        """Generate a text response for a prompt.
+
+        Simple wrapper around chat() for single-prompt generation.
+        Used by planner, think, learn and other nodes.
+
+        Args:
+            prompt: The user prompt to generate a response for.
+            system_prompt: Optional system prompt for context.
+            temperature: Sampling temperature (0.0-1.0).
+            max_tokens: Maximum tokens in response.
+
+        Returns:
+            Generated text response.
+        """
+        messages = [{"role": "user", "content": prompt}]
+        return await self.chat(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     async def generate_build_spec(

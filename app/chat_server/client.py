@@ -23,6 +23,7 @@ class ProgenitorClient:
         self._process: Optional[asyncio.subprocess.Process] = None
         self._lock = asyncio.Lock()
         self._started = False
+        self._stderr_log = None
 
     async def start(self) -> None:
         """Start the Progenitor subprocess."""
@@ -39,10 +40,18 @@ class ProgenitorClient:
 
             logger.info(f"Starting Progenitor subprocess: {script_path}")
 
+            # Capture subprocess stdout/stderr to files for diagnostics
+            logs_dir = Path(__file__).resolve().parents[2] / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            stderr_path = logs_dir / "progenitor.client.stderr.log"
+            self._stderr_log = open(stderr_path, "a", encoding="utf-8")
+
+            # Use module invocation to preserve package-relative imports
             self._process = await asyncio.create_subprocess_exec(
                 self.config.progenitor_python,
-                "-u",  # Unbuffered output
-                str(script_path),
+                "-u",
+                "-m",
+                "app.progenitor.main",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -65,7 +74,12 @@ class ProgenitorClient:
                 line = await self._process.stderr.readline()
                 if not line:
                     break
-                logger.debug(f"[Progenitor stderr] {line.decode().strip()}")
+                # Surface progenitor stderr so crashes are visible in chatserver logs
+                decoded = line.decode().strip()
+                logger.error(f"[Progenitor stderr] {decoded}")
+                if self._stderr_log:
+                    self._stderr_log.write(decoded + "\n")
+                    self._stderr_log.flush()
             except Exception as e:
                 logger.error(f"Error reading stderr: {e}")
                 break
@@ -83,6 +97,9 @@ class ProgenitorClient:
                     self._process.kill()
                 self._process = None
                 self._started = False
+                if self._stderr_log:
+                    self._stderr_log.close()
+                    self._stderr_log = None
 
     async def send_message(self, message: str) -> str:
         """Send a message to Progenitor and get the response.

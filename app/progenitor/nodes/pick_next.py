@@ -2,9 +2,12 @@
 PickNext Node - Selects the next backlog item to process.
 """
 
+import logging
 from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus
+
+logger = logging.getLogger(__name__)
 
 
 def create_node() -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
@@ -12,13 +15,17 @@ def create_node() -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorS
 
     async def pick_next_node(state: ProgenitorState) -> ProgenitorState:
         """Select the next work item from the backlog."""
+        logger.info("PICK_NEXT: Starting pick_next_node")
         backlog = state.get("backlog", [])
+        logger.info(f"PICK_NEXT: Backlog has {len(backlog)} items")
 
         # Find first pending item
-        for item in backlog:
+        for i, item in enumerate(backlog):
             work_item = _to_work_item(item)
+            logger.debug(f"PICK_NEXT: Item {i}: type={type(item).__name__}, work_item={work_item is not None}")
 
             if work_item and work_item.is_pending:
+                logger.info(f"PICK_NEXT: Found pending item: id={work_item.id}, type={work_item.item_type}")
                 work_item.mark_in_progress()
 
                 # Update in backlog (preserving same reference structure)
@@ -36,6 +43,7 @@ def create_node() -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorS
                 }
 
         # No pending items
+        logger.info("PICK_NEXT: No pending items found in backlog")
         return {"current_work_item": None}
 
     return pick_next_node
