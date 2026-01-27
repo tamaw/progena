@@ -1,16 +1,47 @@
 """
 Register Node - Updates registry after successful build.
+
+Also tests and activates newly built agents for immediate interaction.
 """
 
+import logging
 from datetime import datetime
-from typing import Callable, Coroutine, Any
+from pathlib import Path
+from typing import Callable, Coroutine, Any, TYPE_CHECKING
 
 from ..state.models import ProgenitorState, AgentRegistryEntry
 from ..runtime.time_utils import utcnow_isoformat
+from ..runtime.agent_runner import AgentRunner
+
+if TYPE_CHECKING:
+    from ..config import ProgenitorConfig
+
+logger = logging.getLogger(__name__)
 
 
-def create_node(tool_registry, state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
-    """Create the register node function."""
+def create_node(
+    tool_registry,
+    state_manager,
+    config: "ProgenitorConfig" = None,
+) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
+    """Create the register node function.
+
+    Args:
+        tool_registry: Registry for agents and tools.
+        state_manager: State manager for logging decisions.
+        config: ProgenitorConfig for project root path.
+    """
+    # Initialize agent runner for testing newly built agents
+    # Derive project root from worktrees_dir (worktrees is a subdirectory)
+    if config and hasattr(config, 'storage') and config.storage.worktree_dir:
+        project_root = config.storage.worktree_dir.parent
+    else:
+        project_root = Path.cwd()
+
+    agent_runner = AgentRunner(
+        project_root=project_root,
+        log_callback=state_manager.log_decision if state_manager else None,
+    )
 
     async def register_node(state: ProgenitorState) -> ProgenitorState:
         """Register new/updated agents and tools."""
@@ -38,16 +69,41 @@ def create_node(tool_registry, state_manager) -> Callable[[ProgenitorState], Cor
 
         if item_type == "build_agent":
             # Register new A2A agent
+            agent_name = spec.get("name", "unnamed_agent")
+            # Use new directory structure: app/agents/<agent_name>/agent.py
+            entrypoint = f"app/agents/{agent_name}/agent.py"
+
             entry = AgentRegistryEntry(
-                name=spec.get("name", "unnamed_agent"),
+                name=agent_name,
                 kind="a2a_agent",
                 description=spec.get("description", ""),
                 capabilities=spec.get("capabilities", []),
-                entrypoint=worktree_path + "/main.py" if worktree_path else "",
+                entrypoint=entrypoint,
                 transport="stdio",
             )
 
             await tool_registry.register_agent(entry)
+
+            # Test the newly built agent to ensure it works
+            logger.info(f"Testing newly built agent '{agent_name}'...")
+            test_result = await agent_runner.test_agent(
+                agent_name=agent_name,
+                entrypoint=entrypoint,
+            )
+
+            agent_test_passed = test_result.success
+            agent_test_response = test_result.response
+            agent_test_error = test_result.error
+
+            await state_manager.log_decision({
+                "event": "agent_tested",
+                "agent_name": agent_name,
+                "test_passed": agent_test_passed,
+                "test_response": str(agent_test_response)[:500] if agent_test_response else None,
+                "test_error": agent_test_error,
+                "duration_ms": test_result.duration_ms,
+                "timestamp": utcnow_isoformat(),
+            })
 
             await state_manager.log_decision({
                 "event": "agent_registered",
@@ -100,6 +156,20 @@ def create_node(tool_registry, state_manager) -> Callable[[ProgenitorState], Cor
         # Update agents list in state
         agents = tool_registry.get_agents()
 
-        return {"agents": agents}
+        # Build result including agent test info if applicable
+        result = {"agents": agents}
+
+        # Include agent runner reference and test results for immediate interaction
+        if item_type == "build_agent":
+            result["agent_runner"] = agent_runner
+            result["new_agent_ready"] = {
+                "name": agent_name,
+                "entrypoint": entrypoint,
+                "test_passed": agent_test_passed,
+                "test_response": agent_test_response,
+                "test_error": agent_test_error,
+            }
+
+        return result
 
     return register_node

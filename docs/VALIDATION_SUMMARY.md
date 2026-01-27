@@ -1,6 +1,6 @@
 # Application Validation Summary
 
-**Date**: 2026-01-20  
+**Date**: 2026-01-20
 **Status**: ✓ ALL CHECKS PASSED
 
 ## Refactoring Changes Applied
@@ -94,7 +94,7 @@ python cli.py test
 python -m pytest tests/ -v
 
 # Validate app
-python validate_app.py
+python scripts/validate_app.py
 ```
 
 ### Docker
@@ -138,7 +138,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 ## Files Created
 
-1. **validate_app.py**
+1. **scripts/validate_app.py**
    - Comprehensive validation script for checking app health
    - Tests imports, compilation, FastAPI config, and file existence
 

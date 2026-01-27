@@ -180,7 +180,7 @@ def create_progenitor_graph(
         "worktree_prep": worktree_prep.create_node(worktrees_dir),
         "act": act.create_node(llm_client, tool_registry, config, worktrees_dir, state_manager),
         "validate": validate.create_node(config),
-        "register": register.create_node(tool_registry, state_manager),
+        "register": register.create_node(tool_registry, state_manager, config),
         "commit_core": commit_core.create_node(state_manager),
         "respond": respond.create_node(state_manager),
         "idle": idle.create_node(config, state_manager),

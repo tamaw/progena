@@ -4,24 +4,52 @@
 ```
 progenitor/
 ├── app/                    # Application source code
-├── tests/                  # Test suite (140 tests)
-├── docs/                   # Documentation (9 files)
+├── tests/                  # Test suite
+├── docs/                   # Documentation
 ├── config/                 # Configuration files
+├── data/                   # Runtime data
+│   ├── state/              # State files (gitignored except .gitkeep)
+│   └── prompts/            # Editable prompt templates
 ├── examples/               # Usage examples
-├── state/                  # Runtime state storage
-├── logs/                   # Application logs
-├── worktrees/              # Git worktrees for builds
+├── scripts/                # CLI scripts and utilities
+├── logs/                   # Application logs (gitignored)
+├── worktrees/              # Git worktrees for builds (gitignored)
 ├── .venv/                  # Python virtual environment
 │
 ├── README.md               # Main project documentation
-├── CLEANUP_SUMMARY.md      # Recent cleanup actions
 ├── requirements.txt        # Python dependencies
 ├── pytest.ini              # Test configuration
 ├── docker-compose.yml      # Docker orchestration
-├── Dockerfile              # Container definition
-├── cli.py                  # CLI entry point
+└── Dockerfile              # Container definition
+```
+
+## Scripts Directory
+```
+scripts/
+├── server_cli.py           # Server control (test/serve/mock)
+├── start_all.ps1           # Start all services
+├── chat_cli.py             # Interactive chat client
+├── chat_cli_httpx.py       # Async chat client (httpx)
 ├── validate_app.py         # App validation script
 └── validate_docker.py      # Docker validation script
+```
+
+## Data Directory
+```
+data/
+├── state/                  # Runtime state (gitignored)
+│   ├── backlog.json        # Work item queue
+│   ├── current_state.json  # Agent state
+│   ├── registry.json       # Registered agents/tools
+│   └── schedule.json       # Scheduled tasks
+│
+└── prompts/                # Editable prompts
+    ├── genesis.md          # System prompt
+    ├── decide.md           # Decision routing
+    ├── planner.md          # Work planning
+    ├── build.md            # Build specifications
+    ├── copilot_task.md     # Copilot CLI tasks
+    └── agent_structure.md  # Agent directory structure
 ```
 
 ## Application Structure

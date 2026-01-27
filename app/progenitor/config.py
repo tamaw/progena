@@ -119,10 +119,16 @@ class RuntimeConfig:
     idle_backoff_seconds: int = 30
     max_actions_per_cycle: int = 10
     log_level: str = "info"
+    log_format: str = "text"  # "text" | "json" for structured logging
     backoff_multiplier: float = 1.5
     max_backoff_seconds: int = 300
     checkpoint_interval_seconds: int = 30
     input_timeout_seconds: int = 300
+
+    # Inner loop (dual loop architecture) settings
+    max_inner_iterations: int = 5  # Failsafe max iterations for inner loop
+    min_verification_score: float = 0.8  # Default minimum score to pass verification
+    iteration_time_limit_seconds: int = 600  # Max time per iteration
 
     @classmethod
     def from_env(cls, file_config: dict[str, Any] | None = None) -> "RuntimeConfig":
@@ -137,6 +143,7 @@ class RuntimeConfig:
                 "PROGENITOR_MAX_ACTIONS_PER_CYCLE", fc.get("max_actions_per_cycle", 10)
             ),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", fc.get("log_level", "info")),
+            log_format=os.getenv("PROGENITOR_LOG_FORMAT", fc.get("log_format", "text")),
             backoff_multiplier=_env_float(
                 "PROGENITOR_BACKOFF_MULTIPLIER", fc.get("backoff_multiplier", 1.5)
             ),
@@ -149,6 +156,16 @@ class RuntimeConfig:
             input_timeout_seconds=_env_int(
                 "PROGENITOR_INPUT_TIMEOUT_SECONDS", fc.get("input_timeout_seconds", 300)
             ),
+            # Inner loop settings
+            max_inner_iterations=_env_int(
+                "PROGENITOR_MAX_INNER_ITERATIONS", fc.get("max_inner_iterations", 5)
+            ),
+            min_verification_score=_env_float(
+                "PROGENITOR_MIN_VERIFICATION_SCORE", fc.get("min_verification_score", 0.8)
+            ),
+            iteration_time_limit_seconds=_env_int(
+                "PROGENITOR_ITERATION_TIME_LIMIT_SECONDS", fc.get("iteration_time_limit_seconds", 600)
+            ),
         )
 
 
@@ -156,23 +173,26 @@ class RuntimeConfig:
 class StorageConfig:
     """Storage paths configuration."""
 
-    state_dir: Path = field(default_factory=lambda: Path("/state"))
+    state_dir: Path = field(default_factory=lambda: Path("/data/state"))
     log_dir: Path = field(default_factory=lambda: Path("/logs"))
     worktree_dir: Path = field(default_factory=lambda: Path("/worktrees"))
+    prompts_dir: Path = field(default_factory=lambda: Path("/data/prompts"))
     state_lock_timeout_seconds: int = 10
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
         """Load storage config from environment."""
         # Default to project-relative paths if not in container
-        default_state = "/state" if project_root is None else str(project_root / "state")
+        default_state = "/data/state" if project_root is None else str(project_root / "data" / "state")
         default_logs = "/logs" if project_root is None else str(project_root / "logs")
         default_worktrees = "/worktrees" if project_root is None else str(project_root / "worktrees")
+        default_prompts = "/data/prompts" if project_root is None else str(project_root / "data" / "prompts")
 
         return cls(
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", default_state)),
             log_dir=Path(os.getenv("PROGENITOR_LOG_DIR", default_logs)),
             worktree_dir=Path(os.getenv("PROGENITOR_WORKTREE_DIR", default_worktrees)),
+            prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", default_prompts)),
             state_lock_timeout_seconds=_env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
         )
 
@@ -367,7 +387,12 @@ def reload_config(project_root: Path | None = None, config_dir: Path | None = No
 
 
 def setup_logging(config: ProgenitorConfig) -> None:
-    """Configure logging based on configuration."""
+    """Configure logging based on configuration.
+    
+    Supports two formats:
+    - "text": Human-readable format (default)
+    - "json": Structured JSON format for production/log aggregation
+    """
     log_levels = {
         "debug": logging.DEBUG,
         "info": logging.INFO,
@@ -377,12 +402,49 @@ def setup_logging(config: ProgenitorConfig) -> None:
     }
     level = log_levels.get(config.runtime.log_level.lower(), logging.INFO)
 
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    # Choose format based on config
+    if config.runtime.log_format.lower() == "json":
+        # JSON structured logging for production
+        formatter = JsonLogFormatter()
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logging.root.handlers = [handler]
+        logging.root.setLevel(level)
+    else:
+        # Standard text format
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
 
     # Reduce noise from httpx and openai
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
+
+
+class JsonLogFormatter(logging.Formatter):
+    """JSON formatter for structured logging."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format log record as JSON."""
+        import json as json_module
+        from datetime import datetime, timezone
+        
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        
+        # Add exception info if present
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        
+        # Add extra fields if any
+        for key in ("run_id", "cycle_count", "node", "work_item_id"):
+            if hasattr(record, key):
+                log_entry[key] = getattr(record, key)
+        
+        return json_module.dumps(log_entry)

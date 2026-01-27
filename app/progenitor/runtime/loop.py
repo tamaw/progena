@@ -9,19 +9,26 @@ Controls:
 - idle sleep/backoff when no new input
 - max actions per cycle (tool/A2A/Copilot)
 - restart-safe checkpoints (write state every cycle)
+- health file updated each cycle for Docker health checks
 """
 
 import asyncio
+import json
 import logging
+from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 import uuid
 
-from .time_utils import utcnow_isoformat
+from .time_utils import utcnow, utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
 
 logger = logging.getLogger(__name__)
+
+# Health file location (relative to state directory)
+HEALTH_FILE = "health.json"
+HEALTH_STALE_SECONDS = 120  # Consider unhealthy if not updated in 2 minutes
 
 
 class ProgenitorLoop:
@@ -74,7 +81,7 @@ class ProgenitorLoop:
         state.update(persisted)
         state["run_id"] = run_id  # New run ID for this session
 
-        logger.info(f"Starting perpetual loop (run_id: {run_id})")
+        logger.info("Starting perpetual loop (run_id: %s)", run_id)
 
         while self.running:
             try:
@@ -98,7 +105,8 @@ class ProgenitorLoop:
                     ):
                         # Process graph events
                         for node_name, node_output in event.items():
-                            logger.info(f"GRAPH EVENT: node={node_name}, output_keys={list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)}")
+                            output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
+                            logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
                             if isinstance(node_output, dict):
                                 state.update(node_output)
 
@@ -110,6 +118,7 @@ class ProgenitorLoop:
 
                     # Checkpoint state after each cycle
                     await self._checkpoint_state(state)
+                    await self._update_health_file(state)
 
                 else:
                     # No input - check for scheduled tasks or backlog
@@ -131,16 +140,19 @@ class ProgenitorLoop:
                                     state.update(node_output)
 
                         await self._checkpoint_state(state)
+                        await self._update_health_file(state)
                     else:
                         # Increase backoff exponentially when truly idle
+                        # Still update health to show we're alive
+                        await self._update_health_file(state)
                         backoff = min(backoff * backoff_multiplier, max_backoff)
-                        logger.debug(f"Idle, backoff now {backoff:.1f}s")
+                        logger.debug("Idle, backoff now %.1f s", backoff)
 
             except asyncio.CancelledError:
                 logger.info("Loop cancelled by signal")
                 break
             except Exception as e:
-                logger.error(f"Loop error: {e}", exc_info=True)
+                logger.error("Loop error: %s", e, exc_info=True)
                 await asyncio.sleep(backoff)
 
         # Final checkpoint before shutdown
@@ -178,13 +190,60 @@ class ProgenitorLoop:
         return False
 
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
-        """Save state checkpoint."""
+        """Save full recoverable state checkpoint.
+        
+        Saves all state needed to recover from a crash, not just metadata.
+        Per SPEC: restart-safe checkpoints (write state every cycle).
+        """
+        # Core recoverable state
         checkpoint = {
+            # Metadata
             "run_id": state.get("run_id"),
-            "cycle_count": state.get("cycle_count"),
+            "cycle_count": state.get("cycle_count", 0),
             "last_checkpoint": utcnow_isoformat(),
+            
+            # Essential state for recovery
+            "actions_this_cycle": state.get("actions_this_cycle", 0),
+            "shutdown_requested": state.get("shutdown_requested", False),
+            
+            # Conversation state
+            "messages": state.get("messages", []),
+            
+            # Work items
+            "backlog": self._serialize_backlog(state.get("backlog", [])),
+            
+            # Schedule
+            "schedule": state.get("schedule", []),
+            
+            # Current iteration state (for inner loop recovery)
+            "current_iteration": state.get("current_iteration", 0),
+            "verification_score": state.get("verification_score"),
+            "best_artefact_score": state.get("best_artefact_score"),
         }
+        
+        # Only include ideal_state if it exists and is serializable
+        ideal_state = state.get("ideal_state")
+        if ideal_state:
+            if hasattr(ideal_state, "model_dump"):
+                checkpoint["ideal_state"] = ideal_state.model_dump()
+            elif isinstance(ideal_state, dict):
+                checkpoint["ideal_state"] = ideal_state
+        
         await self.state_manager.save_state(checkpoint)
+        logger.debug("Checkpointed state at cycle %d", checkpoint["cycle_count"])
+
+    def _serialize_backlog(self, backlog: list) -> list:
+        """Serialize backlog items for checkpoint."""
+        serialized = []
+        for item in backlog:
+            if hasattr(item, "model_dump"):
+                serialized.append(item.model_dump())
+            elif isinstance(item, dict):
+                serialized.append(item)
+            else:
+                # Skip items that can't be serialized
+                logger.warning("Skipping non-serializable backlog item: %s", type(item))
+        return serialized
 
     async def enqueue_input(self, message: str) -> None:
         """Add a message to the input queue."""
@@ -205,3 +264,23 @@ class ProgenitorLoop:
     def stop(self) -> None:
         """Signal the loop to stop."""
         self.running = False
+
+    async def _update_health_file(self, state: dict[str, Any]) -> None:
+        """Update health file for Docker health checks.
+        
+        Creates/updates a JSON file with last activity timestamp.
+        Docker can check this file's age to determine health.
+        """
+        health_path = self.state_manager.state_dir / HEALTH_FILE
+        health_data = {
+            "status": "running",
+            "last_active": utcnow_isoformat(),
+            "run_id": state.get("run_id"),
+            "cycle_count": state.get("cycle_count", 0),
+            "pid": __import__("os").getpid(),
+        }
+        
+        try:
+            health_path.write_text(json.dumps(health_data))
+        except Exception as e:
+            logger.warning("Failed to update health file: %s", e)

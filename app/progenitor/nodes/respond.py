@@ -137,7 +137,38 @@ def _generate_response(decision, current_item, state: ProgenitorState) -> str | 
 
     # Generate response based on completed work
     if current_item:
-        return _format_work_item_response(current_item)
+        response = _format_work_item_response(current_item)
+
+        # Add newly built agent info if available
+        new_agent_info = state.get("new_agent_ready")
+        if new_agent_info:
+            agent_name = new_agent_info.get("name", "unknown")
+            test_passed = new_agent_info.get("test_passed", False)
+            test_response = new_agent_info.get("test_response")
+            entrypoint = new_agent_info.get("entrypoint", "")
+
+            if test_passed:
+                agent_info = f"\n\n**Agent Ready for Interaction**\n"
+                agent_info += f"✓ Agent `{agent_name}` is built, tested, and registered.\n"
+                agent_info += f"  - Entrypoint: `{entrypoint}`\n"
+                if test_response:
+                    response_preview = str(test_response)[:200]
+                    agent_info += f"  - Test response: {response_preview}\n"
+                agent_info += f"\nYou can now invoke this agent directly!"
+            else:
+                agent_info = f"\n\n**Agent Built (with warnings)**\n"
+                agent_info += f"○ Agent `{agent_name}` is built and registered.\n"
+                test_error = new_agent_info.get("test_error")
+                if test_error:
+                    agent_info += f"  - Test failed: {test_error[:200]}\n"
+                agent_info += f"  - Manual testing recommended before use."
+
+            if response:
+                response += agent_info
+            else:
+                response = agent_info
+
+        return response
 
     # Check for pending work
     backlog = state.get("backlog", [])

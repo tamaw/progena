@@ -9,10 +9,11 @@ import logging
 import json
 import time
 import uuid
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
@@ -42,6 +43,72 @@ config = ChatServerConfig.from_env()
 client: ProgenitorClient = None  # type: ignore
 
 
+# ============================================================================
+# Rate Limiting (in-memory, per-IP)
+# ============================================================================
+class RateLimiter:
+    """Simple in-memory rate limiter using sliding window."""
+
+    def __init__(self, requests_per_minute: int = 60, requests_per_hour: int = 500):
+        self.requests_per_minute = requests_per_minute
+        self.requests_per_hour = requests_per_hour
+        self._minute_requests: dict[str, list[float]] = defaultdict(list)
+        self._hour_requests: dict[str, list[float]] = defaultdict(list)
+
+    def is_allowed(self, client_id: str) -> tuple[bool, str | None]:
+        """Check if request is allowed. Returns (allowed, reason)."""
+        now = time.time()
+        minute_ago = now - 60
+        hour_ago = now - 3600
+
+        # Clean old entries
+        self._minute_requests[client_id] = [
+            t for t in self._minute_requests[client_id] if t > minute_ago
+        ]
+        self._hour_requests[client_id] = [
+            t for t in self._hour_requests[client_id] if t > hour_ago
+        ]
+
+        # Check limits
+        if len(self._minute_requests[client_id]) >= self.requests_per_minute:
+            return False, f"Rate limit exceeded: {self.requests_per_minute} requests/minute"
+        if len(self._hour_requests[client_id]) >= self.requests_per_hour:
+            return False, f"Rate limit exceeded: {self.requests_per_hour} requests/hour"
+
+        return True, None
+
+    def record_request(self, client_id: str) -> None:
+        """Record a request for rate limiting."""
+        now = time.time()
+        self._minute_requests[client_id].append(now)
+        self._hour_requests[client_id].append(now)
+
+    def get_remaining(self, client_id: str) -> dict[str, int]:
+        """Get remaining requests for headers."""
+        now = time.time()
+        minute_count = len([t for t in self._minute_requests[client_id] if t > now - 60])
+        hour_count = len([t for t in self._hour_requests[client_id] if t > now - 3600])
+        return {
+            "minute": max(0, self.requests_per_minute - minute_count),
+            "hour": max(0, self.requests_per_hour - hour_count),
+        }
+
+
+rate_limiter = RateLimiter(
+    requests_per_minute=config.rate_limit_per_minute,
+    requests_per_hour=config.rate_limit_per_hour,
+)
+
+
+def get_client_id(request: Request) -> str:
+    """Extract client identifier for rate limiting."""
+    # Use X-Forwarded-For if behind proxy, otherwise use client host
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -53,7 +120,13 @@ async def lifespan(app: FastAPI):
 
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues
-    logger.info(f"Chat server ready on {config.host}:{config.port}")
+    logger.info("Chat server ready on %s:%d", config.host, config.port)
+    logger.info(
+        "Rate limiting: %d/min, %d/hour (enabled=%s)",
+        config.rate_limit_per_minute,
+        config.rate_limit_per_hour,
+        config.rate_limit_enabled,
+    )
 
     yield
 
@@ -79,10 +152,47 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Apply rate limiting to API endpoints."""
+    # Skip rate limiting for health checks and if disabled
+    if not config.rate_limit_enabled or request.url.path in ("/health", "/docs", "/openapi.json"):
+        return await call_next(request)
+
+    client_id = get_client_id(request)
+    allowed, reason = rate_limiter.is_allowed(client_id)
+
+    if not allowed:
+        logger.warning("Rate limit exceeded for client %s: %s", client_id, reason)
+        return JSONResponse(
+            status_code=429,
+            content=ErrorResponse(
+                error=ErrorDetail(
+                    message=reason or "Rate limit exceeded",
+                    type="rate_limit_exceeded",
+                )
+            ).model_dump(),
+            headers={"Retry-After": "60"},
+        )
+
+    # Record the request and continue
+    rate_limiter.record_request(client_id)
+    response = await call_next(request)
+
+    # Add rate limit headers
+    remaining = rate_limiter.get_remaining(client_id)
+    response.headers["X-RateLimit-Limit-Minute"] = str(config.rate_limit_per_minute)
+    response.headers["X-RateLimit-Remaining-Minute"] = str(remaining["minute"])
+    response.headers["X-RateLimit-Limit-Hour"] = str(config.rate_limit_per_hour)
+    response.headers["X-RateLimit-Remaining-Hour"] = str(remaining["hour"])
+
+    return response
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler for API errors."""
-    logger.error(f"API error: {exc}", exc_info=True)
+    logger.error("API error: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(

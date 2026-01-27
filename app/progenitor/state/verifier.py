@@ -78,10 +78,37 @@ class VerificationReport(BaseModel):
 
 
 class Verifier:
-    """Verifies outputs against ideal state criteria."""
+    """Verifies outputs against ideal state criteria.
 
-    def __init__(self, llm_client=None):
+    Can operate in two modes:
+    - LLM-assisted: Uses LLM for nuanced scoring when llm_client is provided
+    - Heuristic-only: Falls back to rule-based scoring when no LLM available
+
+    The heuristic mode is useful for offline testing, cost reduction, or when
+    LLM is temporarily unavailable.
+    """
+
+    def __init__(self, llm_client=None, heuristic_only: bool = False):
+        """Initialize the verifier.
+
+        Args:
+            llm_client: Optional LLM client for nuanced verification.
+            heuristic_only: If True, never use LLM even if available.
+        """
         self.llm_client = llm_client
+        self.heuristic_only = heuristic_only
+
+        if self.heuristic_only:
+            logger.info("Verifier initialized in heuristic-only mode")
+        elif self.llm_client is None:
+            logger.info("Verifier initialized without LLM client - using heuristics")
+        else:
+            logger.debug("Verifier initialized with LLM client")
+
+    @property
+    def uses_llm(self) -> bool:
+        """Check if verifier will use LLM for scoring."""
+        return self.llm_client is not None and not self.heuristic_only
 
     async def verify(
         self,
@@ -170,12 +197,12 @@ class Verifier:
             score, evidence = self._heuristic_verification(
                 criterion, output, context
             )
-        elif self.llm_client:
+        elif self.uses_llm:
             score, evidence = await self._llm_based_verification(
                 criterion, output, context
             )
         else:
-            # Fallback to basic heuristic
+            # Fallback to basic heuristic when no LLM
             score, evidence = self._heuristic_verification(
                 criterion, output, context
             )
@@ -254,7 +281,7 @@ Rate from 0.0 to 1.0 and explain your reasoning.
 Format: SCORE: X.XX | EVIDENCE: explanation"""
 
         try:
-            if self.llm_client is None:
+            if not self.uses_llm:
                 return self._heuristic_verification(criterion, output, context)
 
             response = await self.llm_client.generate(
@@ -271,7 +298,7 @@ Format: SCORE: X.XX | EVIDENCE: explanation"""
                 return max(0.0, min(1.0, score)), evidence
 
         except Exception as e:
-            logger.warning(f"LLM verification failed: {e}")
+            logger.warning("LLM verification failed, falling back to heuristic: %s", e)
 
         # Fallback to heuristic
         return self._heuristic_verification(criterion, output, context)

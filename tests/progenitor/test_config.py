@@ -203,9 +203,10 @@ class TestStorageConfig:
         """Test defaults are project-relative when project_root is provided."""
         project_root = Path("/test/project")
         config = StorageConfig.from_env(project_root)
-        assert config.state_dir == project_root / "state"
+        assert config.state_dir == project_root / "data" / "state"
         assert config.log_dir == project_root / "logs"
         assert config.worktree_dir == project_root / "worktrees"
+        assert config.prompts_dir == project_root / "data" / "prompts"
 
     def test_env_overrides(self):
         """Test environment variables override defaults."""
