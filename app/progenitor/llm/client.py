@@ -4,13 +4,15 @@ OpenAI API Client for Progenitor.
 Uses the OpenAI Responses API for all model calls.
 Implements retry logic with exponential backoff and jitter for resilience.
 Supports OpenAI and Azure OpenAI providers.
+Includes telemetry for observability.
 """
 
 import asyncio
 import json
 import logging
 import random
-from typing import Any, Optional
+import time
+from typing import Any, AsyncIterator, Optional
 from openai import APIConnectionError, APIError, RateLimitError, AsyncOpenAI
 
 try:  # Optional dependency for Azure support
@@ -22,6 +24,16 @@ from .prompts import PromptTemplates
 from ..config import LLMConfig
 
 logger = logging.getLogger(__name__)
+
+
+# Lazy telemetry imports to avoid circular dependencies
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_metrics, get_tracer, SpanKind
+        return get_metrics(), get_tracer(), SpanKind
+    except ImportError:
+        return None, None, None
 
 
 class LLMClient:
@@ -154,43 +166,193 @@ class LLMClient:
         response_format: Optional[dict[str, Any]] = None,
     ) -> str:
         """Make a chat completion request with retry."""
+        full_messages = self._build_messages(messages, system_prompt)
+
+        # Telemetry setup
+        metrics, tracer, SpanKind = _get_telemetry()
+        span = None
+        start_time = time.perf_counter()
+
+        if tracer and SpanKind:
+            span = tracer.start_span(
+                "llm.chat",
+                kind=SpanKind.CLIENT,
+                attributes={
+                    "llm.provider": self.config.provider,
+                    "llm.model": self.model,
+                    "llm.role": self.role,
+                    "llm.message_count": len(full_messages),
+                    "llm.max_tokens": max_tokens,
+                    "llm.temperature": temperature,
+                },
+            )
+
+        async def _do_chat():
+            kwargs = self._build_chat_kwargs(full_messages, temperature, max_tokens, response_format)
+            response = await self.client.chat.completions.create(**kwargs)
+
+            # Record token usage in telemetry
+            if metrics and hasattr(response, "usage") and response.usage:
+                usage = response.usage
+                if hasattr(usage, "prompt_tokens"):
+                    metrics.llm_tokens_prompt.inc(usage.prompt_tokens)
+                if hasattr(usage, "completion_tokens"):
+                    metrics.llm_tokens_completion.inc(usage.completion_tokens)
+                if span:
+                    span.set_attribute("llm.prompt_tokens", getattr(usage, "prompt_tokens", 0))
+                    span.set_attribute("llm.completion_tokens", getattr(usage, "completion_tokens", 0))
+
+            return response.choices[0].message.content or ""
+
+        try:
+            result = await self._retry_with_backoff(_do_chat)
+
+            # Record success metrics
+            if metrics:
+                metrics.llm_calls_total.inc()
+                duration = time.perf_counter() - start_time
+                metrics.llm_call_duration.observe(duration)
+
+            if span:
+                span.set_attribute("llm.success", True)
+                span.set_attribute("llm.response_length", len(result))
+
+            return result
+
+        except Exception as e:
+            if span:
+                span.record_exception(e)
+            raise
+
+        finally:
+            if span and tracer:
+                tracer.end_span(span)
+
+    def _build_messages(
+        self,
+        messages: list[dict[str, str]],
+        system_prompt: Optional[str] = None,
+    ) -> list[dict[str, str]]:
+        """Build full message list with optional system prompt."""
         full_messages = []
 
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
 
         full_messages.extend(messages)
+        return full_messages
 
-        async def _do_chat():
-            adjusted_temp = temperature
-            if self.config.provider == "azure" and temperature != 1.0:
-                # Azure OpenAI has stricter temperature constraints
-                # Some models require temperature=1.0, others have narrower ranges
-                adjusted_temp = 1.0
-                logger.debug(
-                    "Azure provider: adjusted temperature from %.2f to %.2f",
-                    temperature, adjusted_temp
-                )
+    def _build_chat_kwargs(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        response_format: Optional[dict[str, Any]] = None,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        """Build kwargs for chat completion API call."""
+        adjusted_temp = temperature
+        if self.config.provider == "azure" and temperature != 1.0:
+            adjusted_temp = 1.0
+            logger.debug(
+                "Azure provider: adjusted temperature from %.2f to %.2f",
+                temperature, adjusted_temp
+            )
 
-            kwargs: dict[str, Any] = {
-                "model": self.model,
-                "messages": full_messages,
-                "temperature": adjusted_temp,
-            }
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": adjusted_temp,
+            "stream": stream,
+        }
 
-            # Azure 2024-preview models reject max_tokens; use max_completion_tokens there
-            if self.config.provider == "azure":
-                kwargs["max_completion_tokens"] = max_tokens
-            else:
-                kwargs["max_tokens"] = max_tokens
+        # Azure 2024-preview models reject max_tokens; use max_completion_tokens there
+        if self.config.provider == "azure":
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs["max_tokens"] = max_tokens
 
-            if response_format:
-                kwargs["response_format"] = response_format
+        if response_format:
+            kwargs["response_format"] = response_format
 
+        return kwargs
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> AsyncIterator[str]:
+        """Make a streaming chat completion request.
+
+        Yields content chunks as they arrive from the API.
+
+        Args:
+            messages: List of conversation messages.
+            system_prompt: Optional system prompt.
+            temperature: Sampling temperature.
+            max_tokens: Maximum tokens in response.
+
+        Yields:
+            Content chunks as strings.
+        """
+        full_messages = self._build_messages(messages, system_prompt)
+
+        # Telemetry setup
+        metrics, tracer, SpanKind = _get_telemetry()
+        span = None
+        start_time = time.perf_counter()
+        total_content = ""
+
+        if tracer and SpanKind:
+            span = tracer.start_span(
+                "llm.chat_stream",
+                kind=SpanKind.CLIENT,
+                attributes={
+                    "llm.provider": self.config.provider,
+                    "llm.model": self.model,
+                    "llm.role": self.role,
+                    "llm.message_count": len(full_messages),
+                    "llm.max_tokens": max_tokens,
+                    "llm.temperature": temperature,
+                    "llm.streaming": True,
+                },
+            )
+
+        try:
+            kwargs = self._build_chat_kwargs(
+                full_messages, temperature, max_tokens, stream=True
+            )
+
+            # Note: streaming doesn't use retry_with_backoff since we can't
+            # retry mid-stream. Connection errors will raise immediately.
             response = await self.client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content or ""
 
-        return await self._retry_with_backoff(_do_chat)
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    total_content += content
+                    yield content
+
+            # Record success metrics
+            if metrics:
+                metrics.llm_calls_total.inc()
+                duration = time.perf_counter() - start_time
+                metrics.llm_call_duration.observe(duration)
+
+            if span:
+                span.set_attribute("llm.success", True)
+                span.set_attribute("llm.response_length", len(total_content))
+
+        except Exception as e:
+            if span:
+                span.record_exception(e)
+            raise
+
+        finally:
+            if span and tracer:
+                tracer.end_span(span)
 
     async def decide(
         self,

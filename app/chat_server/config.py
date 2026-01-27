@@ -7,26 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-
-def _env_int(key: str, default: int) -> int:
-    """Parse integer environment variable."""
-    val = os.getenv(key)
-    if val is not None:
-        try:
-            return int(val)
-        except ValueError:
-            pass
-    return default
-
-
-def _env_bool(key: str, default: bool = False) -> bool:
-    """Parse boolean environment variable."""
-    val = os.getenv(key, "").lower()
-    if val in ("true", "1", "yes", "on"):
-        return True
-    if val in ("false", "0", "no", "off"):
-        return False
-    return default
+from ..common.env_utils import env_int, env_bool
 
 
 @dataclass
@@ -58,18 +39,24 @@ class ChatServerConfig:
     rate_limit_per_minute: int = 60
     rate_limit_per_hour: int = 500
 
+    # Streaming settings
+    stream_enabled: bool = True  # Enable real-time token streaming
+    stream_chunk_delay_ms: int = 0  # Optional delay between chunks (0 = no delay)
+
     @classmethod
     def from_env(cls) -> "ChatServerConfig":
         """Load config from environment variables."""
         return cls(
             host=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"),
-            port=_env_int("CHAT_SERVER_PORT", 8000),
-            debug=_env_bool("CHAT_SERVER_DEBUG", False),
-            progenitor_timeout=_env_int("CHAT_SERVER_PROGENITOR_TIMEOUT", 300),
+            port=env_int("CHAT_SERVER_PORT", 8000),
+            debug=env_bool("CHAT_SERVER_DEBUG", False),
+            progenitor_timeout=env_int("CHAT_SERVER_PROGENITOR_TIMEOUT", 300),
             progenitor_python=os.getenv("CHAT_SERVER_PYTHON", "python"),
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),
-            rate_limit_enabled=_env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),
-            rate_limit_per_minute=_env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 60),
-            rate_limit_per_hour=_env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 500),
+            rate_limit_enabled=env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),
+            rate_limit_per_minute=env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 60),
+            rate_limit_per_hour=env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 500),
+            stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
+            stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
         )

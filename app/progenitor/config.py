@@ -13,49 +13,18 @@ from pathlib import Path
 from typing import Any, Optional
 from dotenv import load_dotenv
 
+from ..common.env_utils import env_bool, env_int, env_float, env_list
+
 # Auto-load .env file from project root
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def _env_bool(key: str, default: bool = False) -> bool:
-    """Parse boolean environment variable."""
-    val = os.getenv(key, "").lower()
-    if val in ("true", "1", "yes", "on"):
-        return True
-    if val in ("false", "0", "no", "off"):
-        return False
-    return default
-
-
-def _env_int(key: str, default: int) -> int:
-    """Parse integer environment variable."""
-    val = os.getenv(key)
-    if val is not None:
-        try:
-            return int(val)
-        except ValueError:
-            logger.warning(f"Invalid integer for {key}: {val}, using default {default}")
-    return default
-
-
-def _env_float(key: str, default: float) -> float:
-    """Parse float environment variable."""
-    val = os.getenv(key)
-    if val is not None:
-        try:
-            return float(val)
-        except ValueError:
-            logger.warning(f"Invalid float for {key}: {val}, using default {default}")
-    return default
-
-
-def _env_list(key: str, default: list[str] | None = None) -> list[str]:
-    """Parse comma-separated list environment variable."""
-    val = os.getenv(key)
-    if val:
-        return [item.strip() for item in val.split(",") if item.strip()]
-    return default or []
+# Keep local aliases for backward compatibility within this module
+_env_bool = env_bool
+_env_int = env_int
+_env_float = env_float
+_env_list = env_list
 
 
 @dataclass
@@ -245,6 +214,40 @@ class TransportConfig:
 
 
 @dataclass
+class TelemetryConfig:
+    """Telemetry and observability configuration."""
+
+    enabled: bool = True
+    output_dir: Optional[Path] = None  # None = use storage.log_dir / "telemetry"
+    console_export: bool = False  # Also print to console (debugging)
+    metrics_interval_seconds: float = 15.0  # How often to snapshot metrics
+    traces_file: str = "traces.jsonl"
+    metrics_file: str = "metrics.jsonl"
+
+    @classmethod
+    def from_env(cls, storage_config: Optional["StorageConfig"] = None) -> "TelemetryConfig":
+        """Load telemetry config from environment."""
+        output_dir_str = os.getenv("PROGENITOR_TELEMETRY_DIR")
+        if output_dir_str:
+            output_dir = Path(output_dir_str)
+        elif storage_config:
+            output_dir = storage_config.log_dir / "telemetry"
+        else:
+            output_dir = None
+
+        return cls(
+            enabled=_env_bool("PROGENITOR_TELEMETRY_ENABLED", True),
+            output_dir=output_dir,
+            console_export=_env_bool("PROGENITOR_TELEMETRY_CONSOLE", False),
+            metrics_interval_seconds=_env_float(
+                "PROGENITOR_TELEMETRY_METRICS_INTERVAL", 15.0
+            ),
+            traces_file=os.getenv("PROGENITOR_TELEMETRY_TRACES_FILE", "traces.jsonl"),
+            metrics_file=os.getenv("PROGENITOR_TELEMETRY_METRICS_FILE", "metrics.jsonl"),
+        )
+
+
+@dataclass
 class SchedulerConfig:
     """Scheduler configuration."""
 
@@ -270,6 +273,7 @@ class ProgenitorConfig:
     copilot: CopilotConfig = field(default_factory=CopilotConfig)
     transport: TransportConfig = field(default_factory=TransportConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
     @classmethod
     def load(cls, project_root: Path | None = None, config_dir: Path | None = None) -> "ProgenitorConfig":
@@ -298,14 +302,61 @@ class ProgenitorConfig:
                 except (json.JSONDecodeError, IOError) as e:
                     logger.warning(f"Failed to load {copilot_json}: {e}")
 
-        return cls(
+        storage_config = StorageConfig.from_env(project_root)
+
+        config = cls(
             llm=LLMConfig.from_env(),
             runtime=RuntimeConfig.from_env(progenitor_config),
-            storage=StorageConfig.from_env(project_root),
+            storage=storage_config,
             copilot=CopilotConfig.from_env(copilot_config, project_root),
             transport=TransportConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
+            telemetry=TelemetryConfig.from_env(storage_config),
         )
+
+        # Validate configuration
+        config.validate()
+
+        return config
+
+    def validate(self) -> None:
+        """Validate configuration and raise errors for invalid combinations.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        errors = []
+
+        # Validate LLM configuration
+        if self.llm.provider == "azure":
+            if not self.llm.azure_endpoint:
+                errors.append("Azure provider requires AZURE_OPENAI_ENDPOINT")
+            if not self.llm.azure_deployment_default:
+                errors.append("Azure provider requires AZURE_OPENAI_DEPLOYMENT_DEFAULT")
+            if not (self.llm.azure_api_key or self.llm.openai_api_key):
+                errors.append("Azure provider requires AZURE_OPENAI_API_KEY or OPENAI_API_KEY")
+        elif self.llm.provider == "openai":
+            if not self.llm.openai_api_key:
+                errors.append("OpenAI provider requires OPENAI_API_KEY")
+
+        # Validate storage paths are sensible
+        for name, path in [
+            ("state_dir", self.storage.state_dir),
+            ("log_dir", self.storage.log_dir),
+            ("worktree_dir", self.storage.worktree_dir),
+        ]:
+            if not path:
+                errors.append(f"Storage {name} cannot be empty")
+
+        # Log warnings but don't fail
+        if self.runtime.max_inner_iterations < 1:
+            logger.warning("max_inner_iterations should be >= 1, got %d", self.runtime.max_inner_iterations)
+
+        if self.runtime.min_verification_score < 0 or self.runtime.min_verification_score > 1:
+            logger.warning("min_verification_score should be between 0 and 1, got %f", self.runtime.min_verification_score)
+
+        if errors:
+            raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))
 
     def to_dict(self, redact_secrets: bool = True) -> dict[str, Any]:
         """Convert config to dictionary for logging."""
@@ -354,6 +405,14 @@ class ProgenitorConfig:
                 "enabled": self.scheduler.enabled,
                 "poll_seconds": self.scheduler.poll_seconds,
             },
+            "telemetry": {
+                "enabled": self.telemetry.enabled,
+                "output_dir": str(self.telemetry.output_dir) if self.telemetry.output_dir else None,
+                "console_export": self.telemetry.console_export,
+                "metrics_interval_seconds": self.telemetry.metrics_interval_seconds,
+                "traces_file": self.telemetry.traces_file,
+                "metrics_file": self.telemetry.metrics_file,
+            },
         }
 
         if redact_secrets:
@@ -388,7 +447,7 @@ def reload_config(project_root: Path | None = None, config_dir: Path | None = No
 
 def setup_logging(config: ProgenitorConfig) -> None:
     """Configure logging based on configuration.
-    
+
     Supports two formats:
     - "text": Human-readable format (default)
     - "json": Structured JSON format for production/log aggregation
@@ -430,21 +489,21 @@ class JsonLogFormatter(logging.Formatter):
         """Format log record as JSON."""
         import json as json_module
         from datetime import datetime, timezone
-        
+
         log_entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
-        
+
         # Add exception info if present
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
-        
+
         # Add extra fields if any
         for key in ("run_id", "cycle_count", "node", "work_item_id"):
             if hasattr(record, key):
                 log_entry[key] = getattr(record, key)
-        
+
         return json_module.dumps(log_entry)

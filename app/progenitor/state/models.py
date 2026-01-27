@@ -52,23 +52,23 @@ SECRET_PATTERNS = [
     # OpenAI keys (multiple formats)
     (r'sk-proj-[A-Za-z0-9\-_]{20,}', '[OPENAI_PROJECT_KEY_REDACTED]'),  # OpenAI project keys
     (r'sk-[A-Za-z0-9]{20,}', '[OPENAI_KEY_REDACTED]'),  # OpenAI keys
-    
+
     # Azure keys (various formats)
     (r'(?i)(?:azure|az)[_-]?(?:openai)?[_-]?(?:api)?[_-]?key["\']?\s*[:=]\s*["\']?[A-Za-z0-9]{32,}', '[AZURE_KEY_REDACTED]'),
     (r'[A-Za-z0-9]{32}', '[AZURE_KEY_REDACTED]'),  # Standard 32-char Azure keys (applied carefully below)
-    
+
     # GitHub tokens
     (r'ghp_[A-Za-z0-9]{36,}', '[GITHUB_TOKEN_REDACTED]'),  # GitHub personal access tokens
     (r'gho_[A-Za-z0-9]{36,}', '[GITHUB_OAUTH_REDACTED]'),  # GitHub OAuth tokens
     (r'ghs_[A-Za-z0-9]{36,}', '[GITHUB_SERVER_REDACTED]'),  # GitHub server tokens
     (r'ghu_[A-Za-z0-9]{36,}', '[GITHUB_USER_REDACTED]'),  # GitHub user tokens
     (r'github_pat_[A-Za-z0-9_]{22,}', '[GITHUB_PAT_REDACTED]'),  # Fine-grained PATs
-    
+
     # Generic patterns (applied last)
     (r'(?i)(api[_-]?key|apikey)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r'\1=[REDACTED]'),
     (r'(?i)(secret|password|passwd|pwd|token|credential|auth)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r'\1=[REDACTED]'),
     (r'(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*', r'\1[REDACTED]'),
-    
+
     # AWS patterns
     (r'AKIA[A-Z0-9]{16}', '[AWS_ACCESS_KEY_REDACTED]'),
     (r'(?i)(aws[_-]?secret[_-]?access[_-]?key)["\']?\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}', r'\1=[REDACTED]'),

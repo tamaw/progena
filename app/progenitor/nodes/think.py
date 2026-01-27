@@ -5,12 +5,22 @@ Generates approaches, trade-offs, and risks for reaching ideal state.
 """
 
 import logging
+import time
 from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
+
+
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_tracer, get_metrics
+        return get_tracer(), get_metrics()
+    except ImportError:
+        return None, None
 
 
 def create_node(
@@ -29,12 +39,29 @@ def create_node(
         - Available tools and capabilities
         - Constraints and anti-criteria
         """
+        start_time = time.perf_counter()
+        tracer, metrics = _get_telemetry()
+        span = None
+
         ideal_state = state.get("ideal_state")
+        iteration = state.get("current_iteration", 0)
+
+        if tracer:
+            span = tracer.start_span(
+                "node_think",
+                attributes={
+                    "iteration": iteration,
+                    "has_ideal_state": ideal_state is not None,
+                },
+            )
+
         if not ideal_state:
             logger.warning("No ideal state in THINK phase")
+            if span:
+                span.set_attribute("skipped", True)
+                span.end()
             return {}
 
-        iteration = state.get("current_iteration", 0)
         last_verification = state.get("last_verification_report")
 
         # Build thinking prompt
@@ -49,6 +76,12 @@ def create_node(
             # Parse approaches
             approaches = _parse_approaches(response)
 
+            if span:
+                span.add_event("approaches_generated", {
+                    "count": len(approaches),
+                    "prompt_length": len(prompt),
+                })
+
             if state_manager:
                 await state_manager.log_decision({
                     "event": "thinking_phase",
@@ -57,6 +90,17 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
+            # Record metrics
+            duration = time.perf_counter() - start_time
+            if metrics:
+                metrics.record_histogram("node_duration_seconds", duration, {"node": "think"})
+                metrics.increment("node_invocations_total", {"node": "think", "success": "true"})
+
+            if span:
+                span.set_attribute("duration_seconds", duration)
+                span.set_attribute("approaches_count", len(approaches))
+                span.end()
+
             return {
                 "current_approaches": approaches,
                 "thinking_output": response,
@@ -64,6 +108,11 @@ def create_node(
 
         except Exception as e:
             logger.error(f"THINK phase error: {e}")
+            if metrics:
+                metrics.increment("node_invocations_total", {"node": "think", "success": "false"})
+            if span:
+                span.record_exception(e)
+                span.end()
             # Fallback to simple approach
             return {
                 "current_approaches": [{

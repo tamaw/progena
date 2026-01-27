@@ -6,12 +6,22 @@ Captures lessons learned for future iterations.
 """
 
 import logging
+import time
 from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
+
+
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_tracer, get_metrics
+        return get_tracer(), get_metrics()
+    except ImportError:
+        return None, None
 
 
 def create_node(
@@ -30,11 +40,27 @@ def create_node(
         - What to try differently next iteration
         - Patterns to remember
         """
+        start_time = time.perf_counter()
+        tracer, metrics = _get_telemetry()
+        span = None
+
         iteration = state.get("current_iteration", 0)
         verification_report = state.get("last_verification_report")
 
+        if tracer:
+            span = tracer.start_span(
+                "node_learn",
+                attributes={
+                    "iteration": iteration,
+                    "has_verification": verification_report is not None,
+                },
+            )
+
         if not verification_report:
             logger.warning("No verification report in LEARN phase")
+            if span:
+                span.set_attribute("skipped", True)
+                span.end()
             return {}
 
         report_dict = verification_report.model_dump() if hasattr(verification_report, "model_dump") else verification_report
@@ -82,6 +108,8 @@ def create_node(
                     llm_client, iteration, report_dict, state
                 )
                 lessons["insights"] = insights
+                if span:
+                    span.add_event("insights_generated", {"count": len(insights)})
             except Exception as e:
                 logger.warning(f"Could not generate insights: {e}")
 
@@ -99,6 +127,22 @@ def create_node(
                 "adjustments_count": len(lessons["adjustments"]),
                 "timestamp": utcnow_isoformat(),
             })
+
+        # Record telemetry
+        duration = time.perf_counter() - start_time
+        if metrics:
+            metrics.record_histogram("node_duration_seconds", duration, {"node": "learn"})
+            metrics.increment("node_invocations_total", {"node": "learn", "success": "true"})
+            metrics.record_histogram("lessons_worked_count", len(lessons["what_worked"]))
+            metrics.record_histogram("lessons_failed_count", len(lessons["what_failed"]))
+
+        if span:
+            span.set_attribute("worked_count", len(lessons["what_worked"]))
+            span.set_attribute("failed_count", len(lessons["what_failed"]))
+            span.set_attribute("adjustments_count", len(lessons["adjustments"]))
+            span.set_attribute("insights_count", len(lessons["insights"]))
+            span.set_attribute("duration_seconds", duration)
+            span.end()
 
         logger.info(
             f"Learning complete: {len(lessons['what_worked'])} successes, "

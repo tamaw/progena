@@ -3,6 +3,8 @@ Agent Runner - Runs and monitors built A2A agents.
 
 Allows Progenitor to start, monitor, and interact with agents
 immediately after they are built.
+
+Includes telemetry for observability of sub-agent execution.
 """
 
 import asyncio
@@ -19,6 +21,16 @@ from typing import Any, Optional, Callable
 from .time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
+
+
+# Lazy telemetry import to avoid circular imports
+def _get_agent_telemetry(agent_name: str, agent_id: str):
+    """Get AgentTelemetry if available."""
+    try:
+        from ..telemetry import AgentTelemetry
+        return AgentTelemetry(agent_name, agent_id)
+    except ImportError:
+        return None
 
 
 @dataclass
@@ -197,6 +209,14 @@ class AgentRunner:
                 error=f"Agent entrypoint not found: {entrypoint_path}",
             )
 
+        # Start telemetry tracking
+        import uuid
+        agent_id = str(uuid.uuid4())[:8]
+        telem = _get_agent_telemetry(agent_name, agent_id)
+        if telem:
+            telem.start()
+            telem.set_attribute("agent.entrypoint", str(entrypoint_path))
+
         # Prepare input payload
         if isinstance(request, str):
             payload = {
@@ -208,12 +228,19 @@ class AgentRunner:
             if context:
                 payload["context"] = context
 
+        # Inject telemetry context for distributed tracing
+        if telem:
+            tel_context = telem.get_context()
+            payload["_telemetry"] = tel_context.to_dict()
+
         # Prepare environment
         agent_env = os.environ.copy()
         agent_env["PYTHONPATH"] = str(self.project_root)
 
         try:
             logger.info("Invoking agent '%s'", agent_name)
+            if telem:
+                telem.add_event("invoke_start")
 
             process = await asyncio.create_subprocess_exec(
                 sys.executable, str(entrypoint_path),
@@ -235,6 +262,9 @@ class AgentRunner:
             if process.returncode != 0:
                 error_msg = stderr.decode() if stderr else f"Exit code {process.returncode}"
                 logger.warning("Agent '%s' invocation failed: %s", agent_name, error_msg)
+                if telem:
+                    telem.set_attribute("agent.exit_code", process.returncode)
+                    telem.complete(success=False, error=error_msg)
                 return AgentInteractionResult(
                     success=False,
                     error=error_msg,
@@ -248,6 +278,10 @@ class AgentRunner:
                 response = {"raw_output": stdout.decode()}
 
             logger.info("Agent '%s' responded in %.1fms", agent_name, duration_ms)
+
+            if telem:
+                telem.add_event("invoke_complete", {"duration_ms": duration_ms})
+                telem.complete(success=True)
 
             if self.log_callback:
                 await self.log_callback({
@@ -267,6 +301,8 @@ class AgentRunner:
         except asyncio.TimeoutError:
             duration_ms = (datetime.now() - start_time).total_seconds() * 1000
             logger.error(f"Agent '{agent_name}' invocation timed out after {timeout}s")
+            if telem:
+                telem.complete(success=False, error=f"Timeout after {timeout}s")
             return AgentInteractionResult(
                 success=False,
                 error=f"Timeout after {timeout}s",
@@ -275,6 +311,8 @@ class AgentRunner:
         except Exception as e:
             duration_ms = (datetime.now() - start_time).total_seconds() * 1000
             logger.exception(f"Error invoking agent '{agent_name}'")
+            if telem:
+                telem.complete(success=False, error=str(e))
             return AgentInteractionResult(
                 success=False,
                 error=str(e),

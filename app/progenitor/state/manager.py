@@ -15,12 +15,22 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
+
+
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_tracer, get_metrics
+        return get_tracer(), get_metrics()
+    except ImportError:
+        return None, None
 
 # Cross-platform file locking
 if sys.platform == 'win32':
@@ -48,16 +58,23 @@ from ..runtime.time_utils import utcnow_isoformat
 
 
 class StateManager:
-    """Manages persistence of Progenitor state with file locking."""
+    """Manages persistence of Progenitor state with file locking.
 
-    CORE_FILES = {
+    Provides:
+    - Atomic writes for crash safety
+    - File locking for concurrent access
+    - Cached state for performance
+    - JSONL logging with secret redaction
+    """
+
+    CORE_FILES: dict[str, str] = {
         "current_state": "current_state.json",
         "backlog": "backlog.json",
         "registry": "registry.json",
         "schedule": "schedule.json",
     }
 
-    LOG_FILES = {
+    LOG_FILES: dict[str, str] = {
         "conversation": "conversation.jsonl",
         "decisions": "decisions.jsonl",
         "copilot_calls": "copilot_calls.jsonl",
@@ -65,7 +82,7 @@ class StateManager:
         "schedule": "schedule.jsonl",
     }
 
-    def __init__(self, state_dir: Path, logs_dir: Path, lock_timeout: int = 10):
+    def __init__(self, state_dir: Path, logs_dir: Path, lock_timeout: int = 10) -> None:
         self.state_dir = Path(state_dir)
         self.logs_dir = Path(logs_dir)
         self.lock_timeout = lock_timeout
@@ -121,6 +138,18 @@ class StateManager:
         file remains intact. No partial writes possible.
         """
         filepath = Path(filepath)
+        start_time = time.perf_counter()
+        tracer, metrics = _get_telemetry()
+        span = None
+
+        if tracer:
+            span = tracer.start_span(
+                "state_write",
+                attributes={
+                    "file": filepath.name,
+                    "operation": "atomic_write",
+                },
+            )
 
         # Write to temp file in same directory
         fd, tmp_path = tempfile.mkstemp(
@@ -138,11 +167,30 @@ class StateManager:
             # Atomic rename
             os.replace(tmp_path, filepath)
             logger.debug("Atomically wrote %s", filepath)
+
+            # Record success metrics
+            duration = time.perf_counter() - start_time
+            if metrics:
+                metrics.record_histogram("state_write_duration_seconds", duration)
+                metrics.increment("state_write_total", {"file": filepath.name, "success": "true"})
+
+            if span:
+                span.set_attribute("success", True)
+                span.set_attribute("duration_seconds", duration)
+                span.end()
+
         except Exception as e:
             logger.error("Failed to write %s: %s", filepath, e)
             # Clean up temp file on error
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+            if metrics:
+                metrics.increment("state_write_total", {"file": filepath.name, "success": "false"})
+
+            if span:
+                span.record_exception(e)
+                span.end()
             raise
 
     async def _read_json(self, filepath: Path) -> Any:
@@ -160,6 +208,7 @@ class StateManager:
             raise ValueError(f"Unknown log: {log_name}")
 
         filepath = self.logs_dir / self.LOG_FILES[log_name]
+        tracer, metrics = _get_telemetry()
 
         # Add timestamp if not present
         if "timestamp" not in entry:
@@ -173,6 +222,11 @@ class StateManager:
             f.write(line)
             f.flush()
             os.fsync(f.fileno())
+
+        # Record log append metrics
+        if metrics:
+            metrics.increment("log_append_total", {"log": log_name})
+            metrics.record_histogram("log_entry_size_bytes", len(line))
 
     async def log_conversation(self, message: ConversationMessage) -> None:
         """Log a conversation message."""

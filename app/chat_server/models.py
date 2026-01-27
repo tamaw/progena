@@ -5,7 +5,6 @@ Based on OpenAI Chat Completions API format.
 https://platform.openai.com/docs/api-reference/chat
 """
 
-from datetime import datetime
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 import time

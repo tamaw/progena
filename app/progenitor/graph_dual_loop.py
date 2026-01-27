@@ -37,6 +37,9 @@ from .nodes import (
 # Import new loop.spec.md nodes
 from .nodes import observe, think, planner, execute, verify_loop, learn
 
+# Import shared utilities
+from ..common.utils import get_attr, get_enum_value
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,24 +132,21 @@ def route_after_decide(state: ProgenitorState) -> Literal["observe", "pick_next"
         → 'observe' (enter inner loop)
     For simple tasks:
         → 'pick_next' or 'respond'
+
+    NOTE: This is a pure routing function. State initialization for the inner
+    loop happens in the 'observe' node, not here.
     """
     decision = state.get("current_decision")
 
     if not decision:
         return "respond"
 
-    # Handle both Decision objects and dicts
-    if hasattr(decision, "action"):
-        action = decision.action
-        requires_planning = decision.requires_planning
-    elif isinstance(decision, dict):
-        action = decision.get("action", "answer_directly")
-        requires_planning = decision.get("requires_planning", False)
-    else:
-        return "respond"
+    # Use helper for uniform object/dict access
+    action = get_attr(decision, "action", "answer_directly")
+    requires_planning = get_attr(decision, "requires_planning", False)
 
     # Get action value if it's an enum
-    action_value = action.value if hasattr(action, 'value') else str(action)
+    action_value = get_enum_value(action, "answer_directly")
 
     # Direct answers bypass inner loop
     if action_value in ("answer", "answer_directly"):
@@ -154,18 +154,7 @@ def route_after_decide(state: ProgenitorState) -> Literal["observe", "pick_next"
 
     # Complex tasks enter inner loop with OBSERVE
     if requires_planning or action_value in ("build_agent", "build_mcp", "upgrade"):
-        logger.info("Entering inner loop (OBSERVE phase)")
-        # Initialize iteration state (loop.spec.md Task State)
-        state["current_iteration"] = 0
-        state["iteration_start_time"] = time.time()
-        state["should_iterate"] = True
-        state["lessons_learned"] = []
-        # Initialize artefact tracking (loop.spec.md Task State)
-        state["task_id"] = f"task_{uuid.uuid4().hex[:8]}"
-        state["artefacts"] = []
-        state["best_artefact"] = None
-        state["best_artefact_score"] = 0.0
-        state["verification_reports"] = []
+        logger.info("Routing to inner loop (OBSERVE phase)")
         return "observe"
 
     # Simple tasks go to pick_next

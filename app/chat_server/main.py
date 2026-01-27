@@ -11,7 +11,7 @@ import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,11 +49,37 @@ client: ProgenitorClient = None  # type: ignore
 class RateLimiter:
     """Simple in-memory rate limiter using sliding window."""
 
+    CLEANUP_INTERVAL = 300  # Cleanup stale clients every 5 minutes
+    STALE_CLIENT_AGE = 3600  # Remove clients with no activity for 1 hour
+
     def __init__(self, requests_per_minute: int = 60, requests_per_hour: int = 500):
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
         self._minute_requests: dict[str, list[float]] = defaultdict(list)
         self._hour_requests: dict[str, list[float]] = defaultdict(list)
+        self._last_cleanup = time.time()
+
+    def _cleanup_stale_clients(self) -> None:
+        """Remove stale client entries to prevent memory leak."""
+        now = time.time()
+        if now - self._last_cleanup < self.CLEANUP_INTERVAL:
+            return
+
+        self._last_cleanup = now
+        stale_threshold = now - self.STALE_CLIENT_AGE
+
+        # Find and remove stale clients
+        stale_clients = []
+        for client_id, timestamps in self._hour_requests.items():
+            if not timestamps or max(timestamps) < stale_threshold:
+                stale_clients.append(client_id)
+
+        for client_id in stale_clients:
+            self._minute_requests.pop(client_id, None)
+            self._hour_requests.pop(client_id, None)
+
+        if stale_clients:
+            logger.debug("Cleaned up %d stale rate limit clients", len(stale_clients))
 
     def is_allowed(self, client_id: str) -> tuple[bool, str | None]:
         """Check if request is allowed. Returns (allowed, reason)."""
@@ -61,7 +87,10 @@ class RateLimiter:
         minute_ago = now - 60
         hour_ago = now - 3600
 
-        # Clean old entries
+        # Periodic cleanup of stale clients
+        self._cleanup_stale_clients()
+
+        # Clean old entries for this client
         self._minute_requests[client_id] = [
             t for t in self._minute_requests[client_id] if t > minute_ago
         ]
@@ -91,6 +120,14 @@ class RateLimiter:
         return {
             "minute": max(0, self.requests_per_minute - minute_count),
             "hour": max(0, self.requests_per_hour - hour_count),
+        }
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get rate limiter statistics for health endpoint."""
+        return {
+            "active_clients": len(self._hour_requests),
+            "requests_per_minute_limit": self.requests_per_minute,
+            "requests_per_hour_limit": self.requests_per_hour,
         }
 
 
@@ -153,6 +190,35 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Add request ID to all requests for tracing."""
+    # Get or generate request ID
+    request_id = request.headers.get("X-Request-ID") or f"req-{uuid.uuid4().hex[:12]}"
+
+    # Store in request state for access by handlers
+    request.state.request_id = request_id
+
+    # Log request with ID
+    logger.info(
+        "Request %s: %s %s",
+        request_id,
+        request.method,
+        request.url.path,
+    )
+
+    # Update activity timestamp
+    _update_activity()
+
+    # Process request
+    response = await call_next(request)
+
+    # Add request ID to response headers
+    response.headers["X-Request-ID"] = request_id
+
+    return response
+
+
+@app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """Apply rate limiting to API endpoints."""
     # Skip rate limiting for health checks and if disabled
@@ -204,13 +270,83 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+# Track server start time for uptime calculation
+_server_start_time = time.time()
+_last_activity_time = time.time()
+
+
+def _update_activity():
+    """Update last activity timestamp."""
+    global _last_activity_time
+    _last_activity_time = time.time()
+
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with detailed diagnostics."""
+    now = time.time()
     return {
         "status": "ok",
+        "version": config.api_version,
         "progenitor_running": client.is_running if client else False,
+        "uptime_seconds": round(now - _server_start_time, 1),
+        "last_activity_seconds_ago": round(now - _last_activity_time, 1),
+        "rate_limit": rate_limiter.get_stats() if config.rate_limit_enabled else None,
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    """
+    Prometheus-compatible metrics endpoint.
+
+    Returns metrics in Prometheus text format for scraping.
+    """
+    try:
+        from ..progenitor.telemetry import get_metrics
+
+        collector = get_metrics()
+        prometheus_text = collector.to_prometheus()
+
+        return Response(
+            content=prometheus_text,
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+    except ImportError:
+        return Response(
+            content="# Telemetry not available\n",
+            media_type="text/plain",
+        )
+    except Exception as e:
+        logger.warning("Failed to collect metrics: %s", e)
+        return Response(
+            content=f"# Error collecting metrics: {e}\n",
+            media_type="text/plain",
+        )
+
+
+@app.get("/metrics/json")
+async def metrics_json():
+    """
+    JSON metrics endpoint for programmatic access.
+
+    Returns all metrics as JSON objects.
+    """
+    try:
+        from ..progenitor.telemetry import get_metrics
+
+        collector = get_metrics()
+        points = collector.collect()
+
+        return {
+            "metrics": [p.to_dict() for p in points],
+            "timestamp": time.time(),
+        }
+    except ImportError:
+        return {"error": "Telemetry not available", "metrics": []}
+    except Exception as e:
+        logger.warning("Failed to collect metrics: %s", e)
+        return {"error": str(e), "metrics": []}
 
 
 @app.get("/v1/models", response_model=ModelsResponse)

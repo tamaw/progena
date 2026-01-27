@@ -3,6 +3,7 @@ Planner Node - Generates work items for complex tasks.
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import Callable, Coroutine, Any
 import uuid
@@ -19,24 +20,59 @@ from ..runtime.time_utils import utcnow_isoformat
 logger = logging.getLogger(__name__)
 
 
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_tracer, get_metrics
+        return get_tracer(), get_metrics()
+    except ImportError:
+        return None, None
+
+
 def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the planner node function."""
 
     async def planner_node(state: ProgenitorState) -> ProgenitorState:
         """Generate work items based on decision or ideal state (loop.spec.md PLAN phase)."""
+        start_time = time.perf_counter()
+        tracer, metrics = _get_telemetry()
+        span = None
+
         decision = state.get("current_decision")
         user_input = state.get("current_input")
         ideal_state = state.get("ideal_state")
         current_approaches = state.get("current_approaches", [])
 
+        if tracer:
+            span = tracer.start_span(
+                "node_planner",
+                attributes={
+                    "has_decision": decision is not None,
+                    "has_ideal_state": ideal_state is not None,
+                    "approaches_count": len(current_approaches),
+                },
+            )
+
         # If in inner loop with ideal state, plan based on THINK phase approaches
         if ideal_state and current_approaches:
-            return await _plan_from_ideal_state(
+            result = await _plan_from_ideal_state(
                 state, ideal_state, current_approaches, llm_client, state_manager
             )
+            duration = time.perf_counter() - start_time
+            if metrics:
+                metrics.record_histogram("node_duration_seconds", duration, {"node": "planner"})
+                metrics.increment("node_invocations_total", {"node": "planner", "success": "true"})
+            if span:
+                span.set_attribute("plan_type", "ideal_state")
+                span.set_attribute("duration_seconds", duration)
+                span.end()
+            return result
 
         # Otherwise, use traditional planning from decision
         if not decision or not decision.requires_planning:
+            if span:
+                span.set_attribute("skipped", True)
+                span.end()
             return {}
 
         # Get current backlog for context
@@ -85,10 +121,28 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
                 "timestamp": utcnow_isoformat(),
             })
 
+            # Record telemetry
+            duration = time.perf_counter() - start_time
+            if metrics:
+                metrics.record_histogram("node_duration_seconds", duration, {"node": "planner"})
+                metrics.increment("node_invocations_total", {"node": "planner", "success": "true"})
+                metrics.record_histogram("planner_work_items_created", len(work_items_data))
+
+            if span:
+                span.set_attribute("work_items_created", len(work_items_data))
+                span.set_attribute("duration_seconds", duration)
+                span.add_event("planning_complete", {"work_items": len(work_items_data)})
+                span.end()
+
             return {"backlog": backlog}
 
         except Exception as e:
             # Log error but continue
+            if metrics:
+                metrics.increment("node_invocations_total", {"node": "planner", "success": "false"})
+            if span:
+                span.record_exception(e)
+                span.end()
             await state_manager.log_decision({
                 "event": "planning_error",
                 "error": str(e),

@@ -10,6 +10,7 @@ Every iteration produces:
 """
 
 import logging
+import time
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,15 @@ from .ideal_state import IdealState, SuccessCriterion, AntiCriterion
 from ..runtime.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_tracer, get_metrics
+        return get_tracer(), get_metrics()
+    except ImportError:
+        return None, None
 
 
 class CriterionScore(BaseModel):
@@ -131,54 +141,97 @@ class Verifier:
         """
         from ..runtime.time_utils import utcnow_isoformat
 
+        start_time = time.perf_counter()
+        tracer, metrics = _get_telemetry()
+        span = None
+
+        if tracer:
+            span = tracer.start_span(
+                "verify",
+                attributes={
+                    "iteration": iteration,
+                    "criteria_count": len(ideal_state.success_criteria),
+                    "anti_criteria_count": len(ideal_state.anti_criteria),
+                    "uses_llm": self.uses_llm,
+                },
+            )
+
         context = context or {}
         criterion_scores = []
         violations = []
 
-        # Score each success criterion
-        for criterion in ideal_state.success_criteria:
-            score_result = await self._score_criterion(
-                criterion, output, context
+        try:
+            # Score each success criterion
+            for criterion in ideal_state.success_criteria:
+                score_result = await self._score_criterion(
+                    criterion, output, context
+                )
+                criterion_scores.append(score_result)
+
+            # Check anti-criteria
+            for anti_criterion in ideal_state.anti_criteria:
+                violation = await self._check_anti_criterion(
+                    anti_criterion, output, context
+                )
+                if violation:
+                    violations.append(violation)
+
+            # Calculate overall score
+            overall_score = self._calculate_overall_score(
+                criterion_scores, violations, ideal_state
             )
-            criterion_scores.append(score_result)
 
-        # Check anti-criteria
-        for anti_criterion in ideal_state.anti_criteria:
-            violation = await self._check_anti_criterion(
-                anti_criterion, output, context
+            # Determine if passed
+            min_score = self._get_minimum_score(ideal_state)
+            passed = overall_score >= min_score
+
+            # Analyze gaps
+            gaps = self._identify_gaps(criterion_scores)
+            next_actions = self._suggest_next_actions(criterion_scores, gaps)
+
+            # Generate summary
+            summary = self._generate_summary(
+                overall_score, passed, criterion_scores, violations, gaps
             )
-            if violation:
-                violations.append(violation)
 
-        # Calculate overall score
-        overall_score = self._calculate_overall_score(
-            criterion_scores, violations, ideal_state
-        )
+            report = VerificationReport(
+                iteration=iteration,
+                timestamp=utcnow_isoformat(),
+                criterion_scores=criterion_scores,
+                anti_criterion_violations=violations,
+                overall_score=overall_score,
+                passed=passed,
+                gaps=gaps,
+                next_actions=next_actions,
+                summary=summary,
+            )
 
-        # Determine if passed
-        min_score = self._get_minimum_score(ideal_state)
-        passed = overall_score >= min_score
+            # Record telemetry
+            duration = time.perf_counter() - start_time
+            if metrics:
+                metrics.record_histogram("verify_duration_seconds", duration)
+                metrics.record_histogram("verify_score", overall_score)
+                metrics.increment("verify_total", {"passed": str(passed).lower()})
+                if violations:
+                    metrics.increment("verify_violations_total", {"count": str(len(violations))})
 
-        # Analyze gaps
-        gaps = self._identify_gaps(criterion_scores)
-        next_actions = self._suggest_next_actions(criterion_scores, gaps)
+            if span:
+                span.set_attribute("overall_score", overall_score)
+                span.set_attribute("passed", passed)
+                span.set_attribute("criteria_passed", sum(1 for s in criterion_scores if s.passed))
+                span.set_attribute("violation_count", len(violations))
+                span.set_attribute("gap_count", len(gaps))
+                span.set_attribute("duration_seconds", duration)
+                span.add_event("verification_complete", {"score": overall_score, "passed": passed})
+                span.end()
 
-        # Generate summary
-        summary = self._generate_summary(
-            overall_score, passed, criterion_scores, violations, gaps
-        )
+            return report
 
-        return VerificationReport(
-            iteration=iteration,
-            timestamp=utcnow_isoformat(),
-            criterion_scores=criterion_scores,
-            anti_criterion_violations=violations,
-            overall_score=overall_score,
-            passed=passed,
-            gaps=gaps,
-            next_actions=next_actions,
-            summary=summary,
-        )
+        except Exception as e:
+            if span:
+                span.record_exception(e)
+                span.end()
+            raise
 
     async def _score_criterion(
         self,
