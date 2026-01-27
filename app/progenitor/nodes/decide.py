@@ -2,11 +2,18 @@
 Decide Node - Routes user input to appropriate action path.
 """
 
+import logging
 from datetime import datetime
 from typing import Callable, Coroutine, Any, Optional
 
+from openai import APIConnectionError, RateLimitError
+
 from ..state.models import ProgenitorState, Decision, DecisionAction, WorkItem
+from ..state.helpers import is_work_item_actionable
 from ..runtime.time_utils import utcnow_isoformat
+from .errors import RecoverableError, LLMError, ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 def create_node(
@@ -31,7 +38,7 @@ def create_node(
             backlog = state.get("backlog", [])
             pending = [
                 item for item in backlog
-                if _is_actionable(item)
+                if is_work_item_actionable(item)
             ]
 
             if pending:
@@ -60,6 +67,7 @@ def create_node(
             try:
                 action = DecisionAction(action_str)
             except ValueError:
+                logger.warning("Unknown action '%s', falling back to answer_directly", action_str)
                 action = DecisionAction.ANSWER_DIRECTLY
 
             decision = Decision(
@@ -83,28 +91,39 @@ def create_node(
 
             return {"current_decision": decision}
 
+        except (RateLimitError, APIConnectionError) as e:
+            # Recoverable errors - log and raise for retry handling
+            logger.warning("Recoverable LLM error in decide node: %s", e)
+            raise LLMError(
+                message=f"LLM API error: {e}",
+                node_name="decide",
+                context={"user_input": user_input[:100] if user_input else None},
+                retry_after_seconds=5.0,
+            ) from e
+
         except Exception as e:
-            # Fallback to direct answer on error
+            # Unexpected errors - log at error level, but still try to recover
+            logger.error("Unexpected error in decide node: %s", e, exc_info=True)
+            
+            # Fallback to direct answer
             decision = Decision(
                 action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning=f"Fallback due to error: {e}",
+                reasoning=f"Fallback due to error: {type(e).__name__}: {e}",
                 requires_planning=False,
             )
+            
+            # Log the fallback
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "routing_decision_fallback",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "timestamp": utcnow_isoformat(),
+                })
+            
             return {"current_decision": decision}
 
     return decide_node
-
-
-def _is_actionable(item) -> bool:
-    """Check if a work item is actionable (pending or in_progress)."""
-    if isinstance(item, WorkItem):
-        return item.is_actionable
-    if isinstance(item, dict):
-        return item.get("status") in ("pending", "in_progress")
-    if hasattr(item, "status"):
-        status = item.status.value if hasattr(item.status, "value") else item.status
-        return status in ("pending", "in_progress")
-    return False
 
 
 def _extract_history(messages: list, limit: int = 10) -> list[dict[str, str]]:

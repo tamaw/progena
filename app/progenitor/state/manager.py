@@ -137,9 +137,9 @@ class StateManager:
 
             # Atomic rename
             os.replace(tmp_path, filepath)
-            logger.debug(f"Atomically wrote {filepath}")
+            logger.debug("Atomically wrote %s", filepath)
         except Exception as e:
-            logger.error(f"Failed to write {filepath}: {e}")
+            logger.error("Failed to write %s: %s", filepath, e)
             # Clean up temp file on error
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)

@@ -17,6 +17,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from .state.models import ProgenitorState
+from .state.helpers import get_actionable_items
 from .nodes import (
     intake,
     time_check,
@@ -39,9 +40,16 @@ from .nodes import observe, think, planner, execute, verify_loop, learn
 logger = logging.getLogger(__name__)
 
 
-def should_iterate(state: ProgenitorState) -> Literal["observe", "respond"]:
+# Default failsafe - can be overridden via config passed to create_progenitor_graph
+DEFAULT_MAX_INNER_ITERATIONS = 5
+
+
+def should_iterate(state: ProgenitorState, max_iterations: int = DEFAULT_MAX_INNER_ITERATIONS) -> Literal["observe", "respond"]:
     """
     Determine if inner loop should continue iterating.
+
+    IMPORTANT: This is a routing function - it must NOT mutate state.
+    State updates happen in nodes, not in routing conditionals.
 
     Checks stop conditions:
     - Min score reached
@@ -62,9 +70,7 @@ def should_iterate(state: ProgenitorState) -> Literal["observe", "respond"]:
 
     # Check if verification passed
     if state.get("verification_passed", False):
-        logger.info(f"Verification passed at iteration {iteration}")
-        state["should_iterate"] = False
-        state["iteration_stop_reason"] = "Verification passed"
+        logger.info("Verification passed at iteration %d", iteration)
         return "respond"
 
     # Check stop conditions from ideal state
@@ -83,22 +89,16 @@ def should_iterate(state: ProgenitorState) -> Literal["observe", "respond"]:
         )
 
         if should_stop:
-            logger.info(f"Stop conditions met: {', '.join(reasons)}")
-            state["should_iterate"] = False
-            state["iteration_stop_reason"] = reasons[0] if reasons else "Stop condition met"
+            logger.info("Stop conditions met: %s", ', '.join(reasons))
             return "respond"
 
-    # Default: Continue iterating if under reasonable limits
-    max_iterations = 5  # Failsafe
+    # Default: Continue iterating if under failsafe limit
     if iteration >= max_iterations:
-        logger.warning(f"Max failsafe iterations ({max_iterations}) reached")
-        state["should_iterate"] = False
-        state["iteration_stop_reason"] = f"Max iterations {max_iterations} reached"
+        logger.warning("Max failsafe iterations (%d) reached", max_iterations)
         return "respond"
 
     # Continue iterating
-    logger.info(f"Continuing to iteration {iteration + 1}")
-    state["should_iterate"] = True
+    logger.info("Continuing to iteration %d", iteration + 1)
     return "observe"
 
 
@@ -112,18 +112,10 @@ def should_continue_outer(state: ProgenitorState) -> Literal["pick_next", "idle"
         return "end"
 
     backlog = state.get("backlog", [])
-    pending = []
-    for item in backlog:
-        if hasattr(item, "is_actionable"):
-            if item.is_actionable:
-                pending.append(item)
-        elif isinstance(item, dict):
-            status = item.get("status", "pending")
-            if status in ("pending", "in_progress"):
-                pending.append(item)
+    pending = get_actionable_items(backlog)
 
     if pending:
-        logger.debug(f"{len(pending)} actionable items in backlog")
+        logger.debug("%d actionable items in backlog", len(pending))
         return "pick_next"
 
     return "idle"
@@ -278,6 +270,13 @@ def create_progenitor_graph(
     Returns:
         Compiled StateGraph implementing dual-loop architecture.
     """
+    # Get max iterations from config (or use default)
+    max_inner_iterations = getattr(config.runtime, 'max_inner_iterations', DEFAULT_MAX_INNER_ITERATIONS)
+
+    # Create a bound version of should_iterate with the configured max iterations
+    def should_iterate_configured(state: ProgenitorState) -> Literal["observe", "respond"]:
+        """Configured version of should_iterate using runtime settings."""
+        return should_iterate(state, max_iterations=max_inner_iterations)
 
     # Create all node functions
     nodes = {
@@ -289,7 +288,7 @@ def create_progenitor_graph(
         "pick_next": pick_next.create_node(),
         "worktree_prep": worktree_prep.create_node(worktrees_dir),
         "validate": validate.create_node(config),
-        "register": register.create_node(tool_registry, state_manager),
+        "register": register.create_node(tool_registry, state_manager, config),
         "commit_core": commit_core.create_node(state_manager),
         "respond": respond.create_node(state_manager),
         "idle": idle.create_node(config, state_manager),
@@ -375,10 +374,10 @@ def create_progenitor_graph(
     # After verify: learn
     builder.add_edge("verify", "learn")
 
-    # After learn: check if should iterate or respond
+    # After learn: check if should iterate or respond (using configured max iterations)
     builder.add_conditional_edges(
         "learn",
-        should_iterate,
+        should_iterate_configured,
         {
             "observe": "observe",  # Continue iterating
             "respond": "respond",  # Done iterating
@@ -405,5 +404,10 @@ def create_progenitor_graph(
     # Compile with checkpointing
     memory = MemorySaver()
     graph = builder.compile(checkpointer=memory)
+
+    logger.info(
+        "Created dual-loop graph with max_inner_iterations=%d",
+        max_inner_iterations
+    )
 
     return graph

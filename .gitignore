@@ -64,12 +64,11 @@ venv.bak/
 *.swo
 
 # Project specific
-state/*.json
-!state/.gitkeep
+data/state/*.json
+!data/state/.gitkeep
 logs/
 !logs/.gitkeep
-worktrees/*
-!worktrees/.gitkeep
+worktrees/
 
 # Secrets
 .env

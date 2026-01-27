@@ -16,10 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code (including app.chat_server and app.progenitor)
 COPY app/ ./app/
 COPY config/ ./config/
-COPY cli.py ./
+COPY data/prompts/ ./data/prompts/
 
 # Create directories for mounted volumes
-RUN mkdir -p /app/state /app/logs /app/worktrees
+RUN mkdir -p /app/data/state /app/logs /app/worktrees
 
 # Set environment variables
 ENV PYTHONPATH=/app

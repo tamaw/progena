@@ -10,7 +10,8 @@ services:
       - AZURE_OPENAI_DEPLOYMENT_DEFAULT=${AZURE_OPENAI_DEPLOYMENT_DEFAULT}
       - TZ=UTC
     volumes:
-      - ./state:/app/state
+      - ./data/state:/app/data/state
+      - ./data/prompts:/app/data/prompts:ro
       - ./logs:/app/logs
       - ./worktrees:/app/worktrees
       - ./config:/app/config:ro
@@ -18,6 +19,12 @@ services:
     tty: true
     networks:
       - progenitor-net
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   chat_server:
     build: .
@@ -35,7 +42,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./state:/app/state
+      - ./data/state:/app/data/state
       - ./logs:/app/logs
       - ./config:/app/config:ro
     depends_on:

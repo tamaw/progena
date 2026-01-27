@@ -2,13 +2,14 @@
 OpenAI API Client for Progenitor.
 
 Uses the OpenAI Responses API for all model calls.
-Implements retry logic with exponential backoff for resilience.
+Implements retry logic with exponential backoff and jitter for resilience.
 Supports OpenAI and Azure OpenAI providers.
 """
 
 import asyncio
 import json
 import logging
+import random
 from typing import Any, Optional
 from openai import APIConnectionError, APIError, RateLimitError, AsyncOpenAI
 
@@ -29,6 +30,7 @@ class LLMClient:
     DEFAULT_RETRIES = 3
     RETRY_DELAY = 1.0
     RETRY_MULTIPLIER = 2.0
+    RETRY_JITTER = 0.5  # ±50% jitter to prevent thundering herd
 
     def __init__(
         self,
@@ -97,10 +99,13 @@ class LLMClient:
         )
 
     async def _retry_with_backoff(self, func, *args, **kwargs) -> Any:
-        """Execute function with exponential backoff retry.
+        """Execute function with exponential backoff retry and jitter.
 
         Retries on rate limits and connection errors. Does not retry
         on client errors (4xx except 429).
+
+        Uses jitter to prevent thundering herd when multiple instances
+        hit rate limits simultaneously.
         """
         last_error: Optional[Exception] = None
         delay = self.RETRY_DELAY
@@ -111,22 +116,31 @@ class LLMClient:
             except (RateLimitError, APIConnectionError) as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    logger.warning(f"API call failed (attempt {attempt + 1}/{self.max_retries}): {e}. Retrying in {delay}s...")
-                    await asyncio.sleep(delay)
+                    # Add jitter: delay * (1 ± RETRY_JITTER)
+                    jittered_delay = delay * (1.0 + random.uniform(-self.RETRY_JITTER, self.RETRY_JITTER))
+                    logger.warning(
+                        "API call failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                        attempt + 1, self.max_retries, e, jittered_delay
+                    )
+                    await asyncio.sleep(jittered_delay)
                     delay *= self.RETRY_MULTIPLIER
             except APIError as e:
                 # Don't retry on client errors (4xx except rate limit)
                 status = getattr(e, 'status_code', None)
                 if status and 400 <= status < 500 and status != 429:
-                    logger.error(f"API client error (not retrying): {e}")
+                    logger.error("API client error (not retrying): %s", e)
                     raise
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    logger.warning(f"API error (attempt {attempt + 1}/{self.max_retries}): {e}. Retrying in {delay}s...")
-                    await asyncio.sleep(delay)
+                    jittered_delay = delay * (1.0 + random.uniform(-self.RETRY_JITTER, self.RETRY_JITTER))
+                    logger.warning(
+                        "API error (attempt %d/%d): %s. Retrying in %.1fs...",
+                        attempt + 1, self.max_retries, e, jittered_delay
+                    )
+                    await asyncio.sleep(jittered_delay)
                     delay *= self.RETRY_MULTIPLIER
 
-        logger.error(f"All {self.max_retries} retry attempts failed")
+        logger.error("All %d retry attempts failed", self.max_retries)
         if last_error:
             raise last_error
         raise RuntimeError("Retry failed with no captured error")
@@ -148,7 +162,15 @@ class LLMClient:
         full_messages.extend(messages)
 
         async def _do_chat():
-            adjusted_temp = 1.0 if (self.config.provider == "azure" and temperature != 1) else temperature
+            adjusted_temp = temperature
+            if self.config.provider == "azure" and temperature != 1.0:
+                # Azure OpenAI has stricter temperature constraints
+                # Some models require temperature=1.0, others have narrower ranges
+                adjusted_temp = 1.0
+                logger.debug(
+                    "Azure provider: adjusted temperature from %.2f to %.2f",
+                    temperature, adjusted_temp
+                )
 
             kwargs: dict[str, Any] = {
                 "model": self.model,

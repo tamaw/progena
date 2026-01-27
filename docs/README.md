@@ -12,16 +12,16 @@
 ## Architecture
 
 - **[ARCHITECTURE_DIAGRAM.md](ARCHITECTURE_DIAGRAM.md)** - Visual system architecture and component diagrams
-- **[LOOP_IMPROVEMENTS.md](LOOP_IMPROVEMENTS.md)** - Loop improvements and iterations
+- **[LOOP_IMPROVEMENTS.md](LOOP_IMPROVEMENTS.md)** - Loop architecture and dual-loop implementation details
+- **[LOOP_IMPROVEMENTS_SUMMARY.md](LOOP_IMPROVEMENTS_SUMMARY.md)** - Summary of loop implementation
 
 ## Components
 
 - **[CHAT_SERVER.md](CHAT_SERVER.md)** - Chat server API documentation and endpoints
 - **[DOCKER.md](DOCKER.md)** - Docker deployment guide and container configuration
 
-## Implementation Notes
+## Validation
 
-- **[LOOP_IMPROVEMENTS_SUMMARY.md](LOOP_IMPROVEMENTS_SUMMARY.md)** - Summary of loop implementation improvements
 - **[VALIDATION_SUMMARY.md](VALIDATION_SUMMARY.md)** - Validation test results and coverage
 
 ## Quick Links
@@ -29,3 +29,4 @@
 - [Main README](../README.md)
 - [Tests](../tests/)
 - [Examples](../examples/)
+- [Scripts](../scripts/)

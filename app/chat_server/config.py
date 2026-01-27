@@ -53,6 +53,11 @@ class ChatServerConfig:
     # CORS
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
+    # Rate limiting
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 60
+    rate_limit_per_hour: int = 500
+
     @classmethod
     def from_env(cls) -> "ChatServerConfig":
         """Load config from environment variables."""
@@ -64,4 +69,7 @@ class ChatServerConfig:
             progenitor_python=os.getenv("CHAT_SERVER_PYTHON", "python"),
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),
+            rate_limit_enabled=_env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),
+            rate_limit_per_minute=_env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 60),
+            rate_limit_per_hour=_env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 500),
         )

@@ -29,9 +29,13 @@ class ToolRegistry:
             try:
                 with open(self.registry_path, 'r') as f:
                     self._registry = json.load(f)
-                logger.info(f"Loaded registry with {len(self._registry.get('agents', []))} agents and {len(self._registry.get('tools', []))} tools")
+                logger.info(
+                    "Loaded registry with %d agents and %d tools",
+                    len(self._registry.get('agents', [])),
+                    len(self._registry.get('tools', []))
+                )
             except (json.JSONDecodeError, IOError) as e:
-                logger.error(f"Failed to load registry: {e}. Starting fresh.")
+                logger.error("Failed to load registry: %s. Starting fresh.", e)
                 self._registry = {"agents": [], "tools": []}
         else:
             logger.info("No existing registry found, creating new one")

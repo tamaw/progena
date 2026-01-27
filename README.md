@@ -74,19 +74,28 @@ app/
   agents/            # A2A agents (created by Progenitor)
   mcp/               # MCP servers (created by Progenitor)
 config/
-  copilot.json         # Copilot CLI configuration
+  copilot.json       # Copilot CLI configuration
   progenitor.json    # Runtime configuration
-state/               # Persisted state (JSON)
+data/
+  state/             # Persisted state (JSON)
+  prompts/           # Editable prompt templates
 logs/                # Append-only logs (JSONL)
+scripts/             # CLI utilities
 worktrees/           # Git worktrees for builds
 ```
 
 ### State Files
 
-- `state/current_state.json` - Runtime state
-- `state/backlog.json` - Work item queue
-- `state/registry.json` - Agent and tool registry
-- `state/schedule.json` - Scheduled tasks
+- `data/state/current_state.json` - Runtime state
+- `data/state/backlog.json` - Work item queue
+- `data/state/registry.json` - Agent and tool registry
+- `data/state/schedule.json` - Scheduled tasks
+
+### Prompt Files (Editable)
+
+- `data/prompts/genesis.md` - System prompt
+- `data/prompts/decide.md` - Decision routing
+- `data/prompts/build.md` - Build specifications
 
 ### Log Files
 
@@ -175,9 +184,9 @@ pytest tests/test_dual_loop.py -v
 
 ### Adding New Capabilities
 
-1. Create an agent in `app/agents/`
+1. Create an agent in `app/agents/<agent_name>/`
 2. Or create an MCP server in `app/mcp/`
-3. Register in `state/registry.json`
+3. Register in `data/state/registry.json`
 
 Or simply ask Progenitor to build it for you!
 

@@ -23,6 +23,18 @@ from . import (
     learn,
 )
 
+# Error types for consistent error handling across nodes
+from .errors import (
+    NodeError,
+    RecoverableError,
+    FatalError,
+    ValidationError,
+    LLMError,
+    ToolError,
+    StateError,
+    ConfigurationError,
+)
+
 __all__ = [
     "intake",
     "time_check",
@@ -44,5 +56,14 @@ __all__ = [
     "execute",
     "verify_loop",
     "learn",
+    # Error types
+    "NodeError",
+    "RecoverableError",
+    "FatalError",
+    "ValidationError",
+    "LLMError",
+    "ToolError",
+    "StateError",
+    "ConfigurationError",
 ]
 

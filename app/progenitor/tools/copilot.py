@@ -70,8 +70,8 @@ class CopilotCLI:
 
         # Resolve command
         cmd = self._build_command(prompt, target_path)
-        logger.info(f"COPILOT: Building command for work item {work_item_id}")
-        logger.info(f"COPILOT: cmd={cmd[:3]}... in {worktree_path}")
+        logger.info("COPILOT: Building command for work item %s", work_item_id)
+        logger.info("COPILOT: cmd=%s... in %s", cmd[:3], worktree_path)
 
         # Log the invocation
         invocation_log = {
@@ -84,9 +84,9 @@ class CopilotCLI:
 
         try:
             # Run Copilot CLI
-            logger.info(f"COPILOT: Running command...")
+            logger.info("COPILOT: Running command...")
             result = await self._run_command(cmd, cwd=worktree_path)
-            logger.info(f"COPILOT: Command completed with returncode={result['returncode']}")
+            logger.info("COPILOT: Command completed with returncode=%s", result['returncode'])
 
             # Get git diff
             diff_result = await self._get_diff(worktree_path)

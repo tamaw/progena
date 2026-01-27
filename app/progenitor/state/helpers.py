@@ -21,6 +21,56 @@ from .models import (
 T = TypeVar('T')
 
 
+def is_work_item_actionable(item: Any) -> bool:
+    """Check if a work item is actionable (pending or in_progress).
+
+    This is the canonical implementation - use this instead of duplicating
+    the check logic. Handles WorkItem objects, dicts, and objects with
+    a status attribute.
+
+    Args:
+        item: WorkItem, dict with 'status' key, or object with status attribute
+
+    Returns:
+        True if the item can be acted on (pending or in_progress)
+    """
+    if item is None:
+        return False
+
+    # WorkItem model - use its property
+    if isinstance(item, WorkItem):
+        return item.is_actionable
+
+    # Dict representation
+    if isinstance(item, dict):
+        status = item.get("status", "pending")
+        return status in ("pending", "in_progress")
+
+    # Generic object with status attribute
+    if hasattr(item, "is_actionable"):
+        return item.is_actionable
+
+    if hasattr(item, "status"):
+        status = item.status
+        if hasattr(status, "value"):
+            status = status.value
+        return status in ("pending", "in_progress")
+
+    return False
+
+
+def get_actionable_items(backlog: list) -> list:
+    """Filter backlog to only actionable items.
+
+    Args:
+        backlog: List of work items (WorkItem, dict, or mixed)
+
+    Returns:
+        List of items that are actionable (pending or in_progress)
+    """
+    return [item for item in backlog if is_work_item_actionable(item)]
+
+
 def normalize_work_item(item: Any) -> Optional[WorkItem]:
     """Convert various formats to WorkItem.
 
