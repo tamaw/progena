@@ -10,12 +10,22 @@ and clean separation of concerns.
 """
 
 import logging
+import time
 from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
+
+
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_tracer, get_metrics
+        return get_tracer(), get_metrics()
+    except ImportError:
+        return None, None
 
 
 def create_node(
@@ -40,23 +50,42 @@ def create_node(
         This node handles the actual tool execution after BUILD
         has prepared the work.
         """
+        start_time = time.perf_counter()
+        tracer, metrics = _get_telemetry()
+        span = None
+
         current_item = state.get("current_work_item")
         build_output = state.get("last_iteration_output")
+        iteration = state.get("current_iteration", 0)
+
+        if tracer:
+            span = tracer.start_span(
+                "node_execute",
+                attributes={
+                    "iteration": iteration,
+                    "has_work_item": current_item is not None,
+                    "has_build_output": build_output is not None,
+                },
+            )
 
         if not current_item:
             logger.debug("No work item to execute")
+            if span:
+                span.set_attribute("skipped", True)
+                span.end()
             return {}
 
         # Check if execution is needed (some work items are already complete after BUILD)
         work_completed = state.get("work_item_completed", False)
         if work_completed:
             logger.info("Work item already completed in BUILD phase")
+            if span:
+                span.set_attribute("already_completed", True)
+                span.end()
             return {
                 "execution_result": build_output,
                 "execution_completed": True,
             }
-
-        iteration = state.get("current_iteration", 0)
 
         # Get pending tools from BUILD phase
         pending_tools = state.get("pending_tool_calls", [])
@@ -64,6 +93,11 @@ def create_node(
         if not pending_tools:
             # No tools to execute - pass through build output
             logger.debug("No pending tools to execute")
+            if metrics:
+                metrics.increment("node_invocations_total", {"node": "execute", "success": "true"})
+            if span:
+                span.set_attribute("no_tools", True)
+                span.end()
             return {
                 "execution_result": build_output,
                 "execution_completed": True,
@@ -71,10 +105,15 @@ def create_node(
 
         logger.info(f"Executing {len(pending_tools)} pending tool(s)")
 
+        if span:
+            span.set_attribute("pending_tools_count", len(pending_tools))
+            span.add_event("execution_start", {"tool_count": len(pending_tools)})
+
         tool_results = []
         errors = []
 
         for tool_call in pending_tools:
+            tool_start = time.perf_counter()
             try:
                 tool_name = tool_call.get("tool")
                 tool_args = tool_call.get("arguments", {})
@@ -94,6 +133,11 @@ def create_node(
                         "result": result,
                         "success": True,
                     })
+
+                    if metrics:
+                        tool_duration = time.perf_counter() - tool_start
+                        metrics.record_histogram("tool_execution_duration_seconds", tool_duration, {"tool": tool_name})
+                        metrics.increment("tool_executions_total", {"tool": tool_name, "success": "true"})
                 else:
                     errors.append(f"Tool not found: {tool_name}")
                     tool_results.append({
@@ -102,6 +146,8 @@ def create_node(
                         "success": False,
                         "error": f"Tool not found: {tool_name}",
                     })
+                    if metrics:
+                        metrics.increment("tool_executions_total", {"tool": tool_name, "success": "false"})
 
             except Exception as e:
                 logger.error(f"Tool execution error: {e}")
@@ -112,6 +158,8 @@ def create_node(
                     "success": False,
                     "error": str(e),
                 })
+                if metrics:
+                    metrics.increment("tool_executions_total", {"tool": tool_call.get("tool", "unknown"), "success": "false"})
 
         # Log execution
         if state_manager:
@@ -133,6 +181,19 @@ def create_node(
         }
 
         logger.info(f"Execution complete: {len(tool_results)} tools, {len(errors)} errors")
+
+        # Record overall metrics
+        duration = time.perf_counter() - start_time
+        if metrics:
+            metrics.record_histogram("node_duration_seconds", duration, {"node": "execute"})
+            metrics.increment("node_invocations_total", {"node": "execute", "success": str(len(errors) == 0).lower()})
+
+        if span:
+            span.set_attribute("tools_succeeded", sum(1 for r in tool_results if r.get("success")))
+            span.set_attribute("tools_failed", len(errors))
+            span.set_attribute("duration_seconds", duration)
+            span.add_event("execution_complete", {"errors": len(errors)})
+            span.end()
 
         return {
             "execution_result": execution_output,

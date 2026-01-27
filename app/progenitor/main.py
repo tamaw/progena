@@ -129,7 +129,8 @@ class Progenitor:
         loop_task = asyncio.create_task(self.loop_runner.run_forever())  # type: ignore[arg-type]
         stdin_task = asyncio.create_task(self._stdin_listener())
         output_task = asyncio.create_task(self._output_writer())
-        self._background_tasks = [loop_task, stdin_task, output_task]
+        stream_task = asyncio.create_task(self._stream_writer())
+        self._background_tasks = [loop_task, stdin_task, output_task, stream_task]
 
         try:
             done, pending = await asyncio.wait(
@@ -213,6 +214,21 @@ class Progenitor:
 
             payload = {"type": "assistant_message", "content": message}
             sys.stdout.write(json.dumps(payload) + "\n")
+            sys.stdout.flush()
+
+    async def _stream_writer(self) -> None:
+        """Write streaming chunks to stdout as JSON lines for the client.
+
+        Streaming chunks have type="stream_chunk" and include is_final flag.
+        This enables real-time token streaming for better UX.
+        """
+        while not self._shutdown_started:
+            chunk = await self.loop_runner.get_stream_chunk(timeout=0.1)  # type: ignore[union-attr]
+            if not chunk:
+                continue
+
+            # Stream chunks are already dicts with type, content, is_final
+            sys.stdout.write(json.dumps(chunk) + "\n")
             sys.stdout.flush()
 
 

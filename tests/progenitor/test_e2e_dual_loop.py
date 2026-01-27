@@ -24,11 +24,11 @@ from app.progenitor.config import ProgenitorConfig
 def mock_llm_client():
     """Create a mock LLM client that returns realistic responses."""
     client = Mock()
-    
+
     # Mock chat to return JSON-like responses for different scenarios
     async def mock_chat(messages, system_prompt=None, **kwargs):
         prompt_lower = system_prompt.lower() if system_prompt else ""
-        
+
         if "observe" in prompt_lower or "analyze" in prompt_lower:
             return json.dumps({
                 "observations": ["Task is simple text processing"],
@@ -61,7 +61,7 @@ def mock_llm_client():
             })
         else:
             return "OK"
-    
+
     client.chat = AsyncMock(side_effect=mock_chat)
     client.generate = AsyncMock(return_value="Generated content")
     return client
@@ -122,17 +122,17 @@ class TestDualLoopEndToEnd:
             config=test_config,
             worktrees_dir=Path("./worktrees"),
         )
-        
+
         assert graph is not None
-        
+
         # Verify all expected nodes exist
         nodes = set(graph.get_graph().nodes.keys()) - {"__start__"}
-        
+
         expected_nodes = {
             "intake", "decide", "respond", "idle",
             "observe", "think", "plan", "build", "execute", "verify", "learn",
         }
-        
+
         for node in expected_nodes:
             assert node in nodes, f"Missing node: {node}"
 
@@ -148,7 +148,7 @@ class TestDualLoopEndToEnd:
             "verification_score": 0.0,
             "should_iterate": True,
         }
-        
+
         assert len(state["backlog"]) == 1
         assert state["backlog"][0].id == "test-item-001"
         assert state["current_iteration"] == 0
@@ -157,11 +157,11 @@ class TestDualLoopEndToEnd:
         """Test that work items can transition through statuses."""
         # Start pending
         assert test_work_item.status == WorkItemStatus.PENDING
-        
+
         # Transition to in_progress
         test_work_item.status = WorkItemStatus.IN_PROGRESS
         assert test_work_item.status == WorkItemStatus.IN_PROGRESS
-        
+
         # Complete
         test_work_item.status = WorkItemStatus.COMPLETED
         assert test_work_item.status == WorkItemStatus.COMPLETED
@@ -176,7 +176,7 @@ class TestDualLoopEndToEnd:
         )
         data = json.loads(response)
         assert "observations" in data
-        
+
         # Test verify-like prompt
         response = await mock_llm_client.chat(
             messages=[{"role": "user", "content": "test"}],
@@ -197,11 +197,11 @@ class TestIterationControl:
             "verification_passed": False,
             "should_iterate": True,
         }
-        
+
         # Simulate iteration increment
         state["current_iteration"] += 1
         assert state["current_iteration"] == 1
-        
+
         state["current_iteration"] += 1
         assert state["current_iteration"] == 2
 
@@ -213,30 +213,30 @@ class TestIterationControl:
             "verification_score": 0.5,
             "should_iterate": True,
         }
-        
+
         # Simulate verification passing
         state["verification_passed"] = True
         state["verification_score"] = 0.9
         state["should_iterate"] = False
-        
+
         assert not state["should_iterate"]
         assert state["verification_score"] >= 0.8
 
     def test_max_iterations_stops_loop(self, test_config):
         """Test that max iterations setting is respected."""
         max_iter = test_config.runtime.max_inner_iterations
-        
+
         state: ProgenitorState = {
             "current_iteration": max_iter,
             "verification_passed": False,
             "should_iterate": True,
         }
-        
+
         # At max iterations, should stop
         if state["current_iteration"] >= max_iter:
             state["should_iterate"] = False
             state["iteration_stop_reason"] = "max_iterations_reached"
-        
+
         assert not state["should_iterate"]
         assert state["iteration_stop_reason"] == "max_iterations_reached"
 

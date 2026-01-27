@@ -10,6 +10,7 @@ Controls:
 - max actions per cycle (tool/A2A/Copilot)
 - restart-safe checkpoints (write state every cycle)
 - health file updated each cycle for Docker health checks
+- telemetry for observability (traces and metrics)
 """
 
 import asyncio
@@ -30,6 +31,42 @@ logger = logging.getLogger(__name__)
 HEALTH_FILE = "health.json"
 HEALTH_STALE_SECONDS = 120  # Consider unhealthy if not updated in 2 minutes
 
+# Telemetry - imported lazily to avoid circular imports
+_telemetry_initialized = False
+_exporter = None
+
+
+def _init_telemetry(config: "ProgenitorConfig"):
+    """Initialize telemetry if enabled."""
+    global _telemetry_initialized, _exporter
+
+    if _telemetry_initialized:
+        return
+
+    if not config.telemetry.enabled:
+        _telemetry_initialized = True
+        return
+
+    try:
+        from ..telemetry import setup_telemetry
+
+        output_dir = config.telemetry.output_dir
+        if output_dir is None:
+            output_dir = config.storage.log_dir / "telemetry"
+
+        _, _, _exporter = setup_telemetry(
+            output_dir=output_dir,
+            enable_console=config.telemetry.console_export,
+            metrics_interval=config.telemetry.metrics_interval_seconds,
+        )
+
+        logger.info("Telemetry initialized, output_dir=%s", output_dir)
+        _telemetry_initialized = True
+
+    except Exception as e:
+        logger.warning("Failed to initialize telemetry: %s", e)
+        _telemetry_initialized = True
+
 
 class ProgenitorLoop:
     """Manages the perpetual execution loop."""
@@ -46,6 +83,8 @@ class ProgenitorLoop:
         self.running = False
         self._input_queue: asyncio.Queue = asyncio.Queue()
         self._output_queue: asyncio.Queue = asyncio.Queue()
+        self._stream_queue: asyncio.Queue = asyncio.Queue()  # For streaming chunks
+        self._cycle_telemetry = None
 
     async def run_forever(self) -> None:
         """Run the perpetual loop.
@@ -55,6 +94,9 @@ class ProgenitorLoop:
         State is checkpointed after each cycle for crash recovery.
         """
         self.running = True
+
+        # Initialize telemetry
+        _init_telemetry(self.config)
 
         # Get runtime config values
         runtime = self.config.runtime
@@ -99,6 +141,9 @@ class ProgenitorLoop:
                     # Run graph cycle
                     thread_id = f"cycle_{state['cycle_count']}"
 
+                    # Start cycle telemetry
+                    cycle_telem = self._start_cycle_telemetry(state["cycle_count"], run_id)
+
                     async for event in self.graph.astream(
                         state,
                         config={"configurable": {"thread_id": thread_id}},
@@ -110,11 +155,19 @@ class ProgenitorLoop:
                             if isinstance(node_output, dict):
                                 state.update(node_output)
 
+                            # Record node event in telemetry
+                            if cycle_telem:
+                                cycle_telem.add_event(f"node.{node_name}", {"output_keys": str(output_info)})
+
                         # Check for response to send
                         pending = state.get("pending_response")
                         if pending:
                             await self._send_output(str(pending))
                             state["pending_response"] = None
+
+                    # End cycle telemetry
+                    if cycle_telem:
+                        cycle_telem.complete(success=True)
 
                     # Checkpoint state after each cycle
                     await self._checkpoint_state(state)
@@ -131,6 +184,9 @@ class ProgenitorLoop:
                         state["current_input"] = None
                         state["cycle_count"] = state.get("cycle_count", 0) + 1
 
+                        # Start cycle telemetry
+                        cycle_telem = self._start_cycle_telemetry(state["cycle_count"], run_id)
+
                         async for event in self.graph.astream(
                             state,
                             config={"configurable": {"thread_id": f"cycle_{state['cycle_count']}"}},
@@ -138,6 +194,11 @@ class ProgenitorLoop:
                             for node_name, node_output in event.items():
                                 if isinstance(node_output, dict):
                                     state.update(node_output)
+                                if cycle_telem:
+                                    cycle_telem.add_event(f"node.{node_name}")
+
+                        if cycle_telem:
+                            cycle_telem.complete(success=True)
 
                         await self._checkpoint_state(state)
                         await self._update_health_file(state)
@@ -153,11 +214,39 @@ class ProgenitorLoop:
                 break
             except Exception as e:
                 logger.error("Loop error: %s", e, exc_info=True)
+                if self._cycle_telemetry:
+                    self._cycle_telemetry.complete(success=False, error=str(e))
                 await asyncio.sleep(backoff)
 
-        # Final checkpoint before shutdown
+        # Final checkpoint and telemetry shutdown
         await self._checkpoint_state(state)
+        self._shutdown_telemetry()
         logger.info("Loop terminated")
+
+    def _start_cycle_telemetry(self, cycle_number: int, run_id: str):
+        """Start telemetry tracking for a cycle."""
+        if not self.config.telemetry.enabled:
+            return None
+
+        try:
+            from ..telemetry import CycleTelemetry
+
+            self._cycle_telemetry = CycleTelemetry(cycle_number, run_id)
+            self._cycle_telemetry.start()
+            return self._cycle_telemetry
+        except Exception as e:
+            logger.debug("Failed to start cycle telemetry: %s", e)
+            return None
+
+    def _shutdown_telemetry(self):
+        """Shutdown telemetry on loop exit."""
+        global _exporter
+        if _exporter:
+            try:
+                from ..telemetry import shutdown_telemetry
+                shutdown_telemetry(_exporter)
+            except Exception as e:
+                logger.debug("Failed to shutdown telemetry: %s", e)
 
     async def _get_input(self, timeout: float) -> Optional[str]:
         """Get user input with timeout."""
@@ -173,6 +262,43 @@ class ProgenitorLoop:
         """Send output to the user."""
         await self._output_queue.put(message)
         logger.info("Queued output message for client")
+
+    async def _send_stream_chunk(self, chunk: str, is_final: bool = False) -> None:
+        """Send a streaming chunk to the output stream.
+
+        Args:
+            chunk: The text chunk to stream.
+            is_final: Whether this is the final chunk (signals stream end).
+        """
+        await self._stream_queue.put({
+            "type": "stream_chunk",
+            "content": chunk,
+            "is_final": is_final,
+        })
+
+    async def _send_stream_end(self) -> None:
+        """Signal the end of a streaming response."""
+        await self._stream_queue.put({
+            "type": "stream_end",
+            "content": "",
+            "is_final": True,
+        })
+
+    async def get_stream_chunk(self, timeout: Optional[float] = None) -> Optional[dict]:
+        """Get a streaming chunk from the agent.
+
+        Returns:
+            Dict with 'type', 'content', and 'is_final' keys, or None on timeout.
+        """
+        try:
+            if timeout:
+                return await asyncio.wait_for(
+                    self._stream_queue.get(),
+                    timeout=timeout
+                )
+            return await self._stream_queue.get()
+        except asyncio.TimeoutError:
+            return None
 
     async def _check_pending_work(self, state: dict[str, Any]) -> bool:
         """Check if there's pending work in backlog or schedule."""
@@ -191,7 +317,7 @@ class ProgenitorLoop:
 
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
         """Save full recoverable state checkpoint.
-        
+
         Saves all state needed to recover from a crash, not just metadata.
         Per SPEC: restart-safe checkpoints (write state every cycle).
         """
@@ -201,26 +327,26 @@ class ProgenitorLoop:
             "run_id": state.get("run_id"),
             "cycle_count": state.get("cycle_count", 0),
             "last_checkpoint": utcnow_isoformat(),
-            
+
             # Essential state for recovery
             "actions_this_cycle": state.get("actions_this_cycle", 0),
             "shutdown_requested": state.get("shutdown_requested", False),
-            
+
             # Conversation state
             "messages": state.get("messages", []),
-            
+
             # Work items
             "backlog": self._serialize_backlog(state.get("backlog", [])),
-            
+
             # Schedule
             "schedule": state.get("schedule", []),
-            
+
             # Current iteration state (for inner loop recovery)
             "current_iteration": state.get("current_iteration", 0),
             "verification_score": state.get("verification_score"),
             "best_artefact_score": state.get("best_artefact_score"),
         }
-        
+
         # Only include ideal_state if it exists and is serializable
         ideal_state = state.get("ideal_state")
         if ideal_state:
@@ -228,7 +354,7 @@ class ProgenitorLoop:
                 checkpoint["ideal_state"] = ideal_state.model_dump()
             elif isinstance(ideal_state, dict):
                 checkpoint["ideal_state"] = ideal_state
-        
+
         await self.state_manager.save_state(checkpoint)
         logger.debug("Checkpointed state at cycle %d", checkpoint["cycle_count"])
 
@@ -267,7 +393,7 @@ class ProgenitorLoop:
 
     async def _update_health_file(self, state: dict[str, Any]) -> None:
         """Update health file for Docker health checks.
-        
+
         Creates/updates a JSON file with last activity timestamp.
         Docker can check this file's age to determine health.
         """
@@ -279,7 +405,7 @@ class ProgenitorLoop:
             "cycle_count": state.get("cycle_count", 0),
             "pid": __import__("os").getpid(),
         }
-        
+
         try:
             health_path.write_text(json.dumps(health_data))
         except Exception as e:

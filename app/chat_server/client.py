@@ -146,17 +146,88 @@ class ProgenitorClient:
     async def send_message_stream(
         self, message: str
     ) -> AsyncIterator[str]:
-        """Send a message and stream the response.
+        """Send a message and stream the response in real-time.
 
-        For now, this just wraps send_message since Progenitor
-        doesn't support streaming yet.
+        Reads streaming chunks from the Progenitor subprocess and yields them
+        as they arrive. Handles both legacy full responses and new streaming
+        chunks for better UX.
+
+        Args:
+            message: The user message to send.
+
+        Yields:
+            Content chunks as they arrive from the LLM.
         """
-        response = await self.send_message(message)
-        # Yield in chunks to simulate streaming
-        words = response.split()
-        for i, word in enumerate(words):
-            yield word + (" " if i < len(words) - 1 else "")
-            await asyncio.sleep(0.02)  # Small delay for streaming effect
+        if not self._started:
+            await self.start()
+
+        if not self._process or not self._process.stdin or not self._process.stdout:
+            raise RuntimeError("Progenitor process not running")
+
+        async with self._lock:
+            # Send message as JSON line with stream flag
+            payload = json.dumps({
+                "type": "user_message",
+                "content": message,
+                "stream": True,
+            })
+            self._process.stdin.write((payload + "\n").encode())
+            await self._process.stdin.drain()
+
+            # Read streaming chunks until we get the final response
+            try:
+                full_response = ""
+                while True:
+                    response_line = await asyncio.wait_for(
+                        self._process.stdout.readline(),
+                        timeout=self.config.progenitor_timeout,
+                    )
+
+                    if not response_line:
+                        raise RuntimeError("Progenitor process closed unexpectedly")
+
+                    try:
+                        response = json.loads(response_line.decode())
+                    except json.JSONDecodeError:
+                        # Non-JSON output, yield as-is
+                        text = response_line.decode().strip()
+                        if text:
+                            yield text
+                        continue
+
+                    msg_type = response.get("type", "")
+                    content = response.get("content", "")
+
+                    if msg_type == "stream_chunk":
+                        # Real streaming chunk
+                        if content:
+                            full_response += content
+                            yield content
+
+                        # Check if this is the final chunk
+                        if response.get("is_final", False):
+                            break
+
+                    elif msg_type == "stream_end":
+                        # Explicit stream end signal
+                        break
+
+                    elif msg_type == "assistant_message":
+                        # Legacy full response - simulate streaming by chunking
+                        words = content.split()
+                        for i, word in enumerate(words):
+                            yield word + (" " if i < len(words) - 1 else "")
+                            await asyncio.sleep(0.02)  # Small delay for streaming effect
+                        break
+
+                    else:
+                        # Unknown message type - log and continue
+                        logger.debug("Received unknown message type: %s", msg_type)
+
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"Progenitor did not respond within {self.config.progenitor_timeout}s"
+                )
 
     @property
     def is_running(self) -> bool:

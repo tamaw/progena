@@ -17,6 +17,15 @@ from ..runtime.time_utils import utcnow_isoformat
 logger = logging.getLogger(__name__)
 
 
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_tracer, get_metrics
+        return get_tracer(), get_metrics()
+    except ImportError:
+        return None, None
+
+
 def create_node(
     llm_client,
     state_manager=None,
@@ -37,12 +46,29 @@ def create_node(
 
         Also tracks artefacts and best_artefact for early-stop scenarios.
         """
+        start_time = time.perf_counter()
+        tracer, metrics = _get_telemetry()
+        span = None
+
         ideal_state = state.get("ideal_state")
+        iteration = state.get("current_iteration", 0)
+
+        if tracer:
+            span = tracer.start_span(
+                "node_verify",
+                attributes={
+                    "iteration": iteration,
+                    "has_ideal_state": ideal_state is not None,
+                },
+            )
+
         if not ideal_state:
             logger.warning("No ideal state in VERIFY phase")
+            if span:
+                span.set_attribute("skipped", True)
+                span.end()
             return {}
 
-        iteration = state.get("current_iteration", 0)
         iteration_start_time = state.get("iteration_start_time", time.time())
 
         # Get the output to verify
@@ -107,6 +133,28 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
+            # Record telemetry
+            duration = time.perf_counter() - start_time
+            if metrics:
+                metrics.record_histogram("node_duration_seconds", duration, {"node": "verify"})
+                metrics.record_histogram("verification_score_distribution", verification_report.overall_score)
+                metrics.increment("node_invocations_total", {"node": "verify", "success": "true"})
+                if verification_report.passed:
+                    metrics.increment("verification_passed_total")
+                else:
+                    metrics.increment("verification_failed_total")
+
+            if span:
+                span.set_attribute("score", verification_report.overall_score)
+                span.set_attribute("passed", verification_report.passed)
+                span.set_attribute("is_best", best_score == verification_report.overall_score)
+                span.set_attribute("duration_seconds", duration)
+                span.add_event("verification_complete", {
+                    "score": verification_report.overall_score,
+                    "passed": verification_report.passed,
+                })
+                span.end()
+
             logger.info(
                 f"Verification complete: score={verification_report.overall_score:.2f}, "
                 f"passed={verification_report.passed}"
@@ -124,6 +172,11 @@ def create_node(
 
         except Exception as e:
             logger.error(f"VERIFY phase error: {e}", exc_info=True)
+            if metrics:
+                metrics.increment("node_invocations_total", {"node": "verify", "success": "false"})
+            if span:
+                span.record_exception(e)
+                span.end()
             # Fallback - assume partial success
             return {
                 "last_verification_report": {

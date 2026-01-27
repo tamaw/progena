@@ -5,6 +5,8 @@ The builder actuator for all build operations:
 - A2A agents
 - Internal tools
 - MCP servers
+
+Includes telemetry for observability of build operations.
 """
 
 import asyncio
@@ -12,6 +14,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -19,6 +22,16 @@ from typing import Any, Optional
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
+
+
+# Lazy telemetry imports
+def _get_telemetry():
+    """Get telemetry components if available."""
+    try:
+        from ..telemetry import get_metrics, get_tracer, SpanKind
+        return get_metrics(), get_tracer(), SpanKind
+    except ImportError:
+        return None, None, None
 
 
 class CopilotCLI:
@@ -68,6 +81,24 @@ class CopilotCLI:
         """Execute a build task via Copilot CLI."""
         worktree_path = Path(worktree_path)
 
+        # Telemetry setup
+        metrics, tracer, SpanKind = _get_telemetry()
+        span = None
+        start_time = time.perf_counter()
+
+        if tracer and SpanKind:
+            span = tracer.start_span(
+                "tool.copilot.build",
+                kind=SpanKind.CLIENT,
+                attributes={
+                    "copilot.work_item_id": work_item_id,
+                    "copilot.worktree": str(worktree_path),
+                    "copilot.target_path": target_path,
+                    "copilot.prompt_length": len(prompt),
+                    "copilot.model": self.config.get("model", "unknown"),
+                },
+            )
+
         # Resolve command
         cmd = self._build_command(prompt, target_path)
         logger.info("COPILOT: Building command for work item %s", work_item_id)
@@ -85,11 +116,35 @@ class CopilotCLI:
         try:
             # Run Copilot CLI
             logger.info("COPILOT: Running command...")
+            if span:
+                span.add_event("copilot.command_start")
+
             result = await self._run_command(cmd, cwd=worktree_path)
             logger.info("COPILOT: Command completed with returncode=%s", result['returncode'])
 
+            if span:
+                span.add_event("copilot.command_complete", {"returncode": result["returncode"]})
+
             # Get git diff
             diff_result = await self._get_diff(worktree_path)
+
+            # Record telemetry
+            duration = time.perf_counter() - start_time
+            success = result["returncode"] == 0
+
+            if metrics:
+                metrics.tool_calls_total.inc()
+                metrics.tool_call_duration.observe(duration)
+                if not success:
+                    metrics.tool_call_errors.inc()
+
+            if span:
+                span.set_attribute("copilot.success", success)
+                span.set_attribute("copilot.returncode", result["returncode"])
+                span.set_attribute("copilot.duration_ms", duration * 1000)
+                span.set_attribute("copilot.has_diff", bool(diff_result))
+                if diff_result:
+                    span.set_attribute("copilot.diff_lines", len(diff_result.splitlines()))
 
             invocation_log.update({
                 "completed_at": utcnow_isoformat(),
@@ -101,6 +156,10 @@ class CopilotCLI:
 
             if self.log_callback:
                 await self.log_callback(invocation_log)
+
+            # End telemetry span on success
+            if span and tracer:
+                tracer.end_span(span)
 
             return {
                 "success": result["returncode"] == 0,
@@ -119,6 +178,12 @@ class CopilotCLI:
 
             if self.log_callback:
                 await self.log_callback(invocation_log)
+
+            # Record error in telemetry
+            if span:
+                span.record_exception(e)
+            if span and tracer:
+                tracer.end_span(span)
 
             return {
                 "success": False,

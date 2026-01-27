@@ -104,14 +104,14 @@ def create_node(
         except Exception as e:
             # Unexpected errors - log at error level, but still try to recover
             logger.error("Unexpected error in decide node: %s", e, exc_info=True)
-            
+
             # Fallback to direct answer
             decision = Decision(
                 action=DecisionAction.ANSWER_DIRECTLY,
                 reasoning=f"Fallback due to error: {type(e).__name__}: {e}",
                 requires_planning=False,
             )
-            
+
             # Log the fallback
             if state_manager:
                 await state_manager.log_decision({
@@ -120,7 +120,7 @@ def create_node(
                     "error_message": str(e),
                     "timestamp": utcnow_isoformat(),
                 })
-            
+
             return {"current_decision": decision}
 
     return decide_node
