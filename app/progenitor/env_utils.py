@@ -1,7 +1,5 @@
 """
-Environment variable parsing utilities.
-
-Shared helpers for parsing typed values from environment variables.
+Environment variable parsing utilities for Progenitor.
 """
 
 import logging
@@ -66,8 +64,3 @@ def env_list(key: str, default: Optional[list[str]] = None) -> list[str]:
     if val:
         return [item.strip() for item in val.split(",") if item.strip()]
     return default or []
-
-
-def env_str(key: str, default: str = "") -> str:
-    """Get string environment variable with default."""
-    return os.getenv(key, default)

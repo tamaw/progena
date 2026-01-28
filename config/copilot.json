@@ -1,7 +1,8 @@
 {
-  "command": "c:\\Users\\me\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli\\copilot.bat",
-  "default_flags": ["--yolo"],
+  "command": "C:\\Users\\me\\AppData\\Roaming\\npm\\copilot.cmd",
+  "default_flags": ["--allow-all-tools"],
   "timeout": 300,
   "model": "claude-haiku-4.5",
-  "max_tokens": 8192
+  "max_tokens": 8192,
+  "allowed_dirs": ["app/agents"]
 }

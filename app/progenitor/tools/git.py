@@ -7,7 +7,6 @@ Includes automatic cleanup of orphaned worktrees on startup and failure.
 
 import asyncio
 import logging
-import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -110,14 +109,15 @@ class GitWorktreeManager:
 
     async def _read_worktree_metadata(self, worktree_path: Path) -> Optional[dict]:
         """Read metadata from a worktree."""
+        import json
         metadata_path = worktree_path / self.METADATA_FILE
         if not metadata_path.exists():
             return None
         try:
-            import json
             with open(metadata_path, "r") as f:
                 return json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError) as e:
+            logger.debug("Failed to read worktree metadata from %s: %s", metadata_path, e)
             return None
 
     async def remove_worktree(self, worktree_path: Path) -> bool:
@@ -134,7 +134,8 @@ class GitWorktreeManager:
                 cwd=self.repo_path
             )
             return True
-        except Exception:
+        except (OSError, RuntimeError) as e:
+            logger.warning("Failed to remove worktree %s: %s", worktree_path, e)
             return False
 
     async def commit_changes(
@@ -277,8 +278,8 @@ class GitWorktreeManager:
                     if mtime < cutoff_time:
                         should_remove = True
                         reason = f"mtime older than {max_age}h"
-                except Exception:
-                    pass
+                except (OSError, ValueError) as e:
+                    logger.debug("Failed to check mtime for %s: %s", item.name, e)
 
             if should_remove:
                 try:

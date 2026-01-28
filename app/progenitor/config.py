@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 from dotenv import load_dotenv
 
-from ..common.env_utils import env_bool, env_int, env_float, env_list
+from .env_utils import env_bool, env_int, env_float, env_list
 
 # Auto-load .env file from project root
 load_dotenv()
@@ -94,6 +94,14 @@ class RuntimeConfig:
     checkpoint_interval_seconds: int = 30
     input_timeout_seconds: int = 300
 
+    # Queue bounds (memory protection)
+    max_input_queue_size: int = 100  # Max pending input messages
+    max_output_queue_size: int = 100  # Max pending output messages
+    max_stream_queue_size: int = 1000  # Max pending stream chunks
+
+    # Health check settings
+    health_stale_seconds: int = 120  # Consider unhealthy if not updated in 2 minutes
+
     # Inner loop (dual loop architecture) settings
     max_inner_iterations: int = 5  # Failsafe max iterations for inner loop
     min_verification_score: float = 0.8  # Default minimum score to pass verification
@@ -124,6 +132,20 @@ class RuntimeConfig:
             ),
             input_timeout_seconds=_env_int(
                 "PROGENITOR_INPUT_TIMEOUT_SECONDS", fc.get("input_timeout_seconds", 300)
+            ),
+            # Queue bounds
+            max_input_queue_size=_env_int(
+                "PROGENITOR_MAX_INPUT_QUEUE_SIZE", fc.get("max_input_queue_size", 100)
+            ),
+            max_output_queue_size=_env_int(
+                "PROGENITOR_MAX_OUTPUT_QUEUE_SIZE", fc.get("max_output_queue_size", 100)
+            ),
+            max_stream_queue_size=_env_int(
+                "PROGENITOR_MAX_STREAM_QUEUE_SIZE", fc.get("max_stream_queue_size", 1000)
+            ),
+            # Health check settings
+            health_stale_seconds=_env_int(
+                "PROGENITOR_HEALTH_STALE_SECONDS", fc.get("health_stale_seconds", 120)
             ),
             # Inner loop settings
             max_inner_iterations=_env_int(
@@ -430,18 +452,57 @@ class ProgenitorConfig:
 _config: Optional[ProgenitorConfig] = None
 
 
-def get_config(project_root: Path | None = None, config_dir: Path | None = None) -> ProgenitorConfig:
-    """Get or create the global configuration instance."""
+def get_config(
+    project_root: Path | None = None,
+    config_dir: Path | None = None,
+    validate: bool = True
+) -> ProgenitorConfig:
+    """Get or create the global configuration instance.
+
+    Args:
+        project_root: Root directory of the project.
+        config_dir: Directory containing config files.
+        validate: Whether to validate configuration at load time (default True).
+                  Set to False for testing or when loading partial configs.
+    """
     global _config
     if _config is None:
         _config = ProgenitorConfig.load(project_root, config_dir)
+        if validate:
+            from .config_validation import validate_config
+            is_valid, issues = validate_config(_config)
+            if not is_valid:
+                logger.warning(
+                    "Configuration has %d validation issue(s): %s",
+                    len(issues),
+                    "; ".join(issues)
+                )
     return _config
 
 
-def reload_config(project_root: Path | None = None, config_dir: Path | None = None) -> ProgenitorConfig:
-    """Reload configuration (useful for testing or dynamic updates)."""
+def reload_config(
+    project_root: Path | None = None,
+    config_dir: Path | None = None,
+    validate: bool = True
+) -> ProgenitorConfig:
+    """Reload configuration (useful for testing or dynamic updates).
+
+    Args:
+        project_root: Root directory of the project.
+        config_dir: Directory containing config files.
+        validate: Whether to validate configuration at load time (default True).
+    """
     global _config
     _config = ProgenitorConfig.load(project_root, config_dir)
+    if validate:
+        from .config_validation import validate_config
+        is_valid, issues = validate_config(_config)
+        if not is_valid:
+            logger.warning(
+                "Configuration has %d validation issue(s): %s",
+                len(issues),
+                "; ".join(issues)
+            )
     return _config
 
 

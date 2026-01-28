@@ -47,26 +47,43 @@ client: ProgenitorClient = None  # type: ignore
 # Rate Limiting (in-memory, per-IP)
 # ============================================================================
 class RateLimiter:
-    """Simple in-memory rate limiter using sliding window."""
+    """Simple in-memory rate limiter using sliding window.
 
-    CLEANUP_INTERVAL = 300  # Cleanup stale clients every 5 minutes
-    STALE_CLIENT_AGE = 3600  # Remove clients with no activity for 1 hour
+    Memory bounded: limits maximum tracked clients and performs periodic cleanup.
+    """
 
-    def __init__(self, requests_per_minute: int = 60, requests_per_hour: int = 500):
+    MAX_TRACKED_CLIENTS = 10000  # Maximum clients to track (memory protection)
+
+    def __init__(
+        self,
+        requests_per_minute: int = 60,
+        requests_per_hour: int = 500,
+        cleanup_interval: int = 300,
+        stale_client_age: int = 3600,
+    ):
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
+        self.cleanup_interval = cleanup_interval
+        self.stale_client_age = stale_client_age
         self._minute_requests: dict[str, list[float]] = defaultdict(list)
         self._hour_requests: dict[str, list[float]] = defaultdict(list)
         self._last_cleanup = time.time()
 
-    def _cleanup_stale_clients(self) -> None:
-        """Remove stale client entries to prevent memory leak."""
+    def _cleanup_stale_clients(self, force: bool = False) -> int:
+        """Remove stale client entries to prevent memory leak.
+
+        Args:
+            force: If True, cleanup regardless of interval.
+
+        Returns:
+            Number of clients removed.
+        """
         now = time.time()
-        if now - self._last_cleanup < self.CLEANUP_INTERVAL:
-            return
+        if not force and (now - self._last_cleanup < self.cleanup_interval):
+            return 0
 
         self._last_cleanup = now
-        stale_threshold = now - self.STALE_CLIENT_AGE
+        stale_threshold = now - self.stale_client_age
 
         # Find and remove stale clients
         stale_clients = []
@@ -81,14 +98,59 @@ class RateLimiter:
         if stale_clients:
             logger.debug("Cleaned up %d stale rate limit clients", len(stale_clients))
 
+        return len(stale_clients)
+
+    def _evict_oldest_clients(self, count: int) -> int:
+        """Evict oldest clients when at capacity.
+
+        Args:
+            count: Number of clients to evict.
+
+        Returns:
+            Number of clients evicted.
+        """
+        if not self._hour_requests:
+            return 0
+
+        # Find clients with oldest last activity
+        client_ages = []
+        for client_id, timestamps in self._hour_requests.items():
+            last_activity = max(timestamps) if timestamps else 0
+            client_ages.append((client_id, last_activity))
+
+        # Sort by oldest activity first
+        client_ages.sort(key=lambda x: x[1])
+
+        # Evict oldest
+        evicted = 0
+        for client_id, _ in client_ages[:count]:
+            self._minute_requests.pop(client_id, None)
+            self._hour_requests.pop(client_id, None)
+            evicted += 1
+
+        if evicted:
+            logger.warning("Evicted %d oldest rate limit clients due to capacity", evicted)
+
+        return evicted
+
     def is_allowed(self, client_id: str) -> tuple[bool, str | None]:
         """Check if request is allowed. Returns (allowed, reason)."""
         now = time.time()
         minute_ago = now - 60
-        hour_ago = now - 3600
+        hour_ago = now - self.stale_client_age
 
         # Periodic cleanup of stale clients
         self._cleanup_stale_clients()
+
+        # Check if we need to evict due to capacity
+        current_clients = len(self._hour_requests)
+        if current_clients >= self.MAX_TRACKED_CLIENTS:
+            # Force cleanup first
+            removed = self._cleanup_stale_clients(force=True)
+
+            # If still at capacity, evict oldest
+            if len(self._hour_requests) >= self.MAX_TRACKED_CLIENTS:
+                self._evict_oldest_clients(self.MAX_TRACKED_CLIENTS // 10)  # Evict 10%
 
         # Clean old entries for this client
         self._minute_requests[client_id] = [
@@ -116,7 +178,7 @@ class RateLimiter:
         """Get remaining requests for headers."""
         now = time.time()
         minute_count = len([t for t in self._minute_requests[client_id] if t > now - 60])
-        hour_count = len([t for t in self._hour_requests[client_id] if t > now - 3600])
+        hour_count = len([t for t in self._hour_requests[client_id] if t > now - self.stale_client_age])
         return {
             "minute": max(0, self.requests_per_minute - minute_count),
             "hour": max(0, self.requests_per_hour - hour_count),
@@ -124,8 +186,11 @@ class RateLimiter:
 
     def get_stats(self) -> dict[str, Any]:
         """Get rate limiter statistics for health endpoint."""
+        active_clients = len(self._hour_requests)
         return {
-            "active_clients": len(self._hour_requests),
+            "active_clients": active_clients,
+            "max_tracked_clients": self.MAX_TRACKED_CLIENTS,
+            "capacity_percent": round(active_clients / self.MAX_TRACKED_CLIENTS * 100, 1),
             "requests_per_minute_limit": self.requests_per_minute,
             "requests_per_hour_limit": self.requests_per_hour,
         }
@@ -134,6 +199,8 @@ class RateLimiter:
 rate_limiter = RateLimiter(
     requests_per_minute=config.rate_limit_per_minute,
     requests_per_hour=config.rate_limit_per_hour,
+    cleanup_interval=config.rate_limit_cleanup_interval,
+    stale_client_age=config.rate_limit_stale_client_age,
 )
 
 
@@ -146,9 +213,87 @@ def get_client_id(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+# ============================================================================
+# Graceful Shutdown Management (OPS-002)
+# ============================================================================
+
+class ShutdownManager:
+    """Manages graceful shutdown with request draining."""
+
+    def __init__(self, drain_timeout: float = 30.0):
+        self.drain_timeout = drain_timeout
+        self._active_requests: int = 0
+        self._shutting_down: bool = False
+        self._shutdown_event: asyncio.Event | None = None
+        self._lock = asyncio.Lock()
+
+    @property
+    def is_shutting_down(self) -> bool:
+        return self._shutting_down
+
+    @property
+    def active_requests(self) -> int:
+        return self._active_requests
+
+    async def start_request(self) -> bool:
+        """Start tracking a request. Returns False if shutting down."""
+        async with self._lock:
+            if self._shutting_down:
+                return False
+            self._active_requests += 1
+            return True
+
+    async def end_request(self) -> None:
+        """Mark a request as complete."""
+        async with self._lock:
+            self._active_requests = max(0, self._active_requests - 1)
+            if self._shutting_down and self._active_requests == 0 and self._shutdown_event:
+                self._shutdown_event.set()
+
+    async def initiate_shutdown(self) -> None:
+        """Initiate graceful shutdown with request draining."""
+        async with self._lock:
+            if self._shutting_down:
+                return
+            self._shutting_down = True
+            self._shutdown_event = asyncio.Event()
+
+            if self._active_requests == 0:
+                self._shutdown_event.set()
+
+        logger.info(
+            "Graceful shutdown initiated, waiting for %d active requests (timeout: %.1fs)",
+            self._active_requests,
+            self.drain_timeout,
+        )
+
+        try:
+            await asyncio.wait_for(
+                self._shutdown_event.wait(),
+                timeout=self.drain_timeout,
+            )
+            logger.info("All requests drained successfully")
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Shutdown timeout reached with %d requests still active",
+                self._active_requests,
+            )
+
+    def get_status(self) -> dict[str, Any]:
+        """Get shutdown status for health endpoint."""
+        return {
+            "shutting_down": self._shutting_down,
+            "active_requests": self._active_requests,
+            "drain_timeout_seconds": self.drain_timeout,
+        }
+
+
+shutdown_manager = ShutdownManager(drain_timeout=30.0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
+    """Application lifespan manager with graceful shutdown (OPS-002)."""
     global client
 
     # Startup
@@ -167,10 +312,35 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
-    logger.info("Shutting down chat server...")
+    # Graceful Shutdown (OPS-002)
+    logger.info("Initiating graceful shutdown...")
+
+    # Step 1: Stop accepting new requests and drain existing ones
+    await shutdown_manager.initiate_shutdown()
+
+    # Step 2: Stop the Progenitor client
     if client:
-        await client.stop()
+        logger.info("Stopping Progenitor client...")
+        try:
+            await asyncio.wait_for(client.stop(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("Progenitor client stop timed out")
+        except Exception as e:
+            logger.error("Error stopping client: %s", e)
+
+    # Step 3: Flush observability data
+    logger.info("Flushing observability data...")
+    try:
+        from ..progenitor.observability import flush_langfuse, shutdown_langfuse
+        flush_langfuse()
+        shutdown_langfuse()
+        logger.info("Langfuse flushed successfully")
+    except ImportError:
+        pass  # Langfuse not installed or observability module not available
+    except Exception as e:
+        logger.warning("Error flushing Langfuse: %s", e)
+
+    logger.info("Chat server shutdown complete")
 
 
 app = FastAPI(
@@ -187,6 +357,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_tracking_middleware(request: Request, call_next):
+    """Track active requests for graceful shutdown (OPS-002)."""
+    # Skip tracking for health/liveness probes
+    if request.url.path in ("/health", "/health/detailed", "/ready", "/live"):
+        return await call_next(request)
+
+    # Check if we're accepting new requests
+    if not await shutdown_manager.start_request():
+        return JSONResponse(
+            status_code=503,
+            content=ErrorResponse(
+                error=ErrorDetail(
+                    message="Server is shutting down",
+                    type="service_unavailable",
+                )
+            ).model_dump(),
+            headers={"Retry-After": "30"},
+        )
+
+    try:
+        return await call_next(request)
+    finally:
+        await shutdown_manager.end_request()
 
 
 @app.middleware("http")
@@ -283,16 +479,123 @@ def _update_activity():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with detailed diagnostics."""
+    """Basic health check endpoint."""
     now = time.time()
     return {
-        "status": "ok",
+        "status": "healthy" if not shutdown_manager.is_shutting_down else "draining",
         "version": config.api_version,
         "progenitor_running": client.is_running if client else False,
         "uptime_seconds": round(now - _server_start_time, 1),
-        "last_activity_seconds_ago": round(now - _last_activity_time, 1),
-        "rate_limit": rate_limiter.get_stats() if config.rate_limit_enabled else None,
     }
+
+
+@app.get("/health/detailed")
+async def health_check_detailed():
+    """
+    Detailed health check endpoint with full diagnostics (OPS-001).
+
+    Returns comprehensive information about:
+    - Server status and configuration
+    - Progenitor client status
+    - Rate limiter statistics
+    - Shutdown status
+    - Memory usage (if available)
+    """
+    import sys
+    now = time.time()
+
+    # Basic health info
+    health_info = {
+        "status": "healthy" if not shutdown_manager.is_shutting_down else "draining",
+        "version": config.api_version,
+        "uptime_seconds": round(now - _server_start_time, 1),
+        "last_activity_seconds_ago": round(now - _last_activity_time, 1),
+    }
+
+    # Progenitor client status
+    progenitor_status = {
+        "running": client.is_running if client else False,
+        "client_type": type(client).__name__ if client else None,
+    }
+
+    # Try to get more detailed Progenitor info
+    if client and hasattr(client, "get_status"):
+        try:
+            progenitor_status["details"] = client.get_status()
+        except Exception:
+            pass
+
+    health_info["progenitor"] = progenitor_status
+
+    # Rate limiter stats
+    if config.rate_limit_enabled:
+        health_info["rate_limiter"] = rate_limiter.get_stats()
+    else:
+        health_info["rate_limiter"] = {"enabled": False}
+
+    # Shutdown status
+    health_info["shutdown"] = shutdown_manager.get_status()
+
+    # Memory usage (if psutil available)
+    try:
+        import psutil
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        health_info["memory"] = {
+            "rss_mb": round(memory_info.rss / 1024 / 1024, 2),
+            "vms_mb": round(memory_info.vms / 1024 / 1024, 2),
+            "percent": round(process.memory_percent(), 2),
+        }
+    except ImportError:
+        health_info["memory"] = {"available": False}
+    except Exception as e:
+        health_info["memory"] = {"error": str(e)}
+
+    # Python info
+    health_info["python"] = {
+        "version": sys.version,
+        "platform": sys.platform,
+    }
+
+    # Configuration summary (non-sensitive)
+    health_info["config"] = {
+        "model_name": config.model_name,
+        "host": config.host,
+        "port": config.port,
+        "rate_limit_enabled": config.rate_limit_enabled,
+        "rate_limit_per_minute": config.rate_limit_per_minute,
+        "rate_limit_per_hour": config.rate_limit_per_hour,
+    }
+
+    return health_info
+
+
+@app.get("/ready")
+async def readiness_check():
+    """
+    Kubernetes-style readiness probe.
+
+    Returns 200 if the server is ready to accept requests.
+    Returns 503 if the server is shutting down or not ready.
+    """
+    if shutdown_manager.is_shutting_down:
+        raise HTTPException(status_code=503, detail="Server is shutting down")
+
+    if not client:
+        raise HTTPException(status_code=503, detail="Client not initialized")
+
+    return {"status": "ready"}
+
+
+@app.get("/live")
+async def liveness_check():
+    """
+    Kubernetes-style liveness probe.
+
+    Returns 200 if the server process is alive.
+    Always returns success unless the process is completely broken.
+    """
+    return {"status": "alive"}
 
 
 @app.get("/metrics")
@@ -364,7 +667,7 @@ async def list_models():
 
 
 @app.post("/v1/responses", response_model=ResponsePayload)
-async def responses(request: ResponseRequest):
+async def responses(request: Request, body: ResponseRequest):
     """Unified Responses API (preferred).
 
     Accepts either the new Responses `input` shape or the legacy
@@ -373,24 +676,27 @@ async def responses(request: ResponseRequest):
     if not client:
         raise HTTPException(status_code=503, detail="Client not initialized")
 
+    # Get request ID for correlation
+    request_id = getattr(request.state, "request_id", None)
+
     try:
-        last_user_msg, all_inputs = _extract_response_input(request)
+        last_user_msg, all_inputs = _extract_response_input(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     try:
-        if request.stream:
+        if body.stream:
             return StreamingResponse(
-                stream_response_unified(last_user_msg, request.model),
+                stream_response_unified(last_user_msg, body.model, request_id),
                 media_type="text/event-stream",
             )
 
-        response_text = await client.send_message(last_user_msg)
+        response_text = await client.send_message(last_user_msg, request_id=request_id)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
         return ResponsePayload(
             id=response_id,
-            model=request.model,
+            model=body.model,
             output=[
                 ResponseOutputMessage(
                     content=[ResponseOutputText(text=response_text)]
@@ -411,7 +717,7 @@ async def responses(request: ResponseRequest):
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: Request, body: ChatCompletionRequest):
     """Legacy Chat Completions API.
 
     Kept for backwards compatibility but internally powered by
@@ -420,24 +726,27 @@ async def chat_completions(request: ChatCompletionRequest):
     if not client:
         raise HTTPException(status_code=503, detail="Client not initialized")
 
+    # Get request ID for correlation
+    request_id = getattr(request.state, "request_id", None)
+
     try:
-        last_user_msg = _extract_chat_message(request)
+        last_user_msg = _extract_chat_message(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     try:
-        if request.stream:
+        if body.stream:
             return StreamingResponse(
-                stream_response(last_user_msg, request.model),
+                stream_response(last_user_msg, body.model, request_id),
                 media_type="text/event-stream",
             )
 
-        response_text = await client.send_message(last_user_msg)
+        response_text = await client.send_message(last_user_msg, request_id=request_id)
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
         return ChatCompletionResponse(
             id=completion_id,
-            model=request.model,
+            model=body.model,
             choices=[
                 ChatCompletionChoice(
                     index=0,
@@ -462,12 +771,16 @@ async def chat_completions(request: ChatCompletionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def stream_response(message: str, model: str) -> AsyncIterator[str]:
+async def stream_response(
+    message: str,
+    model: str,
+    request_id: str | None = None,
+) -> AsyncIterator[str]:
     """Stream response chunks in SSE format."""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
     try:
-        async for chunk in client.send_message_stream(message):
+        async for chunk in client.send_message_stream(message, request_id=request_id):
             chunk_data = ChatCompletionChunk(
                 id=completion_id,
                 model=model,
@@ -545,12 +858,16 @@ def _extract_chat_message(request: ChatCompletionRequest) -> str:
     )
 
 
-async def stream_response_unified(message: str, model: str) -> AsyncIterator[str]:
+async def stream_response_unified(
+    message: str,
+    model: str,
+    request_id: str | None = None,
+) -> AsyncIterator[str]:
     """Stream SSE events using the Responses API shape."""
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
     try:
-        async for chunk in client.send_message_stream(message):
+        async for chunk in client.send_message_stream(message, request_id=request_id):
             delta_event = {
                 "id": response_id,
                 "object": "response.output_text.delta",

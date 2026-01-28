@@ -120,9 +120,17 @@ class Verifier:
         """Check if verifier will use LLM for scoring."""
         return self.llm_client is not None and not self.heuristic_only
 
+    def _ensure_ideal_state(self, ideal_state: Any) -> IdealState:
+        """Convert ideal_state dict to IdealState object if needed."""
+        if isinstance(ideal_state, IdealState):
+            return ideal_state
+        if isinstance(ideal_state, dict):
+            return IdealState(**ideal_state)
+        raise TypeError(f"Expected IdealState or dict, got {type(ideal_state)}")
+
     async def verify(
         self,
-        ideal_state: IdealState,
+        ideal_state: IdealState | dict,
         output: Any,
         iteration: int,
         context: Optional[dict[str, Any]] = None,
@@ -131,7 +139,7 @@ class Verifier:
         Verify output against ideal state.
 
         Args:
-            ideal_state: The target state with criteria
+            ideal_state: The target state with criteria (IdealState or dict)
             output: The candidate output to verify
             iteration: Current iteration number
             context: Additional context (e.g., tool results, logs)
@@ -140,6 +148,9 @@ class Verifier:
             VerificationReport with scores and analysis
         """
         from ..runtime.time_utils import utcnow_isoformat
+
+        # Ensure we have an IdealState object (may come as dict from LangGraph state)
+        ideal_state = self._ensure_ideal_state(ideal_state)
 
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()

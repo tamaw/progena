@@ -2,9 +2,12 @@
 Time utilities for Progenitor.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 import pytz
+
+logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
@@ -35,7 +38,8 @@ class TimeManager:
         self.timezone_name = timezone_name
         try:
             self.tz = pytz.timezone(timezone_name)
-        except Exception:
+        except pytz.exceptions.UnknownTimeZoneError as e:
+            logger.warning("Unknown timezone '%s', falling back to UTC: %s", timezone_name, e)
             self.tz = pytz.UTC
 
     def now(self) -> datetime:

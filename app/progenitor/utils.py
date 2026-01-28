@@ -1,10 +1,10 @@
 """
-Common utility functions.
+Utility functions for Progenitor.
 
-Shared helpers for working with data structures across the codebase.
+Helpers for working with data structures.
 """
 
-from typing import Any, TypeVar, Optional
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -23,12 +23,6 @@ def get_attr(obj: Any, name: str, default: Any = None) -> Any:
 
     Returns:
         The attribute value or default
-
-    Example:
-        >>> get_attr({"action": "build"}, "action")
-        'build'
-        >>> get_attr(decision_obj, "action")
-        'build'
     """
     if obj is None:
         return default
@@ -71,22 +65,3 @@ def get_enum_value(obj: Any, default: str = "") -> str:
     if hasattr(obj, "value"):
         return str(obj.value)
     return str(obj)
-
-
-def is_truthy(value: Any) -> bool:
-    """Check if a value is truthy in a None-safe way.
-
-    Handles common edge cases:
-    - None -> False
-    - Empty string -> False
-    - Empty list/dict -> False
-    - 0 -> False
-    - False -> False
-    """
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (list, dict)):
-        return bool(value)
-    return bool(value)

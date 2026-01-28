@@ -101,11 +101,16 @@ class ProgenitorClient:
                     self._stderr_log.close()
                     self._stderr_log = None
 
-    async def send_message(self, message: str) -> str:
+    async def send_message(
+        self,
+        message: str,
+        request_id: Optional[str] = None,
+    ) -> str:
         """Send a message to Progenitor and get the response.
 
         Args:
             message: The user message to send
+            request_id: Optional request ID for correlation
 
         Returns:
             The response from Progenitor
@@ -118,8 +123,14 @@ class ProgenitorClient:
 
         async with self._lock:
             # Send message as JSON line
-            payload = json.dumps({"type": "user_message", "content": message})
-            self._process.stdin.write((payload + "\n").encode())
+            payload = {
+                "type": "user_message",
+                "content": message,
+            }
+            if request_id:
+                payload["request_id"] = request_id
+
+            self._process.stdin.write((json.dumps(payload) + "\n").encode())
             await self._process.stdin.drain()
 
             # Read response
@@ -144,7 +155,9 @@ class ProgenitorClient:
                 return response_line.decode().strip()
 
     async def send_message_stream(
-        self, message: str
+        self,
+        message: str,
+        request_id: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response in real-time.
 
@@ -154,6 +167,7 @@ class ProgenitorClient:
 
         Args:
             message: The user message to send.
+            request_id: Optional request ID for correlation.
 
         Yields:
             Content chunks as they arrive from the LLM.
@@ -166,12 +180,15 @@ class ProgenitorClient:
 
         async with self._lock:
             # Send message as JSON line with stream flag
-            payload = json.dumps({
+            payload = {
                 "type": "user_message",
                 "content": message,
                 "stream": True,
-            })
-            self._process.stdin.write((payload + "\n").encode())
+            }
+            if request_id:
+                payload["request_id"] = request_id
+
+            self._process.stdin.write((json.dumps(payload) + "\n").encode())
             await self._process.stdin.drain()
 
             # Read streaming chunks until we get the final response

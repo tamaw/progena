@@ -6,12 +6,15 @@ verification methods, and stop conditions. The Ideal State is the primary
 control surface for the agent loop.
 """
 
+import logging
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Any
 from pydantic import BaseModel, Field
 
 from ..runtime.time_utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 
 class CriterionType(str, Enum):
@@ -254,8 +257,9 @@ class IdealStateBuilder:
 
             return refined_state
 
-        except Exception:
-            # Return with at least the violation-based refinements
+        except (ValueError, KeyError, TypeError) as e:
+            # Log and return with at least the violation-based refinements
+            logger.warning("Failed to parse LLM refinement response: %s", e)
             return refined_state.refine({})
 
     def _build_extraction_prompt(self, task: str, context: dict) -> str:
@@ -434,3 +438,173 @@ Return only the refinements as structured data."""
                 StopCondition(condition_type="max_iterations", threshold=5),
             ],
         )
+
+    async def refine_with_clarification(
+        self,
+        current_ideal_state: "IdealState",
+        clarification_context: dict[str, Any],
+    ) -> "IdealState":
+        """
+        Refine ideal state with user's clarification response.
+
+        Called when the user provides additional context after Copilot
+        indicated it needed more information. This incorporates the
+        user's response into the ideal state criteria and task description.
+
+        Args:
+            current_ideal_state: The ideal state before clarification
+            clarification_context: Contains:
+                - user_clarification: The user's response text
+                - original_context: What triggered the clarification need
+                - iteration_before_clarification: Which iteration needed it
+
+        Returns:
+            Updated IdealState with clarification incorporated
+        """
+        user_clarification = clarification_context.get("user_clarification", "")
+        original_context = clarification_context.get("original_context", "")
+
+        if not user_clarification:
+            return current_ideal_state
+
+        # Build prompt to incorporate clarification into ideal state
+        prompt = f"""The user has provided additional clarification for this task.
+
+ORIGINAL TASK:
+{current_ideal_state.task_description}
+
+WHAT TRIGGERED CLARIFICATION:
+{original_context}
+
+USER'S CLARIFICATION:
+{user_clarification}
+
+Based on this clarification, update the task understanding:
+1. How does this clarification change or enhance the task description?
+2. Are there new success criteria to add?
+3. Are there new anti-criteria (things to avoid)?
+4. Does this tighten any existing criteria?
+
+Provide:
+- UPDATED_TASK: An enhanced task description incorporating the clarification
+- NEW_CRITERIA: Any new success criteria (one per line, starting with -)
+- NEW_ANTI_CRITERIA: Any new anti-criteria (one per line, starting with -)
+- TIGHTENED: Any criteria that should be more specific now"""
+
+        try:
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                system_prompt="You incorporate user clarifications into task specifications. Be specific and actionable.",
+            )
+
+            refinements = self._parse_clarification_response(response, current_ideal_state)
+
+            # Update task description if provided
+            if "task_description" in refinements:
+                current_ideal_state.task_description = refinements["task_description"]
+                del refinements["task_description"]
+
+            # Add new criteria
+            if "_new_criteria" in refinements:
+                for i, desc in enumerate(refinements["_new_criteria"]):
+                    criterion_id = f"criterion_clarification_{current_ideal_state.version}_{i+1}"
+                    current_ideal_state.add_success_criterion(SuccessCriterion(
+                        id=criterion_id,
+                        description=desc,
+                        criterion_type=CriterionType.FUNCTIONAL,
+                        rank=2,  # Lower priority than original criteria
+                        measurement=f"Verify: {desc[:50]}",
+                        target_score=0.8,
+                    ))
+                del refinements["_new_criteria"]
+
+            # Add new anti-criteria
+            if "_new_anti_criteria" in refinements:
+                for i, desc in enumerate(refinements["_new_anti_criteria"]):
+                    anti_id = f"anti_clarification_{current_ideal_state.version}_{i+1}"
+                    current_ideal_state.add_anti_criterion(AntiCriterion(
+                        id=anti_id,
+                        description=desc,
+                        severity=0.8,
+                        detection=f"Check for: {desc[:30]}",
+                    ))
+                del refinements["_new_anti_criteria"]
+
+            # Add clarification to constraints for context
+            current_ideal_state.constraints.append(
+                f"User clarification: {user_clarification[:200]}"
+            )
+
+            return current_ideal_state.refine(refinements)
+
+        except Exception as e:
+            logger.warning("Failed to incorporate clarification: %s", e)
+            # At minimum, add clarification as a constraint
+            current_ideal_state.constraints.append(
+                f"User clarification: {user_clarification[:200]}"
+            )
+            return current_ideal_state.refine({})
+
+    def _parse_clarification_response(
+        self,
+        response: str,
+        ideal_state: "IdealState"
+    ) -> dict[str, Any]:
+        """Parse clarification refinement response from LLM."""
+        refinements = {}
+        lines = response.strip().split("\n")
+
+        current_section = None
+        new_criteria = []
+        new_anti_criteria = []
+        updated_task = []
+
+        for line in lines:
+            line_stripped = line.strip()
+            line_lower = line_stripped.lower()
+
+            # Detect section headers
+            if line_lower.startswith("updated_task:"):
+                current_section = "task"
+                content = line_stripped.split(":", 1)
+                if len(content) > 1 and content[1].strip():
+                    updated_task.append(content[1].strip())
+                continue
+            elif line_lower.startswith("new_criteria:"):
+                current_section = "criteria"
+                continue
+            elif line_lower.startswith("new_anti_criteria:"):
+                current_section = "anti"
+                continue
+            elif line_lower.startswith("tightened:"):
+                current_section = "tightened"
+                continue
+
+            # Extract content based on section
+            if current_section == "task" and line_stripped:
+                updated_task.append(line_stripped)
+            elif current_section == "criteria" and line_stripped.startswith("-"):
+                content = line_stripped.lstrip("- ")
+                if content:
+                    new_criteria.append(content)
+            elif current_section == "anti" and line_stripped.startswith("-"):
+                content = line_stripped.lstrip("- ")
+                if content:
+                    new_anti_criteria.append(content)
+
+        # Build refinements
+        if updated_task:
+            # Append clarification context to task, don't replace entirely
+            clarification_summary = " ".join(updated_task)
+            refinements["task_description"] = (
+                f"{ideal_state.task_description}\n\n"
+                f"Additional context: {clarification_summary}"
+            )
+
+        if new_criteria:
+            refinements["_new_criteria"] = new_criteria
+
+        if new_anti_criteria:
+            refinements["_new_anti_criteria"] = new_anti_criteria
+
+        return refinements

@@ -2,6 +2,14 @@
 
 Generate a detailed specification for building a {item_type}.
 
+## NAME EXTRACTION (CRITICAL)
+Extract a descriptive snake_case name from the description. Examples:
+- "hello world agent" → name: "hello_world"
+- "email notification agent" → name: "email_notifier"
+- "weather lookup agent" → name: "weather_lookup"
+
+NEVER use "unnamed" as the name - always derive from the description.
+
 ## Build Discipline
 - Keep diffs minimal
 - Update tests if behaviour changes

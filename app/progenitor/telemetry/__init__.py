@@ -23,6 +23,33 @@ from .instrument import (
     CycleTelemetry,
 )
 
+
+def get_telemetry():
+    """
+    Get the telemetry tracer and metrics instances.
+
+    This is a centralized helper for accessing telemetry components.
+    Returns (None, None) if telemetry is not available, allowing callers
+    to gracefully handle the case where telemetry is disabled.
+
+    Returns:
+        Tuple of (tracer, metrics) where each may be None if not configured.
+
+    Example:
+        tracer, metrics = get_telemetry()
+        if tracer:
+            span = tracer.start_span("my_operation")
+        if metrics:
+            metrics.increment("my_counter")
+    """
+    try:
+        tracer = get_tracer()
+        metrics = get_metrics()
+        return tracer, metrics
+    except Exception:
+        return None, None
+
+
 __all__ = [
     # Metrics
     "MetricsCollector",
@@ -53,4 +80,6 @@ __all__ = [
     "AgentTelemetry",
     "IterationTelemetry",
     "CycleTelemetry",
+    # Helpers
+    "get_telemetry",
 ]

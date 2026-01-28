@@ -95,6 +95,40 @@ class TestDecideNode:
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
 
     @pytest.mark.asyncio
+    async def test_decide_forces_build_agent_for_explicit_agent_request(self):
+        """Explicit build-agent requests should not fall through to a generic ack."""
+        from app.progenitor.nodes import decide
+
+        mock_llm = AsyncMock()
+        # Simulate an LLM response that would otherwise cause a non-actionable direct answer.
+        mock_llm.decide.return_value = {
+            "action": "answer_directly",
+            "reasoning": "",
+            "requires_planning": False,
+            "target_capabilities": [],
+            "direct_response": None,
+        }
+
+        mock_registry = MagicMock()
+        mock_registry.get_all_capabilities.return_value = []
+
+        mock_state_manager = AsyncMock()
+
+        node = decide.create_node(mock_llm, mock_registry, mock_state_manager)
+
+        state: ProgenitorState = {
+            "current_input": "Please build a hello world agent and register it.",
+            "messages": [],
+        }
+
+        result = await node(state)
+
+        assert result["current_decision"] is not None
+        decision = result["current_decision"]
+        assert decision.action == DecisionAction.BUILD_AGENT
+        assert decision.requires_planning is True
+
+    @pytest.mark.asyncio
     async def test_decide_no_input(self):
         """Test decision with no input."""
         from app.progenitor.nodes import decide

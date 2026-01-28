@@ -5,6 +5,7 @@ Refines ideal state, adds anti-criteria, tightens criteria based on:
 - Current iteration results
 - Verification feedback
 - New context or constraints discovered
+- User clarification responses (when the build needed more info)
 """
 
 import logging
@@ -13,6 +14,7 @@ from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState
 from ..state.ideal_state import IdealStateBuilder
+from ..state.clarification import create_clarification_history_entry
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ def create_node(
         OBSERVE phase: Refine ideal state based on iteration results.
 
         - If first iteration: Build initial ideal state from task
+        - If clarification response: Incorporate user's additional context
         - Otherwise: Refine based on previous verification results
         """
         start_time = time.perf_counter()
@@ -48,6 +51,13 @@ def create_node(
 
         iteration = state.get("current_iteration", 0)
         ideal_state = state.get("ideal_state")
+
+        # Check if we have a clarification response to incorporate
+        clarification_response = state.get("clarification_response")
+        awaiting_clarification = state.get("awaiting_clarification", False)
+
+        # Track clarification-related state updates
+        clarification_updates = {}
 
         # Initialize inner loop state if this is the first entry
         # (moved from routing function to keep routing pure)
@@ -74,11 +84,55 @@ def create_node(
                     "iteration": iteration,
                     "has_ideal_state": ideal_state is not None,
                     "is_initial": iteration == 0 or ideal_state is None,
+                    "has_clarification_response": clarification_response is not None,
                 },
             )
 
         try:
-            if iteration == 0 or ideal_state is None:
+            # Handle clarification response - incorporate user's additional context
+            if awaiting_clarification and clarification_response and ideal_state:
+                logger.info("Incorporating clarification response into ideal state")
+
+                # Update the clarification history to mark it as resolved
+                history = list(state.get("clarification_history", []))
+                if history and not history[-1].get("resolved"):
+                    history[-1]["user_response"] = clarification_response
+                    history[-1]["resolved"] = True
+
+                # Refine ideal state with clarification context
+                clarification_context = {
+                    "user_clarification": clarification_response,
+                    "original_context": state.get("clarification_context", ""),
+                    "iteration_before_clarification": iteration,
+                }
+
+                ideal_state = await ideal_state_builder.refine_with_clarification(
+                    ideal_state, clarification_context
+                )
+
+                # Clear clarification state - ready for next iteration
+                clarification_updates = {
+                    "awaiting_clarification": False,
+                    "clarification_response": None,
+                    "clarification_context": None,
+                    "clarification_question": None,
+                    "clarification_history": history,
+                }
+
+                if span:
+                    span.add_event("clarification_incorporated", {
+                        "response_length": len(clarification_response),
+                    })
+
+                if state_manager:
+                    await state_manager.log_decision({
+                        "event": "clarification_incorporated",
+                        "iteration": iteration,
+                        "response_preview": clarification_response[:200] if clarification_response else None,
+                        "timestamp": utcnow_isoformat(),
+                    })
+
+            elif iteration == 0 or ideal_state is None:
                 # First iteration - build initial ideal state
                 task = state.get("current_input") or state.get("task_description", "")
                 context = {
@@ -154,11 +208,21 @@ def create_node(
 
             if span:
                 span.set_attribute("duration_seconds", duration)
-                span.set_attribute("criteria_count", len(ideal_state.success_criteria) if ideal_state else 0)
+                # Handle ideal_state being either IdealState object or dict
+                if ideal_state:
+                    if hasattr(ideal_state, "success_criteria"):
+                        criteria_count = len(ideal_state.success_criteria)
+                    elif isinstance(ideal_state, dict):
+                        criteria_count = len(ideal_state.get("success_criteria", []))
+                    else:
+                        criteria_count = 0
+                else:
+                    criteria_count = 0
+                span.set_attribute("criteria_count", criteria_count)
                 span.end()
 
-            # Merge state updates with ideal_state
-            return {**state_updates, "ideal_state": ideal_state}
+            # Merge state updates with ideal_state and clarification updates
+            return {**state_updates, **clarification_updates, "ideal_state": ideal_state}
 
         except Exception as e:
             if metrics:

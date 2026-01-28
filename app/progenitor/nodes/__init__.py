@@ -35,6 +35,25 @@ from .errors import (
     ConfigurationError,
 )
 
+# Dependency injection
+from .dependencies import (
+    NodeDependencies,
+    LLMClientProtocol,
+    StateManagerProtocol,
+    ToolRegistryProtocol,
+    create_all_nodes,
+    create_node_subset,
+    create_test_dependencies,
+)
+
+# Telemetry decorators
+from .telemetry_decorators import (
+    traced_node,
+    traced_method,
+    timed,
+    NodeInstrumentationMixin,
+)
+
 __all__ = [
     "intake",
     "time_check",
@@ -65,5 +84,18 @@ __all__ = [
     "ToolError",
     "StateError",
     "ConfigurationError",
+    # Dependency injection
+    "NodeDependencies",
+    "LLMClientProtocol",
+    "StateManagerProtocol",
+    "ToolRegistryProtocol",
+    "create_all_nodes",
+    "create_node_subset",
+    "create_test_dependencies",
+    # Telemetry decorators
+    "traced_node",
+    "traced_method",
+    "timed",
+    "NodeInstrumentationMixin",
 ]
 
