@@ -13,9 +13,7 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -102,13 +100,13 @@ class CopilotCLI:
         # Resolve command
         cmd = self._build_command(prompt, target_path)
         logger.info("COPILOT: Building command for work item %s", work_item_id)
-        logger.info("COPILOT: cmd=%s... in %s", cmd[:3], worktree_path)
+        logger.info("COPILOT: cmd args (excl prompt): %s in %s", cmd[:-1], worktree_path)
 
         # Log the invocation
         invocation_log = {
             "work_item_id": work_item_id,
             "worktree_path": str(worktree_path),
-            "command": cmd,
+            "command": cmd[:-1],  # Don't log full prompt in command
             "prompt_preview": prompt[:500] + "..." if len(prompt) > 500 else prompt,
             "started_at": utcnow_isoformat(),
         }
@@ -151,6 +149,7 @@ class CopilotCLI:
                 "success": result["returncode"] == 0,
                 "stdout_preview": result["stdout"][:1000] if result["stdout"] else None,
                 "stderr_preview": result["stderr"][:500] if result["stderr"] else None,
+                "summary": result.get("summary", ""),
                 "diff_preview": diff_result[:2000] if diff_result else None,
             })
 
@@ -165,6 +164,7 @@ class CopilotCLI:
                 "success": result["returncode"] == 0,
                 "stdout": result["stdout"],
                 "stderr": result["stderr"],
+                "summary": result.get("summary", ""),
                 "diff": diff_result,
                 "returncode": result["returncode"],
             }
@@ -191,7 +191,12 @@ class CopilotCLI:
             }
 
     def _build_command(self, prompt: str, target_path: Optional[str] = None) -> list[str]:
-        """Build the Copilot CLI command."""
+        """Build the Copilot CLI command.
+
+        Returns:
+            Command args list. The prompt is passed directly via -p.
+            For long/complex prompts, consider using a temp file.
+        """
         cmd = [self.config.get("command", "copilot")]
         cmd.extend(self.config.get("default_flags", []))
 
@@ -199,10 +204,14 @@ class CopilotCLI:
         if "model" in self.config:
             cmd.extend(["--model", self.config["model"]])
 
+        # Add allowed directories (restricts file access to only these dirs)
+        for allowed_dir in self.config.get("allowed_dirs", []):
+            cmd.extend(["--add-dir", allowed_dir])
+
         if target_path:
             cmd.extend(["--target", target_path])
 
-        # Add prompt as argument
+        # Pass prompt directly - subprocess.exec handles quoting
         cmd.extend(["-p", prompt])
 
         return cmd
@@ -211,46 +220,164 @@ class CopilotCLI:
         self,
         cmd: list[str],
         cwd: Path,
+        stream_to_log: bool = True,
     ) -> dict[str, Any]:
-        """Run a command asynchronously."""
+        """Run a command asynchronously with streaming output.
+
+        Args:
+            cmd: Command and arguments to run.
+            cwd: Working directory.
+            stream_to_log: If True, log output lines as they arrive.
+
+        Returns:
+            Dict with returncode, stdout, stderr, and summary.
+        """
         timeout = self.config.get("timeout", 300)
         process = None
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
 
         try:
+            # Log the command (truncate prompt for readability)
+            # cmd ends with ["-p", prompt], so cmd[:-1] shows everything up to the prompt
+            cmd_display = cmd[:-1] if len(cmd) > 1 else cmd
+            logger.info("COPILOT: Executing: %s <prompt omitted>", " ".join(cmd_display))
+
+            # Note: stdin=DEVNULL prevents Node.js stdin issues in nested subprocess chains
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=cwd,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, "COPILOT_NON_INTERACTIVE": "1"},
             )
 
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout
-            )
+            async def read_stream(stream, lines: list, prefix: str):
+                """Read stream line by line and log."""
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    decoded = line.decode().rstrip()
+                    lines.append(decoded)
+                    if stream_to_log and decoded:
+                        logger.info("COPILOT [%s]: %s", prefix, decoded)
+
+            # Read stdout and stderr concurrently with timeout
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        read_stream(process.stdout, stdout_lines, "out"),
+                        read_stream(process.stderr, stderr_lines, "err"),
+                    ),
+                    timeout=timeout
+                )
+                await process.wait()
+            except asyncio.TimeoutError:
+                logger.warning("COPILOT: Command timed out after %ds", timeout)
+                await self._terminate_process_gracefully(process)
+                return {
+                    "returncode": -1,
+                    "stdout": "\n".join(stdout_lines),
+                    "stderr": "\n".join(stderr_lines) + f"\n[Timed out after {timeout}s]",
+                    "summary": self._extract_summary(stdout_lines),
+                }
+
+            stdout_text = "\n".join(stdout_lines)
+            stderr_text = "\n".join(stderr_lines)
+
+            # Extract the summary section from output
+            summary = self._extract_summary(stdout_lines)
+            if summary:
+                logger.info("COPILOT SUMMARY:\n%s", summary)
 
             return {
                 "returncode": process.returncode,
-                "stdout": stdout.decode() if stdout else "",
-                "stderr": stderr.decode() if stderr else "",
+                "stdout": stdout_text,
+                "stderr": stderr_text,
+                "summary": summary,
             }
 
-        except asyncio.TimeoutError:
-            if process is not None:
-                process.kill()
+        except FileNotFoundError as e:
+            logger.error("COPILOT: Command not found: %s", cmd[0])
             return {
                 "returncode": -1,
                 "stdout": "",
-                "stderr": f"Command timed out after {timeout} seconds",
+                "stderr": f"Command not found: {cmd[0]} - {e}",
+                "summary": "",
             }
+        except Exception as e:
+            logger.error("COPILOT: Unexpected error: %s", e)
+            if process is not None:
+                await self._terminate_process_gracefully(process)
+            return {
+                "returncode": -1,
+                "stdout": "\n".join(stdout_lines),
+                "stderr": "\n".join(stderr_lines) + f"\n[Error: {e}]",
+                "summary": "",
+            }
+
+    def _extract_summary(self, lines: list[str]) -> str:
+        """Extract the usage summary section from copilot output.
+
+        The summary typically starts with 'Total usage' and includes
+        duration and code change statistics.
+        """
+        summary_lines = []
+        in_summary = False
+
+        for line in lines:
+            # Summary starts with "Total usage" or blank line before it
+            if "Total usage" in line or "Total duration" in line:
+                in_summary = True
+            if in_summary:
+                summary_lines.append(line)
+
+        return "\n".join(summary_lines) if summary_lines else ""
+
+    async def _terminate_process_gracefully(
+        self,
+        process: asyncio.subprocess.Process,
+        grace_period: float = 5.0
+    ) -> None:
+        """Gracefully terminate a process with SIGTERM, then SIGKILL if needed.
+
+        Args:
+            process: The process to terminate.
+            grace_period: Seconds to wait for graceful shutdown before force kill.
+        """
+        try:
+            # First try SIGTERM (graceful shutdown)
+            process.terminate()
+            logger.debug("Sent SIGTERM to process %s", process.pid)
+
+            try:
+                # Wait for graceful shutdown
+                await asyncio.wait_for(process.wait(), timeout=grace_period)
+                logger.debug("Process %s terminated gracefully", process.pid)
+            except asyncio.TimeoutError:
+                # Process didn't terminate gracefully, force kill
+                logger.warning(
+                    "Process %s did not respond to SIGTERM after %.1fs, sending SIGKILL",
+                    process.pid,
+                    grace_period
+                )
+                process.kill()
+                await process.wait()  # Clean up zombie process
+                logger.debug("Process %s killed", process.pid)
+        except ProcessLookupError:
+            # Process already terminated
+            logger.debug("Process already terminated")
+        except Exception as e:
+            logger.warning("Error terminating process: %s", e)
 
     async def _get_diff(self, worktree_path: Path) -> str:
         """Get git diff for the worktree."""
         try:
             result = await self._run_command(
                 ["git", "diff", "--cached", "--stat"],
-                cwd=worktree_path
+                cwd=worktree_path,
+                stream_to_log=False,  # Don't log git output
             )
 
             if result["returncode"] == 0:
@@ -259,11 +386,13 @@ class CopilotCLI:
             # Try unstaged diff
             result = await self._run_command(
                 ["git", "diff", "--stat"],
-                cwd=worktree_path
+                cwd=worktree_path,
+                stream_to_log=False,
             )
             return result["stdout"]
 
-        except Exception:
+        except (OSError, asyncio.TimeoutError) as e:
+            logger.debug("Failed to get worktree diff for %s: %s", worktree_path, e)
             return ""
 
     async def validate_installation(self) -> bool:
@@ -271,8 +400,10 @@ class CopilotCLI:
         try:
             result = await self._run_command(
                 [self.config.get("command", "copilot"), "--version"],
-                cwd=Path.cwd()
+                cwd=Path.cwd(),
+                stream_to_log=False,  # Don't log version check
             )
             return result["returncode"] == 0
-        except Exception:
+        except (OSError, FileNotFoundError, asyncio.TimeoutError) as e:
+            logger.debug("Copilot CLI validation failed: %s", e)
             return False

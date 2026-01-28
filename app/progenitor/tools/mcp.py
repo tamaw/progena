@@ -6,10 +6,70 @@ Handles communication with MCP servers via stdio or HTTP transports.
 
 import asyncio
 import json
+import logging
 import os
-import subprocess
+import shlex
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Allowlist of safe command prefixes for MCP servers
+# Commands must start with one of these to be executed
+ALLOWED_COMMAND_PREFIXES = (
+    "python",
+    "node",
+    "npx",
+    "uvx",
+    "deno",
+)
+
+
+def _validate_command(command: str | list[str]) -> list[str]:
+    """
+    Safely parse and validate a command for execution.
+
+    Args:
+        command: Command string or list of command parts
+
+    Returns:
+        List of command parts, safely parsed
+
+    Raises:
+        ValueError: If command is invalid or not in allowlist
+    """
+    if isinstance(command, list):
+        cmd_parts = command
+    else:
+        # Use shlex.split for proper shell escaping (prevents injection)
+        try:
+            cmd_parts = shlex.split(command)
+        except ValueError as e:
+            raise ValueError(f"Invalid command syntax: {e}") from e
+
+    if not cmd_parts:
+        raise ValueError("Empty command")
+
+    # Validate command against allowlist
+    executable = cmd_parts[0].lower()
+    # Extract just the executable name (handle paths like /usr/bin/python)
+    executable_name = Path(executable).name.lower()
+    # Remove common extensions
+    if executable_name.endswith('.exe'):
+        executable_name = executable_name[:-4]
+
+    if not any(executable_name.startswith(prefix) for prefix in ALLOWED_COMMAND_PREFIXES):
+        logger.warning(
+            "Command '%s' not in allowlist. Allowed prefixes: %s",
+            executable_name,
+            ALLOWED_COMMAND_PREFIXES,
+        )
+        raise ValueError(
+            f"Command '{executable_name}' not allowed. "
+            f"Allowed: {', '.join(ALLOWED_COMMAND_PREFIXES)}"
+        )
+
+    return cmd_parts
 
 
 class MCPClient:
@@ -53,11 +113,8 @@ class MCPClient:
             "params": params or {},
         }
 
-        # Parse command
-        if isinstance(command, str):
-            cmd_parts = command.split()
-        else:
-            cmd_parts = command
+        # Safely parse and validate command (prevents command injection)
+        cmd_parts = _validate_command(command)
 
         # Run the MCP server
         process = await asyncio.create_subprocess_exec(
@@ -132,7 +189,8 @@ class MCPClient:
         try:
             result = await self.call_tool(tool_config, "ping")
             return not isinstance(result, dict) or "error" not in result
-        except Exception:
+        except (OSError, asyncio.TimeoutError, ValueError) as e:
+            logger.debug("MCP healthcheck failed: %s", e)
             return False
 
 

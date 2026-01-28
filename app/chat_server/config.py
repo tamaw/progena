@@ -3,11 +3,12 @@ Chat Server Configuration.
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from ..common.env_utils import env_int, env_bool
+from .env_utils import env_int, env_bool
 
 
 @dataclass
@@ -24,7 +25,7 @@ class ChatServerConfig:
         default_factory=lambda: Path(__file__).parent.parent / "progenitor" / "main.py"
     )
     progenitor_timeout: int = 300  # seconds
-    progenitor_python: str = "python"
+    progenitor_python: str = field(default_factory=lambda: sys.executable)  # Use same Python as chat server
 
     # API settings
     api_title: str = "Progenitor Chat API"
@@ -38,6 +39,8 @@ class ChatServerConfig:
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 60
     rate_limit_per_hour: int = 500
+    rate_limit_cleanup_interval: int = 300  # Cleanup stale clients every 5 minutes
+    rate_limit_stale_client_age: int = 3600  # Remove clients with no activity for 1 hour
 
     # Streaming settings
     stream_enabled: bool = True  # Enable real-time token streaming
@@ -51,7 +54,7 @@ class ChatServerConfig:
             port=env_int("CHAT_SERVER_PORT", 8000),
             debug=env_bool("CHAT_SERVER_DEBUG", False),
             progenitor_timeout=env_int("CHAT_SERVER_PROGENITOR_TIMEOUT", 300),
-            progenitor_python=os.getenv("CHAT_SERVER_PYTHON", "python"),
+            progenitor_python=os.getenv("CHAT_SERVER_PYTHON", sys.executable),
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),
             rate_limit_enabled=env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),

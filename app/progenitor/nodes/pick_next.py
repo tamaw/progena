@@ -78,6 +78,7 @@ def _to_work_item(item) -> WorkItem | None:
                 target_tool=item.get("target_tool"),
                 worktree_path=item.get("worktree_path"),
             )
-        except Exception:
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug("Failed to convert item to WorkItem: %s", e)
             return None
     return None

@@ -1,16 +1,22 @@
 # Copilot Build Task
 
-Build the following component according to this specification:
+Create the following component now. Do not ask for clarification - just build it:
 
-## Specification
-Name: {agent_name}
-Kind: {kind}
-Description: {description}
+## Task
+Create a new {kind} named "{agent_name}" in `app/agents/{agent_name}/`
 
-Capabilities:
+## What to create
+1. Create directory: `app/agents/{agent_name}/`
+2. Create `app/agents/{agent_name}/agent.py` with the main implementation
+3. Create `app/agents/{agent_name}/__init__.py` that exports the main class
+
+## Description
+{description}
+
+## Capabilities
 {capabilities}
 
-Implementation Notes:
+## Implementation Notes
 {implementation_notes}
 
 {structure_guidance}
@@ -18,8 +24,9 @@ Implementation Notes:
 ## Requirements
 - Follow Python best practices
 - Include docstrings and type hints
-- Write minimal, focused code
-- Include basic tests
-- Make it work with the Progenitor framework
+- The agent class must have:
+  - AGENT_ID, AGENT_NAME, DESCRIPTION, CAPABILITIES class attributes
+  - async def invoke(self, input: str) -> str method
+  - def get_agent_card(self) -> dict method
 
-Generate the implementation.
+Build it now.

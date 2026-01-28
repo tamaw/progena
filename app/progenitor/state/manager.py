@@ -16,10 +16,11 @@ import os
 import sys
 import tempfile
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from contextlib import asynccontextmanager
+
+import aiofiles
 
 logger = logging.getLogger(__name__)
 
@@ -194,13 +195,14 @@ class StateManager:
             raise
 
     async def _read_json(self, filepath: Path) -> Any:
-        """Read JSON file."""
+        """Read JSON file asynchronously."""
         filepath = Path(filepath)
         if not filepath.exists():
             return None
 
-        with open(filepath, 'r') as f:
-            return json.load(f)
+        async with aiofiles.open(filepath, 'r') as f:
+            content = await f.read()
+            return json.loads(content)
 
     async def append_jsonl(self, log_name: str, entry: dict[str, Any]) -> None:
         """Append a single entry to a JSONL log file with secret redaction."""
@@ -218,9 +220,10 @@ class StateManager:
         line = json.dumps(entry, default=str)
         line = redact_secrets(line) + "\n"
 
-        with open(filepath, 'a') as f:
-            f.write(line)
-            f.flush()
+        async with aiofiles.open(filepath, 'a') as f:
+            await f.write(line)
+            await f.flush()
+            # fsync for durability - use os.fsync on the file descriptor
             os.fsync(f.fileno())
 
         # Record log append metrics
@@ -342,14 +345,14 @@ class StateManager:
                     )
 
     async def read_conversation_log(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Read recent conversation log entries."""
+        """Read recent conversation log entries asynchronously."""
         filepath = self.logs_dir / self.LOG_FILES["conversation"]
         if not filepath.exists():
             return []
 
         entries = []
-        with open(filepath, 'r') as f:
-            for line in f:
+        async with aiofiles.open(filepath, 'r') as f:
+            async for line in f:
                 if line.strip():
                     entries.append(json.loads(line))
 
@@ -395,14 +398,14 @@ class StateManager:
         await self.log_decision(entry)
 
     async def get_iteration_history(self, limit: int = 10) -> list[dict[str, Any]]:
-        """Get recent iteration history."""
+        """Get recent iteration history asynchronously."""
         decisions_path = self.logs_dir / self.LOG_FILES["decisions"]
         if not decisions_path.exists():
             return []
 
         iterations = []
-        with open(decisions_path, 'r') as f:
-            for line in f:
+        async with aiofiles.open(decisions_path, 'r') as f:
+            async for line in f:
                 if line.strip():
                     entry = json.loads(line)
                     if entry.get("event") in ("iteration_start", "iteration_end", "verification"):

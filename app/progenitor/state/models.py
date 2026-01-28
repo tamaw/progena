@@ -48,35 +48,50 @@ class DecisionAction(str, Enum):
 
 # Patterns for secret redaction - (pattern, replacement_or_handler)
 # Order matters: more specific patterns should come first
+# NOTE: Patterns are carefully crafted to avoid false positives (e.g., UUIDs, hashes)
 SECRET_PATTERNS = [
-    # OpenAI keys (multiple formats)
+    # OpenAI keys (multiple formats) - very specific prefixes
     (r'sk-proj-[A-Za-z0-9\-_]{20,}', '[OPENAI_PROJECT_KEY_REDACTED]'),  # OpenAI project keys
-    (r'sk-[A-Za-z0-9]{20,}', '[OPENAI_KEY_REDACTED]'),  # OpenAI keys
+    (r'sk-[A-Za-z0-9]{20,}', '[OPENAI_KEY_REDACTED]'),  # OpenAI keys (sk- prefix)
 
-    # Azure keys (various formats)
-    (r'(?i)(?:azure|az)[_-]?(?:openai)?[_-]?(?:api)?[_-]?key["\']?\s*[:=]\s*["\']?[A-Za-z0-9]{32,}', '[AZURE_KEY_REDACTED]'),
-    (r'[A-Za-z0-9]{32}', '[AZURE_KEY_REDACTED]'),  # Standard 32-char Azure keys (applied carefully below)
+    # Azure keys - context-aware patterns only (avoid matching UUIDs/hashes)
+    # Match "key": "value" or key=value patterns with Azure context
+    (r'(?i)(?:azure|az)[_-]?(?:openai)?[_-]?(?:api)?[_-]?key["\']?\s*[:=]\s*["\']?([A-Za-z0-9]{32,})', '[AZURE_KEY_REDACTED]'),
+    # Match environment variable style AZURE_*_KEY=value
+    (r'(?i)(AZURE_[A-Z_]*KEY)\s*=\s*([A-Za-z0-9]{32,})', r'\1=[AZURE_KEY_REDACTED]'),
+    # Only match 32-char hex strings in key/secret/credential contexts (not standalone)
+    (r'(?i)(?:key|secret|credential|token)["\']?\s*[:=]\s*["\']?([A-Fa-f0-9]{32})(?![A-Za-z0-9])', '[AZURE_KEY_REDACTED]'),
 
-    # GitHub tokens
+    # GitHub tokens - very specific prefixes
     (r'ghp_[A-Za-z0-9]{36,}', '[GITHUB_TOKEN_REDACTED]'),  # GitHub personal access tokens
     (r'gho_[A-Za-z0-9]{36,}', '[GITHUB_OAUTH_REDACTED]'),  # GitHub OAuth tokens
     (r'ghs_[A-Za-z0-9]{36,}', '[GITHUB_SERVER_REDACTED]'),  # GitHub server tokens
     (r'ghu_[A-Za-z0-9]{36,}', '[GITHUB_USER_REDACTED]'),  # GitHub user tokens
     (r'github_pat_[A-Za-z0-9_]{22,}', '[GITHUB_PAT_REDACTED]'),  # Fine-grained PATs
 
-    # Generic patterns (applied last)
+    # Anthropic keys
+    (r'sk-ant-[A-Za-z0-9\-_]{20,}', '[ANTHROPIC_KEY_REDACTED]'),
+
+    # Generic patterns - require context (key/value assignment)
     (r'(?i)(api[_-]?key|apikey)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r'\1=[REDACTED]'),
-    (r'(?i)(secret|password|passwd|pwd|token|credential|auth)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r'\1=[REDACTED]'),
+    (r'(?i)(secret|password|passwd|pwd|credential)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r'\1=[REDACTED]'),
     (r'(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*', r'\1[REDACTED]'),
 
-    # AWS patterns
+    # AWS patterns - specific prefixes
     (r'AKIA[A-Z0-9]{16}', '[AWS_ACCESS_KEY_REDACTED]'),
     (r'(?i)(aws[_-]?secret[_-]?access[_-]?key)["\']?\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}', r'\1=[REDACTED]'),
 ]
 
 
 def redact_secrets(text: str) -> str:
-    """Redact sensitive information from text before logging."""
+    """Redact sensitive information from text before logging.
+
+    This function is designed to minimize false positives while catching
+    real secrets. It requires context (key=value patterns) for generic
+    patterns and uses specific prefixes for known API key formats.
+
+    UUIDs, hashes, and work item IDs should NOT be redacted.
+    """
     import re
     result = text
     for pattern, replacement in SECRET_PATTERNS:
@@ -262,73 +277,116 @@ class ValidationResult(BaseModel):
     timestamp: datetime = Field(default_factory=utcnow)
 
 
-# TypedDict for LangGraph state (allows partial updates)
-class ProgenitorState(TypedDict, total=False):
-    """Main state for the LangGraph."""
-    # Conversation
+# ============================================================================
+# Composable State Types for LangGraph
+# Split into focused substates for better organization and testing
+# ============================================================================
+
+class ConversationState(TypedDict, total=False):
+    """Conversation-related state."""
     messages: list[ConversationMessage]
     current_input: Optional[str]
     pending_response: Optional[str]
 
-    # Backlog and work
+
+class WorkState(TypedDict, total=False):
+    """Work item and backlog state."""
     backlog: list[WorkItem]
     current_work_item: Optional[WorkItem]
-
-    # Decision state
     current_decision: Optional[Decision]
 
-    # Scheduling
+
+class SchedulingState(TypedDict, total=False):
+    """Scheduling and registry state."""
     schedule: list[ScheduleEntry]
     current_time: Optional[datetime]
     due_items: list[str]  # IDs of due schedule entries
-
-    # Registry
     agents: list[AgentRegistryEntry]
 
-    # Validation
-    last_validation_result: Optional[dict[str, Any]]
 
-    # Loop control
+class LoopControlState(TypedDict, total=False):
+    """Loop control and metadata."""
     cycle_count: int
     actions_this_cycle: int
     shutdown_requested: bool
-
-    # Metadata
     last_commit_time: Optional[datetime]
     run_id: str
+    last_validation_result: Optional[dict[str, Any]]
 
-    # Ideal State Loop (loop.spec.md) - NEW
+
+class InnerLoopState(TypedDict, total=False):
+    """Inner loop (OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN) state.
+
+    Per loop.spec.md ideal state architecture.
+    """
+    # Ideal state and iteration tracking
     ideal_state: Optional[Any]  # IdealState object
     current_iteration: int  # Inner loop iteration count
     iteration_start_time: float  # Timestamp when iteration started
+    task_id: Optional[str]  # Unique task identifier
 
-    # Inner Loop Phases
-    current_approaches: list[dict[str, Any]]  # From THINK phase
+    # Phase outputs
     thinking_output: Optional[str]  # THINK phase output
+    current_approaches: list[dict[str, Any]]  # From THINK phase
     last_iteration_output: Optional[Any]  # Output from BUILD phase
 
     # Verification
     last_verification_report: Optional[Any]  # VerificationReport object
     verification_passed: bool
     verification_score: float
+    verification_reports: list[dict[str, Any]]  # All verification reports
 
     # Learning
     lessons_learned: list[dict[str, Any]]  # Accumulated lessons
     current_lesson: Optional[dict[str, Any]]  # Current iteration lesson
 
-    # Stop condition tracking
+    # Stop conditions
     should_iterate: bool  # Whether to continue iterating
     iteration_stop_reason: Optional[str]  # Why iteration stopped
 
-    # Task State (loop.spec.md persisted state)
-    task_id: Optional[str]  # Unique task identifier
+    # Artefacts
     artefacts: list[dict[str, Any]]  # Produced artefacts per iteration
     best_artefact: Optional[dict[str, Any]]  # Best artefact by verification score
     best_artefact_score: float  # Score of best artefact
-    verification_reports: list[dict[str, Any]]  # All verification reports
 
-    # Execute Phase (loop.spec.md BUILD → EXECUTE → VERIFY)
+    # Clarification handling (user interaction during build)
+    clarification_needed: bool  # Whether Copilot needs more information from user
+    clarification_question: Optional[str]  # Formatted question to ask user
+    clarification_context: Optional[str]  # Raw context from Copilot output indicating need
+    awaiting_clarification: bool  # Currently waiting for user response
+    clarification_response: Optional[str]  # User's response to clarification question
+    clarification_history: list[dict[str, Any]]  # History of clarification exchanges
+
+
+class ExecutionState(TypedDict, total=False):
+    """Execution phase state."""
     execution_result: Optional[Any]  # Result from EXECUTE phase
     execution_completed: bool  # Whether execution finished
     pending_tool_calls: list[dict[str, Any]]  # Tools pending execution
     work_item_completed: bool  # Whether work item is complete
+
+
+# TypedDict for LangGraph state (allows partial updates)
+# Composed from focused substates for better organization
+class ProgenitorState(
+    ConversationState,
+    WorkState,
+    SchedulingState,
+    LoopControlState,
+    InnerLoopState,
+    ExecutionState,
+    total=False
+):
+    """Main state for the LangGraph.
+
+    Composed from focused substates:
+    - ConversationState: messages, input, responses
+    - WorkState: backlog, work items, decisions
+    - SchedulingState: schedule, agents, registry
+    - LoopControlState: cycle control, metadata
+    - InnerLoopState: ideal state, verification, learning
+    - ExecutionState: tool execution, completion
+
+    All fields are optional (total=False) to allow partial updates.
+    """
+    pass  # All fields inherited from substates

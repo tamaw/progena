@@ -102,7 +102,8 @@ class JSONLExporter(Exporter):
             while not self._shutdown:
                 try:
                     asyncio.run(asyncio.sleep(self.flush_interval))
-                except:
+                except RuntimeError:
+                    # No event loop available, fall back to sync sleep
                     import time
                     time.sleep(self.flush_interval)
                 if not self._shutdown:

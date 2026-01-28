@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
-HEALTH_STALE_SECONDS = 120  # Consider unhealthy if not updated in 2 minutes
 
 # Telemetry - imported lazily to avoid circular imports
 _telemetry_initialized = False
@@ -81,9 +80,18 @@ class ProgenitorLoop:
         self.state_manager = state_manager
         self.config = config
         self.running = False
-        self._input_queue: asyncio.Queue = asyncio.Queue()
-        self._output_queue: asyncio.Queue = asyncio.Queue()
-        self._stream_queue: asyncio.Queue = asyncio.Queue()  # For streaming chunks
+
+        # Bounded queues to prevent memory exhaustion
+        runtime = config.runtime
+        self._input_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=runtime.max_input_queue_size
+        )
+        self._output_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=runtime.max_output_queue_size
+        )
+        self._stream_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=runtime.max_stream_queue_size
+        )
         self._cycle_telemetry = None
 
     async def run_forever(self) -> None:
@@ -259,9 +267,20 @@ class ProgenitorLoop:
             return None
 
     async def _send_output(self, message: str) -> None:
-        """Send output to the user."""
-        await self._output_queue.put(message)
-        logger.info("Queued output message for client")
+        """Send output to the user.
+
+        Uses non-blocking put to avoid deadlock. If queue is full,
+        logs a warning and drops the message.
+        """
+        try:
+            self._output_queue.put_nowait(message)
+            logger.info("Queued output message for client")
+        except asyncio.QueueFull:
+            logger.warning(
+                "Output queue full (%d/%d), dropping message",
+                self._output_queue.qsize(),
+                self._output_queue.maxsize
+            )
 
     async def _send_stream_chunk(self, chunk: str, is_final: bool = False) -> None:
         """Send a streaming chunk to the output stream.
@@ -270,19 +289,29 @@ class ProgenitorLoop:
             chunk: The text chunk to stream.
             is_final: Whether this is the final chunk (signals stream end).
         """
-        await self._stream_queue.put({
-            "type": "stream_chunk",
-            "content": chunk,
-            "is_final": is_final,
-        })
+        try:
+            self._stream_queue.put_nowait({
+                "type": "stream_chunk",
+                "content": chunk,
+                "is_final": is_final,
+            })
+        except asyncio.QueueFull:
+            logger.warning(
+                "Stream queue full (%d/%d), dropping chunk",
+                self._stream_queue.qsize(),
+                self._stream_queue.maxsize
+            )
 
     async def _send_stream_end(self) -> None:
         """Signal the end of a streaming response."""
-        await self._stream_queue.put({
-            "type": "stream_end",
-            "content": "",
-            "is_final": True,
-        })
+        try:
+            self._stream_queue.put_nowait({
+                "type": "stream_end",
+                "content": "",
+                "is_final": True,
+            })
+        except asyncio.QueueFull:
+            logger.warning("Stream queue full, could not send stream end marker")
 
     async def get_stream_chunk(self, timeout: Optional[float] = None) -> Optional[dict]:
         """Get a streaming chunk from the agent.
@@ -371,9 +400,45 @@ class ProgenitorLoop:
                 logger.warning("Skipping non-serializable backlog item: %s", type(item))
         return serialized
 
-    async def enqueue_input(self, message: str) -> None:
-        """Add a message to the input queue."""
-        await self._input_queue.put(message)
+    async def enqueue_input(self, message: str, timeout: Optional[float] = 30.0) -> bool:
+        """Add a message to the input queue.
+
+        Args:
+            message: The message to enqueue.
+            timeout: Max seconds to wait if queue is full. None = wait forever.
+
+        Returns:
+            True if message was queued, False if queue was full and timed out.
+
+        Raises:
+            asyncio.QueueFull: If timeout is 0 and queue is full (non-blocking mode).
+        """
+        try:
+            if timeout == 0:
+                # Non-blocking mode
+                self._input_queue.put_nowait(message)
+            elif timeout is None:
+                # Wait forever
+                await self._input_queue.put(message)
+            else:
+                # Wait with timeout
+                await asyncio.wait_for(
+                    self._input_queue.put(message),
+                    timeout=timeout
+                )
+            return True
+        except asyncio.QueueFull:
+            logger.warning("Input queue full, message rejected (non-blocking)")
+            raise
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Input queue full, message rejected after %.1fs timeout. "
+                "Queue size: %d/%d",
+                timeout,
+                self._input_queue.qsize(),
+                self._input_queue.maxsize
+            )
+            return False
 
     async def get_output(self, timeout: Optional[float] = None) -> Optional[str]:
         """Get output from the agent."""
@@ -390,6 +455,30 @@ class ProgenitorLoop:
     def stop(self) -> None:
         """Signal the loop to stop."""
         self.running = False
+
+    def get_queue_stats(self) -> dict[str, Any]:
+        """Get current queue statistics for monitoring.
+
+        Returns:
+            Dict with queue sizes and capacities.
+        """
+        return {
+            "input_queue": {
+                "size": self._input_queue.qsize(),
+                "maxsize": self._input_queue.maxsize,
+                "full": self._input_queue.full(),
+            },
+            "output_queue": {
+                "size": self._output_queue.qsize(),
+                "maxsize": self._output_queue.maxsize,
+                "full": self._output_queue.full(),
+            },
+            "stream_queue": {
+                "size": self._stream_queue.qsize(),
+                "maxsize": self._stream_queue.maxsize,
+                "full": self._stream_queue.full(),
+            },
+        }
 
     async def _update_health_file(self, state: dict[str, Any]) -> None:
         """Update health file for Docker health checks.

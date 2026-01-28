@@ -174,6 +174,15 @@ class Progenitor:
 
         # Persist final state
         await self.state_manager.commit_state()
+
+        # Flush Langfuse traces before exit
+        try:
+            from .observability import flush_langfuse, shutdown_langfuse
+            flush_langfuse()
+            shutdown_langfuse()
+        except ImportError:
+            pass  # Langfuse not installed
+
         logger.info("State persisted. Goodbye.")
 
     async def _stdin_listener(self) -> None:

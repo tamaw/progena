@@ -228,10 +228,12 @@ async def _execute_build(
         capabilities=capabilities,
     )
     logger.info(f"BUILD: spec generated, length={len(str(spec))}")
+    logger.info(f"BUILD: spec name={spec.get('name')}, kind={spec.get('kind')}")
 
     # Generate prompt for Copilot
     prompt = llm_client.prompts.get_copilot_task_prompt(spec)
     logger.info(f"BUILD: Generated copilot prompt, length={len(prompt)}")
+    logger.info(f"BUILD: Prompt preview: {prompt[:300]}...")
 
     # Run Copilot
     # If worktree_path is None, use the main project directory (parent of worktrees_dir)

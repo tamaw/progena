@@ -20,10 +20,47 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         Per loop.spec.md: Final output must include compact verification summary.
         If stopped early, return best artefact plus unmet criteria.
+
+        Also handles clarification requests - when the inner loop detects
+        that Copilot CLI needs more information, we present the question
+        to the user and mark state as awaiting clarification.
         """
         decision = state.get("current_decision")
         current_item = state.get("current_work_item")
         user_input = state.get("current_input")
+
+        # Check if this is a clarification request
+        clarification_updates = {}
+        if state.get("clarification_needed") and state.get("clarification_question"):
+            # This is a clarification request - present question to user
+            response_text = state.get("clarification_question")
+            clarification_updates = {
+                "awaiting_clarification": True,
+                "clarification_needed": False,  # Reset for next iteration
+            }
+
+            # Log the clarification request
+            message = ConversationMessage(
+                id=str(uuid.uuid4()),
+                role="assistant",
+                content=response_text,
+                timestamp=utcnow(),
+                metadata={
+                    "type": "clarification_request",
+                    "clarification_context": state.get("clarification_context"),
+                    "iteration": state.get("current_iteration", 0),
+                }
+            )
+            await state_manager.log_conversation(message)
+
+            messages = list(state.get("messages", []))
+            messages.append(message)
+
+            return {
+                "pending_response": response_text,
+                "messages": messages,
+                **clarification_updates,
+            }
 
         response_text = _generate_response(decision, current_item, state)
 

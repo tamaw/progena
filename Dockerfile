@@ -28,5 +28,9 @@ ENV PYTHONUNBUFFERED=1
 # Expose chat server port
 EXPOSE 8000
 
+# Health check for container orchestration
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
 # Default command (runs Progenitor agent)
 CMD ["python", "-m", "app.progenitor.main"]

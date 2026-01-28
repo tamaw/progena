@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from typing import Callable, Coroutine, Any, Optional
 
+import re
+
 from openai import APIConnectionError, RateLimitError
 
 from ..state.models import ProgenitorState, Decision, DecisionAction, WorkItem
@@ -14,6 +16,71 @@ from ..runtime.time_utils import utcnow_isoformat
 from .errors import RecoverableError, LLMError, ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_agent_build_request(user_input: str) -> bool:
+    """Heuristic: detect explicit requests to build/create a new agent."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    has_build_intent = any(
+        phrase in text
+        for phrase in (
+            "build ",
+            "create ",
+            "scaffold ",
+            "generate ",
+            "make ",
+            "implement ",
+        )
+    )
+    has_agent_intent = any(
+        phrase in text
+        for phrase in (
+            " a2a agent",
+            " an a2a agent",
+            " agent",
+            " assistant agent",
+        )
+    )
+
+    # Reduce false positives like "build a plan" or "build a docker image".
+    has_non_agent_build = any(
+        phrase in text
+        for phrase in (
+            "build a plan",
+            "build the plan",
+            "build a docker",
+            "build an image",
+            "build the image",
+            "build a container",
+            "build the container",
+        )
+    )
+
+    return has_build_intent and has_agent_intent and not has_non_agent_build
+
+
+def _infer_target_capabilities(user_input: str) -> list[str]:
+    """Infer a likely capability name from the user's request."""
+    text = (user_input or "").lower()
+
+    if "hello world" in text or "hello-world" in text:
+        return ["hello_world_a2a_agent"]
+
+    # Try to extract an agent name: "build/create <name> agent"
+    match = re.search(r"\b(?:build|create|scaffold|generate|make|implement)\s+(?:an?\s+)?([a-z0-9 _\-]{1,64})\s+agent\b", text)
+    if not match:
+        return []
+
+    raw_name = match.group(1).strip()
+    # Convert to snake_case-ish.
+    slug = re.sub(r"[^a-z0-9]+", "_", raw_name).strip("_")
+    if not slug:
+        return []
+
+    return [f"{slug}_a2a_agent"]
 
 
 def create_node(
@@ -61,6 +128,23 @@ def create_node(
                 conversation_history=history,
                 available_capabilities=capabilities,
             )
+
+            # If the LLM returns a non-actionable direct answer (no direct_response)
+            # but the user is explicitly asking to build an agent, force build routing.
+            action_str = decision_data.get("action", "answer_directly")
+            direct_response = decision_data.get("direct_response")
+            if (
+                str(action_str).lower().strip() in ("answer", "answer_directly")
+                and not direct_response
+                and _looks_like_agent_build_request(user_input)
+            ):
+                decision_data = {
+                    "action": "build_agent",
+                    "reasoning": "User explicitly requested creation of a new agent.",
+                    "requires_planning": True,
+                    "target_capabilities": _infer_target_capabilities(user_input),
+                    "direct_response": None,
+                }
 
             # Parse decision
             action_str = decision_data.get("action", "answer_directly")

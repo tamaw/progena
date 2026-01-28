@@ -4,6 +4,8 @@ VERIFY Node - Verification phase of inner loop (loop.spec.md).
 Scores candidate output against ideal state criteria.
 Produces verification report with scores, gaps, next actions.
 Tracks artefacts and best artefact per loop.spec.md.
+
+Also detects when Copilot CLI needs clarification from the user.
 """
 
 import logging
@@ -12,6 +14,7 @@ import time
 
 from ..state.models import ProgenitorState
 from ..state.verifier import Verifier
+from ..state.clarification import ClarificationDetector, create_clarification_history_entry
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,7 @@ def create_node(
     """Create the verify node function."""
 
     verifier = Verifier(llm_client)
+    clarification_detector = ClarificationDetector(llm_client)
 
     async def verify_node(state: ProgenitorState) -> ProgenitorState:
         """
@@ -45,6 +49,9 @@ def create_node(
         - Gaps and next actions
 
         Also tracks artefacts and best_artefact for early-stop scenarios.
+
+        Additionally checks if Copilot CLI output indicates need for
+        user clarification, which can interrupt the inner loop.
         """
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()
@@ -85,7 +92,75 @@ def create_node(
 
         logger.info(f"Verifying iteration {iteration} output")
 
+        # Initialize clarification state updates
+        clarification_updates = {
+            "clarification_needed": False,
+            "clarification_question": None,
+            "clarification_context": None,
+        }
+
         try:
+            # Check for clarification needs from Copilot output
+            # Only check if we have build output with Copilot results
+            if output and isinstance(output, dict):
+                build_result = output.get("result") or output.get("build_result")
+                if build_result and isinstance(build_result, dict):
+                    # Get task description for context
+                    task_description = ""
+                    if ideal_state:
+                        if hasattr(ideal_state, "task_description"):
+                            task_description = ideal_state.task_description
+                        elif isinstance(ideal_state, dict):
+                            task_description = ideal_state.get("task_description", "")
+
+                    # Detect if clarification is needed
+                    clarification_result = await clarification_detector.detect(
+                        copilot_output=build_result,
+                        task_description=task_description,
+                        ideal_state=ideal_state,
+                    )
+
+                    if clarification_result.needs_clarification:
+                        logger.info(
+                            f"Clarification needed: {clarification_result.category} "
+                            f"(confidence: {clarification_result.confidence:.2f})"
+                        )
+
+                        # Format the question for the user
+                        formatted_question = await clarification_detector.format_user_question(
+                            clarification_result,
+                            task_description,
+                        )
+
+                        # Update clarification history
+                        history = list(state.get("clarification_history", []))
+                        history.append(create_clarification_history_entry(clarification_result))
+
+                        clarification_updates = {
+                            "clarification_needed": True,
+                            "clarification_question": formatted_question,
+                            "clarification_context": clarification_result.context,
+                            "awaiting_clarification": True,
+                            "clarification_history": history,
+                        }
+
+                        # Log clarification detection
+                        if state_manager:
+                            await state_manager.log_decision({
+                                "event": "clarification_detected",
+                                "iteration": iteration,
+                                "category": clarification_result.category,
+                                "confidence": clarification_result.confidence,
+                                "question_preview": formatted_question[:200] if formatted_question else None,
+                                "timestamp": utcnow_isoformat(),
+                            })
+
+                        if span:
+                            span.add_event("clarification_detected", {
+                                "category": clarification_result.category,
+                                "confidence": clarification_result.confidence,
+                            })
+
             verification_report = await verifier.verify(
                 ideal_state=ideal_state,
                 output=output,
@@ -160,7 +235,9 @@ def create_node(
                 f"passed={verification_report.passed}"
             )
 
-            return {
+            # Merge verification results with clarification updates
+            # Note: TypedDict doesn't support dynamic spread, but this is valid for LangGraph
+            return {  # type: ignore[return-value]
                 "last_verification_report": verification_report,
                 "verification_passed": verification_report.passed,
                 "verification_score": verification_report.overall_score,
@@ -168,6 +245,7 @@ def create_node(
                 "best_artefact": best_artefact,
                 "best_artefact_score": best_score,
                 "verification_reports": verification_reports,
+                **clarification_updates,
             }
 
         except Exception as e:
@@ -187,6 +265,7 @@ def create_node(
                 },
                 "verification_passed": False,
                 "verification_score": 0.5,
+                "clarification_needed": False,
             }
 
     return verify_node

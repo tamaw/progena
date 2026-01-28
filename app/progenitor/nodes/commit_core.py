@@ -2,11 +2,14 @@
 CommitCore Node - Persists state with locks and appends log events.
 """
 
+import logging
 from datetime import datetime
 from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState
 from ..runtime.time_utils import utcnow, utcnow_isoformat
+
+logger = logging.getLogger(__name__)
 
 
 def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
@@ -28,8 +31,8 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         for item_data in backlog_data:
             try:
                 work_items.append(WorkItem(**item_data))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as e:
+                logger.debug("Skipping invalid backlog item: %s", e)
 
         await state_manager.save_backlog(work_items)
 
@@ -47,8 +50,8 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         for item_data in schedule_data:
             try:
                 schedule_entries.append(ScheduleEntry(**item_data))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as e:
+                logger.debug("Skipping invalid schedule entry: %s", e)
 
         await state_manager.save_schedule(schedule_entries)
 

@@ -18,6 +18,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from .state.models import ProgenitorState
 from .state.helpers import get_actionable_items
+from .state.ideal_state import IdealState
 from .nodes import (
     intake,
     time_check,
@@ -37,14 +38,34 @@ from .nodes import (
 # Import new loop.spec.md nodes
 from .nodes import observe, think, planner, execute, verify_loop, learn
 
-# Import shared utilities
-from ..common.utils import get_attr, get_enum_value
+# Import utilities
+from .utils import get_attr, get_enum_value
 
 logger = logging.getLogger(__name__)
 
 
 # Default failsafe - can be overridden via config passed to create_progenitor_graph
 DEFAULT_MAX_INNER_ITERATIONS = 5
+
+
+def _ensure_ideal_state(ideal_state: Any) -> IdealState | None:
+    """Convert ideal_state dict to IdealState object if needed.
+
+    LangGraph state may serialize IdealState to dict when passing through nodes.
+    This helper ensures we always have an IdealState object for methods.
+    """
+    if ideal_state is None:
+        return None
+    if isinstance(ideal_state, IdealState):
+        return ideal_state
+    if isinstance(ideal_state, dict):
+        try:
+            return IdealState(**ideal_state)
+        except Exception as e:
+            logger.warning("Failed to convert ideal_state dict to IdealState: %s", e)
+            return None
+    logger.warning("Unknown ideal_state type: %s", type(ideal_state))
+    return None
 
 
 def should_iterate(state: ProgenitorState, max_iterations: int = DEFAULT_MAX_INNER_ITERATIONS) -> Literal["observe", "respond"]:
@@ -55,21 +76,29 @@ def should_iterate(state: ProgenitorState, max_iterations: int = DEFAULT_MAX_INN
     State updates happen in nodes, not in routing conditionals.
 
     Checks stop conditions:
+    - Clarification needed (interrupts to ask user)
     - Min score reached
     - Max iterations hit
     - Tool/time budget exhausted
 
     Returns:
         'observe': Continue iterating (next iteration)
-        'respond': Stop and respond (verification passed or limits hit)
+        'respond': Stop and respond (verification passed, clarification needed, or limits hit)
     """
     iteration = state.get("current_iteration", 0)
     verification_report = state.get("last_verification_report")
-    ideal_state = state.get("ideal_state")
+    ideal_state_raw = state.get("ideal_state")
+    ideal_state = _ensure_ideal_state(ideal_state_raw)
 
     # First iteration - always continue
     if iteration == 0:
         return "observe"
+
+    # Check if clarification is needed - this interrupts the loop
+    # to ask the user for more information
+    if state.get("clarification_needed", False):
+        logger.info("Clarification needed - interrupting inner loop to ask user")
+        return "respond"
 
     # Check if verification passed
     if state.get("verification_passed", False):
@@ -132,11 +161,28 @@ def route_after_decide(state: ProgenitorState) -> Literal["observe", "pick_next"
         → 'observe' (enter inner loop)
     For simple tasks:
         → 'pick_next' or 'respond'
+    For clarification responses:
+        → 'observe' (resume inner loop with user context)
 
     NOTE: This is a pure routing function. State initialization for the inner
     loop happens in the 'observe' node, not here.
     """
     decision = state.get("current_decision")
+
+    # Check if this is a clarification response - resume inner loop
+    # When user responds to a clarification request, we have:
+    # - awaiting_clarification was True (now should be processed)
+    # - clarification_response contains user's answer
+    # - ideal_state still exists from the interrupted build
+    if state.get("awaiting_clarification") and state.get("clarification_response"):
+        logger.info("Clarification response received - resuming inner loop")
+        return "observe"
+
+    # Also check if we have an existing ideal_state and were waiting
+    # This handles the case where intake processed the clarification
+    if state.get("ideal_state") and state.get("clarification_response"):
+        logger.info("Resuming inner loop with clarification context")
+        return "observe"
 
     if not decision:
         return "respond"

@@ -4,7 +4,7 @@ OpenAI API Client for Progenitor.
 Uses the OpenAI Responses API for all model calls.
 Implements retry logic with exponential backoff and jitter for resilience.
 Supports OpenAI and Azure OpenAI providers.
-Includes telemetry for observability.
+Includes telemetry for observability and Langfuse for LLM tracing.
 """
 
 import asyncio
@@ -13,17 +13,105 @@ import logging
 import random
 import time
 from typing import Any, AsyncIterator, Optional
-from openai import APIConnectionError, APIError, RateLimitError, AsyncOpenAI
+from openai import APIConnectionError, APIError, RateLimitError
 
-try:  # Optional dependency for Azure support
-    from openai import AsyncAzureOpenAI
-except ImportError:  # pragma: no cover - older SDKs
-    AsyncAzureOpenAI = None  # type: ignore[assignment]
+# Import clients from observability module (Langfuse-wrapped if configured)
+from ..observability import get_openai_client, get_azure_openai_client, get_langfuse_config
 
 from .prompts import PromptTemplates
+from .response_models import (
+    validate_decision_response,
+    validate_planner_response,
+    validate_build_spec,
+    DecisionResponse,
+    PlannerResponse,
+    BuildSpec,
+)
 from ..config import LLMConfig
 
 logger = logging.getLogger(__name__)
+
+
+# Minimum Azure API version that supports json_schema response format
+MIN_AZURE_API_VERSION_FOR_JSON_SCHEMA = "2024-08-01-preview"
+
+
+def _azure_supports_json_schema(api_version: str) -> bool:
+    """Check if the Azure API version supports json_schema response format.
+
+    json_schema structured outputs require api version 2024-08-01-preview or later.
+    """
+    # Extract date components for comparison
+    # Format: YYYY-MM-DD or YYYY-MM-DD-preview
+    try:
+        version_date = api_version.split("-preview")[0]  # Remove -preview suffix
+        min_date = MIN_AZURE_API_VERSION_FOR_JSON_SCHEMA.split("-preview")[0]
+        return version_date >= min_date
+    except Exception:
+        # If parsing fails, assume it doesn't support
+        return False
+
+
+def _build_json_schema_format(model_class: type, name: str) -> dict[str, Any]:
+    """Build structured output response_format from a Pydantic model.
+
+    Uses json_schema response format which doesn't require "json" in the prompt,
+    unlike the json_object response format.
+
+    Args:
+        model_class: A Pydantic BaseModel class.
+        name: Schema name for the response format.
+
+    Returns:
+        A dict suitable for response_format parameter.
+    """
+    schema = model_class.model_json_schema()
+
+    # OpenAI structured outputs require additionalProperties: false at all levels
+    # and all properties must be required
+    def _enforce_strict_schema(obj: dict) -> dict:
+        """Recursively enforce strict schema rules for OpenAI structured outputs."""
+        if not isinstance(obj, dict):
+            return obj
+
+        result = dict(obj)
+
+        # For object types, add additionalProperties: false and make all required
+        if result.get("type") == "object" and "properties" in result:
+            result["additionalProperties"] = False
+            # Make all properties required
+            result["required"] = list(result["properties"].keys())
+            # Recursively process nested properties
+            for prop_name, prop_schema in result["properties"].items():
+                result["properties"][prop_name] = _enforce_strict_schema(prop_schema)
+
+        # Process array items
+        if "items" in result:
+            result["items"] = _enforce_strict_schema(result["items"])
+
+        # Process $defs (definitions)
+        if "$defs" in result:
+            result["$defs"] = {
+                k: _enforce_strict_schema(v) for k, v in result["$defs"].items()
+            }
+
+        # Process allOf, anyOf, oneOf
+        for key in ("allOf", "anyOf", "oneOf"):
+            if key in result:
+                result[key] = [_enforce_strict_schema(item) for item in result[key]]
+
+        return result
+
+    strict_schema = _enforce_strict_schema(schema)
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": strict_schema,
+        },
+    }
 
 
 # Lazy telemetry imports to avoid circular dependencies
@@ -37,7 +125,7 @@ def _get_telemetry():
 
 
 class LLMClient:
-    """Wrapper for OpenAI API calls with retry logic."""
+    """Wrapper for OpenAI API calls with retry logic and Langfuse observability."""
 
     DEFAULT_RETRIES = 3
     RETRY_DELAY = 1.0
@@ -71,24 +159,26 @@ class LLMClient:
             self._configure_openai()
 
     def _configure_openai(self) -> None:
-        """Configure OpenAI client."""
+        """Configure OpenAI client with Langfuse observability if available."""
         if not self.config.openai_api_key:
             raise ValueError("OPENAI_API_KEY must be set for OpenAI provider")
 
         self.api_key = self.config.openai_api_key
         self.model = self.config.model_default
-        self.client = AsyncOpenAI(api_key=self.api_key)
+
+        # Use Langfuse-wrapped client if configured
+        self.client = get_openai_client(async_client=True)
+        # Set API key (Langfuse client reads from env, but we ensure it's set)
+        self.client.api_key = self.api_key
+
+        langfuse_config = get_langfuse_config()
+        if langfuse_config.is_configured():
+            logger.info("OpenAI client configured with Langfuse observability")
 
     def _configure_azure(self) -> None:
-        """Configure Azure OpenAI client."""
+        """Configure Azure OpenAI client with Langfuse observability if available."""
         if not self.config.azure_endpoint:
             raise ValueError("AZURE_OPENAI_ENDPOINT must be set for Azure OpenAI provider")
-
-        if AsyncAzureOpenAI is None:
-            raise ImportError(
-                "AsyncAzureOpenAI is not available in the installed openai package. "
-                "Upgrade to openai>=1.0.0 to use Azure OpenAI."
-            )
 
         # Try Azure key first, then fall back to OpenAI key
         key = self.config.azure_api_key or self.config.openai_api_key
@@ -104,11 +194,53 @@ class LLMClient:
 
         self.api_key = key
         self.model = deployment_name
-        self.client = AsyncAzureOpenAI(
-            api_key=self.api_key,
+
+        # Use Langfuse-wrapped Azure client if configured
+        self.client = get_azure_openai_client(
             azure_endpoint=self.config.azure_endpoint,
+            api_key=self.api_key,
             api_version=self.config.azure_api_version,
+            async_client=True,
         )
+
+        langfuse_config = get_langfuse_config()
+        if langfuse_config.is_configured():
+            logger.info("Azure OpenAI client configured with Langfuse observability")
+
+    def _get_json_response_format(
+        self,
+        model_class: type,
+        schema_name: str,
+    ) -> dict[str, Any]:
+        """Get the appropriate JSON response format based on provider and API version.
+
+        Uses json_schema (structured outputs) when supported, falls back to json_object.
+
+        Args:
+            model_class: Pydantic model class for structured outputs.
+            schema_name: Name for the JSON schema.
+
+        Returns:
+            Response format dict for the API call.
+        """
+        # OpenAI always supports json_schema
+        if self.config.provider == "openai":
+            return _build_json_schema_format(model_class, schema_name)
+
+        # Azure: check if API version supports json_schema
+        if self.config.provider == "azure":
+            if _azure_supports_json_schema(self.config.azure_api_version):
+                return _build_json_schema_format(model_class, schema_name)
+            else:
+                # Fall back to json_object (requires "json" in prompt)
+                logger.debug(
+                    "Azure API version %s doesn't support json_schema, using json_object",
+                    self.config.azure_api_version,
+                )
+                return {"type": "json_object"}
+
+        # Default to json_object for unknown providers
+        return {"type": "json_object"}
 
     async def _retry_with_backoff(self, func, *args, **kwargs) -> Any:
         """Execute function with exponential backoff retry and jitter.
@@ -360,27 +492,52 @@ class LLMClient:
         conversation_history: list[dict[str, str]],
         available_capabilities: list[str],
     ) -> dict[str, Any]:
-        """Make a routing decision for user input."""
+        """Make a routing decision for user input.
+
+        Returns validated decision response with guaranteed schema.
+        Uses structured outputs (json_schema) when supported, falls back to json_object.
+        """
         system_prompt = self.prompts.get_decide_prompt(available_capabilities)
 
         messages = conversation_history[-10:]  # Last 10 messages for context
         messages.append({"role": "user", "content": user_input})
 
+        # Choose response format based on provider and API version support
+        response_format = self._get_json_response_format(DecisionResponse, "decision_response")
+
+        # If using json_object fallback, add json instruction to prompt
+        if response_format.get("type") == "json_object":
+            system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
+
         response = await self.chat(
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.3,  # Lower temperature for decisions
-            response_format={"type": "json_object"},
+            response_format=response_format,
         )
 
         try:
-            return json.loads(response)
+            raw_data = json.loads(response)
+            # Validate with Pydantic model - guarantees schema compliance
+            validated = validate_decision_response(raw_data)
+            return validated.model_dump()
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse decision JSON: {e}. Falling back to direct answer.")
+            logger.warning("Failed to parse decision JSON: %s. Falling back to direct answer.", e)
             return {
                 "action": "answer_directly",
-                "reasoning": "JSON parse error - falling back to direct answer",
+                "reasoning": f"JSON parse error - falling back to direct answer: {e}",
+                "requires_planning": False,
+                "target_capabilities": [],
                 "direct_response": response,
+            }
+        except Exception as e:
+            logger.warning("Decision validation failed: %s. Using defaults.", e)
+            return {
+                "action": "answer_directly",
+                "reasoning": f"Validation error - falling back to direct answer: {e}",
+                "requires_planning": False,
+                "target_capabilities": [],
+                "direct_response": None,
             }
 
     async def plan(
@@ -389,7 +546,11 @@ class LLMClient:
         decision: dict[str, Any],
         current_backlog: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Generate work items for a task."""
+        """Generate work items for a task.
+
+        Returns validated work items with guaranteed schema.
+        Uses structured outputs (json_schema) to avoid 'must contain json' constraint.
+        """
         system_prompt = self.prompts.get_planner_prompt()
 
         context = f"""
@@ -404,18 +565,30 @@ Generate a list of work items to fulfill this request.
 
         messages = [{"role": "user", "content": context}]
 
+        # Choose response format based on provider and API version support
+        response_format = self._get_json_response_format(PlannerResponse, "planner_response")
+
+        # If using json_object fallback, add json instruction to prompt
+        if response_format.get("type") == "json_object":
+            system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
+
         response = await self.chat(
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.5,
-            response_format={"type": "json_object"},
+            response_format=response_format,
         )
 
         try:
-            result = json.loads(response)
-            return result.get("work_items", [])
+            raw_data = json.loads(response)
+            # Validate with Pydantic model
+            validated = validate_planner_response(raw_data)
+            return [item.model_dump() for item in validated.work_items]
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse planner JSON: {e}. Returning empty work items.")
+            logger.warning("Failed to parse planner JSON: %s. Returning empty work items.", e)
+            return []
+        except Exception as e:
+            logger.warning("Planner validation failed: %s. Returning empty work items.", e)
             return []
 
     async def generate_response(
@@ -480,7 +653,11 @@ Generate a list of work items to fulfill this request.
         description: str,
         capabilities: list[str],
     ) -> dict[str, Any]:
-        """Generate a specification for building an agent or MCP server."""
+        """Generate a specification for building an agent or MCP server.
+
+        Returns validated build spec with guaranteed schema.
+        Uses structured outputs (json_schema) to avoid 'must contain json' constraint.
+        """
         system_prompt = self.prompts.get_build_prompt(item_type)
 
         context = f"""
@@ -493,21 +670,46 @@ Generate a detailed specification for building this component.
 
         messages = [{"role": "user", "content": context}]
 
+        # Choose response format based on provider and API version support
+        response_format = self._get_json_response_format(BuildSpec, "build_spec")
+
+        # If using json_object fallback, add json instruction to prompt
+        if response_format.get("type") == "json_object":
+            system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
+
         response = await self.chat(
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.5,
-            response_format={"type": "json_object"},
+            response_format=response_format,
         )
 
         try:
-            return json.loads(response)
+            raw_data = json.loads(response)
+            # Validate with Pydantic model
+            validated = validate_build_spec(raw_data)
+            return validated.model_dump()
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse build spec JSON: {e}")
+            logger.warning("Failed to parse build spec JSON: %s", e)
             return {
                 "name": "unnamed",
                 "description": description,
                 "kind": item_type,
                 "capabilities": capabilities,
+                "entrypoint": "main.py",
+                "dependencies": [],
+                "config": {},
                 "error": f"JSON parse error: {e}",
+            }
+        except Exception as e:
+            logger.warning("Build spec validation failed: %s", e)
+            return {
+                "name": "unnamed",
+                "description": description,
+                "kind": item_type,
+                "capabilities": capabilities,
+                "entrypoint": "main.py",
+                "dependencies": [],
+                "config": {},
+                "error": f"Validation error: {e}",
             }

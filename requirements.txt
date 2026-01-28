@@ -3,8 +3,12 @@ openai>=1.0.0
 langgraph>=0.2.0
 pydantic>=2.0.0
 aiohttp>=3.9.0
+aiofiles>=24.1.0
 pytz>=2024.1
 python-dotenv>=1.0.0
+
+# Observability - Langfuse for LLM tracing
+langfuse>=2.0.0
 
 # Chat server (FastAPI + OpenAI-compatible interface)
 fastapi>=0.109.0
@@ -14,3 +18,9 @@ uvicorn[standard]>=0.27.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 httpx>=0.26.0  # For FastAPI TestClient
+hypothesis>=6.100.0
+locust>=2.20.0
+
+# Optional ML dependencies (semantic search)
+numpy>=1.26.0
+sentence-transformers>=2.5.0
