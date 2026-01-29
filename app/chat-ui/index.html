@@ -37,41 +37,60 @@
             <!-- Sidebar - Agent Status -->
             <aside class="sidebar" id="sidebar">
                 <div class="sidebar-section">
-                    <h3 class="sidebar-title">Agent Status</h3>
+                    <h3 class="sidebar-title">Progenitor Status</h3>
                     <div id="agent-status" class="agent-status-panel">
                         <div class="status-item">
                             <span class="status-label">Status</span>
                             <span id="agent-running" class="status-value">Unknown</span>
                         </div>
                         <div class="status-item">
-                            <span class="status-label">Uptime</span>
+                            <span class="status-label">Cycles</span>
+                            <span id="agent-cycles" class="status-value">--</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">PID</span>
+                            <span id="agent-pid" class="status-value">--</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Memory</span>
+                            <span id="agent-memory" class="status-value">--</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Server Uptime</span>
                             <span id="agent-uptime" class="status-value">--</span>
                         </div>
                         <div class="status-item">
                             <span class="status-label">Version</span>
                             <span id="agent-version" class="status-value">--</span>
                         </div>
-                        <div class="status-item">
-                            <span class="status-label">Memory</span>
-                            <span id="agent-memory" class="status-value">--</span>
-                        </div>
                     </div>
                 </div>
 
                 <div class="sidebar-section">
-                    <h3 class="sidebar-title">
-                        Sub-Agents
-                        <button id="btn-refresh-agents" class="btn-mini" title="Refresh">🔄</button>
-                    </h3>
-                    <div id="sub-agents-list" class="sub-agents-list">
-                        <div class="empty-state">No active sub-agents</div>
+                    <h3 class="sidebar-title">Loops</h3>
+                    <div id="loops-list" class="sub-agents-list">
+                        <div class="empty-state">No active loops</div>
                     </div>
                 </div>
 
                 <div class="sidebar-section">
-                    <h3 class="sidebar-title">Active Tasks</h3>
-                    <div id="active-tasks" class="task-list">
-                        <div class="empty-state">No active tasks</div>
+                    <h3 class="sidebar-title">Registered Agents</h3>
+                    <div id="agents-list" class="sub-agents-list">
+                        <div class="empty-state">No registered agents</div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">Backlog</h3>
+                    <div id="backlog-list" class="backlog-list">
+                        <div class="empty-state">No backlog items</div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">Schedule</h3>
+                    <div id="schedule-list" class="schedule-list">
+                        <div class="empty-state">No scheduled tasks</div>
                     </div>
                 </div>
             </aside>
@@ -122,8 +141,8 @@
                             autofocus
                         ></textarea>
                         <div class="input-actions">
-                            <button id="btn-stop" class="btn-stop hidden" title="Stop Generation">
-                                ⏹️ Stop
+                            <button id="btn-stop" class="btn-stop hidden" title="Stop Generation (Esc)">
+                                ⏹
                             </button>
                             <button id="btn-send" class="btn-send" title="Send Message (Enter)">
                                 <span class="send-icon">➤</span>

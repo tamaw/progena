@@ -19,20 +19,20 @@ class TestUIRoutes:
 
     def test_ui_index_returns_html(self, client):
         """Test that /ui returns the HTML page."""
-        response = client.get("/ui")
+        response = client.get("/")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
         assert "Progenitor Chat" in response.text
 
     def test_ui_css_files_accessible(self, client):
         """Test that CSS files are accessible."""
-        response = client.get("/ui/css/main.css")
+        response = client.get("/css/main.css")
         assert response.status_code == 200
         assert "text/css" in response.headers["content-type"]
 
     def test_ui_js_files_accessible(self, client):
         """Test that JS files are accessible."""
-        response = client.get("/ui/js/config.js")
+        response = client.get("/js/config.js")
         assert response.status_code == 200
         assert "javascript" in response.headers["content-type"]
 
