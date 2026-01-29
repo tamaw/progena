@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Metrics Dashboard Module
- * 
+ *
  * Provides real-time metrics visualization and monitoring.
  */
 
@@ -14,10 +14,10 @@ export class MetricsDashboard {
             errors: { count: 0, last: null },
             uptime: { start: Date.now() }
         };
-        
+
         this.storageKey = 'progenitor_metrics';
         this.isOpen = false;
-        
+
         this.init();
     }
 
@@ -71,22 +71,22 @@ export class MetricsDashboard {
      */
     recordResponseReceived(responseTime, tokens = 0) {
         this.metrics.messages.received++;
-        
+
         // Update response times (keep last 50)
         this.metrics.response.times.push(responseTime);
         if (this.metrics.response.times.length > 50) {
             this.metrics.response.times.shift();
         }
-        
+
         // Calculate average
         const sum = this.metrics.response.times.reduce((a, b) => a + b, 0);
         this.metrics.response.avgTime = Math.round(sum / this.metrics.response.times.length);
-        
+
         // Update tokens
         if (tokens > 0) {
             this.metrics.tokens.output += tokens;
         }
-        
+
         this.saveMetrics();
         this.updateDisplay();
     }
@@ -294,12 +294,12 @@ export class MetricsDashboard {
         this.setText('#metric-avg-response', `${this.metrics.response.avgTime}ms`);
         this.setText('#metric-sessions', this.metrics.sessions.total);
         this.setText('#metric-errors', this.metrics.errors.count);
-        
+
         // Calculate uptime
         const uptimeMs = Date.now() - this.metrics.uptime.start;
         const uptimeMinutes = Math.floor(uptimeMs / 60000);
         const uptimeHours = Math.floor(uptimeMinutes / 60);
-        const uptimeStr = uptimeHours > 0 
+        const uptimeStr = uptimeHours > 0
             ? `${uptimeHours}h ${uptimeMinutes % 60}m`
             : `${uptimeMinutes}m`;
         this.setText('#metric-uptime', uptimeStr);
@@ -336,14 +336,14 @@ export class MetricsDashboard {
         }
 
         const maxTime = Math.max(...times, 100);
-        
+
         container.innerHTML = times.map((time, i) => {
             const height = Math.max(5, (time / maxTime) * 100);
-            const color = time < 500 ? 'var(--color-success)' 
+            const color = time < 500 ? 'var(--color-success)'
                         : time < 1000 ? 'var(--color-warning)'
                         : 'var(--color-error)';
             return `
-                <div class="chart-bar" 
+                <div class="chart-bar"
                      style="height: ${height}%; background-color: ${color};"
                      title="${time}ms">
                 </div>

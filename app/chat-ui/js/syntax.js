@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Syntax Highlighting Module
- * 
+ *
  * Provides syntax highlighting for code blocks using a lightweight approach.
  */
 
@@ -90,15 +90,15 @@ export class SyntaxHighlighter {
         let escaped = this.escape(code);
 
         // Strings first (to protect them from other replacements)
-        escaped = escaped.replace(this.patterns.string, match => 
+        escaped = escaped.replace(this.patterns.string, match =>
             this.wrap(match, 'string'));
 
         // Comments
-        escaped = escaped.replace(this.patterns.comment, match => 
+        escaped = escaped.replace(this.patterns.comment, match =>
             this.wrap(match, 'comment'));
 
         // Numbers
-        escaped = escaped.replace(this.patterns.number, match => 
+        escaped = escaped.replace(this.patterns.number, match =>
             this.wrap(match, 'number'));
 
         return escaped;
@@ -129,7 +129,7 @@ export class SyntaxHighlighter {
         });
 
         // Keywords
-        result = result.replace(/\b(const|let|var|function|class|if|else|for|while|do|switch|case|default|break|continue|return|throw|try|catch|finally|new|delete|typeof|instanceof|in|of|void|this|super|extends|import|export|from|as|async|await|yield|static|get|set|null|undefined|true|false|NaN|Infinity)\b/g, 
+        result = result.replace(/\b(const|let|var|function|class|if|else|for|while|do|switch|case|default|break|continue|return|throw|try|catch|finally|new|delete|typeof|instanceof|in|of|void|this|super|extends|import|export|from|as|async|await|yield|static|get|set|null|undefined|true|false|NaN|Infinity)\b/g,
             match => this.wrap(match, 'keyword'));
 
         // Built-in objects

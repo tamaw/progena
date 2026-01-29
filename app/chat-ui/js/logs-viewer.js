@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Logs Viewer Module
- * 
+ *
  * Provides real-time agent logs viewing and filtering.
  */
 
@@ -14,7 +14,7 @@ export class LogsViewer {
         };
         this.isOpen = false;
         this.autoScroll = true;
-        
+
         this.init();
     }
 
@@ -49,9 +49,9 @@ export class LogsViewer {
         this.renderLog(entry);
 
         // Console output
-        const consoleMethod = level === 'error' ? console.error 
-                           : level === 'warn' ? console.warn 
-                           : level === 'debug' ? console.debug 
+        const consoleMethod = level === 'error' ? console.error
+                           : level === 'warn' ? console.warn
+                           : level === 'debug' ? console.debug
                            : console.log;
         consoleMethod(`[${level.toUpperCase()}] ${message}`, data || '');
     }
@@ -84,7 +84,7 @@ export class LogsViewer {
                             }
                         })
                         .filter(Boolean);
-                    
+
                     this.logs = entries.slice(-this.maxLogs);
                     this.renderAllLogs();
                 }
@@ -124,9 +124,9 @@ export class LogsViewer {
                         <option value="info">Info</option>
                         <option value="debug">Debug</option>
                     </select>
-                    <input type="text" 
-                           id="logs-search" 
-                           class="logs-search" 
+                    <input type="text"
+                           id="logs-search"
+                           class="logs-search"
                            placeholder="Search logs...">
                     <button class="btn-auto-scroll active" title="Auto-scroll">
                         ⬇️
@@ -282,7 +282,7 @@ export class LogsViewer {
     createLogHtml(log) {
         const time = new Date(log.timestamp).toLocaleTimeString();
         const dataStr = log.data ? JSON.stringify(log.data, null, 2) : '';
-        
+
         return `
             <div class="log-entry log-${log.level}" data-id="${log.id}">
                 <span class="log-time">${time}</span>

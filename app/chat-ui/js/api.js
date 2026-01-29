@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - API Client
- * 
+ *
  * Handles all communication with the Progenitor chat server.
  * Supports both regular requests and Server-Sent Events for streaming.
  * Includes automatic retry logic and connection recovery.
@@ -24,7 +24,7 @@ class ProgenitorAPI {
     setConnectionState(state) {
         const oldState = this.connectionState;
         this.connectionState = state;
-        
+
         if (oldState !== state) {
             // Dispatch custom event for UI updates
             window.dispatchEvent(new CustomEvent('api-connection-change', {
@@ -49,13 +49,13 @@ class ProgenitorAPI {
      */
     recordFailure(error) {
         this.failureCount++;
-        
+
         if (this.failureCount >= this.maxFailures) {
             this.setConnectionState('error');
         } else {
             this.setConnectionState('degraded');
         }
-        
+
         // Exponential backoff
         this.backoffMs = Math.min(this.backoffMs * 2, 30000);
     }
@@ -84,7 +84,7 @@ class ProgenitorAPI {
         };
 
         let lastError;
-        
+
         // Check if we should skip due to circuit breaker
         if (this.connectionState === 'error') {
             // Allow retry after backoff period
@@ -97,42 +97,42 @@ class ProgenitorAPI {
         for (let attempt = 0; attempt < this.config.api.retryAttempts; attempt++) {
             try {
                 this.setConnectionState('connecting');
-                
+
                 const response = await fetch(url, mergedOptions);
-                
+
                 if (!response.ok) {
-                    const error = await response.json().catch(() => ({ 
-                        error: { message: response.statusText } 
+                    const error = await response.json().catch(() => ({
+                        error: { message: response.statusText }
                     }));
-                    
+
                     // Handle specific HTTP errors
                     if (response.status === 429) {
                         const retryAfter = response.headers.get('Retry-After') || 60;
                         throw new RateLimitError(`Rate limit exceeded. Try again in ${retryAfter} seconds.`);
                     }
-                    
+
                     if (response.status >= 500) {
                         throw new ServerError(error.error?.message || `Server error: ${response.status}`);
                     }
-                    
+
                     throw new APIError(error.error?.message || `HTTP ${response.status}: ${response.statusText}`);
                 }
-                
+
                 this.recordSuccess();
                 return response;
-                
+
             } catch (error) {
                 lastError = error;
-                
+
                 // Don't retry on abort or specific error types
-                if (error.name === 'AbortError' || 
+                if (error.name === 'AbortError' ||
                     error instanceof RateLimitError ||
                     error instanceof APIError) {
                     throw error;
                 }
-                
+
                 this.recordFailure(error);
-                
+
                 // Wait before retrying with exponential backoff
                 if (attempt < this.config.api.retryAttempts - 1) {
                     const delay = this.config.api.retryDelay * Math.pow(2, attempt);
@@ -225,16 +225,16 @@ class ProgenitorAPI {
     async sendMessageStream(message, history = [], onChunk, onComplete, onError) {
         // Cancel any existing stream
         this.cancelStream();
-        
+
         this.abortController = new AbortController();
-        
+
         const messages = [
             ...history,
             { role: 'user', content: message }
         ];
 
         const url = this.config.getApiUrl('chat');
-        
+
         try {
             const response = await fetch(url, {
                 method: 'POST',
@@ -260,7 +260,7 @@ class ProgenitorAPI {
 
             while (true) {
                 const { done, value } = await reader.read();
-                
+
                 if (done) {
                     break;
                 }
@@ -272,7 +272,7 @@ class ProgenitorAPI {
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6).trim();
-                        
+
                         if (data === '[DONE]') {
                             onComplete?.();
                             return;
@@ -280,7 +280,7 @@ class ProgenitorAPI {
 
                         try {
                             const parsed = JSON.parse(data);
-                            
+
                             if (parsed.error) {
                                 onError?.(new Error(parsed.error));
                                 return;
@@ -290,7 +290,7 @@ class ProgenitorAPI {
                             if (parsed.choices?.[0]?.delta?.content) {
                                 onChunk?.(parsed.choices[0].delta.content);
                             }
-                            
+
                             // Check for finish reason
                             if (parsed.choices?.[0]?.finish_reason === 'stop') {
                                 onComplete?.();
@@ -352,7 +352,7 @@ class ProgenitorAPI {
 
             while (true) {
                 const { done, value } = await reader.read();
-                
+
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
@@ -364,17 +364,17 @@ class ProgenitorAPI {
                         // Handle SSE events
                         continue;
                     }
-                    
+
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6).trim();
-                        
+
                         try {
                             const parsed = JSON.parse(data);
-                            
+
                             if (parsed.delta?.text) {
                                 onChunk?.(parsed.delta.text);
                             }
-                            
+
                             if (parsed.object === 'response.completed') {
                                 onComplete?.();
                                 return;

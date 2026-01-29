@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Export/Import Module
- * 
+ *
  * Provides functionality to export and import chat sessions.
  */
 
@@ -8,7 +8,7 @@ export class ExportImport {
     constructor(chatManager, sessionManager) {
         this.chatManager = chatManager;
         this.sessionManager = sessionManager;
-        
+
         this.init();
     }
 
@@ -127,7 +127,7 @@ export class ExportImport {
      */
     exportAllSessions() {
         const sessions = this.sessionManager?.getSessions() || [];
-        
+
         if (sessions.length === 0) {
             window.notifications?.show('warning', 'No Sessions', 'No sessions to export.');
             return;
@@ -181,7 +181,7 @@ export class ExportImport {
         const { session, messages } = data;
         let md = `# ${session.title || 'Chat Session'}\n\n`;
         md += `*Exported: ${new Date().toLocaleString()}*\n\n`;
-        
+
         for (const msg of messages) {
             const role = msg.role === 'user' ? '**You**' : '**Assistant**';
             const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
@@ -200,7 +200,7 @@ export class ExportImport {
         let txt = `${session.title || 'Chat Session'}\n`;
         txt += `${'='.repeat(40)}\n`;
         txt += `Exported: ${new Date().toLocaleString()}\n\n`;
-        
+
         for (const msg of messages) {
             const role = msg.role === 'user' ? 'You' : 'Assistant';
             const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
@@ -225,13 +225,13 @@ export class ExportImport {
      * Download file.
      */
     downloadFile(content, filename, format) {
-        const mimeType = format === 'json' ? 'application/json' 
-                       : format === 'markdown' ? 'text/markdown' 
+        const mimeType = format === 'json' ? 'application/json'
+                       : format === 'markdown' ? 'text/markdown'
                        : 'text/plain';
-        
+
         const blob = new Blob([content], { type: mimeType });
         const url = URL.createObjectURL(blob);
-        
+
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;

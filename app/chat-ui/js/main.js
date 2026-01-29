@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Main Application
- * 
+ *
  * Initializes all modules and coordinates the application.
  */
 
@@ -134,25 +134,25 @@ async function initApp() {
 function setupConnectionStateListener() {
     window.addEventListener('api-connection-change', (event) => {
         const { state, previousState } = event.detail;
-        
+
         // Update connection indicator
         const indicator = document.getElementById('connection-status');
         if (indicator) {
-            indicator.dataset.status = state === 'connected' ? 'connected' : 
-                                       state === 'connecting' ? 'connecting' : 
+            indicator.dataset.status = state === 'connected' ? 'connected' :
+                                       state === 'connecting' ? 'connecting' :
                                        'disconnected';
-            indicator.querySelector('.status-text').textContent = 
+            indicator.querySelector('.status-text').textContent =
                 state === 'connected' ? 'Connected' :
                 state === 'connecting' ? 'Connecting...' :
                 state === 'error' ? 'Error' : 'Disconnected';
         }
-        
+
         // Show notification on significant state changes
         if (previousState === 'connected' && state === 'error') {
-            notifications?.show('error', 'Connection Lost', 
+            notifications?.show('error', 'Connection Lost',
                 'Unable to reach the server. Will retry automatically.');
         } else if (previousState === 'error' && state === 'connected') {
-            notifications?.show('success', 'Reconnected', 
+            notifications?.show('success', 'Reconnected',
                 'Connection to server restored.');
         }
     });
@@ -172,7 +172,7 @@ function initTheme() {
  */
 function applyTheme(theme) {
     const root = document.documentElement;
-    
+
     if (theme === 'system') {
         // Use system preference
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -195,7 +195,7 @@ function toggleTheme() {
     const root = document.documentElement;
     const current = root.dataset.theme;
     const newTheme = current === 'dark' ? 'light' : 'dark';
-    
+
     applyTheme(newTheme);
     Config.setTheme(newTheme);
 }
@@ -301,7 +301,7 @@ window.addEventListener('offline', () => {
 window.addEventListener('beforeunload', () => {
     // Cancel any ongoing streams
     api?.cancelStream();
-    
+
     // Stop polling
     status?.stopHealthCheck();
 });

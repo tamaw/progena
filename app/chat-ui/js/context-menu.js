@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Message Context Menu Module
- * 
+ *
  * Provides right-click context menu for messages with various actions.
  */
 
@@ -8,7 +8,7 @@ export class ContextMenu {
     constructor(chatManager) {
         this.chatManager = chatManager;
         this.activeMenu = null;
-        
+
         this.init();
     }
 
@@ -246,7 +246,7 @@ export class ContextMenu {
 
         // Show edit mode
         const originalText = content.textContent;
-        
+
         const editContainer = document.createElement('div');
         editContainer.className = 'message-edit-container';
         editContainer.innerHTML = `
@@ -309,7 +309,7 @@ export class ContextMenu {
      */
     regenerateResponse() {
         if (this.targetRole !== 'assistant' || !this.chatManager) return;
-        
+
         this.chatManager.regenerateResponse?.(this.targetMessageId);
     }
 
@@ -339,7 +339,7 @@ export class ContextMenu {
 
         const text = content.textContent.trim();
         const quoted = text.split('\n').map(line => `> ${line}`).join('\n');
-        
+
         input.value = input.value + (input.value ? '\n\n' : '') + quoted + '\n\n';
         input.focus();
         input.dispatchEvent(new Event('input'));

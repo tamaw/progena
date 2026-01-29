@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Message Reactions Module
- * 
+ *
  * Provides emoji reactions for messages.
  */
 
@@ -10,7 +10,7 @@ export class MessageReactions {
         this.storageKey = 'progenitor_reactions';
         this.reactions = {};
         this.availableReactions = ['👍', '👎', '❤️', '😄', '🤔', '🎉', '🔥', '👀'];
-        
+
         this.init();
     }
 
@@ -148,7 +148,7 @@ export class MessageReactions {
         if (!messageId || !this.reactions[messageId]?.[emoji]) return;
 
         const reaction = this.reactions[messageId][emoji];
-        
+
         if (reaction.userReacted) {
             reaction.count--;
             reaction.userReacted = false;
@@ -182,7 +182,7 @@ export class MessageReactions {
         if (!messageEl) return;
 
         let reactionsContainer = messageEl.querySelector('.message-reactions');
-        
+
         // Create container if it doesn't exist
         if (!reactionsContainer) {
             reactionsContainer = document.createElement('div');

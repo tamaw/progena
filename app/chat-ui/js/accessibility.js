@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Accessibility Module
- * 
+ *
  * Provides ARIA labels, screen reader support, and accessibility features.
  */
 
@@ -10,7 +10,7 @@ export class AccessibilityManager {
         this.focusTrap = null;
         this.skipLinks = null;
         this.reducedMotion = false;
-        
+
         this.init();
     }
 
@@ -29,7 +29,7 @@ export class AccessibilityManager {
     detectPreferences() {
         // Reduced motion preference
         this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        
+
         if (this.reducedMotion) {
             document.documentElement.classList.add('reduce-motion');
         }
@@ -58,7 +58,7 @@ export class AccessibilityManager {
         announcer.setAttribute('aria-atomic', 'true');
         announcer.className = 'sr-only';
         document.body.appendChild(announcer);
-        
+
         this.announcer = announcer;
 
         // Urgent announcer
@@ -69,7 +69,7 @@ export class AccessibilityManager {
         urgentAnnouncer.setAttribute('aria-atomic', 'true');
         urgentAnnouncer.className = 'sr-only';
         document.body.appendChild(urgentAnnouncer);
-        
+
         this.urgentAnnouncer = urgentAnnouncer;
     }
 
@@ -101,7 +101,7 @@ export class AccessibilityManager {
             <a href="#chat-input" class="skip-link">Skip to input</a>
             <a href="#sidebar" class="skip-link">Skip to sidebar</a>
         `;
-        
+
         document.body.insertBefore(skipNav, document.body.firstChild);
         this.skipLinks = skipNav;
     }
@@ -114,7 +114,7 @@ export class AccessibilityManager {
         this.setLandmark('.chat-container', 'main', 'Chat conversation');
         this.setLandmark('.sidebar', 'complementary', 'Chat sidebar');
         this.setLandmark('.status-bar', 'contentinfo', 'Status information');
-        
+
         // Chat messages container
         const messagesContainer = document.querySelector('.chat-messages');
         if (messagesContainer) {
@@ -220,12 +220,12 @@ export class AccessibilityManager {
      */
     trapFocus(element) {
         this.focusTrap = element;
-        
+
         // Find all focusable elements
         const focusable = element.querySelectorAll(
             'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
         );
-        
+
         if (focusable.length > 0) {
             focusable[0].focus();
         }
@@ -247,7 +247,7 @@ export class AccessibilityManager {
         const focusable = this.focusTrap.querySelectorAll(
             'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
         );
-        
+
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
 

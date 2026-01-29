@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Configuration
- * 
+ *
  * Central configuration for the chat UI application.
  */
 
@@ -204,7 +204,7 @@ const Config = {
         Object.values(this.storage).forEach(key => {
             localStorage.removeItem(key);
         });
-        
+
         // Reset runtime values
         this.api.baseUrl = 'http://localhost:8000';
         this.theme.default = 'system';

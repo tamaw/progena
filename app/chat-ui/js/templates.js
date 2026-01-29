@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Prompt Templates Module
- * 
+ *
  * Provides quick-access prompt templates for common tasks.
  */
 
@@ -9,7 +9,7 @@ export class PromptTemplates {
         this.chatManager = chatManager;
         this.storageKey = 'progenitor_templates';
         this.templates = [];
-        
+
         this.init();
     }
 
@@ -170,7 +170,7 @@ export class PromptTemplates {
                 <line x1="9" y1="21" x2="9" y2="9"></line>
             </svg>
         `;
-        
+
         inputWrapper.insertBefore(templatesBtn, inputWrapper.firstChild);
 
         // Create templates dropdown
@@ -193,7 +193,7 @@ export class PromptTemplates {
         `;
 
         inputWrapper.appendChild(dropdown);
-        
+
         this.dropdown = dropdown;
         this.renderTemplates();
     }
@@ -208,7 +208,7 @@ export class PromptTemplates {
 
         // Get unique categories
         const categories = [...new Set(this.templates.map(t => t.category))];
-        
+
         // Render category filters
         categoriesEl.innerHTML = `
             <button class="category-btn active" data-category="all">All</button>
@@ -221,7 +221,7 @@ export class PromptTemplates {
         let filtered = this.templates;
         if (filter) {
             const lowerFilter = filter.toLowerCase();
-            filtered = this.templates.filter(t => 
+            filtered = this.templates.filter(t =>
                 t.name.toLowerCase().includes(lowerFilter) ||
                 t.prompt.toLowerCase().includes(lowerFilter)
             );
@@ -336,14 +336,14 @@ export class PromptTemplates {
                 // For now, just insert the template and let user fill in
                 input.value = prompt;
                 input.focus();
-                
+
                 // Select first placeholder
                 const firstPlaceholder = placeholders[0];
                 const start = prompt.indexOf(firstPlaceholder);
                 const end = start + firstPlaceholder.length;
                 input.setSelectionRange(start, end);
-                
-                window.notifications?.show('info', 'Template Loaded', 
+
+                window.notifications?.show('info', 'Template Loaded',
                     'Replace the highlighted placeholder with your content.');
                 return;
             }

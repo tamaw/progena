@@ -10,7 +10,7 @@ export class KeyboardManager {
         this.notificationManager = notificationManager;
         this.isHelpVisible = false;
         this.shortcuts = new Map();
-        
+
         this.registerDefaultShortcuts();
         this.init();
     }
@@ -44,18 +44,18 @@ export class KeyboardManager {
             // First check for open modals
             const settingsModal = document.getElementById('settingsModal');
             const helpModal = document.getElementById('keyboardHelpModal');
-            
+
             if (settingsModal?.classList.contains('visible')) {
                 settingsModal.classList.remove('visible');
                 return;
             }
-            
+
             if (helpModal?.classList.contains('visible')) {
                 helpModal.classList.remove('visible');
                 this.isHelpVisible = false;
                 return;
             }
-            
+
             // Otherwise stop generation
             const stopBtn = document.getElementById('stopBtn');
             if (stopBtn && !stopBtn.classList.contains('hidden')) {
@@ -183,14 +183,14 @@ export class KeyboardManager {
         });
 
         const shortcut = this.shortcuts.get(id);
-        
+
         if (shortcut) {
             // Don't trigger shortcuts when typing in input unless explicitly allowed
             const isInputFocused = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
-            
+
             // Allow certain shortcuts even when input is focused
             const allowedInInput = ['Escape', 'Enter', 'Ctrl+Enter', 'Ctrl+/', 'F1', 'Shift+?'];
-            
+
             if (isInputFocused && !allowedInInput.includes(id)) {
                 return;
             }
@@ -198,7 +198,7 @@ export class KeyboardManager {
             if (shortcut.preventDefault) {
                 event.preventDefault();
             }
-            
+
             shortcut.handler(event);
         }
     }
@@ -243,7 +243,7 @@ export class KeyboardManager {
             const role = isUser ? 'User' : 'Assistant';
             const content = msg.querySelector('.message-content')?.textContent || '';
             const time = msg.querySelector('.message-time')?.textContent || '';
-            
+
             exportText += `## ${role} (${time})\n\n`;
             exportText += `${content}\n\n`;
             exportText += `---\n\n`;
@@ -312,7 +312,7 @@ export class KeyboardManager {
 
         this.shortcuts.forEach((shortcut, id) => {
             const item = { id, ...shortcut };
-            
+
             if (id.includes('Enter') || id.includes('Escape') || id.includes('Ctrl+/') || id.includes('Ctrl+n')) {
                 categories['Chat'].push(item);
             } else if (id.includes('Arrow') || id.includes('history')) {
@@ -325,14 +325,14 @@ export class KeyboardManager {
         });
 
         let html = '';
-        
+
         for (const [category, shortcuts] of Object.entries(categories)) {
             if (shortcuts.length === 0) continue;
-            
+
             html += `<div class="shortcut-category">
                 <h3>${category}</h3>
                 <div class="shortcut-list">`;
-            
+
             shortcuts.forEach(shortcut => {
                 html += `
                     <div class="shortcut-item">
@@ -340,7 +340,7 @@ export class KeyboardManager {
                         <span>${shortcut.description}</span>
                     </div>`;
             });
-            
+
             html += `</div></div>`;
         }
 

@@ -107,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Categories
 
 - **Added**: New features
-- **Changed**: Changes to existing functionality  
+- **Changed**: Changes to existing functionality
 - **Deprecated**: Features to be removed in future versions
 - **Removed**: Features removed in this release
 - **Fixed**: Bug fixes
