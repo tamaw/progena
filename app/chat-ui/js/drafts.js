@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Drafts Module
- * 
+ *
  * Auto-saves draft messages to prevent data loss.
  */
 
@@ -11,7 +11,7 @@ export class DraftsManager {
         this.autoSaveInterval = 1000; // 1 second
         this.lastSavedContent = '';
         this.saveTimer = null;
-        
+
         this.init();
     }
 
@@ -34,7 +34,7 @@ export class DraftsManager {
 
         // Save draft when leaving page
         window.addEventListener('beforeunload', () => this.saveDraft());
-        
+
         // Periodic save
         setInterval(() => this.saveDraft(), 5000);
     }
@@ -46,7 +46,7 @@ export class DraftsManager {
         if (this.saveTimer) {
             clearTimeout(this.saveTimer);
         }
-        
+
         this.saveTimer = setTimeout(() => {
             this.saveDraft();
         }, this.autoSaveInterval);
@@ -60,7 +60,7 @@ export class DraftsManager {
         if (!input) return;
 
         const content = input.value;
-        
+
         // Don't save if content hasn't changed
         if (content === this.lastSavedContent) return;
 
@@ -86,7 +86,7 @@ export class DraftsManager {
             if (!saved) return;
 
             const draft = JSON.parse(saved);
-            
+
             // Check if draft is recent (within 24 hours)
             const age = Date.now() - draft.timestamp;
             if (age > 24 * 60 * 60 * 1000) {
@@ -99,12 +99,12 @@ export class DraftsManager {
             if (input && draft.content) {
                 input.value = draft.content;
                 this.lastSavedContent = draft.content;
-                
+
                 // Trigger resize
                 input.dispatchEvent(new Event('input'));
-                
+
                 // Show notification
-                window.notifications?.show('info', 'Draft Restored', 
+                window.notifications?.show('info', 'Draft Restored',
                     'Your unsent message has been restored.');
             }
         } catch (e) {
@@ -129,7 +129,7 @@ export class DraftsManager {
         try {
             const saved = localStorage.getItem(this.storageKey);
             if (!saved) return false;
-            
+
             const draft = JSON.parse(saved);
             return draft.sessionId === sessionId && draft.content.trim().length > 0;
         } catch {

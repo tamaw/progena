@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Sessions Module
- * 
+ *
  * Handles multiple conversation sessions with persistence.
  */
 
@@ -11,7 +11,7 @@ export class SessionManager {
         this.currentSessionId = null;
         this.storageKey = 'progenitor_sessions';
         this.maxSessions = 50;
-        
+
         this.init();
     }
 
@@ -19,7 +19,7 @@ export class SessionManager {
         this.loadSessions();
         this.createSessionUI();
         this.bindEvents();
-        
+
         // Create default session if none exists
         if (this.sessions.length === 0) {
             this.createSession('New Chat');
@@ -136,7 +136,7 @@ export class SessionManager {
         if (!this.sessionList) return;
 
         this.sessionList.innerHTML = this.sessions.map(session => `
-            <div class="session-item ${session.id === this.currentSessionId ? 'active' : ''}" 
+            <div class="session-item ${session.id === this.currentSessionId ? 'active' : ''}"
                  data-session-id="${session.id}">
                 <div class="session-info">
                     <span class="session-title">${this.escapeHTML(session.title)}</span>
@@ -311,10 +311,10 @@ export class SessionManager {
      * @returns {string} JSON string
      */
     exportSession(sessionId = null) {
-        const session = sessionId 
+        const session = sessionId
             ? this.sessions.find(s => s.id === sessionId)
             : this.getCurrentSession();
-        
+
         if (!session) return null;
 
         return JSON.stringify(session, null, 2);

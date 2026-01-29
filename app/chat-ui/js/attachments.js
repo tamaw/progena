@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - File Attachments Module
- * 
+ *
  * Provides file upload and attachment functionality.
  */
 
@@ -28,7 +28,7 @@ export class FileAttachments {
             'image/webp',
             'application/pdf'
         ];
-        
+
         this.init();
     }
 
@@ -76,7 +76,7 @@ export class FileAttachments {
         const previewArea = document.createElement('div');
         previewArea.id = 'attachments-preview';
         previewArea.className = 'attachments-preview hidden';
-        
+
         // Insert before textarea
         const textarea = inputWrapper.querySelector('textarea');
         if (textarea) {
@@ -128,7 +128,7 @@ export class FileAttachments {
         document.addEventListener('paste', (e) => {
             const items = Array.from(e.clipboardData?.items || []);
             const imageItems = items.filter(item => item.type.startsWith('image/'));
-            
+
             if (imageItems.length > 0) {
                 e.preventDefault();
                 const files = imageItems.map(item => item.getAsFile()).filter(Boolean);
@@ -273,7 +273,7 @@ export class FileAttachments {
         this.previewArea.classList.remove('hidden');
         this.previewArea.innerHTML = this.attachments.map(att => `
             <div class="attachment-item" data-id="${att.id}">
-                ${att.type.startsWith('image/') 
+                ${att.type.startsWith('image/')
                     ? `<img src="${att.preview}" alt="${att.name}" class="attachment-image">`
                     : `<div class="attachment-icon">${this.getFileIcon(att)}</div>`
                 }

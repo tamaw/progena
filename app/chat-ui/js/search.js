@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Search Module
- * 
+ *
  * Handles searching through chat messages.
  */
 
@@ -11,7 +11,7 @@ export class SearchManager {
         this.currentQuery = '';
         this.matches = [];
         this.currentMatchIndex = -1;
-        
+
         this.init();
     }
 
@@ -26,9 +26,9 @@ export class SearchManager {
         searchBar.className = 'search-bar hidden';
         searchBar.innerHTML = `
             <div class="search-container">
-                <input type="text" 
-                       class="search-input" 
-                       placeholder="Search messages..." 
+                <input type="text"
+                       class="search-input"
+                       placeholder="Search messages..."
                        aria-label="Search messages">
                 <span class="search-count"></span>
                 <div class="search-nav">
@@ -65,7 +65,7 @@ export class SearchManager {
         // Bind events
         this.searchInput.addEventListener('input', (e) => this.handleSearchInput(e));
         this.searchInput.addEventListener('keydown', (e) => this.handleSearchKeydown(e));
-        
+
         searchBar.querySelector('#search-prev').addEventListener('click', () => this.navigateMatch(-1));
         searchBar.querySelector('#search-next').addEventListener('click', () => this.navigateMatch(1));
         searchBar.querySelector('#search-close').addEventListener('click', () => this.close());
@@ -99,19 +99,19 @@ export class SearchManager {
         this.matches = [];
         this.currentMatchIndex = -1;
         this.updateCount();
-        
+
         // Return focus to chat input
         document.getElementById('chat-input')?.focus();
     }
 
     handleSearchInput(e) {
         const query = e.target.value.trim().toLowerCase();
-        
+
         if (query === this.currentQuery) return;
-        
+
         this.currentQuery = query;
         this.clearHighlights();
-        
+
         if (!query) {
             this.matches = [];
             this.currentMatchIndex = -1;
@@ -188,18 +188,18 @@ export class SearchManager {
             while (pos !== -1) {
                 highlightedHTML += this.escapeHTML(text.substring(lastIndex, pos));
                 const matchedText = text.substring(pos, pos + query.length);
-                const isCurrentMatch = matchIndex === this.currentMatchIndex && 
+                const isCurrentMatch = matchIndex === this.currentMatchIndex &&
                                        instanceCount === 0; // First instance
-                
+
                 highlightedHTML += `<mark class="search-highlight${isCurrentMatch ? ' current' : ''}">${this.escapeHTML(matchedText)}</mark>`;
-                
+
                 lastIndex = pos + query.length;
                 pos = textLower.indexOf(query, lastIndex);
                 instanceCount++;
             }
 
             highlightedHTML += this.escapeHTML(text.substring(lastIndex));
-            
+
             // Store original and apply highlight
             content.dataset.originalHTML = originalHTML;
             content.innerHTML = highlightedHTML;

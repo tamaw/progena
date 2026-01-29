@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Typing Indicator Module
- * 
+ *
  * Shows typing indicators when assistant is responding.
  */
 
@@ -10,7 +10,7 @@ export class TypingIndicator {
         this.indicator = null;
         this.dots = [];
         this.animationFrame = null;
-        
+
         this.init();
     }
 
@@ -66,9 +66,9 @@ export class TypingIndicator {
      */
     show(text = 'Thinking...') {
         if (this.isTyping) return;
-        
+
         this.isTyping = true;
-        
+
         const textEl = this.indicator?.querySelector('.typing-text');
         if (textEl) textEl.textContent = text;
 
@@ -101,7 +101,7 @@ export class TypingIndicator {
      */
     startAnimation() {
         let step = 0;
-        
+
         const animate = () => {
             if (!this.isTyping) return;
 
@@ -110,7 +110,7 @@ export class TypingIndicator {
                 const phase = (step * 0.1 + delay) % 1;
                 const scale = 1 + Math.sin(phase * Math.PI) * 0.3;
                 const opacity = 0.4 + Math.sin(phase * Math.PI) * 0.6;
-                
+
                 dot.style.transform = `scale(${scale})`;
                 dot.style.opacity = opacity;
             });

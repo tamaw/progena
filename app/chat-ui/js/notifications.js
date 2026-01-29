@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Notifications Module
- * 
+ *
  * Handles in-app notifications, browser notifications, and agent alerts.
  */
 
@@ -9,11 +9,11 @@ class NotificationManager {
         this.container = document.getElementById('notification-container');
         this.alertModal = document.getElementById('alert-modal');
         this.notificationBtn = document.getElementById('btn-notifications');
-        
+
         this.notifications = [];
         this.alerts = [];
         this.browserPermission = Notification.permission;
-        
+
         this.init();
     }
 
@@ -25,11 +25,11 @@ class NotificationManager {
         const alertClose = document.getElementById('alert-close');
         const alertDismiss = document.getElementById('alert-dismiss');
         const alertRespond = document.getElementById('alert-respond');
-        
+
         alertClose?.addEventListener('click', () => this.hideAlertModal());
         alertDismiss?.addEventListener('click', () => this.dismissCurrentAlert());
         alertRespond?.addEventListener('click', () => this.respondToAlert());
-        
+
         // Modal backdrop click
         this.alertModal?.querySelector('.modal-backdrop')?.addEventListener('click', () => {
             this.hideAlertModal();
@@ -74,7 +74,7 @@ class NotificationManager {
     show(type, title, message, options = {}) {
         const notification = document.createElement('div');
         notification.className = `notification ${type}`;
-        
+
         const icons = {
             info: 'ℹ️',
             success: '✅',
@@ -251,7 +251,7 @@ class NotificationManager {
         // Show immediately if it's urgent
         if (options.urgent) {
             this.displayAlertModal(alert);
-            
+
             // Also show browser notification
             this.showBrowserNotification(title, message, 'warning');
         } else {
@@ -331,7 +331,7 @@ class NotificationManager {
      */
     updateAlertBadge() {
         const existingBadge = this.notificationBtn?.querySelector('.alert-badge');
-        
+
         if (this.alerts.length > 0) {
             if (existingBadge) {
                 existingBadge.textContent = this.alerts.length;

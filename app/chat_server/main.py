@@ -382,12 +382,12 @@ _chat_ui_path = Path(__file__).parent.parent / "chat-ui"
 if _chat_ui_path.exists():
     app.mount("/css", StaticFiles(directory=_chat_ui_path / "css"), name="ui-css")
     app.mount("/js", StaticFiles(directory=_chat_ui_path / "js"), name="ui-js")
-    
+
     @app.get("/")
     async def serve_ui():
         """Serve the Chat UI at root."""
         return FileResponse(_chat_ui_path / "index.html")
-    
+
     logger.info("Chat UI mounted at /")
 else:
     logger.warning("Chat UI not found at %s", _chat_ui_path)

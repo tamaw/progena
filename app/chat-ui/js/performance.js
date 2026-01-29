@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Performance Module
- * 
+ *
  * Provides performance optimizations and monitoring.
  */
 
@@ -9,7 +9,7 @@ export class PerformanceManager {
         this.observer = null;
         this.measurements = [];
         this.lazyLoadObserver = null;
-        
+
         this.init();
     }
 
@@ -77,7 +77,7 @@ export class PerformanceManager {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     const el = entry.target;
-                    
+
                     // Load lazy images
                     if (el.dataset.src) {
                         el.src = el.dataset.src;
@@ -117,7 +117,7 @@ export class PerformanceManager {
         // Create observer to monitor message count
         const containerObserver = new MutationObserver(() => {
             const messageCount = messagesContainer.querySelectorAll('.message').length;
-            
+
             if (messageCount > THRESHOLD && !virtualScrollEnabled) {
                 this.enableVirtualScrolling(messagesContainer);
                 virtualScrollEnabled = true;
@@ -135,12 +135,12 @@ export class PerformanceManager {
         const updateVisibility = this.debounce(() => {
             const containerRect = container.getBoundingClientRect();
             const messages = container.querySelectorAll('.message-wrapper');
-            
+
             messages.forEach(msg => {
                 const rect = msg.getBoundingClientRect();
                 const isVisible = rect.bottom > containerRect.top - 500 &&
                                  rect.top < containerRect.bottom + 500;
-                
+
                 if (isVisible) {
                     msg.style.contentVisibility = 'visible';
                 } else {
@@ -214,7 +214,7 @@ export class PerformanceManager {
     setupMemoryManagement() {
         // Clear old messages from DOM when count exceeds threshold
         const MAX_DOM_MESSAGES = 500;
-        
+
         setInterval(() => {
             const container = document.querySelector('.chat-messages');
             if (!container) return;
@@ -271,7 +271,7 @@ export class PerformanceManager {
         const start = performance.now();
         const result = fn();
         const duration = performance.now() - start;
-        
+
         this.measurements.push({
             type: 'custom',
             name,

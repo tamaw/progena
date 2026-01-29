@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Status Module
- * 
+ *
  * Handles status monitoring, health checks, and agent status display.
  * Now with Server-Sent Events support for real-time updates.
  */
@@ -14,12 +14,12 @@ class StatusManager {
         this.agentMemory = document.getElementById('agent-memory');
         this.subAgentsList = document.getElementById('sub-agents-list');
         this.activeTasks = document.getElementById('active-tasks');
-        
+
         this.isConnected = false;
         this.healthCheckInterval = null;
         this.lastHealth = null;
         this.eventSource = null;
-        
+
         this.init();
     }
 
@@ -35,7 +35,7 @@ class StatusManager {
 
         // Start monitoring
         this.startHealthCheck();
-        
+
         // Connect to SSE for real-time updates
         this.connectEventSource();
     }
@@ -49,10 +49,10 @@ class StatusManager {
         }
 
         const url = `${Config.api.baseUrl}/api/ui/events`;
-        
+
         try {
             this.eventSource = new EventSource(url);
-            
+
             this.eventSource.onopen = () => {
                 console.log('SSE connection established');
             };
@@ -99,7 +99,7 @@ class StatusManager {
     handleStatusEvent(data) {
         // Trigger a status refresh on status change
         this.refreshStatus();
-        
+
         // Show notification if significant change
         if (data.status === 'error' && window.notifications) {
             notifications.show('error', 'Status Change', data.details?.message || 'Agent status changed');
@@ -165,17 +165,17 @@ class StatusManager {
      */
     updateConnectionStatus(connected, error = null) {
         this.isConnected = connected;
-        
+
         const status = connected ? 'connected' : 'disconnected';
         const text = connected ? 'Connected' : 'Disconnected';
-        
+
         this.connectionStatus.dataset.status = status;
         this.connectionStatus.querySelector('.status-text').textContent = text;
 
         // Notify if connection state changed
         if (!connected && this.isConnected !== false) {
             if (window.notifications) {
-                notifications.show('error', 'Connection Lost', 
+                notifications.show('error', 'Connection Lost',
                     error?.message || 'Unable to reach the Progenitor server');
             }
         }
@@ -259,7 +259,7 @@ class StatusManager {
      */
     renderSubAgentCard(agent) {
         const statusClass = agent.status || 'idle';
-        const progressHtml = agent.progress !== null 
+        const progressHtml = agent.progress !== null
             ? `<div class="sub-agent-progress"><div class="sub-agent-progress-bar" style="width: ${agent.progress}%"></div></div>`
             : '';
 

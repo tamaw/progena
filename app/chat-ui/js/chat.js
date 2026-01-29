@@ -1,6 +1,6 @@
 /**
  * Progenitor Chat UI - Chat Module
- * 
+ *
  * Handles chat functionality including message rendering,
  * streaming, and user interactions.
  */
@@ -12,17 +12,17 @@ class ChatManager {
         this.sendButton = document.getElementById('btn-send');
         this.stopButton = document.getElementById('btn-stop');
         this.typingIndicator = document.getElementById('typing-indicator');
-        
+
         this.messages = [];
         this.isGenerating = false;
         this.currentStreamMessage = null;
-        
+
         // Input history for navigation
         this.inputHistory = [];
         this.historyIndex = 0;
         this.currentDraft = '';
         this.maxHistoryItems = 50;
-        
+
         this.init();
     }
 
@@ -33,11 +33,11 @@ class ChatManager {
         // Bind event listeners
         this.sendButton.addEventListener('click', () => this.sendMessage());
         this.stopButton.addEventListener('click', () => this.stopGeneration());
-        
+
         // Input handling
         this.inputElement.addEventListener('keydown', (e) => this.handleKeyDown(e));
         this.inputElement.addEventListener('input', () => this.autoResizeInput());
-        
+
         // Quick actions
         document.querySelectorAll('.quick-action').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -51,7 +51,7 @@ class ChatManager {
 
         // Load history from localStorage
         this.loadHistory();
-        
+
         // Focus input
         this.inputElement.focus();
     }
@@ -85,7 +85,7 @@ class ChatManager {
      */
     async sendMessage() {
         const message = this.inputElement.value.trim();
-        
+
         if (!message || this.isGenerating) {
             return;
         }
@@ -161,29 +161,29 @@ class ChatManager {
                     hasStartedGenerating = true;
                     this.setTypingState('generating');
                 }
-                
+
                 fullContent += chunk;
                 tokenCount++;
-                
+
                 // Update token counter periodically (every 5 tokens for performance)
                 if (tokenCount % 5 === 0) {
                     this.updateTokenCounter(tokenCount);
                 }
-                
+
                 contentEl.innerHTML = this.formatMessage(fullContent);
                 this.scrollToBottom();
             },
             // On complete
             (status) => {
                 messageEl.classList.remove('streaming');
-                
+
                 // Final token count update
                 this.updateTokenCounter(tokenCount);
-                
+
                 if (status === 'cancelled') {
                     fullContent += ' [Cancelled]';
                 }
-                
+
                 contentEl.innerHTML = this.formatMessage(fullContent);
                 this.messages.push({
                     role: 'assistant',
@@ -209,11 +209,11 @@ class ChatManager {
     async regularResponse(message, history, messageEl) {
         const response = await api.sendMessage(message, history);
         const content = response.choices?.[0]?.message?.content || response.response || '';
-        
+
         const contentEl = messageEl.querySelector('.message-content');
         contentEl.innerHTML = this.formatMessage(content);
         messageEl.classList.remove('streaming');
-        
+
         this.messages.push({
             role: 'assistant',
             content: content,
@@ -230,11 +230,11 @@ class ChatManager {
      */
     handleError(error, messageEl) {
         console.error('Chat error:', error);
-        
+
         const contentEl = messageEl.querySelector('.message-content');
         messageEl.classList.remove('streaming');
         messageEl.classList.add('error');
-        
+
         contentEl.innerHTML = `
             <div class="message-error">
                 <span class="message-error-icon">⚠️</span>
@@ -259,7 +259,7 @@ class ChatManager {
      */
     addMessage(role, content, isStreaming = false) {
         const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
+
         const wrapper = document.createElement('div');
         wrapper.className = `message-wrapper ${role}`;
         wrapper.dataset.messageId = messageId;
@@ -277,13 +277,13 @@ class ChatManager {
 
         message.appendChild(contentDiv);
         message.appendChild(timestamp);
-        
+
         // Add message actions (copy, etc.)
         const actions = this.createMessageActions(role, messageId);
-        
+
         wrapper.appendChild(message);
         wrapper.appendChild(actions);
-        
+
         this.messagesContainer.appendChild(wrapper);
         this.scrollToBottom();
 
@@ -341,7 +341,7 @@ class ChatManager {
         formatted = formatted.replace(/~~([^~]+)~~/g, '<del>$1</del>');
 
         // Links
-        formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, 
+        formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
             '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 
         // Horizontal rules
@@ -350,14 +350,14 @@ class ChatManager {
 
         // Blockquotes
         formatted = formatted.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
-        
+
         // Merge consecutive blockquotes
         formatted = formatted.replace(/<\/blockquote>\s*<blockquote>/g, '<br>');
 
         // Unordered lists
         formatted = formatted.replace(/^[-*+]\s+(.+)$/gm, '<li class="md-li">$1</li>');
         formatted = formatted.replace(/(<li class="md-li">.*<\/li>)/s, '<ul class="md-ul">$1</ul>');
-        
+
         // Ordered lists
         formatted = formatted.replace(/^\d+\.\s+(.+)$/gm, '<li class="md-li-ordered">$1</li>');
         formatted = formatted.replace(/(<li class="md-li-ordered">.*<\/li>)/s, '<ol class="md-ol">$1</ol>');
@@ -372,7 +372,7 @@ class ChatManager {
         // Line breaks (convert double newlines to paragraphs)
         formatted = formatted.replace(/\n\n/g, '</p><p>');
         formatted = formatted.replace(/\n/g, '<br>');
-        
+
         // Wrap in paragraph if not already structured
         if (!formatted.startsWith('<') || formatted.startsWith('<br>')) {
             formatted = `<p>${formatted}</p>`;
@@ -389,34 +389,34 @@ class ChatManager {
     formatTables(text) {
         // Simple table detection: rows starting with |
         const tablePattern = /(\|.+\|[\r\n]+)+/g;
-        
+
         return text.replace(tablePattern, (match) => {
             const rows = match.trim().split(/[\r\n]+/);
             if (rows.length < 2) return match;
-            
+
             let html = '<table class="md-table">';
             let isHeader = true;
-            
+
             for (const row of rows) {
                 // Skip separator row
                 if (/^\|[\s\-:]+\|$/.test(row)) {
                     isHeader = false;
                     continue;
                 }
-                
+
                 const cells = row.split('|').filter(c => c.trim());
                 const tag = isHeader ? 'th' : 'td';
                 const rowClass = isHeader ? 'thead' : 'tbody';
-                
+
                 html += `<tr class="${rowClass}">`;
                 for (const cell of cells) {
                     html += `<${tag}>${cell.trim()}</${tag}>`;
                 }
                 html += '</tr>';
-                
+
                 if (isHeader) isHeader = false;
             }
-            
+
             html += '</table>';
             return html;
         });
@@ -456,11 +456,11 @@ class ChatManager {
      */
     setGenerating(generating, state = 'thinking') {
         this.isGenerating = generating;
-        
+
         this.sendButton.disabled = generating;
         this.stopButton.classList.toggle('hidden', !generating);
         this.typingIndicator.classList.toggle('hidden', !generating);
-        
+
         if (generating) {
             this.sendButton.classList.add('hidden');
             this.setTypingState(state);
@@ -477,7 +477,7 @@ class ChatManager {
     setTypingState(state) {
         this.typingIndicator.dataset.state = state;
         const actionEl = this.typingIndicator.querySelector('.typing-action');
-        
+
         if (actionEl) {
             switch (state) {
                 case 'thinking':
@@ -545,7 +545,7 @@ class ChatManager {
             const saved = localStorage.getItem(Config.storage.chatHistory);
             if (saved) {
                 this.messages = JSON.parse(saved);
-                
+
                 // Render saved messages (optional - uncomment to show history on load)
                 // this.renderSavedMessages();
             }
@@ -583,7 +583,7 @@ class ChatManager {
             message.appendChild(contentDiv);
             wrapper.appendChild(message);
             wrapper.appendChild(meta);
-            
+
             this.messagesContainer.appendChild(wrapper);
         });
 
@@ -596,7 +596,7 @@ class ChatManager {
     clearHistory() {
         this.messages = [];
         localStorage.removeItem(Config.storage.chatHistory);
-        
+
         // Clear UI
         this.messagesContainer.innerHTML = `
             <div class="welcome-message">
@@ -678,12 +678,12 @@ class ChatManager {
     async copyMessage(messageId, button) {
         const wrapper = document.querySelector(`[data-message-id="${messageId}"]`);
         const content = wrapper?.querySelector('.message-content')?.textContent;
-        
+
         if (!content) return;
 
         try {
             await navigator.clipboard.writeText(content);
-            
+
             // Visual feedback
             button.classList.add('copied');
             const originalHTML = button.innerHTML;
@@ -693,7 +693,7 @@ class ChatManager {
                 </svg>
                 Copied!
             `;
-            
+
             setTimeout(() => {
                 button.classList.remove('copied');
                 button.innerHTML = originalHTML;
@@ -716,7 +716,7 @@ class ChatManager {
         // Get index in DOM
         const allWrappers = [...this.messagesContainer.querySelectorAll('.message-wrapper')];
         const index = allWrappers.indexOf(wrapper);
-        
+
         // Find the user message before this assistant message
         let userMessage = null;
         for (let i = index - 1; i >= 0; i--) {
@@ -802,7 +802,7 @@ class ChatManager {
         // Render each message
         this.messages.forEach(msg => {
             const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            
+
             const wrapper = document.createElement('div');
             wrapper.className = `message-wrapper ${msg.role}`;
             wrapper.dataset.messageId = messageId;
@@ -820,12 +820,12 @@ class ChatManager {
 
             message.appendChild(contentDiv);
             message.appendChild(timestamp);
-            
+
             const actions = this.createMessageActions(msg.role, messageId);
-            
+
             wrapper.appendChild(message);
             wrapper.appendChild(actions);
-            
+
             this.messagesContainer.appendChild(wrapper);
         });
 
