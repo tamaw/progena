@@ -244,6 +244,28 @@ async def respond_to_alert(alert_id: str, response: str = "acknowledged"):
     return {"status": "responded", "alert_id": alert_id, "response": response}
 
 
+@router.get("/prompts")
+async def get_prompts():
+    """
+    Get available prompt templates.
+
+    Returns list of prompt templates from data/prompts/ directory.
+    """
+    # TODO: Implement actual prompt loading from data/prompts/
+    return {"prompts": []}
+
+
+@router.get("/logs")
+async def get_logs():
+    """
+    Get agent logs.
+
+    Returns recent logs from the agent.
+    """
+    # TODO: Implement actual log reading from logs/
+    return {"logs": ""}
+
+
 def create_alert(
     type: str,
     title: str,
@@ -285,24 +307,153 @@ def create_alert(
 # Event subscribers for SSE
 _event_subscribers: list[asyncio.Queue] = []
 
+# Status monitor state
+_status_monitor_task: Optional[asyncio.Task] = None
+_last_status: dict = {}
+
+
+async def _get_current_status() -> dict:
+    """Get current server status for SSE broadcast."""
+    from . import main as chat_main
+    import psutil
+
+    now = time.time()
+    start_time = getattr(chat_main, '_server_start_time', now)
+    client = getattr(chat_main, 'client', None)
+    shutdown_mgr = getattr(chat_main, 'shutdown_manager', None)
+
+    # Try to ensure client is connected (non-blocking check)
+    progenitor_running = False
+    if client:
+        # If client hasn't started yet, try to start it (connects to IPC)
+        if not client._started and hasattr(client, 'start'):
+            try:
+                await asyncio.wait_for(client.start(), timeout=2.0)
+            except Exception as e:
+                logger.debug("Failed to start client for status check: %s", e)
+
+        progenitor_running = client.is_running if hasattr(client, 'is_running') else False
+
+    status = {
+        "status": "healthy",
+        "uptime_seconds": round(now - start_time, 1),
+        "progenitor_running": progenitor_running,
+        "version": getattr(chat_main.config, 'api_version', '0.1.0'),
+    }
+
+    if shutdown_mgr and shutdown_mgr.is_shutting_down:
+        status["status"] = "draining"
+
+    # Memory info
+    try:
+        process = psutil.Process()
+        status["memory_mb"] = round(process.memory_info().rss / 1024 / 1024, 2)
+    except Exception:
+        status["memory_mb"] = None
+
+    # Progenitor details
+    if client and hasattr(client, 'get_status'):
+        try:
+            status["progenitor_details"] = client.get_status()
+        except Exception:
+            pass
+
+    return status
+
+
+async def _status_monitor():
+    """Background task that polls status and broadcasts to SSE subscribers.
+
+    Pushes status updates every 10 seconds.
+    """
+    global _last_status
+
+    update_interval = 10  # Push status every 10 seconds
+
+    print("[StatusMonitor] Starting status monitor loop", flush=True)
+
+    while True:
+        try:
+            await asyncio.sleep(update_interval)
+
+            subscriber_count = len(_event_subscribers)
+            print(f"[StatusMonitor] Check: {subscriber_count} subscribers", flush=True)
+
+            if subscriber_count == 0:
+                continue  # No subscribers, skip
+
+            current = await _get_current_status()
+            _last_status = current.copy()
+            broadcast_event("status", current)
+            print(f"[StatusMonitor] Pushed status (uptime: {current.get('uptime_seconds', 0):.1f}s)", flush=True)
+
+        except asyncio.CancelledError:
+            print("[StatusMonitor] Cancelled", flush=True)
+            break
+        except Exception as e:
+            print(f"[StatusMonitor] Error: {e}", flush=True)
+            await asyncio.sleep(10)
+
+
+def _status_changed(current: dict, previous: dict) -> bool:
+    """Check if status has meaningfully changed."""
+    if not previous:
+        return True
+
+    # Check key fields for changes
+    for key in ("status", "progenitor_running"):
+        if current.get(key) != previous.get(key):
+            return True
+
+    # Check memory change > 10MB
+    curr_mem = current.get("memory_mb") or 0
+    prev_mem = previous.get("memory_mb") or 0
+    if abs(curr_mem - prev_mem) > 10:
+        return True
+
+    return False
+
+
+def start_status_monitor():
+    """Start the status monitor background task."""
+    global _status_monitor_task
+    if _status_monitor_task is None or _status_monitor_task.done():
+        _status_monitor_task = asyncio.create_task(_status_monitor())
+        print("[StatusMonitor] Started background task", flush=True)
+
+
+def stop_status_monitor():
+    """Stop the status monitor background task."""
+    global _status_monitor_task
+    if _status_monitor_task and not _status_monitor_task.done():
+        _status_monitor_task.cancel()
+        logger.info("Status monitor stopped")
+
 
 async def _generate_events() -> AsyncGenerator[str, None]:
     """Generate SSE events for a subscriber."""
+    import json
+
     queue: asyncio.Queue = asyncio.Queue()
     _event_subscribers.append(queue)
 
+    # Start status monitor if not running
+    start_status_monitor()
+
     try:
-        # Send initial connection event
-        yield f"event: connected\ndata: {{}}\n\n"
+        # Send initial connection event with current status
+        initial_status = await _get_current_status()
+        yield f"event: connected\ndata: {json.dumps(initial_status)}\n\n"
 
         while True:
             try:
-                # Wait for event with timeout
+                # Wait for event with timeout (30s keepalive)
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
                 yield f"event: {event['type']}\ndata: {event['data']}\n\n"
             except asyncio.TimeoutError:
-                # Send keepalive
-                yield f": keepalive\n\n"
+                # Send heartbeat with current status (keeps connection alive)
+                heartbeat_status = await _get_current_status()
+                yield f"event: heartbeat\ndata: {json.dumps(heartbeat_status)}\n\n"
     except asyncio.CancelledError:
         pass
     finally:

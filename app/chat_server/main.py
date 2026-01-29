@@ -7,6 +7,13 @@ Communication modes:
 - IPC (default): Socket-based communication for reliability and streaming
 - Subprocess: Legacy stdin/stdout mode (deprecated)
 - In-process: Direct service calls (for testing)
+
+Features (from text-generation-webui patterns):
+- Streaming callbacks for real-time token streaming
+- Conversation metadata with reasoning traces
+- File attachments for document-grounded chat
+- Session management for state persistence
+- Graceful shutdown with request draining
 """
 
 import asyncio
@@ -19,7 +26,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Union
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -47,12 +54,65 @@ from .models import (
     StreamingResponseRequest,
 )
 
+# New modules for enhanced features
+from .streaming import (
+    Iteratorize,
+    AsyncIteratorize,
+    StreamingBuffer,
+    stream_with_callback,
+    stop_everything,
+    reset_stop_flag,
+)
+from .conversation import (
+    ConversationHistory,
+    ConversationMessage as ConvMessage,
+    MessageMetadata,
+    AttachmentType,
+    truncate_content_by_tokens,
+)
+from .attachments import (
+    AttachmentManager,
+    AttachmentConfig,
+    AttachmentResult,
+    format_attachments_for_context,
+    create_attachment_from_upload,
+)
+from .session import (
+    SessionManager,
+    SessionConfig,
+    SessionState,
+    UserPreferences,
+    SettingsManager,
+    get_session_from_request,
+    set_session_cookie,
+)
+from .shutdown import (
+    GracefulShutdownManager,
+    ShutdownPhase,
+    managed_shutdown,
+    stop_client_safely,
+    commit_state_safely,
+)
+
 logger = logging.getLogger(__name__)
 
 # Global config and client
 config = ChatServerConfig.from_env()
 # Client can be either IPC-based or subprocess-based
 client: Union[ProgenitorClient, IPCProgenitorClient, None] = None
+
+# Enhanced feature managers
+session_manager: SessionManager = SessionManager(SessionConfig(
+    persist_dir=Path("state/sessions") if config.host else None,
+))
+attachment_manager: AttachmentManager = AttachmentManager(AttachmentConfig(
+    cache_dir=Path("state/attachments"),
+))
+conversation_history: ConversationHistory = ConversationHistory()
+graceful_shutdown: GracefulShutdownManager = GracefulShutdownManager(
+    drain_timeout=30.0,
+    total_timeout=60.0,
+)
 
 
 # ============================================================================
@@ -305,11 +365,43 @@ shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager with graceful shutdown (OPS-002)."""
+    """Application lifespan manager with graceful shutdown (OPS-002).
+
+    Enhanced with:
+    - Session manager lifecycle
+    - Attachment manager cleanup
+    - Graceful shutdown with callbacks
+    """
     global client
 
     # Startup
-    logger.info("Starting chat server...")
+    logger.info("Starting chat server with enhanced features...")
+
+    # Initialize session manager
+    await session_manager.start()
+    logger.info("Session manager started")
+
+    # Install graceful shutdown signal handlers
+    graceful_shutdown.install_signal_handlers()
+
+    # Register shutdown callbacks
+    graceful_shutdown.register_callback(
+        "stop_session_manager",
+        session_manager.stop,
+        priority=50,
+        timeout=5.0,
+    )
+
+    async def _clear_attachment_cache():
+        """Async wrapper for sync clear_cache."""
+        attachment_manager.clear_cache()
+
+    graceful_shutdown.register_callback(
+        "clear_attachment_cache",
+        _clear_attachment_cache,
+        priority=60,
+        timeout=2.0,
+    )
 
     # Choose client based on configuration
     if config.progenitor_ipc_enabled:
@@ -324,6 +416,15 @@ async def lifespan(app: FastAPI):
         logger.info("Using subprocess client (legacy mode)")
         client = get_client(config)
 
+    # Register client shutdown callback
+    if client:
+        graceful_shutdown.register_callback(
+            "stop_progenitor_client",
+            lambda: stop_client_safely(client, timeout=10.0, name="Progenitor"),
+            priority=30,
+            timeout=15.0,
+        )
+
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues
     logger.info("Chat server ready on %s:%d", config.host, config.port)
@@ -333,36 +434,15 @@ async def lifespan(app: FastAPI):
         config.rate_limit_per_hour,
         config.rate_limit_enabled,
     )
+    logger.info("Enhanced features: streaming, metadata, attachments, sessions")
 
     yield
 
-    # Graceful Shutdown (OPS-002)
+    # Graceful Shutdown (OPS-002) - now using enhanced manager
     logger.info("Initiating graceful shutdown...")
 
-    # Step 1: Stop accepting new requests and drain existing ones
-    await shutdown_manager.initiate_shutdown()
-
-    # Step 2: Stop the Progenitor client
-    if client:
-        logger.info("Stopping Progenitor client...")
-        try:
-            await asyncio.wait_for(client.stop(), timeout=10.0)
-        except asyncio.TimeoutError:
-            logger.warning("Progenitor client stop timed out")
-        except Exception as e:
-            logger.error("Error stopping client: %s", e)
-
-    # Step 3: Flush observability data
-    logger.info("Flushing observability data...")
-    try:
-        from ..progenitor.observability import flush_langfuse, shutdown_langfuse
-        flush_langfuse()
-        shutdown_langfuse()
-        logger.info("Langfuse flushed successfully")
-    except ImportError:
-        pass  # Langfuse not installed or observability module not available
-    except Exception as e:
-        logger.warning("Error flushing Langfuse: %s", e)
+    # Use the enhanced graceful shutdown manager
+    await graceful_shutdown.initiate_shutdown()
 
     logger.info("Chat server shutdown complete")
 
@@ -460,8 +540,17 @@ async def request_id_middleware(request: Request, call_next):
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """Apply rate limiting to API endpoints."""
-    # Skip rate limiting for health checks and if disabled
-    if not config.rate_limit_enabled or request.url.path in ("/health", "/docs", "/openapi.json"):
+    # Skip rate limiting for health checks, UI endpoints, and if disabled
+    # Health endpoints should never be rate-limited to allow monitoring
+    # UI endpoints are for the frontend and don't hit the LLM
+    health_paths = ("/health", "/health/detailed", "/ready", "/live", "/docs", "/openapi.json")
+    if not config.rate_limit_enabled:
+        return await call_next(request)
+    if request.url.path in health_paths:
+        return await call_next(request)
+    if request.url.path.startswith("/api/ui/"):
+        return await call_next(request)
+    if request.url.path.startswith("/ui"):
         return await call_next(request)
 
     client_id = get_client_id(request)
@@ -522,20 +611,23 @@ def _update_activity():
 
 @app.get("/health")
 async def health_check():
-    """Basic health check endpoint."""
-    now = time.time()
+    """
+    Simple health check endpoint.
+
+    Returns minimal status - use SSE /api/ui/events for detailed status.
+    """
     return {
         "status": "healthy" if not shutdown_manager.is_shutting_down else "draining",
-        "version": config.api_version,
-        "progenitor_running": client.is_running if client else False,
-        "uptime_seconds": round(now - _server_start_time, 1),
     }
 
 
-@app.get("/health/detailed")
+@app.get("/health/detailed", deprecated=True)
 async def health_check_detailed():
     """
     Detailed health check endpoint with full diagnostics (OPS-001).
+
+    DEPRECATED: Use SSE endpoint /api/ui/events for real-time status updates.
+    This endpoint will be removed in a future version.
 
     Returns comprehensive information about:
     - Server status and configuration
@@ -964,3 +1056,213 @@ async def simple_chat(body: SimpleChatRequest):
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Attachment Endpoints
+# ============================================================================
+
+@app.post("/v1/attachments")
+async def upload_attachment(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """
+    Upload a file attachment for use in conversations.
+
+    Returns attachment metadata including extracted text content.
+    """
+    content = await file.read()
+
+    result = await create_attachment_from_upload(
+        file_content=content,
+        filename=file.filename or "uploaded_file",
+        content_type=file.content_type or "application/octet-stream",
+        manager=attachment_manager,
+    )
+
+    if result.error:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    # Store in session if available
+    session_id = request.cookies.get("progenitor_session")
+    if session_id:
+        session = await session_manager.get_session(session_id)
+        if session:
+            session.pending_attachments.append(result.id)
+
+    return {
+        "id": result.id,
+        "name": result.name,
+        "filename": result.original_filename,
+        "mime_type": result.mime_type,
+        "size_bytes": result.size_bytes,
+        "content_truncated": result.content_truncated,
+        "content_preview": result.content[:500] + "..." if len(result.content) > 500 else result.content,
+    }
+
+
+@app.get("/v1/attachments/{attachment_id}")
+async def get_attachment(attachment_id: str):
+    """Get attachment metadata and content by ID."""
+    # Search in cache by ID
+    for result in attachment_manager._cache.values():
+        if result.id == attachment_id:
+            return {
+                "id": result.id,
+                "name": result.name,
+                "filename": result.original_filename,
+                "mime_type": result.mime_type,
+                "size_bytes": result.size_bytes,
+                "content": result.content,
+                "content_truncated": result.content_truncated,
+                "metadata": result.metadata,
+            }
+
+    raise HTTPException(status_code=404, detail="Attachment not found")
+
+
+# ============================================================================
+# Session Endpoints
+# ============================================================================
+
+@app.get("/v1/session")
+async def get_session(request: Request):
+    """Get current session state."""
+    session = await get_session_from_request(request, session_manager)
+    return {
+        "session_id": session.session_id,
+        "created_at": session.created_at.isoformat(),
+        "last_activity": session.last_activity.isoformat(),
+        "is_authenticated": session.is_authenticated,
+        "preferences": session.preferences.model_dump(),
+        "message_count": session.message_count,
+        "pending_attachments": session.pending_attachments,
+    }
+
+
+@app.post("/v1/session")
+async def create_new_session(request: Request, response: Response):
+    """Create a new session."""
+    session = await session_manager.create_session()
+    set_session_cookie(response, session)
+    return {
+        "session_id": session.session_id,
+        "created_at": session.created_at.isoformat(),
+    }
+
+
+@app.patch("/v1/session/preferences")
+async def update_session_preferences(request: Request, body: dict):
+    """Update session preferences."""
+    session_id = request.cookies.get("progenitor_session")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="No session found")
+
+    session = await session_manager.update_preferences(session_id, **body)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {"preferences": session.preferences.model_dump()}
+
+
+@app.get("/v1/session/settings/export")
+async def export_settings(request: Request):
+    """Export session settings as YAML."""
+    session = await get_session_from_request(request, session_manager)
+    yaml_content = SettingsManager.export_settings(
+        session.preferences,
+        session.extension_states,
+    )
+    return Response(
+        content=yaml_content,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": "attachment; filename=settings.yaml"},
+    )
+
+
+@app.post("/v1/session/settings/import")
+async def import_settings(request: Request, response: Response):
+    """Import settings from YAML."""
+    body = await request.body()
+    yaml_content = body.decode("utf-8")
+
+    try:
+        preferences, extension_states = SettingsManager.import_settings(yaml_content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
+
+    session = await get_session_from_request(request, session_manager)
+    session.preferences = preferences
+    session.extension_states = extension_states
+    set_session_cookie(response, session)
+
+    return {"preferences": preferences.model_dump()}
+
+
+# ============================================================================
+# Conversation History Endpoints
+# ============================================================================
+
+@app.get("/v1/conversation")
+async def get_conversation():
+    """Get current conversation history."""
+    return {
+        "message_count": len(conversation_history),
+        "messages": [
+            {
+                "id": msg.id,
+                "role": msg.role,
+                "content": msg.content[:500] + "..." if len(msg.content) > 500 else msg.content,
+                "timestamp": msg.timestamp.isoformat(),
+                "has_attachments": len(msg.metadata.attachments) > 0,
+                "has_tool_calls": len(msg.metadata.tool_calls) > 0,
+            }
+            for msg in conversation_history.internal
+        ],
+    }
+
+
+@app.get("/v1/conversation/{message_id}")
+async def get_conversation_message(message_id: str):
+    """Get a specific message with full metadata."""
+    msg = conversation_history.get_message(message_id)
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    return {
+        "id": msg.id,
+        "role": msg.role,
+        "content": msg.content,
+        "visible_content": msg.visible_content,
+        "timestamp": msg.timestamp.isoformat(),
+        "metadata": msg.metadata.model_dump(),
+    }
+
+
+@app.delete("/v1/conversation")
+async def clear_conversation():
+    """Clear conversation history."""
+    conversation_history.clear()
+    return {"status": "cleared"}
+
+
+# ============================================================================
+# Enhanced Health Endpoints
+# ============================================================================
+
+@app.get("/health/features")
+async def health_features():
+    """Get status of enhanced features."""
+    return {
+        "streaming": {
+            "enabled": True,
+            "stop_flag": False,
+        },
+        "session_manager": session_manager.get_stats(),
+        "attachment_manager": attachment_manager.get_cache_stats(),
+        "conversation": {
+            "message_count": len(conversation_history),
+        },
+        "graceful_shutdown": graceful_shutdown.get_status(),
+    }

@@ -270,8 +270,9 @@ export class KeyboardManager {
     createHelpModal() {
         const modal = document.createElement('div');
         modal.id = 'keyboardHelpModal';
-        modal.className = 'modal';
+        modal.className = 'modal hidden';
         modal.innerHTML = `
+            <div class="modal-backdrop"></div>
             <div class="modal-content keyboard-help">
                 <div class="modal-header">
                     <h2>Keyboard Shortcuts</h2>
@@ -288,15 +289,18 @@ export class KeyboardManager {
         document.body.appendChild(modal);
 
         // Close button handler
-        modal.querySelector('.modal-close').addEventListener('click', () => {
+        modal.querySelector('.modal-close').addEventListener('click', (e) => {
+            e.stopPropagation();
             modal.classList.remove('visible');
+            modal.classList.add('hidden');
             this.isHelpVisible = false;
         });
 
-        // Click outside to close
+        // Click outside to close (on the modal background, not the content)
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 modal.classList.remove('visible');
+                modal.classList.add('hidden');
                 this.isHelpVisible = false;
             }
         });
@@ -363,7 +367,13 @@ export class KeyboardManager {
         const modal = document.getElementById('keyboardHelpModal');
         if (modal) {
             this.isHelpVisible = !this.isHelpVisible;
-            modal.classList.toggle('visible', this.isHelpVisible);
+            if (this.isHelpVisible) {
+                modal.classList.remove('hidden');
+                modal.classList.add('visible');
+            } else {
+                modal.classList.remove('visible');
+                modal.classList.add('hidden');
+            }
         }
     }
 }

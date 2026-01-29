@@ -9,10 +9,15 @@ class NotificationManager {
         this.container = document.getElementById('notification-container');
         this.alertModal = document.getElementById('alert-modal');
         this.notificationBtn = document.getElementById('btn-notifications');
+        this.notificationsPanel = document.getElementById('notifications-panel');
+        this.notificationsBackdrop = document.getElementById('notifications-backdrop');
+        this.notificationsList = document.getElementById('notifications-list');
 
         this.notifications = [];
+        this.notificationHistory = [];
         this.alerts = [];
         this.browserPermission = Notification.permission;
+        this.isPanelOpen = false;
 
         this.init();
     }
@@ -35,13 +40,125 @@ class NotificationManager {
             this.hideAlertModal();
         });
 
-        // Notification button
-        this.notificationBtn?.addEventListener('click', () => this.toggleNotificationHistory());
+        // Notification button - opens panel
+        this.notificationBtn?.addEventListener('click', () => this.toggleNotificationsPanel());
+
+        // Panel close button
+        const panelClose = document.getElementById('notifications-panel-close');
+        panelClose?.addEventListener('click', () => this.closeNotificationsPanel());
+
+        // Backdrop click closes panel
+        this.notificationsBackdrop?.addEventListener('click', () => this.closeNotificationsPanel());
+
+        // Clear all button
+        const clearBtn = document.getElementById('clear-notifications');
+        clearBtn?.addEventListener('click', () => {
+            this.clearNotificationHistory();
+            this.updateNotificationsList();
+        });
 
         // Request browser notification permission if needed
         if (Config.notifications.enabled && this.browserPermission === 'default') {
             this.requestPermission();
         }
+    }
+
+    /**
+     * Toggle the notifications panel.
+     */
+    toggleNotificationsPanel() {
+        if (this.isPanelOpen) {
+            this.closeNotificationsPanel();
+        } else {
+            this.openNotificationsPanel();
+        }
+    }
+
+    /**
+     * Open the notifications panel.
+     */
+    openNotificationsPanel() {
+        this.isPanelOpen = true;
+        this.updateNotificationsList();
+
+        this.notificationsPanel?.classList.remove('hidden');
+        this.notificationsBackdrop?.classList.remove('hidden');
+
+        // Trigger reflow for animation
+        this.notificationsPanel?.offsetHeight;
+        this.notificationsBackdrop?.offsetHeight;
+
+        this.notificationsPanel?.classList.add('visible');
+        this.notificationsBackdrop?.classList.add('visible');
+    }
+
+    /**
+     * Close the notifications panel.
+     */
+    closeNotificationsPanel() {
+        this.isPanelOpen = false;
+
+        this.notificationsPanel?.classList.remove('visible');
+        this.notificationsBackdrop?.classList.remove('visible');
+
+        // Hide after animation
+        setTimeout(() => {
+            if (!this.isPanelOpen) {
+                this.notificationsPanel?.classList.add('hidden');
+                this.notificationsBackdrop?.classList.add('hidden');
+            }
+        }, 200);
+    }
+
+    /**
+     * Update the notifications list in the panel.
+     */
+    updateNotificationsList() {
+        if (!this.notificationsList) return;
+
+        if (this.notificationHistory.length === 0) {
+            this.notificationsList.innerHTML = '<div class="empty-state">No notifications</div>';
+            return;
+        }
+
+        this.notificationsList.innerHTML = this.notificationHistory
+            .slice()
+            .reverse()
+            .map(n => {
+                const icons = { info: 'ℹ️', success: '✅', warning: '⚠️', error: '❌' };
+                const timeAgo = this.formatTimeAgo(n.timestamp);
+                return `
+                    <div class="notification-item ${n.type}">
+                        <span class="notification-icon">${icons[n.type] || 'ℹ️'}</span>
+                        <div class="notification-content">
+                            <div class="notification-title">${this.escapeHtml(n.title)}</div>
+                            <div class="notification-message">${this.escapeHtml(n.message)}</div>
+                            <div class="notification-time">${timeAgo}</div>
+                        </div>
+                    </div>
+                `;
+            })
+            .join('');
+    }
+
+    /**
+     * Format time ago string.
+     */
+    formatTimeAgo(timestamp) {
+        const seconds = Math.floor((Date.now() - timestamp) / 1000);
+        if (seconds < 60) return 'Just now';
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+        if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+        return `${Math.floor(seconds / 86400)}d ago`;
+    }
+
+    /**
+     * Clear notification history.
+     */
+    clearNotificationHistory() {
+        this.notificationHistory = [];
+        this.alerts = [];
+        this.updateAlertBadge();
     }
 
     /**
@@ -110,6 +227,19 @@ class NotificationManager {
         // Add to container
         this.container.appendChild(notification);
         this.notifications.push(notification);
+
+        // Add to history for the panel
+        this.notificationHistory.push({
+            type,
+            title,
+            message,
+            timestamp: Date.now()
+        });
+
+        // Keep history limited
+        if (this.notificationHistory.length > 50) {
+            this.notificationHistory.shift();
+        }
 
         // Limit visible notifications
         while (this.notifications.length > Config.notifications.maxVisible) {
@@ -283,14 +413,16 @@ class NotificationManager {
         document.getElementById('alert-title').textContent = alert.title;
         document.getElementById('alert-message').textContent = alert.message;
 
-        this.alertModal.classList.remove('hidden');
+        this.alertModal?.classList.remove('hidden');
+        this.alertModal?.classList.add('visible');
     }
 
     /**
      * Hide the alert modal.
      */
     hideAlertModal() {
-        this.alertModal.classList.add('hidden');
+        this.alertModal?.classList.remove('visible');
+        this.alertModal?.classList.add('hidden');
         this.currentAlert = null;
     }
 
@@ -347,15 +479,10 @@ class NotificationManager {
     }
 
     /**
-     * Toggle notification history panel.
+     * Toggle notification history panel (legacy method, redirects to panel).
      */
     toggleNotificationHistory() {
-        // For now, just show pending alerts
-        if (this.alerts.length > 0) {
-            this.displayAlertModal(this.alerts[0]);
-        } else {
-            this.show('info', 'No Alerts', 'You have no pending alerts.');
-        }
+        this.toggleNotificationsPanel();
     }
 
     /**
