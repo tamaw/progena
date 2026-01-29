@@ -1,16 +1,31 @@
 /**
  * Progenitor Chat UI - Status Module
  * SSE-first architecture: Status updates are pushed via Server-Sent Events.
+ *
+ * Displays real data from the server:
+ * - Health status from data/state/health.json
+ * - Registered agents from data/state/registry.json
+ * - Loops (Planner/Executor) status
+ * - Backlog items
+ * - Schedule
  */
 
 class StatusManager {
     constructor() {
+        // Status elements
         this.connectionStatus = document.getElementById('connection-status');
         this.agentRunning = document.getElementById('agent-running');
         this.agentUptime = document.getElementById('agent-uptime');
         this.agentVersion = document.getElementById('agent-version');
         this.agentMemory = document.getElementById('agent-memory');
-        this.subAgentsList = document.getElementById('sub-agents-list');
+        this.agentCycles = document.getElementById('agent-cycles');
+        this.agentPid = document.getElementById('agent-pid');
+
+        // List elements
+        this.loopsList = document.getElementById('loops-list');
+        this.agentsList = document.getElementById('agents-list');
+        this.backlogList = document.getElementById('backlog-list');
+        this.scheduleList = document.getElementById('schedule-list');
         this.activeTasks = document.getElementById('active-tasks');
 
         this.isConnected = false;
@@ -24,10 +39,6 @@ class StatusManager {
     }
 
     init() {
-        const refreshBtn = document.getElementById('btn-refresh-agents');
-        if (refreshBtn) {
-            refreshBtn.addEventListener('click', () => this.reconnect());
-        }
         this.connectEventSource();
     }
 
@@ -124,8 +135,10 @@ class StatusManager {
 
     updateAllStatus(data) {
         this.updateAgentStatus(data);
-        this.updateSubAgents(data);
-        this.updateTasks(data);
+        this.updateLoops(data);
+        this.updateAgents(data);
+        this.updateBacklog(data);
+        this.updateSchedule(data);
     }
 
     updateConnectionStatus(connected) {
@@ -138,8 +151,8 @@ class StatusManager {
     }
 
     updateAgentStatus(data) {
-        console.log('Updating agent status with:', data);
         const running = data.progenitor_running;
+
         if (this.agentRunning) {
             this.agentRunning.textContent = running ? 'Running' : 'Stopped';
             this.agentRunning.className = 'status-value ' + (running ? 'status-healthy' : 'status-error');
@@ -153,21 +166,150 @@ class StatusManager {
         if (this.agentMemory && data.memory_mb) {
             this.agentMemory.textContent = data.memory_mb + ' MB';
         }
-    }
-
-    updateSubAgents(data) {
-        if (!this.subAgentsList) return;
-        const running = data.progenitor_running;
-        if (running) {
-            this.subAgentsList.innerHTML = '<div class="sub-agent-card active"><div class="sub-agent-header"><span class="sub-agent-name">Planner</span><span class="sub-agent-status"><span class="sub-agent-status-dot"></span>active</span></div></div><div class="sub-agent-card idle"><div class="sub-agent-header"><span class="sub-agent-name">Executor</span><span class="sub-agent-status"><span class="sub-agent-status-dot"></span>idle</span></div></div>';
-        } else {
-            this.subAgentsList.innerHTML = '<div class="empty-state">No active sub-agents</div>';
+        if (this.agentCycles && data.cycle_count !== undefined) {
+            this.agentCycles.textContent = data.cycle_count;
+        }
+        if (this.agentPid && data.pid) {
+            this.agentPid.textContent = data.pid;
         }
     }
 
-    updateTasks(data) {
-        if (!this.activeTasks) return;
-        this.activeTasks.innerHTML = '<div class="empty-state">No active tasks</div>';
+    updateLoops(data) {
+        if (!this.loopsList) return;
+
+        const loops = data.loops || [];
+
+        if (loops.length === 0) {
+            this.loopsList.innerHTML = '<div class="empty-state">No active loops</div>';
+            return;
+        }
+
+        this.loopsList.innerHTML = loops.map(loop => {
+            const statusClass = loop.status === 'active' ? 'active' : 'idle';
+            return `
+                <div class="sub-agent-card ${statusClass}">
+                    <div class="sub-agent-header">
+                        <span class="sub-agent-name">${this.escapeHtml(loop.name)}</span>
+                        <span class="sub-agent-status">
+                            <span class="sub-agent-status-dot"></span>
+                            ${this.escapeHtml(loop.status)}
+                        </span>
+                    </div>
+                    ${loop.current_task ? `<div class="sub-agent-task">${this.escapeHtml(loop.current_task)}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+    }
+
+    updateAgents(data) {
+        if (!this.agentsList) return;
+
+        const agents = data.agents || [];
+
+        if (agents.length === 0) {
+            this.agentsList.innerHTML = '<div class="empty-state">No registered agents</div>';
+            return;
+        }
+
+        this.agentsList.innerHTML = agents.map(agent => {
+            const statusClass = agent.status === 'ready' ? 'idle' : 'offline';
+            const icon = this.getAgentIcon(agent.kind);
+            return `
+                <div class="sub-agent-card ${statusClass}" title="${this.escapeHtml(agent.description)}">
+                    <div class="sub-agent-header">
+                        <span class="sub-agent-name">${icon} ${this.escapeHtml(agent.name)}</span>
+                        <span class="sub-agent-status">
+                            <span class="sub-agent-status-dot"></span>
+                            ${this.escapeHtml(agent.status)}
+                        </span>
+                    </div>
+                    <div class="sub-agent-meta">
+                        <span class="agent-version">v${this.escapeHtml(agent.version)}</span>
+                        <span class="agent-transport">${this.escapeHtml(agent.transport)}</span>
+                    </div>
+                    ${agent.description ? `<div class="sub-agent-task">${this.truncate(agent.description, 60)}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+    }
+
+    updateBacklog(data) {
+        if (!this.backlogList) return;
+
+        const backlog = data.backlog || [];
+
+        if (backlog.length === 0) {
+            this.backlogList.innerHTML = '<div class="empty-state">No backlog items</div>';
+            return;
+        }
+
+        this.backlogList.innerHTML = backlog.map(item => {
+            const statusClass = this.getBacklogStatusClass(item.status);
+            const icon = this.getBacklogIcon(item.type);
+            return `
+                <div class="backlog-item ${statusClass}">
+                    <div class="backlog-header">
+                        <span class="backlog-icon">${icon}</span>
+                        <span class="backlog-type">${this.escapeHtml(item.type)}</span>
+                        <span class="backlog-status">${this.escapeHtml(item.status)}</span>
+                    </div>
+                    <div class="backlog-description">${this.truncate(item.description, 80)}</div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    updateSchedule(data) {
+        if (!this.scheduleList) return;
+
+        const schedule = data.schedule || [];
+
+        if (schedule.length === 0) {
+            this.scheduleList.innerHTML = '<div class="empty-state">No scheduled tasks</div>';
+            return;
+        }
+
+        this.scheduleList.innerHTML = schedule.map(item => {
+            const enabledClass = item.enabled ? 'enabled' : 'disabled';
+            return `
+                <div class="schedule-item ${enabledClass}">
+                    <div class="schedule-header">
+                        <span class="schedule-name">${this.escapeHtml(item.name)}</span>
+                        <span class="schedule-badge">${item.enabled ? '✓' : '✗'}</span>
+                    </div>
+                    <div class="schedule-cron">${this.escapeHtml(item.schedule)}</div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    getAgentIcon(kind) {
+        const icons = {
+            'a2a_agent': '🤖',
+            'tool': '🔧',
+            'service': '⚙️',
+        };
+        return icons[kind] || '📦';
+    }
+
+    getBacklogIcon(type) {
+        const icons = {
+            'build_agent': '🏗️',
+            'task': '📋',
+            'bug': '🐛',
+            'feature': '✨',
+        };
+        return icons[type] || '📝';
+    }
+
+    getBacklogStatusClass(status) {
+        const classes = {
+            'pending': 'pending',
+            'in_progress': 'active',
+            'completed': 'completed',
+            'failed': 'error',
+        };
+        return classes[status] || 'pending';
     }
 
     formatUptime(seconds) {
@@ -175,6 +317,20 @@ class StatusManager {
         if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + Math.round(seconds % 60) + 's';
         if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
         return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h';
+    }
+
+    escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    truncate(text, maxLen) {
+        if (!text) return '';
+        const escaped = this.escapeHtml(text);
+        if (escaped.length <= maxLen) return escaped;
+        return escaped.substring(0, maxLen) + '...';
     }
 
     getLastStatus() { return this.lastStatus; }

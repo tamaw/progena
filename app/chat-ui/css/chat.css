@@ -149,6 +149,18 @@
     color: var(--color-text-muted);
 }
 
+/* Message Timestamp */
+.message-timestamp {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    margin-top: var(--spacing-xs);
+    opacity: 0.8;
+}
+
+.message.user .message-timestamp {
+    color: rgba(255, 255, 255, 0.7);
+}
+
 .message-wrapper.user .message-meta {
     flex-direction: row-reverse;
 }
@@ -311,19 +323,21 @@
 .btn-stop {
     display: flex;
     align-items: center;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-xs) var(--spacing-sm);
+    justify-content: center;
+    width: 36px;
+    height: 36px;
     border: none;
     border-radius: var(--border-radius-md);
-    background-color: var(--color-error);
-    color: white;
-    font-size: var(--font-size-sm);
+    background-color: transparent;
+    color: var(--color-text-secondary);
+    font-size: 16px;
     cursor: pointer;
     transition: all var(--transition-fast);
 }
 
 .btn-stop:hover {
-    background-color: #da3633;
+    background-color: var(--color-bg-hover);
+    color: var(--color-error);
 }
 
 /* Input Hints */

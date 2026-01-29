@@ -2,6 +2,13 @@
 Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
+
+Reads real state data from data/state/ directory:
+- health.json: Agent health status
+- registry.json: Registered agents and tools
+- current_state.json: Current execution state
+- schedule.json: Scheduled tasks
+- backlog.json: Task backlog
 """
 
 import asyncio
@@ -12,6 +19,8 @@ from typing import AsyncGenerator, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+from .state_reader import get_state_reader, StateSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +36,72 @@ class UIStatusResponse(BaseModel):
     version: str
     memory_mb: Optional[float] = None
     active_requests: int
-    rate_limit_remaining_minute: int
-    rate_limit_remaining_hour: int
+    rate_limit_minute_limit: int
+    rate_limit_hour_limit: int
+    # New fields from state reader
+    cycle_count: int = 0
+    run_id: Optional[str] = None
+    messages_count: int = 0
+    pid: Optional[int] = None
+    last_active: Optional[str] = None
+
+
+class LoopInfo(BaseModel):
+    """Processing loop information (Planner/Executor)."""
+    name: str
+    status: str
+    current_task: Optional[str] = None
+
+
+class LoopsResponse(BaseModel):
+    """Response containing loop status."""
+    loops: list[LoopInfo]
 
 
 class SubAgentInfo(BaseModel):
-    """Sub-agent information."""
+    """Sub-agent (registered agent) information."""
     name: str
     status: str
+    kind: str = "a2a_agent"
+    version: str = "0.1.0"
+    description: str = ""
+    transport: str = "stdio"
     task: Optional[str] = None
     progress: Optional[int] = None
 
 
 class SubAgentsResponse(BaseModel):
-    """Response containing sub-agent status."""
+    """Response containing registered agents."""
     agents: list[SubAgentInfo]
+    total: int
+
+
+class BacklogItemInfo(BaseModel):
+    """Backlog item information."""
+    id: str
+    type: str
+    status: str
+    description: str
+
+
+class BacklogResponse(BaseModel):
+    """Response containing backlog items."""
+    items: list[BacklogItemInfo]
+    total: int
+
+
+class ScheduleItemInfo(BaseModel):
+    """Schedule item information."""
+    id: str
+    name: str
+    schedule: str
+    next_run: Optional[str]
+    enabled: bool
+
+
+class ScheduleResponse(BaseModel):
+    """Response containing schedule items."""
+    items: list[ScheduleItemInfo]
     total: int
 
 
@@ -95,73 +155,136 @@ async def get_ui_status():
     Get combined status information for the UI.
 
     Aggregates health, rate limit, and progenitor status into a single response.
+    Uses real data from data/state/ files.
     """
     from . import main as chat_main
 
+    state_reader = get_state_reader()
+
     try:
-        # Get basic health
+        # Get basic health from chat server
         health = await chat_main.health_check_detailed()
+
+        # Get state from files
+        state_health = state_reader.get_health()
+        current_state = state_reader.get_current_state()
+
+        # Determine if progenitor is running from state file
+        progenitor_running = state_health.is_running()
 
         # Build response
         return UIStatusResponse(
             connected=True,
             server_status=health.get("status", "unknown"),
-            progenitor_running=health.get("progenitor", {}).get("running", False),
+            progenitor_running=progenitor_running,
             uptime_seconds=health.get("uptime_seconds", 0),
             version=health.get("version", "unknown"),
             memory_mb=health.get("memory", {}).get("rss_mb"),
             active_requests=health.get("shutdown", {}).get("active_requests", 0),
-            rate_limit_remaining_minute=health.get("rate_limiter", {}).get("requests_per_minute_limit", 60),
-            rate_limit_remaining_hour=health.get("rate_limiter", {}).get("requests_per_hour_limit", 500),
+            rate_limit_minute_limit=health.get("rate_limiter", {}).get("requests_per_minute_limit", 60),
+            rate_limit_hour_limit=health.get("rate_limiter", {}).get("requests_per_hour_limit", 500),
+            # New fields from state
+            cycle_count=state_health.cycle_count,
+            run_id=state_health.run_id,
+            messages_count=len(current_state.get("messages", [])),
+            pid=state_health.pid,
+            last_active=state_health.last_active,
         )
     except Exception as e:
         logger.error("Failed to get UI status: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/loops", response_model=LoopsResponse)
+async def get_loops():
+    """
+    Get status of processing loops (Planner/Executor).
+    """
+    state_reader = get_state_reader()
+    health = state_reader.get_health()
+    loops = state_reader.get_loops(health)
+
+    return LoopsResponse(
+        loops=[
+            LoopInfo(name=l.name, status=l.status, current_task=l.current_task)
+            for l in loops
+        ]
+    )
+
+
 @router.get("/agents", response_model=SubAgentsResponse)
 async def get_sub_agents():
     """
-    Get status of all sub-agents.
+    Get registered agents from registry.json.
 
-    Returns information about active sub-agents and their current tasks.
+    Returns information about all registered A2A agents.
     """
-    from . import main as chat_main
+    state_reader = get_state_reader()
+    agents, _ = state_reader.get_registry()
+    health = state_reader.get_health()
+    progenitor_running = health.is_running()
 
-    # Get health to check if progenitor is running
-    try:
-        health = await chat_main.health_check_detailed()
-        progenitor_running = health.get("progenitor", {}).get("running", False)
-    except Exception:
-        progenitor_running = False
+    # Convert to response format
+    agent_infos = []
+    for agent in agents:
+        if agent.enabled:
+            agent_infos.append(SubAgentInfo(
+                name=agent.name,
+                status="ready" if progenitor_running else "offline",
+                kind=agent.kind,
+                version=agent.version,
+                description=agent.description,
+                transport=agent.transport,
+                task=None,
+                progress=None,
+            ))
 
-    # In a full implementation, this would query the progenitor for sub-agent status
-    # For now, return simulated data based on whether progenitor is running
-    if progenitor_running:
-        agents = [
-            SubAgentInfo(
-                name="Planner",
-                status="active",
-                task="Monitoring task queue",
-                progress=None
-            ),
-            SubAgentInfo(
-                name="Executor",
-                status="idle",
-                task="Awaiting tasks",
-                progress=None
-            ),
-            SubAgentInfo(
-                name="Monitor",
-                status="active",
-                task="Watching system health",
-                progress=None
-            ),
-        ]
-    else:
-        agents = []
+    return SubAgentsResponse(agents=agent_infos, total=len(agent_infos))
 
-    return SubAgentsResponse(agents=agents, total=len(agents))
+
+@router.get("/backlog", response_model=BacklogResponse)
+async def get_backlog():
+    """
+    Get backlog items from backlog.json.
+    """
+    state_reader = get_state_reader()
+    backlog = state_reader.get_backlog()
+
+    return BacklogResponse(
+        items=[
+            BacklogItemInfo(
+                id=b.id,
+                type=b.item_type,
+                status=b.status,
+                description=b.description,
+            )
+            for b in backlog
+        ],
+        total=len(backlog),
+    )
+
+
+@router.get("/schedule", response_model=ScheduleResponse)
+async def get_schedule():
+    """
+    Get scheduled items from schedule.json.
+    """
+    state_reader = get_state_reader()
+    schedule = state_reader.get_schedule()
+
+    return ScheduleResponse(
+        items=[
+            ScheduleItemInfo(
+                id=s.id,
+                name=s.name,
+                schedule=s.schedule,
+                next_run=s.next_run,
+                enabled=s.enabled,
+            )
+            for s in schedule
+        ],
+        total=len(schedule),
+    )
 
 
 @router.get("/tasks", response_model=TasksResponse)
@@ -317,28 +440,51 @@ async def _get_current_status() -> dict:
     from . import main as chat_main
     import psutil
 
+    state_reader = get_state_reader()
+    snapshot = state_reader.get_snapshot()
+
     now = time.time()
     start_time = getattr(chat_main, '_server_start_time', now)
-    client = getattr(chat_main, 'client', None)
     shutdown_mgr = getattr(chat_main, 'shutdown_manager', None)
-
-    # Try to ensure client is connected (non-blocking check)
-    progenitor_running = False
-    if client:
-        # If client hasn't started yet, try to start it (connects to IPC)
-        if not client._started and hasattr(client, 'start'):
-            try:
-                await asyncio.wait_for(client.start(), timeout=2.0)
-            except Exception as e:
-                logger.debug("Failed to start client for status check: %s", e)
-
-        progenitor_running = client.is_running if hasattr(client, 'is_running') else False
 
     status = {
         "status": "healthy",
         "uptime_seconds": round(now - start_time, 1),
-        "progenitor_running": progenitor_running,
+        "progenitor_running": snapshot.health.is_running(),
         "version": getattr(chat_main.config, 'api_version', '0.1.0'),
+        # State data
+        "cycle_count": snapshot.cycle_count,
+        "run_id": snapshot.run_id,
+        "messages_count": snapshot.messages_count,
+        "pid": snapshot.health.pid,
+        "last_active": snapshot.health.last_active,
+        # Loops
+        "loops": [
+            {"name": l.name, "status": l.status, "current_task": l.current_task}
+            for l in snapshot.loops
+        ],
+        # Agents
+        "agents": [
+            {
+                "name": a.name,
+                "kind": a.kind,
+                "version": a.version,
+                "description": a.description,
+                "enabled": a.enabled,
+                "status": "ready" if snapshot.health.is_running() else "offline",
+            }
+            for a in snapshot.agents
+        ],
+        # Backlog
+        "backlog": [
+            {"id": b.id, "type": b.item_type, "status": b.status, "description": b.description}
+            for b in snapshot.backlog
+        ],
+        # Schedule
+        "schedule": [
+            {"id": s.id, "name": s.name, "schedule": s.schedule, "enabled": s.enabled}
+            for s in snapshot.schedule
+        ],
     }
 
     if shutdown_mgr and shutdown_mgr.is_shutting_down:
@@ -350,13 +496,6 @@ async def _get_current_status() -> dict:
         status["memory_mb"] = round(process.memory_info().rss / 1024 / 1024, 2)
     except Exception:
         status["memory_mb"] = None
-
-    # Progenitor details
-    if client and hasattr(client, 'get_status'):
-        try:
-            status["progenitor_details"] = client.get_status()
-        except Exception:
-            pass
 
     return status
 
@@ -516,7 +655,7 @@ def broadcast_alert(alert: AlertInfo):
     })
 
 
-def broadcast_status_change(status: str, details: dict = None):
+def broadcast_status_change(status: str, details: Optional[dict] = None):
     """Broadcast a status change to all subscribers."""
     broadcast_event("status", {
         "status": status,
