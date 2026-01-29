@@ -113,7 +113,9 @@ def should_iterate(state: ProgenitorState, max_iterations: int = DEFAULT_MAX_INN
         iteration_start = state.get("iteration_start_time", time.time())
         elapsed_time = time.time() - iteration_start
 
-        should_stop, reasons = ideal_state.check_stop_conditions(
+        # CQ-008: check_stop_conditions is now immutable and returns met_condition_ids
+        # State updates happen in nodes, not in routing functions
+        should_stop, reasons, _met_ids = ideal_state.check_stop_conditions(
             current_score=verification_score,
             iteration=iteration,
             elapsed_time=elapsed_time,
@@ -138,6 +140,10 @@ def should_continue_outer(state: ProgenitorState) -> Literal["pick_next", "idle"
     """
     Outer loop control - same as original.
     Determine if we should continue processing, idle, or shutdown.
+
+    NOTE: Changed to return "end" instead of "idle" when no pending work.
+    This allows the perpetual loop runner to exit the graph streaming
+    and check for new user input via the input queue.
     """
     if state.get("shutdown_requested", False):
         logger.info("Shutdown requested, ending loop")
@@ -150,7 +156,10 @@ def should_continue_outer(state: ProgenitorState) -> Literal["pick_next", "idle"
         logger.debug("%d actionable items in backlog", len(pending))
         return "pick_next"
 
-    return "idle"
+    # No pending work - end this graph cycle so the loop runner
+    # can check for new user input
+    logger.debug("No pending work, ending graph cycle to check for input")
+    return "end"
 
 
 def route_after_decide(state: ProgenitorState) -> Literal["observe", "pick_next", "respond"]:
@@ -246,10 +255,10 @@ def route_after_validate(state: ProgenitorState) -> Literal["register", "execute
 
     # If validation succeeded and it's a build, register first
     if validation_result:
-        if hasattr(validation_result, "success"):
-            success = validation_result.success
-        elif isinstance(validation_result, dict):
+        if isinstance(validation_result, dict):
             success = validation_result.get("success", False)
+        elif hasattr(validation_result, "success"):
+            success = getattr(validation_result, "success", False)
         else:
             success = False
 

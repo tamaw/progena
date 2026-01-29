@@ -10,6 +10,7 @@ from typing import Any, Callable, Coroutine
 import uuid
 
 from ..state.models import ConversationMessage, ProgenitorState
+from ..state.helpers import trim_conversation_history
 from ..runtime.time_utils import utcnow
 
 
@@ -60,6 +61,9 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Update messages in state
         messages = list(state.get("messages", []))
         messages.append(message)
+
+        # Trim conversation history to prevent unbounded growth (TD-008)
+        messages = trim_conversation_history(messages)
 
         return {
             "messages": messages,

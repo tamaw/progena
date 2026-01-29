@@ -1,0 +1,92 @@
+2026-01-29 11:56:47 - app.progenitor.observability.config - INFO - Langfuse observability disabled
+2026-01-29 11:56:48 - __main__ - INFO - Progenitor starting...
+2026-01-29 11:56:48 - app.progenitor.tools.registry - INFO - Loaded registry with 5 agents and 0 tools
+2026-01-29 11:56:48 - __main__ - INFO - Using dual-loop graph (loop.spec.md)
+2026-01-29 11:56:48 - app.progenitor.graph_dual_loop - INFO - Created dual-loop graph with max_inner_iterations=5
+2026-01-29 11:56:48 - __main__ - INFO - Progenitor initialized. Entering perpetual loop.
+2026-01-29 11:56:48 - __main__ - INFO - Starting IPC server on 127.0.0.1:9500
+2026-01-29 11:56:48 - app.progenitor.runtime.loop - INFO - Telemetry initialized, output_dir=D:\tmp\agent\progenitor\logs\telemetry
+2026-01-29 11:56:48 - app.progenitor.ipc.server - INFO - IPC server listening on ('127.0.0.1', 9500)
+2026-01-29 11:56:48 - app.progenitor.runtime.loop - INFO - Starting perpetual loop (run_id: df6bd750-f4ff-4613-880b-69d0d0c46bbd)
+2026-01-29 11:56:56 - app.progenitor.ipc.server - INFO - Client connected: client_6e5b083d from ('127.0.0.1', 54942)
+2026-01-29 11:56:56 - app.progenitor.ipc.server - INFO - Processing request req_cc0724c6772c: First message
+2026-01-29 11:56:56 - app.progenitor.ipc.server - INFO - Input enqueued for req_cc0724c6772c: success=True, queue_size=1
+2026-01-29 11:56:56 - app.progenitor.runtime.loop - INFO - Got user input: First message
+2026-01-29 11:56:56 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=intake, output_keys=['messages', 'current_input']
+2026-01-29 11:56:56 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=time_check, output_keys=['current_time', 'due_items']
+2026-01-29 11:56:56 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=enqueue_due, output_keys=<class 'NoneType'>
+2026-01-29 11:56:59 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=decide, output_keys=['current_decision']
+2026-01-29 11:57:00 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=respond, output_keys=['pending_response', 'messages', 'current_input']
+2026-01-29 11:57:00 - app.progenitor.runtime.loop - INFO - Queued output message for client
+2026-01-29 11:57:00 - app.progenitor.ipc.server - INFO - Got response for req_cc0724c6772c: 34 chars
+2026-01-29 11:57:00 - app.progenitor.ipc.server - INFO - Client client_6e5b083d disconnected
+2026-01-29 11:57:00 - app.progenitor.ipc.server - INFO - Client client_6e5b083d disconnected, 0 clients remaining
+2026-01-29 11:57:00 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=cycle_limit, output_keys=<class 'NoneType'>
+2026-01-29 11:57:07 - app.progenitor.ipc.server - INFO - Client connected: client_d1a03183 from ('127.0.0.1', 56535)
+2026-01-29 11:57:07 - app.progenitor.ipc.server - INFO - Processing request req_5ecdcca87756: Second message
+2026-01-29 11:57:07 - app.progenitor.ipc.server - INFO - Input enqueued for req_5ecdcca87756: success=True, queue_size=1
+2026-01-29 11:57:07 - app.progenitor.runtime.loop - INFO - Got user input: Second message
+2026-01-29 11:57:07 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=intake, output_keys=['messages', 'current_input']
+2026-01-29 11:57:07 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=time_check, output_keys=['current_time', 'due_items']
+2026-01-29 11:57:07 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=enqueue_due, output_keys=<class 'NoneType'>
+2026-01-29 11:57:10 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=decide, output_keys=['current_decision']
+2026-01-29 11:57:10 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=respond, output_keys=['pending_response', 'messages', 'current_input']
+2026-01-29 11:57:10 - app.progenitor.runtime.loop - INFO - Queued output message for client
+2026-01-29 11:57:10 - app.progenitor.ipc.server - INFO - Got response for req_5ecdcca87756: 68 chars
+2026-01-29 11:57:10 - app.progenitor.ipc.server - INFO - Client client_d1a03183 disconnected
+2026-01-29 11:57:10 - app.progenitor.ipc.server - INFO - Client client_d1a03183 disconnected, 0 clients remaining
+2026-01-29 11:57:10 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=cycle_limit, output_keys=<class 'NoneType'>
+2026-01-29 11:57:18 - app.progenitor.ipc.server - INFO - Client connected: client_6c25814a from ('127.0.0.1', 49938)
+2026-01-29 11:57:18 - app.progenitor.ipc.server - INFO - Processing request req_974766fc6674: Third message
+2026-01-29 11:57:18 - app.progenitor.ipc.server - INFO - Input enqueued for req_974766fc6674: success=True, queue_size=1
+2026-01-29 11:57:18 - app.progenitor.runtime.loop - INFO - Got user input: Third message
+2026-01-29 11:57:18 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=intake, output_keys=['messages', 'current_input']
+2026-01-29 11:57:18 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=time_check, output_keys=['current_time', 'due_items']
+2026-01-29 11:57:18 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=enqueue_due, output_keys=<class 'NoneType'>
+2026-01-29 11:57:21 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=decide, output_keys=['current_decision']
+2026-01-29 11:57:21 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=respond, output_keys=['pending_response', 'messages', 'current_input']
+2026-01-29 11:57:21 - app.progenitor.runtime.loop - INFO - Queued output message for client
+2026-01-29 11:57:21 - app.progenitor.ipc.server - INFO - Got response for req_974766fc6674: 91 chars
+2026-01-29 11:57:21 - app.progenitor.ipc.server - INFO - Client client_6c25814a disconnected
+2026-01-29 11:57:21 - app.progenitor.ipc.server - INFO - Client client_6c25814a disconnected, 0 clients remaining
+2026-01-29 11:57:21 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=cycle_limit, output_keys=<class 'NoneType'>
+2026-01-29 11:57:22 - app.progenitor.ipc.server - INFO - Client connected: client_9480d5bd from ('127.0.0.1', 54781)
+2026-01-29 11:57:22 - app.progenitor.ipc.server - INFO - Processing request req_8f53efc1308f: Fourth message
+2026-01-29 11:57:22 - app.progenitor.ipc.server - INFO - Input enqueued for req_8f53efc1308f: success=True, queue_size=1
+2026-01-29 11:57:22 - app.progenitor.runtime.loop - INFO - Got user input: Fourth message
+2026-01-29 11:57:22 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=intake, output_keys=['messages', 'current_input']
+2026-01-29 11:57:22 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=time_check, output_keys=['current_time', 'due_items']
+2026-01-29 11:57:22 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=enqueue_due, output_keys=<class 'NoneType'>
+2026-01-29 11:57:24 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=decide, output_keys=['current_decision']
+2026-01-29 11:57:24 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=respond, output_keys=['pending_response', 'messages', 'current_input']
+2026-01-29 11:57:24 - app.progenitor.runtime.loop - INFO - Queued output message for client
+2026-01-29 11:57:24 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=cycle_limit, output_keys=<class 'NoneType'>
+2026-01-29 11:57:24 - app.progenitor.ipc.server - INFO - Got response for req_8f53efc1308f: 92 chars
+2026-01-29 11:57:24 - app.progenitor.ipc.server - INFO - Client client_9480d5bd disconnected
+2026-01-29 11:57:24 - app.progenitor.ipc.server - INFO - Client client_9480d5bd disconnected, 0 clients remaining
+2026-01-29 11:57:25 - app.progenitor.ipc.server - INFO - Client connected: client_c7ff74c1 from ('127.0.0.1', 54254)
+2026-01-29 11:57:25 - app.progenitor.ipc.server - INFO - Processing request req_3fb49763b8cd: What is 2+2?
+2026-01-29 11:57:25 - app.progenitor.ipc.server - INFO - Input enqueued for req_3fb49763b8cd: success=True, queue_size=1
+2026-01-29 11:57:25 - app.progenitor.runtime.loop - INFO - Got user input: What is 2+2?
+2026-01-29 11:57:25 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=intake, output_keys=['messages', 'current_input']
+2026-01-29 11:57:25 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=time_check, output_keys=['current_time', 'due_items']
+2026-01-29 11:57:25 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=enqueue_due, output_keys=<class 'NoneType'>
+2026-01-29 11:57:27 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=decide, output_keys=['current_decision']
+2026-01-29 11:57:27 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=respond, output_keys=['pending_response', 'messages', 'current_input']
+2026-01-29 11:57:27 - app.progenitor.runtime.loop - INFO - Queued output message for client
+2026-01-29 11:57:27 - app.progenitor.ipc.server - INFO - Got response for req_3fb49763b8cd: 9 chars
+2026-01-29 11:57:27 - app.progenitor.ipc.server - INFO - Client client_c7ff74c1 disconnected
+2026-01-29 11:57:27 - app.progenitor.ipc.server - INFO - Client client_c7ff74c1 disconnected, 0 clients remaining
+2026-01-29 11:57:27 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=cycle_limit, output_keys=<class 'NoneType'>
+2026-01-29 11:57:33 - app.progenitor.ipc.server - INFO - Client connected: client_df6722bb from ('127.0.0.1', 54264)
+2026-01-29 11:57:33 - app.progenitor.ipc.server - INFO - Processing streaming request req_91d2cc656966
+2026-01-29 11:57:33 - app.progenitor.runtime.loop - INFO - Got user input: Tell me a short joke
+2026-01-29 11:57:33 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=intake, output_keys=['messages', 'current_input']
+2026-01-29 11:57:33 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=time_check, output_keys=['current_time', 'due_items']
+2026-01-29 11:57:33 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=enqueue_due, output_keys=<class 'NoneType'>
+2026-01-29 11:57:36 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=decide, output_keys=['current_decision']
+2026-01-29 11:57:36 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=respond, output_keys=['pending_response', 'messages', 'current_input']
+2026-01-29 11:57:36 - app.progenitor.runtime.loop - INFO - Queued output message for client
+2026-01-29 11:57:36 - app.progenitor.runtime.loop - INFO - GRAPH EVENT: node=cycle_limit, output_keys=<class 'NoneType'>
+2026-01-29 11:57:36 - app.progenitor.ipc.server - INFO - Client client_df6722bb disconnected
+2026-01-29 11:57:36 - app.progenitor.ipc.server - INFO - Client client_df6722bb disconnected, 0 clients remaining

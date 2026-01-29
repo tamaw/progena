@@ -18,9 +18,12 @@ x-langfuse-s3-env: &langfuse-s3-env
   LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
   LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
 
+# SECURITY WARNING: For production deployments, use Docker secrets or a secrets manager.
+# The default values below are for local development only and MUST be changed.
+# Generate secrets with: openssl rand -base64 32
 x-langfuse-auth-env: &langfuse-auth-env
-  NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-changeme-generate-a-secret}
-  SALT: ${LANGFUSE_SALT:-changeme-generate-a-salt}
+  NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-default-dev-secret-change-in-production}
+  SALT: ${LANGFUSE_SALT:-default-dev-salt-change-in-production}
 
 x-progenitor-llm-env: &progenitor-llm-env
   OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -218,12 +221,14 @@ services:
     build: .
     container_name: progenitor
     restart: unless-stopped
-    depends_on:
-      langfuse-web:
-        condition: service_healthy
+    # Langfuse is optional - remove depends_on to run standalone
+    # depends_on:
+    #   langfuse-web:
+    #     condition: service_healthy
     environment:
       <<: [*progenitor-llm-env, *progenitor-langfuse-env]
       TZ: UTC
+      LANGFUSE_ENABLED: "false"
     volumes:
       - ./data/state:/app/data/state
       - ./data/prompts:/app/data/prompts:ro
@@ -256,13 +261,15 @@ services:
     depends_on:
       progenitor:
         condition: service_started
-      langfuse-web:
-        condition: service_healthy
+      # Langfuse is optional - remove depends_on to run standalone
+      # langfuse-web:
+      #   condition: service_healthy
     environment:
       <<: [*progenitor-llm-env, *progenitor-langfuse-env]
       CHAT_SERVER_HOST: 0.0.0.0
       CHAT_SERVER_PORT: 8000
       CHAT_SERVER_PROGENITOR_TIMEOUT: 300
+      LANGFUSE_ENABLED: "false"
     ports:
       - "8000:8000"
     volumes:

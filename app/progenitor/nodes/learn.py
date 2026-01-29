@@ -7,10 +7,11 @@ Captures lessons learned for future iterations.
 
 import logging
 import time
-from typing import Callable, Coroutine, Any
+from typing import Any
 
 from ..state.models import ProgenitorState
 from ..runtime.time_utils import utcnow_isoformat
+from . import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,14 @@ def _get_telemetry():
 def create_node(
     llm_client,
     state_manager=None,
-) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
-    """Create the learn node function."""
+) -> NodeFunction:
+    """Create the learn node function.
 
-    async def learn_node(state: ProgenitorState) -> ProgenitorState:
+    CQ-006: Returns NodeFunction type - async function that takes
+    ProgenitorState and returns NodeStateUpdate (partial dict).
+    """
+
+    async def learn_node(state: ProgenitorState) -> NodeStateUpdate:
         """
         LEARN phase: Update strategy and capture lessons.
 

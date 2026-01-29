@@ -149,3 +149,66 @@ class ErrorResponse(BaseModel):
     """Error response."""
 
     error: ErrorDetail
+
+
+# CR-002: Simple chat request validation model
+class SimpleChatRequest(BaseModel):
+    """Simple chat request for /chat endpoint (CR-002)."""
+
+    message: str = Field(..., min_length=1, max_length=100000)
+    stream: bool = False
+
+
+# CR-002: Enhanced validation for streaming requests
+class StreamingChatRequest(ChatCompletionRequest):
+    """Chat request with additional streaming validation (CR-002)."""
+
+    @classmethod
+    def validate_for_streaming(cls, request: "ChatCompletionRequest") -> None:
+        """Additional validation for streaming requests."""
+        if not request.messages:
+            raise ValueError("Messages cannot be empty for streaming")
+
+        # Validate message content isn't too large for streaming
+        total_content_length = sum(
+            len(msg.content) for msg in request.messages
+        )
+        if total_content_length > 500000:  # 500KB limit
+            raise ValueError(
+                f"Total message content ({total_content_length} chars) exceeds "
+                "streaming limit of 500000 chars"
+            )
+
+        # Ensure at least one user message exists
+        user_messages = [m for m in request.messages if m.role == "user"]
+        if not user_messages:
+            raise ValueError("At least one user message is required")
+
+
+class StreamingResponseRequest(ResponseRequest):
+    """Response request with additional streaming validation (CR-002)."""
+
+    @classmethod
+    def validate_for_streaming(cls, request: "ResponseRequest") -> None:
+        """Additional validation for streaming requests."""
+        # Check input size
+        if isinstance(request.input, str):
+            if len(request.input) > 500000:
+                raise ValueError(
+                    f"Input ({len(request.input)} chars) exceeds "
+                    "streaming limit of 500000 chars"
+                )
+            if not request.input.strip():
+                raise ValueError("Input cannot be empty")
+        else:
+            total_length = sum(
+                len(m.content) if hasattr(m, 'content') else len(str(m))
+                for m in request.input
+            )
+            if total_length > 500000:
+                raise ValueError(
+                    f"Total input ({total_length} chars) exceeds "
+                    "streaming limit of 500000 chars"
+                )
+            if not request.input:
+                raise ValueError("Input cannot be empty")

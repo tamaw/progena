@@ -8,7 +8,7 @@ Provides capability discovery and lookup for routing decisions.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 
 from ..state.models import AgentRegistryEntry
 from ..runtime.time_utils import utcnow
@@ -16,12 +16,18 @@ from ..runtime.time_utils import utcnow
 logger = logging.getLogger(__name__)
 
 
+class RegistryData(TypedDict):
+    """Type definition for registry data structure."""
+    agents: list[dict[str, Any]]
+    tools: list[dict[str, Any]]
+
+
 class ToolRegistry:
     """Registry for A2A agents and MCP tools."""
 
-    def __init__(self, registry_path: Path):
-        self.registry_path = Path(registry_path)
-        self._registry: dict[str, Any] = {"agents": [], "tools": []}
+    def __init__(self, registry_path: Path | str) -> None:
+        self.registry_path: Path = Path(registry_path)
+        self._registry: RegistryData = {"agents": [], "tools": []}
 
     async def load(self) -> None:
         """Load registry from disk."""

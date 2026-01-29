@@ -102,6 +102,12 @@ class RuntimeConfig:
     # Health check settings
     health_stale_seconds: int = 120  # Consider unhealthy if not updated in 2 minutes
 
+    # IPC settings (socket-based communication with chat_server)
+    ipc_enabled: bool = True  # Enable socket IPC (vs stdin/stdout)
+    ipc_host: str = "127.0.0.1"  # IPC server bind host
+    ipc_port: int = 9500  # IPC server bind port
+    ipc_max_clients: int = 10  # Maximum concurrent IPC clients
+
     # Inner loop (dual loop architecture) settings
     max_inner_iterations: int = 5  # Failsafe max iterations for inner loop
     min_verification_score: float = 0.8  # Default minimum score to pass verification
@@ -146,6 +152,19 @@ class RuntimeConfig:
             # Health check settings
             health_stale_seconds=_env_int(
                 "PROGENITOR_HEALTH_STALE_SECONDS", fc.get("health_stale_seconds", 120)
+            ),
+            # IPC settings
+            ipc_enabled=_env_bool(
+                "PROGENITOR_IPC_ENABLED", fc.get("ipc_enabled", True)
+            ),
+            ipc_host=os.getenv(
+                "PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")
+            ),
+            ipc_port=_env_int(
+                "PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)
+            ),
+            ipc_max_clients=_env_int(
+                "PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)
             ),
             # Inner loop settings
             max_inner_iterations=_env_int(
@@ -402,6 +421,10 @@ class ProgenitorConfig:
                 "max_backoff_seconds": self.runtime.max_backoff_seconds,
                 "checkpoint_interval_seconds": self.runtime.checkpoint_interval_seconds,
                 "input_timeout_seconds": self.runtime.input_timeout_seconds,
+                "ipc_enabled": self.runtime.ipc_enabled,
+                "ipc_host": self.runtime.ipc_host,
+                "ipc_port": self.runtime.ipc_port,
+                "ipc_max_clients": self.runtime.ipc_max_clients,
             },
             "storage": {
                 "state_dir": str(self.storage.state_dir),

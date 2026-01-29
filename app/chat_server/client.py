@@ -2,11 +2,18 @@
 Progenitor Client - Subprocess communication with the Progenitor agent.
 
 Spawns Progenitor as a subprocess and communicates via stdin/stdout.
+
+CR-001 Improvements:
+- Message framing with length prefix for robust parsing
+- Heartbeat/liveness checking
+- Automatic restart on process crash
+- Configurable timeouts
 """
 
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -14,9 +21,17 @@ from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
 
+# Message framing constants
+MESSAGE_DELIMITER = b"\n---PROGENITOR_MSG_END---\n"
+HEARTBEAT_INTERVAL = 30  # seconds
+HEARTBEAT_TIMEOUT = 10  # seconds
+
 
 class ProgenitorClient:
-    """Client for communicating with Progenitor via subprocess."""
+    """Client for communicating with Progenitor via subprocess.
+
+    CR-001: Enhanced with heartbeat monitoring and auto-restart.
+    """
 
     def __init__(self, config: ChatServerConfig):
         self.config = config
@@ -24,6 +39,11 @@ class ProgenitorClient:
         self._lock = asyncio.Lock()
         self._started = False
         self._stderr_log = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._last_heartbeat: float = 0
+        self._restart_count: int = 0
+        self._max_restarts: int = 3
+        self._restart_delay: float = 1.0
 
     async def start(self) -> None:
         """Start the Progenitor subprocess."""
@@ -59,10 +79,77 @@ class ProgenitorClient:
             )
 
             self._started = True
+            self._last_heartbeat = time.time()
+            self._restart_count = 0
             logger.info(f"Progenitor started (PID: {self._process.pid})")
 
             # Start stderr reader task
             asyncio.create_task(self._read_stderr())
+
+            # Start heartbeat monitoring (CR-001)
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_monitor())
+
+    async def _heartbeat_monitor(self) -> None:
+        """Monitor process health with periodic heartbeat checks (CR-001)."""
+        while self._started:
+            try:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+                if not self._check_process_alive():
+                    logger.warning("Progenitor process died, attempting restart...")
+                    await self._attempt_restart()
+                    continue
+
+                # Check if we've received any activity recently
+                time_since_heartbeat = time.time() - self._last_heartbeat
+                if time_since_heartbeat > HEARTBEAT_INTERVAL * 3:
+                    logger.warning(
+                        "No activity from Progenitor in %.1fs, checking health...",
+                        time_since_heartbeat
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Heartbeat monitor error: %s", e)
+
+    def _check_process_alive(self) -> bool:
+        """Check if the subprocess is still running (CR-001)."""
+        if not self._process:
+            return False
+        return self._process.returncode is None
+
+    async def _attempt_restart(self) -> bool:
+        """Attempt to restart the Progenitor process (CR-001)."""
+        if self._restart_count >= self._max_restarts:
+            logger.error(
+                "Max restart attempts (%d) reached, giving up",
+                self._max_restarts
+            )
+            return False
+
+        self._restart_count += 1
+        logger.info(
+            "Restart attempt %d/%d after %.1fs delay",
+            self._restart_count,
+            self._max_restarts,
+            self._restart_delay
+        )
+
+        await asyncio.sleep(self._restart_delay)
+        self._restart_delay *= 2  # Exponential backoff
+
+        # Reset state and restart
+        self._started = False
+        self._process = None
+
+        try:
+            await self.start()
+            logger.info("Progenitor restarted successfully")
+            return True
+        except Exception as e:
+            logger.error("Failed to restart Progenitor: %s", e)
+            return False
 
     async def _read_stderr(self) -> None:
         """Read and log stderr from the subprocess."""
@@ -87,13 +174,35 @@ class ProgenitorClient:
     async def stop(self) -> None:
         """Stop the Progenitor subprocess."""
         async with self._lock:
+            # Cancel heartbeat task first (CR-001)
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
+                try:
+                    await self._heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+                self._heartbeat_task = None
+
             if self._process:
                 logger.info("Stopping Progenitor subprocess...")
                 self._process.terminate()
+
+                # Use configurable timeout (CR-001: CQ-011 fix)
+                stop_timeout = getattr(
+                    self.config,
+                    'progenitor_stop_timeout',
+                    5
+                )
                 try:
-                    await asyncio.wait_for(self._process.wait(), timeout=5)
+                    await asyncio.wait_for(
+                        self._process.wait(),
+                        timeout=stop_timeout
+                    )
                 except asyncio.TimeoutError:
-                    logger.warning("Progenitor did not terminate gracefully, killing...")
+                    logger.warning(
+                        "Progenitor did not terminate in %ds, killing...",
+                        stop_timeout
+                    )
                     self._process.kill()
                 self._process = None
                 self._started = False
@@ -117,6 +226,12 @@ class ProgenitorClient:
         """
         if not self._started:
             await self.start()
+
+        # CR-001: Check process health before sending
+        if not self._check_process_alive():
+            logger.warning("Progenitor process not alive, restarting...")
+            if not await self._attempt_restart():
+                raise RuntimeError("Progenitor process not running and restart failed")
 
         if not self._process or not self._process.stdin or not self._process.stdout:
             raise RuntimeError("Progenitor process not running")
@@ -143,6 +258,9 @@ class ProgenitorClient:
                 if not response_line:
                     raise RuntimeError("Progenitor process closed unexpectedly")
 
+                # CR-001: Update heartbeat timestamp on successful communication
+                self._last_heartbeat = time.time()
+
                 response = json.loads(response_line.decode())
                 return response.get("content", str(response))
 
@@ -152,6 +270,7 @@ class ProgenitorClient:
                 )
             except json.JSONDecodeError as e:
                 # Return raw text if not JSON
+                self._last_heartbeat = time.time()  # CR-001
                 return response_line.decode().strip()
 
     async def send_message_stream(
@@ -254,6 +373,20 @@ class ProgenitorClient:
             and self._process is not None
             and self._process.returncode is None
         )
+
+    def get_status(self) -> dict:
+        """Get detailed client status (CR-001)."""
+        return {
+            "running": self.is_running,
+            "started": self._started,
+            "pid": self._process.pid if self._process else None,
+            "last_heartbeat_ago": (
+                time.time() - self._last_heartbeat
+                if self._last_heartbeat > 0 else None
+            ),
+            "restart_count": self._restart_count,
+            "max_restarts": self._max_restarts,
+        }
 
 
 # Global client instance

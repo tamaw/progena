@@ -5,10 +5,11 @@ Per loop.spec.md: "Final output must include a compact verification summary."
 """
 
 from datetime import datetime
-from typing import Callable, Coroutine, Any
+from typing import Callable, Coroutine, Any, cast
 import uuid
 
 from ..state.models import ProgenitorState, ConversationMessage, WorkItem
+from ..state.helpers import trim_conversation_history
 from ..runtime.time_utils import utcnow
 
 
@@ -30,10 +31,10 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         user_input = state.get("current_input")
 
         # Check if this is a clarification request
-        clarification_updates = {}
+        clarification_updates: dict[str, Any] = {}
         if state.get("clarification_needed") and state.get("clarification_question"):
             # This is a clarification request - present question to user
-            response_text = state.get("clarification_question")
+            response_text = state.get("clarification_question", "")
             clarification_updates = {
                 "awaiting_clarification": True,
                 "clarification_needed": False,  # Reset for next iteration
@@ -43,7 +44,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             message = ConversationMessage(
                 id=str(uuid.uuid4()),
                 role="assistant",
-                content=response_text,
+                content=response_text or "",
                 timestamp=utcnow(),
                 metadata={
                     "type": "clarification_request",
@@ -56,11 +57,14 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             messages = list(state.get("messages", []))
             messages.append(message)
 
-            return {
-                "pending_response": response_text,
+            # Trim conversation history to prevent unbounded growth (TD-008)
+            messages = trim_conversation_history(messages)
+
+            return cast(ProgenitorState, {
+                "pending_response": response_text or "",
                 "messages": messages,
                 **clarification_updates,
-            }
+            })
 
         response_text = _generate_response(decision, current_item, state)
 
@@ -93,6 +97,9 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Add to messages
         messages = list(state.get("messages", []))
         messages.append(message)
+
+        # Trim conversation history to prevent unbounded growth (TD-008)
+        messages = trim_conversation_history(messages)
 
         return {
             "pending_response": response_text,

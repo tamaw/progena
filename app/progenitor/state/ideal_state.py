@@ -128,41 +128,85 @@ class IdealState(BaseModel):
         self.anti_criteria.append(anti_criterion)
         self.updated_at = utcnow()
 
-    def check_stop_conditions(self, current_score: float, iteration: int,
-                             elapsed_time: float, tool_calls: int) -> tuple[bool, list[str]]:
-        """Check if any stop conditions are met.
+    def check_stop_conditions(
+        self,
+        current_score: float,
+        iteration: int,
+        elapsed_time: float,
+        tool_calls: int,
+    ) -> tuple[bool, list[str], list[str]]:
+        """Check if any stop conditions are met (immutable - does NOT mutate state).
+
+        This method is used in routing functions which must NOT mutate state.
+        State updates should happen in nodes, not routing conditionals.
 
         Returns:
-            (should_stop, reasons)
+            (should_stop, reasons, met_condition_ids) - met_condition_ids can be used
+            by nodes to update state if needed.
         """
         reasons = []
+        met_condition_ids = []
 
         for condition in self.stop_conditions:
+            # Skip already-met conditions (check but don't mutate)
             if condition.met:
                 continue
 
+            condition_met = False
+
             if condition.condition_type == "min_score":
                 if current_score >= condition.threshold:
-                    condition.met = True
+                    condition_met = True
                     reasons.append(f"Minimum score {condition.threshold} reached: {current_score:.2f}")
 
             elif condition.condition_type == "max_iterations":
                 if iteration >= condition.threshold:
-                    condition.met = True
+                    condition_met = True
                     reasons.append(f"Max iterations {condition.threshold} reached")
 
             elif condition.condition_type == "time_limit":
                 if elapsed_time >= condition.threshold:
-                    condition.met = True
+                    condition_met = True
                     reasons.append(f"Time limit {condition.threshold}s exceeded: {elapsed_time:.1f}s")
 
             elif condition.condition_type == "tool_budget":
                 if tool_calls >= condition.threshold:
-                    condition.met = True
+                    condition_met = True
                     reasons.append(f"Tool budget {condition.threshold} exhausted: {tool_calls} calls")
 
-        should_stop = any(c.met for c in self.stop_conditions)
-        return should_stop, reasons
+            if condition_met:
+                met_condition_ids.append(condition.condition_type)
+
+        # Check if any conditions are now met (including previously met ones)
+        should_stop = len(reasons) > 0 or any(c.met for c in self.stop_conditions)
+        return should_stop, reasons, met_condition_ids
+
+    def mark_conditions_met(self, condition_types: list[str]) -> "IdealState":
+        """Create a new IdealState with specified conditions marked as met.
+
+        This is the proper way to update stop conditions - returns a new
+        immutable state rather than mutating in place.
+
+        Args:
+            condition_types: List of condition_type values to mark as met.
+
+        Returns:
+            New IdealState with updated stop_conditions.
+        """
+        new_conditions = []
+        for condition in self.stop_conditions:
+            if condition.condition_type in condition_types and not condition.met:
+                # Create new condition with met=True
+                new_condition = StopCondition(
+                    condition_type=condition.condition_type,
+                    threshold=condition.threshold,
+                    met=True,
+                )
+                new_conditions.append(new_condition)
+            else:
+                new_conditions.append(condition)
+
+        return self.model_copy(update={"stop_conditions": new_conditions})
 
 
 class IdealStateBuilder:
@@ -195,7 +239,13 @@ class IdealStateBuilder:
             return IdealState(**ideal_state_data)
 
         except Exception as e:
-            # Fallback to basic ideal state
+            # Log parsing failures at WARNING level for debugging (TD-003)
+            logger.warning(
+                "Failed to parse LLM response for ideal state extraction: %s. "
+                "Task: %s. Falling back to default ideal state.",
+                str(e),
+                task_description[:100] + "..." if len(task_description) > 100 else task_description
+            )
             return self._create_default_ideal_state(task_description)
 
     async def refine_from_iteration(

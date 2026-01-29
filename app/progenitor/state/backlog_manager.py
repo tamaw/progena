@@ -31,6 +31,11 @@ class BacklogManager:
     - Backlog queries (actionable items, by status, by type)
     - Priority-based ordering (FEAT-002)
     - Status transitions
+
+    Performance optimizations (TD-009):
+    - Maintains indexes for status-based lookups
+    - Uses ID-based lookup dict for O(1) find_by_id
+    - Lazy re-indexing on modifications
     """
 
     BACKLOG_FILE = "backlog.json"
@@ -43,6 +48,44 @@ class BacklogManager:
         """
         self._persistence = persistence
         self._cache: Optional[list[WorkItem]] = None
+        # Performance indexes (TD-009)
+        self._id_index: dict[str, WorkItem] = {}
+        self._status_index: dict[str, list[WorkItem]] = {}
+        self._index_valid: bool = False
+
+    def _rebuild_indexes(self) -> None:
+        """Rebuild lookup indexes from cache.
+
+        Called lazily when indexes are accessed after invalidation.
+        O(n) rebuild enables O(1) lookups.
+        """
+        if self._cache is None:
+            self._id_index = {}
+            self._status_index = {}
+            self._index_valid = True
+            return
+
+        # Build ID index for O(1) lookups
+        self._id_index = {item.id: item for item in self._cache}
+
+        # Build status index for faster filtering
+        self._status_index = {}
+        for item in self._cache:
+            status = item.status_value
+            if status not in self._status_index:
+                self._status_index[status] = []
+            self._status_index[status].append(item)
+
+        self._index_valid = True
+
+    def _ensure_indexes(self) -> None:
+        """Ensure indexes are valid, rebuilding if needed."""
+        if not self._index_valid:
+            self._rebuild_indexes()
+
+    def _invalidate_indexes(self) -> None:
+        """Mark indexes as needing rebuild."""
+        self._index_valid = False
 
     async def load(self) -> list[WorkItem]:
         """Load backlog from disk.
@@ -54,6 +97,7 @@ class BacklogManager:
             data = await self._persistence.read(self.BACKLOG_FILE)
             if data is None:
                 self._cache = []
+                self._invalidate_indexes()
                 return []
 
             # data is list[Any], convert each dict to WorkItem using model_validate
@@ -62,6 +106,7 @@ class BacklogManager:
                 if isinstance(item, dict):
                     items.append(WorkItem.model_validate(item))
             self._cache = items
+            self._invalidate_indexes()
             return self._cache
 
     async def save(self) -> None:
@@ -86,16 +131,20 @@ class BacklogManager:
     def get_actionable_items(self) -> list[WorkItem]:
         """Get items that can be worked on (pending or in_progress).
 
+        Uses status index for O(1) lookup instead of O(n) filtering (TD-009).
+
         Returns:
             List of actionable work items, sorted by priority.
         """
         if self._cache is None:
             return []
 
-        actionable = [
-            item for item in self._cache
-            if item.is_actionable
-        ]
+        self._ensure_indexes()
+
+        # Use index for faster lookup
+        actionable = []
+        actionable.extend(self._status_index.get("pending", []))
+        actionable.extend(self._status_index.get("in_progress", []))
 
         # Sort by effective priority (FEAT-002)
         return sorted(
@@ -128,6 +177,8 @@ class BacklogManager:
     def get_by_status(self, status: WorkItemStatus) -> list[WorkItem]:
         """Get items with a specific status.
 
+        Uses status index for O(1) lookup instead of O(n) filtering (TD-009).
+
         Args:
             status: The status to filter by.
 
@@ -137,13 +188,13 @@ class BacklogManager:
         if self._cache is None:
             return []
 
-        return [
-            item for item in self._cache
-            if item.status_value == status.value
-        ]
+        self._ensure_indexes()
+        return list(self._status_index.get(status.value, []))
 
     def find_by_id(self, item_id: str) -> Optional[WorkItem]:
         """Find a work item by ID.
+
+        Uses ID index for O(1) lookup instead of O(n) search (TD-009).
 
         Args:
             item_id: The work item ID.
@@ -154,10 +205,8 @@ class BacklogManager:
         if self._cache is None:
             return None
 
-        for item in self._cache:
-            if item.id == item_id:
-                return item
-        return None
+        self._ensure_indexes()
+        return self._id_index.get(item_id)
 
     async def add_item(self, item: WorkItem) -> None:
         """Add a work item to the backlog.
@@ -169,6 +218,7 @@ class BacklogManager:
             await self.load()
 
         self._cache.append(item)  # type: ignore[union-attr]
+        self._invalidate_indexes()  # TD-009: Invalidate indexes on modification
         await self.save()
 
         logger.info(
@@ -189,6 +239,7 @@ class BacklogManager:
         for i, existing in enumerate(self._cache or []):
             if existing.id == item.id:
                 self._cache[i] = item  # type: ignore[index]
+                self._invalidate_indexes()  # TD-009: Invalidate indexes on modification
                 break
 
         await self.save()
@@ -275,6 +326,7 @@ class BacklogManager:
         ]
 
         if len(self._cache) < original_len:
+            self._invalidate_indexes()  # TD-009: Invalidate indexes on modification
             await self.save()
             return True
         return False

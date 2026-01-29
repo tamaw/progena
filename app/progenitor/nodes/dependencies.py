@@ -178,16 +178,16 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
             deps.state_manager,
         ),
         "intake": intake.create_node(deps.state_manager),
-        "time_check": time_check.create_node(),
+        # CQ-012: time_check requires timezone parameter
+        "time_check": time_check.create_node(
+            timezone=deps.config.runtime.timezone
+        ),
         "enqueue_due": enqueue_due.create_node(deps.state_manager),
         "pick_next": pick_next.create_node(),
-        "cycle_limit": cycle_limit.create_node(
-            deps.config.runtime.max_actions_per_cycle
-        ),
-        "validate": validate.create_node(
-            deps.state_manager,
-            deps.config.storage.state_dir,
-        ),
+        # CQ-012: cycle_limit expects full config object
+        "cycle_limit": cycle_limit.create_node(deps.config),
+        # CQ-012: validate expects full config object
+        "validate": validate.create_node(deps.config),
         "respond": respond.create_node(deps.state_manager),
         "idle": idle.create_node(
             deps.config.runtime.idle_backoff_seconds

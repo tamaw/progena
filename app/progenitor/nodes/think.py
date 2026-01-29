@@ -6,10 +6,11 @@ Generates approaches, trade-offs, and risks for reaching ideal state.
 
 import logging
 import time
-from typing import Callable, Coroutine, Any
+from typing import Any
 
 from ..state.models import ProgenitorState
 from ..runtime.time_utils import utcnow_isoformat
+from . import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +27,14 @@ def _get_telemetry():
 def create_node(
     llm_client,
     state_manager=None,
-) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
-    """Create the think node function."""
+) -> NodeFunction:
+    """Create the think node function.
 
-    async def think_node(state: ProgenitorState) -> ProgenitorState:
+    CQ-006: Returns NodeFunction type - async function that takes
+    ProgenitorState and returns NodeStateUpdate (partial dict).
+    """
+
+    async def think_node(state: ProgenitorState) -> NodeStateUpdate:
         """
         THINK phase: Generate approaches, trade-offs, and risks.
 
