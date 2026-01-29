@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from ..state.models import ConversationMessage
 from ..runtime.time_utils import utcnow
+from .tokenizer import count_tokens, count_message_tokens, is_tiktoken_available
 
 logger = logging.getLogger(__name__)
 
@@ -173,18 +174,26 @@ Summary (be concise, max ~{self._max_summary_tokens} tokens):"""
     def estimate_tokens(
         self,
         messages: list[ConversationMessage],
+        model: str | None = None,
     ) -> int:
         """Estimate token count for messages.
 
+        Uses tiktoken for accurate counting when available,
+        falls back to character-based estimation otherwise.
+
         Args:
             messages: Messages to estimate.
+            model: Model name for encoding selection.
 
         Returns:
-            Estimated token count.
+            Token count (exact if tiktoken available, estimated otherwise).
         """
-        # Rough estimate: 4 chars per token
-        total_chars = sum(len(m.content) for m in messages)
-        return total_chars // 4
+        # Convert to dicts for count_message_tokens
+        msg_dicts = [
+            {"role": m.role, "content": m.content}
+            for m in messages
+        ]
+        return count_message_tokens(msg_dicts, model)
 
 
 class IncrementalCompressor(ConversationCompressor):

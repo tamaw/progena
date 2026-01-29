@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Progenitor Chat</title>
+    <link rel="stylesheet" href="/css/main.css">
+    <link rel="stylesheet" href="/css/chat.css">
+    <link rel="stylesheet" href="/css/status.css">
+    <link rel="stylesheet" href="/css/notifications.css">
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧬</text></svg>">
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-brand">
+                <span class="brand-icon">🧬</span>
+                <h1>Progenitor</h1>
+            </div>
+            <div class="header-status">
+                <span id="connection-status" class="status-indicator" data-status="disconnected">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Disconnected</span>
+                </span>
+            </div>
+            <div class="header-actions">
+                <button id="btn-settings" class="btn-icon" title="Settings">⚙️</button>
+                <button id="btn-theme" class="btn-icon" title="Toggle Theme">🌙</button>
+                <button id="btn-notifications" class="btn-icon" title="Notifications">🔔</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Sidebar - Agent Status -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">Agent Status</h3>
+                    <div id="agent-status" class="agent-status-panel">
+                        <div class="status-item">
+                            <span class="status-label">Status</span>
+                            <span id="agent-running" class="status-value">Unknown</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Uptime</span>
+                            <span id="agent-uptime" class="status-value">--</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Version</span>
+                            <span id="agent-version" class="status-value">--</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Memory</span>
+                            <span id="agent-memory" class="status-value">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">
+                        Sub-Agents
+                        <button id="btn-refresh-agents" class="btn-mini" title="Refresh">🔄</button>
+                    </h3>
+                    <div id="sub-agents-list" class="sub-agents-list">
+                        <div class="empty-state">No active sub-agents</div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">Active Tasks</h3>
+                    <div id="active-tasks" class="task-list">
+                        <div class="empty-state">No active tasks</div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Chat Container -->
+            <div class="chat-container">
+                <!-- Chat Messages -->
+                <div id="chat-messages" class="chat-messages">
+                    <div class="welcome-message">
+                        <h2>Welcome to Progenitor Chat</h2>
+                        <p>Start a conversation with the Progenitor AI agent.</p>
+                        <div class="quick-actions">
+                            <button class="quick-action" data-message="What is your current status?">
+                                📊 Check Status
+                            </button>
+                            <button class="quick-action" data-message="What tasks are in the backlog?">
+                                📋 View Backlog
+                            </button>
+                            <button class="quick-action" data-message="Show me your capabilities">
+                                🎯 Capabilities
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Typing Indicator -->
+                <div id="typing-indicator" class="typing-indicator hidden" data-state="thinking">
+                    <div class="typing-dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                    <div class="typing-text">
+                        <span class="typing-status">Progenitor</span>
+                        <span class="typing-action">is thinking...</span>
+                    </div>
+                    <span class="token-counter" id="token-counter"></span>
+                </div>
+
+                <!-- Chat Input -->
+                <div class="chat-input-container">
+                    <div class="input-wrapper">
+                        <textarea 
+                            id="chat-input" 
+                            class="chat-input" 
+                            placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+                            rows="1"
+                            autofocus
+                        ></textarea>
+                        <div class="input-actions">
+                            <button id="btn-stop" class="btn-stop hidden" title="Stop Generation">
+                                ⏹️ Stop
+                            </button>
+                            <button id="btn-send" class="btn-send" title="Send Message (Enter)">
+                                <span class="send-icon">➤</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="input-hints">
+                        <span class="hint">Press <kbd>Enter</kbd> to send</span>
+                        <span class="hint">Press <kbd>Shift+Enter</kbd> for new line</span>
+                        <span class="hint">Press <kbd>Esc</kbd> to stop generation</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Notification Container -->
+        <div id="notification-container" class="notification-container"></div>
+
+        <!-- Alert Modal -->
+        <div id="alert-modal" class="modal hidden">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="alert-title">Agent Alert</h3>
+                    <button class="modal-close" id="alert-close">×</button>
+                </div>
+                <div class="modal-body">
+                    <p id="alert-message"></p>
+                </div>
+                <div class="modal-actions">
+                    <button id="alert-dismiss" class="btn btn-secondary">Dismiss</button>
+                    <button id="alert-respond" class="btn btn-primary">Respond</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal hidden">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Settings</h3>
+                    <button class="modal-close" id="settings-close">×</button>
+                </div>
+                <div class="modal-body">
+                    <div class="setting-group">
+                        <label for="setting-theme">Theme</label>
+                        <select id="setting-theme">
+                            <option value="system">System</option>
+                            <option value="dark">Dark</option>
+                            <option value="light">Light</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="setting-notifications">
+                            <input type="checkbox" id="setting-notifications" checked>
+                            Enable Browser Notifications
+                        </label>
+                    </div>
+                    <div class="setting-group">
+                        <label for="setting-sounds">
+                            <input type="checkbox" id="setting-sounds">
+                            Enable Sound Effects
+                        </label>
+                    </div>
+                    <div class="setting-group">
+                        <label for="setting-api-url">API URL</label>
+                        <input type="text" id="setting-api-url" value="http://localhost:8000">
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button id="settings-save" class="btn btn-primary">Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/js/config.js"></script>
+    <script src="/js/api.js"></script>
+    <script src="/js/chat.js"></script>
+    <script src="/js/status.js"></script>
+    <script src="/js/notifications.js"></script>
+    <script src="/js/main.js"></script>
+</body>
+</html>

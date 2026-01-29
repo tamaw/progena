@@ -46,7 +46,9 @@ def get_telemetry():
         tracer = get_tracer()
         metrics = get_metrics()
         return tracer, metrics
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug("Telemetry init failed (non-critical): %s", e)
         return None, None
 
 
