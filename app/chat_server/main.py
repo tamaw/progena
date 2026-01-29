@@ -16,11 +16,13 @@ import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator, Union
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import ChatServerConfig
 from .client import ProgenitorClient, get_client
@@ -371,6 +373,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Include UI API routes
+from .ui_routes import router as ui_router
+app.include_router(ui_router)
+
+# Mount static files for the Chat UI
+_chat_ui_path = Path(__file__).parent.parent / "chat-ui"
+if _chat_ui_path.exists():
+    app.mount("/css", StaticFiles(directory=_chat_ui_path / "css"), name="ui-css")
+    app.mount("/js", StaticFiles(directory=_chat_ui_path / "js"), name="ui-js")
+    
+    @app.get("/")
+    async def serve_ui():
+        """Serve the Chat UI at root."""
+        return FileResponse(_chat_ui_path / "index.html")
+    
+    logger.info("Chat UI mounted at /")
+else:
+    logger.warning("Chat UI not found at %s", _chat_ui_path)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -544,8 +565,8 @@ async def health_check_detailed():
     if client and hasattr(client, "get_status"):
         try:
             progenitor_status["details"] = client.get_status()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to get progenitor status details: %s", e)
 
     health_info["progenitor"] = progenitor_status
 

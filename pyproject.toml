@@ -1,0 +1,168 @@
+[project]
+name = "progenitor"
+version = "0.6.0"
+description = "Dual-loop AI agent system with LangGraph"
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+keywords = ["ai", "agent", "langgraph", "openai", "azure"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "openai>=1.0.0",
+    "langgraph>=0.2.0",
+    "pydantic>=2.0.0",
+    "aiohttp>=3.9.0",
+    "aiofiles>=24.1.0",
+    "pytz>=2024.1",
+    "python-dotenv>=1.0.0",
+    "tiktoken>=0.7.0",
+    "langfuse>=2.0.0",
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.26.0",
+    "hypothesis>=6.100.0",
+    "locust>=2.20.0",
+    "pre-commit>=3.6.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+    "bandit[toml]>=1.7.0",
+]
+ml = [
+    "numpy>=1.26.0",
+    "sentence-transformers>=2.5.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+# Ruff configuration (linting + formatting)
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "app/chat-ui",
+    "worktrees",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults
+    "B904",   # raise without from inside except
+    "ARG001", # unused function argument (common in interfaces)
+]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ARG",    # Unused arguments OK in tests
+    "S101",   # assert OK in tests
+]
+"scripts/**/*.py" = [
+    "ARG",    # Unused arguments OK in scripts
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# Mypy configuration
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = false  # Gradual typing
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "scripts/",
+    "examples/",
+    "app/chat-ui/",
+]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests",
+    "e2e: marks end-to-end tests",
+]
+
+# Bandit security scanner configuration
+[tool.bandit]
+exclude_dirs = ["tests", "scripts", "examples"]
+skips = [
+    "B101",  # assert used (OK in production for invariants)
+    "B311",  # random not for crypto (OK for jitter)
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "app/chat-ui/*",
+    "tests/*",
+    "scripts/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+fail_under = 70

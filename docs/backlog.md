@@ -225,10 +225,206 @@ Implemented real-time token streaming for better UX:
 | 2026-01-27 | #27 Configuration validation | ✅ |
 | 2026-01-27 | #28 StateManager type hints | ✅ |
 | 2026-01-27 | #29 Request ID propagation | ✅ |
+| 2026-01-27 | Sprint 5: Chat UI Advanced Features | ✅ |
 
 ---
 
-## 🆕 2026-01-27 Code Review Findings
+## 🖥️ Chat UI Sprint 5 - Advanced Features
+
+### 30. Conversation Sessions
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/sessions.js`, `app/chat-ui/css/status.css`
+
+Multi-conversation session management:
+- Create, rename, delete sessions
+- Switch between sessions with full message history
+- Session persistence in localStorage
+- Auto-create new sessions
+- Message counts per session
+
+---
+
+### 31. Syntax Highlighting
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/syntax.js`, `app/chat-ui/css/chat.css`
+
+Lightweight syntax highlighting without external dependencies:
+- Support for 12+ languages (JS, TS, Python, JSON, HTML, CSS, SQL, Bash, YAML, etc.)
+- Language auto-detection from code fence
+- Color themes for dark/light modes
+- Keyword, string, comment, number highlighting
+
+---
+
+### 32. Prompt Templates
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/templates.js`, `app/chat-ui/css/chat.css`
+
+Quick-access prompt templates:
+- 12 built-in templates (system queries, coding tasks, general)
+- Category filtering (system, coding, general, custom)
+- Placeholder support for user input
+- Custom template creation and storage
+- Template search functionality
+
+---
+
+### 33. Context Menu
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/context-menu.js`, `app/chat-ui/css/chat.css`
+
+Right-click context menu for messages:
+- Copy message content
+- Copy code blocks
+- Edit user messages
+- Regenerate assistant responses
+- Select all text
+- Quote message in reply
+- Delete messages
+
+---
+
+### 34. Message Actions
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/chat.js`, `app/chat-ui/css/chat.css`
+
+Message action buttons:
+- Copy button with visual feedback
+- Regenerate response button
+- Message timestamps
+- Message IDs for referencing
+
+---
+
+### 35. Metrics Dashboard
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/metrics.js`, `app/chat-ui/css/status.css`
+
+Real-time metrics visualization:
+- Messages sent/received counters
+- Average response time tracking
+- Response time chart (last 20 responses)
+- Session count
+- Error count with last error details
+- Uptime tracking
+- Metrics persistence
+
+---
+
+### 36. Logs Viewer
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/logs-viewer.js`, `app/chat-ui/css/status.css`
+
+Real-time agent logs viewer:
+- Level filtering (debug, info, warn, error)
+- Text search
+- Auto-scroll toggle
+- Expandable log data
+- Color-coded log levels
+- Clear/refresh functionality
+
+---
+
+### 37. Draft Auto-Save
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/drafts.js`
+
+Auto-save message drafts:
+- Debounced saving (500ms)
+- Session-aware drafts
+- Draft indicator in UI
+- Automatic restoration
+- Manual clear option
+
+---
+
+### 38. Accessibility Features
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/accessibility.js`
+
+Comprehensive accessibility support:
+- ARIA landmarks and labels
+- Skip links for keyboard navigation
+- Screen reader announcements (live regions)
+- Focus trap for modals
+- Keyboard navigation in message list
+- Reduced motion preference support
+- High contrast mode support
+- Focus visible indicators
+
+---
+
+### 39. Export/Import Sessions
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/export-import.js`
+
+Session export and import:
+- Export current session
+- Export all sessions
+- Multiple formats: JSON, Markdown, Plain Text
+- Import from JSON files
+- Keyboard shortcut (Ctrl+Shift+E)
+
+---
+
+### 40. Performance Optimizations
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/performance.js`
+
+Performance monitoring and optimization:
+- Performance observer for metrics
+- Lazy loading for images
+- Virtual scrolling for large message lists
+- DOM operation batching
+- Memory management (auto-cleanup)
+- Content visibility optimization
+- Debounce/throttle utilities
+
+---
+
+### 41. File Attachments
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/attachments.js`
+
+File upload and attachment support:
+- Click to upload
+- Drag and drop
+- Paste images from clipboard
+- File type validation
+- Size limits (10MB)
+- Image previews
+- Multiple file support
+- Attachment removal
+
+---
+
+### 42. Typing Indicator
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/typing-indicator.js`
+
+Assistant typing indicator:
+- Animated typing dots
+- Customizable status text
+- Auto-scroll on show
+- Screen reader announcements
+
+---
+
+### 43. Message Reactions
+**Status:** ✅ Completed
+**Files:** `app/chat-ui/js/reactions.js`
+
+Emoji reactions on messages:
+- 8 available reactions
+- Reaction picker popup
+- Toggle reactions on/off
+- Reaction counts
+- Reactions persistence
+- Hover to show add button
+
+---
+
+## 📋 Remaining Backlog Items
 
 ### 22. Unused Import in Chat Server Models
 **Status:** ✅ Completed
@@ -304,16 +500,16 @@ Added middleware that:
 ## 📋 Remaining Backlog Items
 
 ### Token Counting Accuracy
-**Status:** 📋 Backlog
-**Files:** `app/chat_server/main.py`
+**Status:** ✅ Completed (Sprint 6)
+**Files:** `app/progenitor/llm/tokenizer.py`
 
-Uses naive word splitting for token counts. Consider using `tiktoken` for accurate counts.
+Added tiktoken integration for accurate OpenAI token counting. Created new tokenizer module with `count_tokens()`, `count_message_tokens()`, and `truncate_to_tokens()` functions. Falls back to estimation when tiktoken unavailable.
 
 ### Configurable Shutdown Timeout
-**Status:** 📋 Backlog
-**Files:** `app/chat_server/client.py`
+**Status:** ✅ Completed (Sprint 4)
+**Files:** `app/chat_server/config.py`, `app/chat_server/client.py`
 
-Hardcoded 5-second timeout. Make configurable.
+Added `progenitor_stop_timeout` config option with `CHAT_SERVER_PROGENITOR_STOP_TIMEOUT` env var.
 
 ### Backlog Size Limit
 **Status:** 📋 Backlog
@@ -322,6 +518,26 @@ Hardcoded 5-second timeout. Make configurable.
 Add configurable max size with oldest-item pruning.
 
 ### Dry-Run Mode
-**Status:** 📋 Backlog
+**Status:** ✅ Completed (Sprint 6)
+**Files:** `app/progenitor/llm/mock_client.py`
 
-Add `PROGENITOR_DRY_RUN=true` mode that logs without executing LLM calls.
+Added `PROGENITOR_MOCK_LLM=true` mode that returns simulated responses without API calls. Includes `MockLLMClient` class and `create_llm_client()` factory function.
+
+---
+
+## 🏃 Sprint 6 Summary (2026-01-29)
+
+### Completed Items
+1. ✅ **Tiktoken Integration** - Accurate token counting with `app/progenitor/llm/tokenizer.py`
+2. ✅ **Mock LLM Client** - Demo mode with `PROGENITOR_MOCK_LLM=true` environment variable
+3. ✅ **CHANGELOG.md** - Keep a Changelog format with version history
+4. ✅ **Pre-commit Hooks** - `.pre-commit-config.yaml` with ruff, mypy, bandit
+5. ✅ **pyproject.toml** - Modern Python packaging with tool configs
+6. ✅ **CQ-009 Fix** - Added DEBUG logging to silent exception handlers
+7. ✅ **CQ-011 Verified** - Confirmed configurable stop timeout already implemented
+
+### New Tests Added
+- `test_tokenizer.py` - 44 tests for tokenizer module
+- `test_mock_llm_client.py` - 30 tests for mock LLM client
+
+### Total Tests: 540 passed, 2 skipped

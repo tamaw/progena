@@ -28,7 +28,7 @@ class MockLoopRunner:
         # Simulate processing and produce output
         await self._output_queue.put(self._response)
 
-    async def get_output(self, timeout: float = None) -> str | None:
+    async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from queue."""
         try:
             if timeout:
@@ -40,7 +40,7 @@ class MockLoopRunner:
         except (asyncio.TimeoutError, asyncio.QueueEmpty):
             return None
 
-    async def get_stream_chunk(self, timeout: float = None) -> dict | None:
+    async def get_stream_chunk(self, timeout: float | None = None) -> dict | None:
         """Get stream chunk from queue."""
         try:
             if timeout:
@@ -80,6 +80,7 @@ async def ipc_server(mock_loop_runner):
     await server.start()
 
     # Get the actual port
+    assert server._server is not None
     actual_port = server._server.sockets[0].getsockname()[1]
     server.port = actual_port
 
@@ -374,6 +375,7 @@ class TestIPCConcurrency:
         await server.start()
 
         # Get actual port
+        assert server._server is not None
         actual_port = server._server.sockets[0].getsockname()[1]
 
         clients = []

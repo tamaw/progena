@@ -181,8 +181,8 @@ class IPCServer:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error closing client writer (expected during shutdown): %s", e)
             logger.info("Client %s disconnected, %d clients remaining",
                         client_id, self._client_count)
 
