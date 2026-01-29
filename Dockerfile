@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY config/ ./config/
 COPY data/prompts/ ./data/prompts/
+COPY scripts/ ./scripts/
 
 # Create directories for mounted volumes
 RUN mkdir -p /app/data/state /app/logs /app/worktrees

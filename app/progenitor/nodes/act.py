@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Coroutine, Any, TYPE_CHECKING
 
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
+from ..state.helpers import normalize_work_item
 from ..tools.copilot import CopilotCLI
 from ..tools.mcp import MCPClient, A2AClient
 
@@ -53,8 +54,11 @@ def create_node(
         if not current_item:
             return {}
 
-        # Normalize item to WorkItem if possible
-        work_item = _normalize_work_item(current_item)
+        # CQ-007: Use canonical normalize_work_item from helpers.py
+        work_item = normalize_work_item(current_item)
+        if work_item is None:
+            logger.warning("Could not normalize work item: %s", current_item)
+            return {}
         logger.info(f"Executing work item {work_item.id}: {work_item.item_type_value}")
 
         result = None
@@ -108,35 +112,7 @@ def create_node(
     return act_node
 
 
-def _normalize_work_item(item) -> WorkItem:
-    """Convert various item formats to WorkItem."""
-    if isinstance(item, WorkItem):
-        return item
-    if isinstance(item, dict):
-        item_type_str = item.get("item_type", "direct_answer")
-        try:
-            item_type = WorkItemType(item_type_str)
-        except ValueError:
-            item_type = WorkItemType.DIRECT_ANSWER
-
-        status_str = item.get("status", "pending")
-        try:
-            status = WorkItemStatus(status_str)
-        except ValueError:
-            status = WorkItemStatus.PENDING
-
-        return WorkItem(
-            id=item.get("id", "unknown"),
-            item_type=item_type,
-            status=status,
-            description=item.get("description", ""),
-            context=item.get("context", {}),
-            target_agent=item.get("target_agent"),
-            target_tool=item.get("target_tool"),
-            worktree_path=item.get("worktree_path"),
-            retry_count=item.get("retry_count", 0),
-        )
-    raise ValueError(f"Cannot normalize item of type {type(item)}")
+# CQ-007: Removed duplicate _normalize_work_item - use normalize_work_item from state.helpers
 
 
 async def _execute_work_item(

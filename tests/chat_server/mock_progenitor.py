@@ -8,20 +8,17 @@ Useful for testing the chat server without the full agent running.
 
 import sys
 import json
-import asyncio
 
 
-async def mock_progenitor():
-    """Run a simple echo server on stdin/stdout."""
+def mock_progenitor():
+    """Run a simple echo server on stdin/stdout (synchronous for reliability)."""
     print("[Mock Progenitor] Started. Waiting for messages on stdin...", file=sys.stderr)
     sys.stderr.flush()
 
-    loop = asyncio.get_event_loop()
-
     while True:
         try:
-            # Read from stdin (blocking)
-            line = await loop.run_in_executor(None, sys.stdin.readline)
+            # Read from stdin (blocking) - synchronous is more reliable for subprocess IPC
+            line = sys.stdin.readline()
 
             if not line:
                 break
@@ -43,12 +40,14 @@ async def mock_progenitor():
                 else:
                     response = {"content": f"Unknown message type: {message_type}"}
 
-                # Write response to stdout
-                print(json.dumps(response), flush=True)
+                # Write response to stdout - flush immediately
+                sys.stdout.write(json.dumps(response) + "\n")
+                sys.stdout.flush()
 
             except json.JSONDecodeError as e:
                 error_response = {"content": f"JSON parse error: {e}"}
-                print(json.dumps(error_response), flush=True)
+                sys.stdout.write(json.dumps(error_response) + "\n")
+                sys.stdout.flush()
 
         except KeyboardInterrupt:
             print("[Mock Progenitor] Interrupted", file=sys.stderr)
@@ -56,8 +55,9 @@ async def mock_progenitor():
         except Exception as e:
             print(f"[Mock Progenitor] Error: {e}", file=sys.stderr)
             error_response = {"content": f"Server error: {e}"}
-            print(json.dumps(error_response), flush=True)
+            sys.stdout.write(json.dumps(error_response) + "\n")
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":
-    asyncio.run(mock_progenitor())
+    mock_progenitor()

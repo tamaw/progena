@@ -66,6 +66,13 @@ class StateManager:
     - File locking for concurrent access
     - Cached state for performance
     - JSONL logging with secret redaction
+    - CQ-010: Full async context manager protocol for resource handling
+
+    Usage:
+        async with StateManager(state_dir, logs_dir) as manager:
+            backlog = await manager.get_backlog()
+            # ... work with state ...
+        # Resources automatically cleaned up
     """
 
     CORE_FILES: dict[str, str] = {
@@ -89,9 +96,43 @@ class StateManager:
         self.lock_timeout = lock_timeout
         self._locks: dict[str, asyncio.Lock] = {}
         self._state_cache: dict[str, Any] = {}
+        self._initialized = False
+
+    async def __aenter__(self) -> "StateManager":
+        """CQ-010: Async context manager entry - initialize resources."""
+        await self.initialize()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """CQ-010: Async context manager exit - cleanup resources."""
+        await self.close()
+        return None
+
+    async def close(self) -> None:
+        """CQ-010: Clean up resources and flush pending writes."""
+        if not self._initialized:
+            return
+
+        # Flush any cached state to disk
+        try:
+            for name in self.CORE_FILES:
+                if name in self._state_cache:
+                    filepath = self.state_dir / self.CORE_FILES[name]
+                    await self._atomic_write_json(filepath, self._state_cache[name])
+            logger.debug("StateManager: flushed cached state on close")
+        except Exception as e:
+            logger.warning("StateManager: error flushing state on close: %s", e)
+
+        # Clear locks and cache
+        self._locks.clear()
+        self._state_cache.clear()
+        self._initialized = False
 
     async def initialize(self) -> None:
         """Initialize state directories and files."""
+        if self._initialized:
+            return
+
         # Create directories
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -102,6 +143,7 @@ class StateManager:
 
         # Load or create initial state
         await self._ensure_initial_state()
+        self._initialized = True
 
     async def _ensure_initial_state(self) -> None:
         """Ensure all state files exist with defaults."""

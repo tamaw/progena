@@ -139,6 +139,7 @@ class ProgenitorLoop:
                 user_input = await self._get_input(timeout=backoff)
 
                 if user_input:
+                    logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
                     # Reset backoff on input
                     backoff = runtime.idle_backoff_seconds
 

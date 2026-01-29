@@ -121,7 +121,7 @@ class TestGracefulTermination(unittest.IsolatedAsyncioTestCase):
         )
 
         assert result["returncode"] == -1
-        assert "timed out" in result["stderr"]
+        assert "timed out" in result["stderr"].lower()  # Case-insensitive check
         assert graceful_term_called, "Graceful termination should have been called"
 
     async def test_terminate_with_exception(self):

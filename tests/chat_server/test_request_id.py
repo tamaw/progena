@@ -68,9 +68,11 @@ class TestClientRequestIdPropagation:
         mock_process.stdout.readline = AsyncMock(
             return_value=b'{"content": "test response"}\n'
         )
+        mock_process.returncode = None  # Process is running
 
         client._process = mock_process
         client._started = True
+        client._last_heartbeat = 0  # Initialize heartbeat
         config.progenitor_timeout = 30
 
         # Call with request_id
@@ -101,9 +103,11 @@ class TestClientRequestIdPropagation:
         mock_process.stdout.readline = AsyncMock(
             return_value=b'{"content": "test response"}\n'
         )
+        mock_process.returncode = None  # Process is running
 
         client._process = mock_process
         client._started = True
+        client._last_heartbeat = 0  # Initialize heartbeat
         config.progenitor_timeout = 30
 
         # Call without request_id

@@ -2,6 +2,11 @@
 Chat Server Main - FastAPI application with OpenAI-compatible interface.
 
 This provides a standardized chat API that proxies to the Progenitor agent.
+
+Communication modes:
+- IPC (default): Socket-based communication for reliability and streaming
+- Subprocess: Legacy stdin/stdout mode (deprecated)
+- In-process: Direct service calls (for testing)
 """
 
 import asyncio
@@ -11,7 +16,7 @@ import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Union
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +24,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from .config import ChatServerConfig
 from .client import ProgenitorClient, get_client
+from .ipc_client import IPCProgenitorClient, get_ipc_client
 from .models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -34,13 +40,17 @@ from .models import (
     ResponsePayload,
     ResponseOutputMessage,
     ResponseOutputText,
+    SimpleChatRequest,
+    StreamingChatRequest,
+    StreamingResponseRequest,
 )
 
 logger = logging.getLogger(__name__)
 
 # Global config and client
 config = ChatServerConfig.from_env()
-client: ProgenitorClient = None  # type: ignore
+# Client can be either IPC-based or subprocess-based
+client: Union[ProgenitorClient, IPCProgenitorClient, None] = None
 
 
 # ============================================================================
@@ -59,12 +69,12 @@ class RateLimiter:
         requests_per_minute: int = 60,
         requests_per_hour: int = 500,
         cleanup_interval: int = 300,
-        stale_client_age: int = 3600,
+        stale_client_timeout_seconds: int = 3600,
     ):
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
         self.cleanup_interval = cleanup_interval
-        self.stale_client_age = stale_client_age
+        self.stale_client_timeout_seconds = stale_client_timeout_seconds
         self._minute_requests: dict[str, list[float]] = defaultdict(list)
         self._hour_requests: dict[str, list[float]] = defaultdict(list)
         self._last_cleanup = time.time()
@@ -83,7 +93,7 @@ class RateLimiter:
             return 0
 
         self._last_cleanup = now
-        stale_threshold = now - self.stale_client_age
+        stale_threshold = now - self.stale_client_timeout_seconds
 
         # Find and remove stale clients
         stale_clients = []
@@ -137,7 +147,7 @@ class RateLimiter:
         """Check if request is allowed. Returns (allowed, reason)."""
         now = time.time()
         minute_ago = now - 60
-        hour_ago = now - self.stale_client_age
+        hour_ago = now - self.stale_client_timeout_seconds
 
         # Periodic cleanup of stale clients
         self._cleanup_stale_clients()
@@ -178,7 +188,7 @@ class RateLimiter:
         """Get remaining requests for headers."""
         now = time.time()
         minute_count = len([t for t in self._minute_requests[client_id] if t > now - 60])
-        hour_count = len([t for t in self._hour_requests[client_id] if t > now - self.stale_client_age])
+        hour_count = len([t for t in self._hour_requests[client_id] if t > now - self.stale_client_timeout_seconds])
         return {
             "minute": max(0, self.requests_per_minute - minute_count),
             "hour": max(0, self.requests_per_hour - hour_count),
@@ -200,7 +210,7 @@ rate_limiter = RateLimiter(
     requests_per_minute=config.rate_limit_per_minute,
     requests_per_hour=config.rate_limit_per_hour,
     cleanup_interval=config.rate_limit_cleanup_interval,
-    stale_client_age=config.rate_limit_stale_client_age,
+    stale_client_timeout_seconds=config.rate_limit_stale_client_timeout_seconds,
 )
 
 
@@ -298,7 +308,19 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting chat server...")
-    client = get_client(config)
+
+    # Choose client based on configuration
+    if config.progenitor_ipc_enabled:
+        logger.info(
+            "Using IPC client (host=%s, port=%d, auto_start=%s)",
+            config.progenitor_ipc_host,
+            config.progenitor_ipc_port,
+            config.progenitor_ipc_auto_start,
+        )
+        client = get_ipc_client(config)
+    else:
+        logger.info("Using subprocess client (legacy mode)")
+        client = get_client(config)
 
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues
@@ -686,6 +708,12 @@ async def responses(request: Request, body: ResponseRequest):
 
     try:
         if body.stream:
+            # CR-002: Validate request for streaming
+            try:
+                StreamingResponseRequest.validate_for_streaming(body)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
             return StreamingResponse(
                 stream_response_unified(last_user_msg, body.model, request_id),
                 media_type="text/event-stream",
@@ -736,6 +764,12 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
     try:
         if body.stream:
+            # CR-002: Validate request for streaming
+            try:
+                StreamingChatRequest.validate_for_streaming(body)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
             return StreamingResponse(
                 stream_response(last_user_msg, body.model, request_id),
                 media_type="text/event-stream",
@@ -895,8 +929,8 @@ async def stream_response_unified(
 
 # Simple chat endpoint (non-OpenAI format)
 @app.post("/chat")
-async def simple_chat(request: dict):
-    """Simple chat endpoint for quick testing.
+async def simple_chat(body: SimpleChatRequest):
+    """Simple chat endpoint for quick testing (CR-002: now with Pydantic validation).
 
     Request: {"message": "your message here"}
     Response: {"response": "progenitor's response"}
@@ -904,12 +938,8 @@ async def simple_chat(request: dict):
     if not client:
         raise HTTPException(status_code=503, detail="Client not initialized")
 
-    message = request.get("message")
-    if not message:
-        raise HTTPException(status_code=400, detail="No message provided")
-
     try:
-        response = await client.send_message(message)
+        response = await client.send_message(body.message)
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

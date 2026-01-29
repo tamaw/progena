@@ -10,12 +10,13 @@ Refines ideal state, adds anti-criteria, tightens criteria based on:
 
 import logging
 import time
-from typing import Callable, Coroutine, Any
+from typing import Any
 
 from ..state.models import ProgenitorState
 from ..state.ideal_state import IdealStateBuilder
 from ..state.clarification import create_clarification_history_entry
 from ..runtime.time_utils import utcnow_isoformat
+from . import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,16 @@ def _get_telemetry():
 def create_node(
     llm_client,
     state_manager=None,
-) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
-    """Create the observe node function."""
+) -> NodeFunction:
+    """Create the observe node function.
+
+    CQ-006: Returns NodeFunction type - async function that takes
+    ProgenitorState and returns NodeStateUpdate (partial dict).
+    """
 
     ideal_state_builder = IdealStateBuilder(llm_client)
 
-    async def observe_node(state: ProgenitorState) -> ProgenitorState:
+    async def observe_node(state: ProgenitorState) -> NodeStateUpdate:
         """
         OBSERVE phase: Refine ideal state based on iteration results.
 

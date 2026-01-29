@@ -26,6 +26,10 @@ def _get_telemetry():
         from ..telemetry import get_tracer, get_metrics
         return get_tracer(), get_metrics()
     except ImportError:
+        logger.debug("Telemetry not available: ImportError")
+        return None, None
+    except Exception as e:
+        logger.debug("Failed to get telemetry components: %s", e)
         return None, None
 
 

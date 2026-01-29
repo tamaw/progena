@@ -1,4 +1,23 @@
-"""LangGraph nodes for Progenitor."""
+"""LangGraph nodes for Progenitor.
+
+CQ-006: Standardized type hints for node functions.
+
+All node functions follow this pattern:
+    - Input: ProgenitorState (TypedDict)
+    - Output: ProgenitorState (partial dict with only changed keys)
+
+Nodes return partial state updates (dicts with subset of keys) rather than
+full ProgenitorState objects. LangGraph merges these into the full state.
+"""
+
+from typing import Callable, Coroutine, Any
+from ..state.models import ProgenitorState
+
+# CQ-006: Standard type aliases for node functions
+# Nodes receive full state and return partial updates (dict with changed keys only)
+NodeStateUpdate = dict[str, Any]  # Partial state update (subset of ProgenitorState keys)
+NodeFunction = Callable[[ProgenitorState], Coroutine[Any, Any, NodeStateUpdate]]
+NodeFactory = Callable[..., NodeFunction]
 
 from . import (
     intake,
@@ -55,6 +74,11 @@ from .telemetry_decorators import (
 )
 
 __all__ = [
+    # CQ-006: Type aliases for consistent node signatures
+    "NodeStateUpdate",
+    "NodeFunction",
+    "NodeFactory",
+    # Node modules
     "intake",
     "time_check",
     "enqueue_due",

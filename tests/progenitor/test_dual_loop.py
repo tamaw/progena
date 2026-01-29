@@ -82,7 +82,8 @@ class TestIdealState:
         )
 
         # Should not stop at iteration 1 with low score
-        should_stop, reasons = ideal_state.check_stop_conditions(
+        # CQ-008: check_stop_conditions now returns 3 values (immutable pattern)
+        should_stop, reasons, met_ids = ideal_state.check_stop_conditions(
             current_score=0.5,
             iteration=1,
             elapsed_time=10,
@@ -91,7 +92,7 @@ class TestIdealState:
         assert not should_stop
 
         # Should stop when score threshold met
-        should_stop, reasons = ideal_state.check_stop_conditions(
+        should_stop, reasons, met_ids = ideal_state.check_stop_conditions(
             current_score=0.85,
             iteration=1,
             elapsed_time=10,
@@ -101,7 +102,7 @@ class TestIdealState:
         assert "score" in reasons[0].lower()
 
         # Should stop at max iterations
-        should_stop, reasons = ideal_state.check_stop_conditions(
+        should_stop, reasons, met_ids = ideal_state.check_stop_conditions(
             current_score=0.5,
             iteration=3,
             elapsed_time=10,

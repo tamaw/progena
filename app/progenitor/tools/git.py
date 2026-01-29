@@ -26,6 +26,9 @@ class GitWorktreeManager:
     - Tracks worktree creation times for cleanup
     - Automatic cleanup of orphaned worktrees
     - Cleanup on failure and startup
+
+    CR-003: Uses initialization lock to prevent race condition between
+    startup cleanup and first work item creation.
     """
 
     # File to track worktree metadata
@@ -42,28 +45,55 @@ class GitWorktreeManager:
         self.repo_path = repo_path or Path.cwd()
         self.max_worktree_age_hours = max_worktree_age_hours
 
+        # CR-003: Lock to prevent race between cleanup and worktree creation
+        self._init_lock = asyncio.Lock()
+        self._cleanup_complete = asyncio.Event()
+        self._cleanup_task: Optional[asyncio.Task] = None
+
         if cleanup_on_init:
-            # Schedule cleanup (non-blocking)
-            asyncio.get_event_loop().call_soon(
-                lambda: asyncio.create_task(self._startup_cleanup())
-            )
+            # CR-003: Schedule cleanup with proper synchronization
+            try:
+                loop = asyncio.get_running_loop()
+                self._cleanup_task = loop.create_task(self._startup_cleanup())
+            except RuntimeError:
+                # No running loop - defer cleanup to first operation
+                pass
 
     async def _startup_cleanup(self) -> None:
-        """Run cleanup on startup to remove orphaned worktrees."""
-        try:
-            count = await self.cleanup_old_worktrees()
-            if count > 0:
-                logger.info("Startup cleanup removed %d orphaned worktree(s)", count)
-        except Exception as e:
-            logger.warning("Startup worktree cleanup failed: %s", e)
+        """Run cleanup on startup to remove orphaned worktrees.
+
+        CR-003: Uses lock to prevent race condition with create_worktree.
+        """
+        async with self._init_lock:
+            try:
+                count = await self.cleanup_old_worktrees()
+                if count > 0:
+                    logger.info("Startup cleanup removed %d orphaned worktree(s)", count)
+            except Exception as e:
+                logger.warning("Startup worktree cleanup failed: %s", e)
+            finally:
+                # CR-003: Signal that cleanup is complete
+                self._cleanup_complete.set()
 
     async def create_worktree(
         self,
         work_item_id: str,
         branch_name: Optional[str] = None,
     ) -> Path:
-        """Create a new worktree for a work item."""
-        self.worktrees_dir.mkdir(parents=True, exist_ok=True)
+        """Create a new worktree for a work item.
+
+        CR-003: Waits for startup cleanup to complete before creating.
+        """
+        # CR-003: Wait for any pending startup cleanup to complete
+        # This prevents race condition where cleanup could delete a new worktree
+        if self._cleanup_task and not self._cleanup_complete.is_set():
+            try:
+                await asyncio.wait_for(self._cleanup_complete.wait(), timeout=30.0)
+            except asyncio.TimeoutError:
+                logger.warning("Startup cleanup timed out, proceeding with worktree creation")
+
+        async with self._init_lock:
+            self.worktrees_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate unique worktree name
         timestamp = format_timestamp()
@@ -84,11 +114,11 @@ class GitWorktreeManager:
             logger.error("Failed to create worktree: %s", result['stderr'])
             raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
 
-        # Write metadata file for tracking
-        await self._write_worktree_metadata(worktree_path, work_item_id, branch_name)
+            # Write metadata file for tracking
+            await self._write_worktree_metadata(worktree_path, work_item_id, branch_name)
 
-        logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
-        return worktree_path
+            logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
+            return worktree_path
 
     async def _write_worktree_metadata(
         self, worktree_path: Path, work_item_id: str, branch_name: str

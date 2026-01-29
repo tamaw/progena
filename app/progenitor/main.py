@@ -3,6 +3,10 @@ Progenitor Service Entrypoint
 
 Perpetual loop agent that orchestrates TARDIS system operations.
 Runs as a continuous LangGraph loop inside a Docker container.
+
+Communication modes:
+- IPC (default): Socket-based communication for reliability and streaming
+- STDIO: Legacy stdin/stdout mode for backward compatibility
 """
 
 import asyncio
@@ -52,6 +56,7 @@ class Progenitor:
         self.graph = None
         self.loop_runner = None
         self._background_tasks: list[asyncio.Task] = []
+        self._ipc_server = None  # Socket-based IPC server
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -118,6 +123,10 @@ class Progenitor:
 
         This method runs indefinitely until shutdown is requested.
         On graceful shutdown, it persists state before exiting.
+
+        Communication mode is determined by config.runtime.ipc_enabled:
+        - True (default): Use socket-based IPC for reliability and streaming
+        - False: Use legacy stdin/stdout for backward compatibility
         """
         self.running = True
 
@@ -127,10 +136,33 @@ class Progenitor:
         logger.info("Progenitor initialized. Entering perpetual loop.")
 
         loop_task = asyncio.create_task(self.loop_runner.run_forever())  # type: ignore[arg-type]
-        stdin_task = asyncio.create_task(self._stdin_listener())
-        output_task = asyncio.create_task(self._output_writer())
-        stream_task = asyncio.create_task(self._stream_writer())
-        self._background_tasks = [loop_task, stdin_task, output_task, stream_task]
+        self._background_tasks = [loop_task]
+
+        # Choose communication mode based on configuration
+        if self.config.runtime.ipc_enabled:
+            logger.info(
+                "Starting IPC server on %s:%d",
+                self.config.runtime.ipc_host,
+                self.config.runtime.ipc_port,
+            )
+            from .ipc import IPCServer
+
+            self._ipc_server = IPCServer(
+                loop_runner=self.loop_runner,
+                host=self.config.runtime.ipc_host,
+                port=self.config.runtime.ipc_port,
+                max_clients=self.config.runtime.ipc_max_clients,
+            )
+            await self._ipc_server.start()
+            ipc_task = asyncio.create_task(self._ipc_server.serve_forever())
+            self._background_tasks.append(ipc_task)
+        else:
+            # Legacy stdin/stdout mode
+            logger.info("Using legacy stdin/stdout communication mode")
+            stdin_task = asyncio.create_task(self._stdin_listener())
+            output_task = asyncio.create_task(self._output_writer())
+            stream_task = asyncio.create_task(self._stream_writer())
+            self._background_tasks.extend([stdin_task, output_task, stream_task])
 
         try:
             done, pending = await asyncio.wait(
@@ -158,6 +190,11 @@ class Progenitor:
         self._shutdown_started = True
         logger.info("Progenitor shutting down...")
         self.running = False
+
+        # Stop IPC server if running
+        if self._ipc_server:
+            await self._ipc_server.stop()
+            self._ipc_server = None
 
         # Stop loop runner so the main loop exits promptly
         if self.loop_runner:
