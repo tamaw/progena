@@ -1,313 +1,172 @@
 /**
  * Progenitor Chat UI - Prompt Templates Module
  *
- * Provides quick-access prompt templates for common tasks.
+ * Provides editing for system prompt files under data/prompts/.
  */
 
 export class PromptTemplates {
     constructor(chatManager) {
         this.chatManager = chatManager;
-        this.storageKey = 'progenitor_templates';
-        this.templates = [];
+        this.prompts = [];
+        this.currentPrompt = null;
+        this.editorModal = null;
 
         this.init();
     }
 
-    init() {
-        this.loadTemplates();
+    async init() {
         this.createUI();
         this.bindEvents();
+        await this.loadPrompts();
     }
 
     /**
-     * Default templates.
+     * Load prompts from server.
      */
-    getDefaultTemplates() {
-        return [
-            {
-                id: 'status',
-                name: 'Check Status',
-                icon: '📊',
-                prompt: 'What is your current status? Show me active tasks and health.',
-                category: 'system'
-            },
-            {
-                id: 'backlog',
-                name: 'View Backlog',
-                icon: '📋',
-                prompt: 'What tasks are in the backlog? List them by priority.',
-                category: 'system'
-            },
-            {
-                id: 'capabilities',
-                name: 'Capabilities',
-                icon: '🎯',
-                prompt: 'What are your capabilities? What can you help me with?',
-                category: 'system'
-            },
-            {
-                id: 'explain',
-                name: 'Explain Code',
-                icon: '💡',
-                prompt: 'Explain the following code:\n\n```\n{code}\n```',
-                category: 'coding',
-                hasPlaceholder: true
-            },
-            {
-                id: 'review',
-                name: 'Code Review',
-                icon: '🔍',
-                prompt: 'Review this code for bugs, security issues, and improvements:\n\n```\n{code}\n```',
-                category: 'coding',
-                hasPlaceholder: true
-            },
-            {
-                id: 'refactor',
-                name: 'Refactor Code',
-                icon: '🔧',
-                prompt: 'Refactor this code to be cleaner and more efficient:\n\n```\n{code}\n```',
-                category: 'coding',
-                hasPlaceholder: true
-            },
-            {
-                id: 'test',
-                name: 'Write Tests',
-                icon: '🧪',
-                prompt: 'Write unit tests for the following code:\n\n```\n{code}\n```',
-                category: 'coding',
-                hasPlaceholder: true
-            },
-            {
-                id: 'debug',
-                name: 'Debug Issue',
-                icon: '🐛',
-                prompt: 'Help me debug this issue:\n\nError: {error}\n\nCode:\n```\n{code}\n```',
-                category: 'coding',
-                hasPlaceholder: true
-            },
-            {
-                id: 'document',
-                name: 'Add Documentation',
-                icon: '📝',
-                prompt: 'Add comprehensive documentation to this code:\n\n```\n{code}\n```',
-                category: 'coding',
-                hasPlaceholder: true
-            },
-            {
-                id: 'summarize',
-                name: 'Summarize',
-                icon: '📄',
-                prompt: 'Summarize the following text concisely:\n\n{text}',
-                category: 'general',
-                hasPlaceholder: true
-            },
-            {
-                id: 'translate',
-                name: 'Translate',
-                icon: '🌐',
-                prompt: 'Translate the following to {language}:\n\n{text}',
-                category: 'general',
-                hasPlaceholder: true
-            },
-            {
-                id: 'brainstorm',
-                name: 'Brainstorm',
-                icon: '💭',
-                prompt: 'Help me brainstorm ideas for: {topic}',
-                category: 'general',
-                hasPlaceholder: true
-            }
-        ];
-    }
-
-    /**
-     * Load templates from storage.
-     */
-    loadTemplates() {
+    async loadPrompts() {
         try {
-            const saved = localStorage.getItem(this.storageKey);
-            if (saved) {
-                const custom = JSON.parse(saved);
-                this.templates = [...this.getDefaultTemplates(), ...custom];
-            } else {
-                this.templates = this.getDefaultTemplates();
-            }
-        } catch (e) {
-            this.templates = this.getDefaultTemplates();
+            const baseUrl = (window.Config && window.Config.api.baseUrl) || 'http://localhost:8000';
+            const response = await fetch(`${baseUrl}/api/ui/prompts`);
+            if (!response.ok) throw new Error('Failed to load prompts');
+
+            const data = await response.json();
+            this.prompts = data.prompts || [];
+            this.renderPromptList();
+        } catch (error) {
+            console.error('Failed to load prompts:', error);
+            this.prompts = [];
         }
     }
 
     /**
-     * Save custom templates.
-     * @param {Array} customTemplates - Custom templates to save
-     */
-    saveTemplates(customTemplates) {
-        try {
-            localStorage.setItem(this.storageKey, JSON.stringify(customTemplates));
-            this.loadTemplates();
-            this.renderTemplates();
-        } catch (e) {
-            console.error('Failed to save templates:', e);
-        }
-    }
-
-    /**
-     * Create the templates UI.
+     * Create the templates UI button and dropdown.
      */
     createUI() {
-        // Create templates button in input area
         const inputWrapper = document.querySelector('.input-wrapper');
         if (!inputWrapper) return;
 
         const templatesBtn = document.createElement('button');
         templatesBtn.id = 'templates-btn';
         templatesBtn.className = 'btn-templates';
-        templatesBtn.title = 'Prompt Templates';
+        templatesBtn.title = 'System Prompts';
         templatesBtn.innerHTML = `
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <line x1="3" y1="9" x2="21" y2="9"></line>
-                <line x1="9" y1="21" x2="9" y2="9"></line>
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
             </svg>
         `;
-
         inputWrapper.insertBefore(templatesBtn, inputWrapper.firstChild);
 
-        // Create templates dropdown
         const dropdown = document.createElement('div');
         dropdown.id = 'templates-dropdown';
         dropdown.className = 'templates-dropdown hidden';
         dropdown.innerHTML = `
             <div class="templates-header">
-                <h4>Prompt Templates</h4>
+                <h4>System Prompts</h4>
                 <button class="templates-close">&times;</button>
             </div>
-            <div class="templates-search">
-                <input type="text" placeholder="Search templates..." class="templates-search-input">
-            </div>
-            <div class="templates-categories"></div>
             <div class="templates-list"></div>
             <div class="templates-footer">
-                <button class="btn-add-template">+ Add Custom Template</button>
+                <button class="btn-reload-prompts">Reload</button>
             </div>
         `;
-
         inputWrapper.appendChild(dropdown);
-
         this.dropdown = dropdown;
-        this.renderTemplates();
+
+        this.createEditorModal();
     }
 
-    /**
-     * Render templates in the dropdown.
-     */
-    renderTemplates(filter = '') {
-        const listEl = this.dropdown?.querySelector('.templates-list');
-        const categoriesEl = this.dropdown?.querySelector('.templates-categories');
-        if (!listEl || !categoriesEl) return;
-
-        // Get unique categories
-        const categories = [...new Set(this.templates.map(t => t.category))];
-
-        // Render category filters
-        categoriesEl.innerHTML = `
-            <button class="category-btn active" data-category="all">All</button>
-            ${categories.map(cat => `
-                <button class="category-btn" data-category="${cat}">${this.capitalizeFirst(cat)}</button>
-            `).join('')}
+    createEditorModal() {
+        const modal = document.createElement('div');
+        modal.id = 'prompt-editor-modal';
+        modal.className = 'modal hidden';
+        modal.innerHTML = `
+            <div class="modal-backdrop"></div>
+            <div class="modal-content prompt-editor-content">
+                <div class="modal-header">
+                    <h3 id="prompt-editor-title">Edit Prompt</h3>
+                    <button class="modal-close" id="prompt-editor-close">x</button>
+                </div>
+                <div class="modal-body prompt-editor-body">
+                    <div class="prompt-editor-toolbar">
+                        <button type="button" class="toolbar-btn" data-action="bold" title="Bold"><strong>B</strong></button>
+                        <button type="button" class="toolbar-btn" data-action="italic" title="Italic"><em>I</em></button>
+                        <button type="button" class="toolbar-btn" data-action="code" title="Code">&lt;/&gt;</button>
+                        <button type="button" class="toolbar-btn" data-action="codeblock" title="Code Block">\`\`\`</button>
+                        <span class="toolbar-separator"></span>
+                        <button type="button" class="toolbar-btn" data-action="h1" title="H1">H1</button>
+                        <button type="button" class="toolbar-btn" data-action="h2" title="H2">H2</button>
+                        <button type="button" class="toolbar-btn" data-action="h3" title="H3">H3</button>
+                        <span class="toolbar-separator"></span>
+                        <button type="button" class="toolbar-btn" data-action="bullet" title="Bullet">-</button>
+                        <button type="button" class="toolbar-btn" data-action="number" title="Number">1.</button>
+                    </div>
+                    <textarea id="prompt-editor-textarea" class="prompt-editor-textarea" spellcheck="false"></textarea>
+                    <div class="prompt-editor-preview hidden" id="prompt-editor-preview"></div>
+                </div>
+                <div class="modal-actions prompt-editor-actions">
+                    <button type="button" class="btn btn-secondary" id="prompt-editor-preview-toggle">Preview</button>
+                    <div class="prompt-editor-right-actions">
+                        <button type="button" class="btn btn-secondary" id="prompt-editor-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="prompt-editor-save">Save</button>
+                    </div>
+                </div>
+            </div>
         `;
+        document.body.appendChild(modal);
+        this.editorModal = modal;
+        this.bindEditorEvents();
+    }
 
-        // Filter templates
-        let filtered = this.templates;
-        if (filter) {
-            const lowerFilter = filter.toLowerCase();
-            filtered = this.templates.filter(t =>
-                t.name.toLowerCase().includes(lowerFilter) ||
-                t.prompt.toLowerCase().includes(lowerFilter)
-            );
+    renderPromptList() {
+        const listEl = this.dropdown?.querySelector('.templates-list');
+        if (!listEl) return;
+
+        if (this.prompts.length === 0) {
+            listEl.innerHTML = '<div class="empty-state">No prompt files found</div>';
+            return;
         }
 
-        // Render templates
-        listEl.innerHTML = filtered.map(template => `
-            <div class="template-item" data-template-id="${template.id}">
-                <span class="template-icon">${template.icon}</span>
+        listEl.innerHTML = this.prompts.map(prompt => `
+            <div class="template-item" data-filename="${prompt.filename}">
+                <span class="template-icon">📄</span>
                 <div class="template-info">
-                    <span class="template-name">${template.name}</span>
-                    <span class="template-preview">${this.truncate(template.prompt, 50)}</span>
+                    <span class="template-name">${prompt.name}</span>
+                    ${prompt.description ? `<span class="template-preview">${prompt.description}</span>` : ''}
                 </div>
-                ${template.hasPlaceholder ? '<span class="template-placeholder-badge">⌨️</span>' : ''}
+                <span class="template-edit-icon">✏️</span>
             </div>
         `).join('');
     }
 
-    /**
-     * Bind event handlers.
-     */
     bindEvents() {
         const btn = document.getElementById('templates-btn');
         const dropdown = this.dropdown;
 
-        // Toggle dropdown
         btn?.addEventListener('click', (e) => {
             e.stopPropagation();
             dropdown?.classList.toggle('hidden');
         });
 
-        // Close button
         dropdown?.querySelector('.templates-close')?.addEventListener('click', () => {
             dropdown.classList.add('hidden');
         });
 
-        // Search
-        dropdown?.querySelector('.templates-search-input')?.addEventListener('input', (e) => {
-            this.renderTemplates(e.target.value);
+        dropdown?.querySelector('.btn-reload-prompts')?.addEventListener('click', async () => {
+            await this.loadPrompts();
+            window.notifications?.show('info', 'Reloaded', 'Prompt files reloaded');
         });
 
-        // Category filter
-        dropdown?.querySelector('.templates-categories')?.addEventListener('click', (e) => {
-            const btn = e.target.closest('.category-btn');
-            if (!btn) return;
-
-            // Update active state
-            dropdown.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-
-            const category = btn.dataset.category;
-            if (category === 'all') {
-                this.renderTemplates();
-            } else {
-                const listEl = dropdown.querySelector('.templates-list');
-                listEl.innerHTML = this.templates
-                    .filter(t => t.category === category)
-                    .map(template => `
-                        <div class="template-item" data-template-id="${template.id}">
-                            <span class="template-icon">${template.icon}</span>
-                            <div class="template-info">
-                                <span class="template-name">${template.name}</span>
-                                <span class="template-preview">${this.truncate(template.prompt, 50)}</span>
-                            </div>
-                            ${template.hasPlaceholder ? '<span class="template-placeholder-badge">⌨️</span>' : ''}
-                        </div>
-                    `).join('');
-            }
-        });
-
-        // Template selection
-        dropdown?.querySelector('.templates-list')?.addEventListener('click', (e) => {
+        dropdown?.querySelector('.templates-list')?.addEventListener('click', async (e) => {
             const item = e.target.closest('.template-item');
             if (!item) return;
-
-            const templateId = item.dataset.templateId;
-            this.useTemplate(templateId);
+            const filename = item.dataset.filename;
             dropdown.classList.add('hidden');
+            await this.openEditor(filename);
         });
 
-        // Add custom template
-        dropdown?.querySelector('.btn-add-template')?.addEventListener('click', () => {
-            this.showAddTemplateModal();
-        });
-
-        // Close on outside click
         document.addEventListener('click', (e) => {
             if (!dropdown?.contains(e.target) && !btn?.contains(e.target)) {
                 dropdown?.classList.add('hidden');
@@ -315,148 +174,172 @@ export class PromptTemplates {
         });
     }
 
-    /**
-     * Use a template.
-     * @param {string} templateId - Template ID
-     */
-    useTemplate(templateId) {
-        const template = this.templates.find(t => t.id === templateId);
-        if (!template) return;
+    bindEditorEvents() {
+        const modal = this.editorModal;
+        if (!modal) return;
 
-        const input = this.chatManager?.inputElement;
-        if (!input) return;
+        const textarea = modal.querySelector('#prompt-editor-textarea');
+        const preview = modal.querySelector('#prompt-editor-preview');
+        const backdrop = modal.querySelector('.modal-backdrop');
+        const closeBtn = modal.querySelector('#prompt-editor-close');
+        const cancelBtn = modal.querySelector('#prompt-editor-cancel');
+        const saveBtn = modal.querySelector('#prompt-editor-save');
+        const previewToggle = modal.querySelector('#prompt-editor-preview-toggle');
+        const toolbar = modal.querySelector('.prompt-editor-toolbar');
 
-        let prompt = template.prompt;
-
-        // Handle placeholders
-        if (template.hasPlaceholder) {
-            // Find placeholders like {code}, {text}, etc.
-            const placeholders = prompt.match(/\{(\w+)\}/g);
-            if (placeholders) {
-                // For now, just insert the template and let user fill in
-                input.value = prompt;
-                input.focus();
-
-                // Select first placeholder
-                const firstPlaceholder = placeholders[0];
-                const start = prompt.indexOf(firstPlaceholder);
-                const end = start + firstPlaceholder.length;
-                input.setSelectionRange(start, end);
-
-                window.notifications?.show('info', 'Template Loaded',
-                    'Replace the highlighted placeholder with your content.');
-                return;
-            }
-        }
-
-        // No placeholders - just insert
-        input.value = prompt;
-        input.focus();
-        input.dispatchEvent(new Event('input'));
-    }
-
-    /**
-     * Show modal to add custom template.
-     */
-    showAddTemplateModal() {
-        const modal = document.createElement('div');
-        modal.className = 'modal visible';
-        modal.innerHTML = `
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h2>Add Custom Template</h2>
-                    <button class="modal-close">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label>Name</label>
-                        <input type="text" id="template-name" placeholder="My Template">
-                    </div>
-                    <div class="form-group">
-                        <label>Icon (emoji)</label>
-                        <input type="text" id="template-icon" placeholder="📝" maxlength="2">
-                    </div>
-                    <div class="form-group">
-                        <label>Category</label>
-                        <select id="template-category">
-                            <option value="custom">Custom</option>
-                            <option value="coding">Coding</option>
-                            <option value="general">General</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Prompt</label>
-                        <textarea id="template-prompt" rows="4" placeholder="Enter your prompt template..."></textarea>
-                        <small>Use {placeholder} for user-fillable fields</small>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn-secondary modal-cancel">Cancel</button>
-                    <button class="btn-primary modal-save">Save Template</button>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        // Close handlers
-        const close = () => {
-            modal.remove();
+        const closeEditor = () => {
+            modal.classList.add('hidden');
+            modal.classList.remove('visible');
+            this.currentPrompt = null;
         };
 
-        modal.querySelector('.modal-close').addEventListener('click', close);
-        modal.querySelector('.modal-cancel').addEventListener('click', close);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) close();
-        });
+        closeBtn?.addEventListener('click', closeEditor);
+        cancelBtn?.addEventListener('click', closeEditor);
+        backdrop?.addEventListener('click', closeEditor);
 
-        // Save handler
-        modal.querySelector('.modal-save').addEventListener('click', () => {
-            const name = document.getElementById('template-name').value.trim();
-            const icon = document.getElementById('template-icon').value.trim() || '📝';
-            const category = document.getElementById('template-category').value;
-            const prompt = document.getElementById('template-prompt').value.trim();
-
-            if (!name || !prompt) {
-                window.notifications?.show('warning', 'Missing Fields', 'Please fill in name and prompt.');
-                return;
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal.classList.contains('visible')) {
+                closeEditor();
             }
+        });
 
-            const newTemplate = {
-                id: `custom_${Date.now()}`,
-                name,
-                icon,
-                prompt,
-                category,
-                hasPlaceholder: prompt.includes('{'),
-                isCustom: true
-            };
+        previewToggle?.addEventListener('click', () => {
+            const isPreview = preview.classList.contains('hidden');
+            if (isPreview) {
+                preview.innerHTML = this.renderMarkdown(textarea.value);
+                preview.classList.remove('hidden');
+                textarea.classList.add('hidden');
+                previewToggle.textContent = 'Edit';
+            } else {
+                preview.classList.add('hidden');
+                textarea.classList.remove('hidden');
+                previewToggle.textContent = 'Preview';
+            }
+        });
 
-            // Get existing custom templates
-            const saved = localStorage.getItem(this.storageKey);
-            const custom = saved ? JSON.parse(saved) : [];
-            custom.push(newTemplate);
+        saveBtn?.addEventListener('click', async () => {
+            if (!this.currentPrompt) return;
+            const content = textarea.value;
+            try {
+                const baseUrl = (window.Config && window.Config.api.baseUrl) || 'http://localhost:8000';
+                const response = await fetch(`${baseUrl}/api/ui/prompts/${this.currentPrompt.filename}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                if (!response.ok) throw new Error('Failed to save');
+                window.notifications?.show('success', 'Saved', `Prompt saved successfully`);
+                closeEditor();
+                await this.loadPrompts();
+            } catch (error) {
+                console.error('Failed to save prompt:', error);
+                window.notifications?.show('error', 'Error', 'Failed to save prompt file');
+            }
+        });
 
-            this.saveTemplates(custom);
-            close();
+        toolbar?.addEventListener('click', (e) => {
+            const btn = e.target.closest('.toolbar-btn');
+            if (!btn) return;
+            this.applyMarkdownAction(textarea, btn.dataset.action);
+        });
 
-            window.notifications?.show('success', 'Template Saved', 'Custom template added successfully.');
+        textarea?.addEventListener('keydown', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === 'b') { e.preventDefault(); this.applyMarkdownAction(textarea, 'bold'); }
+                if (e.key === 'i') { e.preventDefault(); this.applyMarkdownAction(textarea, 'italic'); }
+                if (e.key === 's') { e.preventDefault(); saveBtn?.click(); }
+            }
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = textarea.selectionStart;
+                textarea.value = textarea.value.substring(0, start) + '    ' + textarea.value.substring(textarea.selectionEnd);
+                textarea.selectionStart = textarea.selectionEnd = start + 4;
+            }
         });
     }
 
-    /**
-     * Truncate text.
-     */
-    truncate(text, maxLength) {
-        if (text.length <= maxLength) return text;
-        return text.substring(0, maxLength).trim() + '...';
+    async openEditor(filename) {
+        try {
+            const baseUrl = (window.Config && window.Config.api.baseUrl) || 'http://localhost:8000';
+            const response = await fetch(`${baseUrl}/api/ui/prompts/${filename}`);
+            if (!response.ok) throw new Error('Failed to load prompt');
+
+            const data = await response.json();
+            this.currentPrompt = data;
+
+            const modal = this.editorModal;
+            const textarea = modal.querySelector('#prompt-editor-textarea');
+            const preview = modal.querySelector('#prompt-editor-preview');
+            const title = modal.querySelector('#prompt-editor-title');
+            const previewToggle = modal.querySelector('#prompt-editor-preview-toggle');
+
+            title.textContent = `Edit: ${data.name}`;
+            textarea.value = data.content;
+            textarea.classList.remove('hidden');
+            preview.classList.add('hidden');
+            previewToggle.textContent = 'Preview';
+
+            modal.classList.remove('hidden');
+            modal.classList.add('visible');
+            textarea.focus();
+        } catch (error) {
+            console.error('Failed to open prompt editor:', error);
+            window.notifications?.show('error', 'Error', 'Failed to load prompt file');
+        }
     }
 
-    /**
-     * Capitalize first letter.
-     */
-    capitalizeFirst(str) {
-        return str.charAt(0).toUpperCase() + str.slice(1);
+    applyMarkdownAction(textarea, action) {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const selected = textarea.value.substring(start, end);
+        let replacement = '';
+
+        switch (action) {
+            case 'bold': replacement = `**${selected || 'text'}**`; break;
+            case 'italic': replacement = `*${selected || 'text'}*`; break;
+            case 'code': replacement = `\`${selected || 'code'}\``; break;
+            case 'codeblock': replacement = `\n\`\`\`\n${selected || 'code'}\n\`\`\`\n`; break;
+            case 'h1': replacement = `# ${selected || 'Heading'}`; break;
+            case 'h2': replacement = `## ${selected || 'Heading'}`; break;
+            case 'h3': replacement = `### ${selected || 'Heading'}`; break;
+            case 'bullet': replacement = `- ${selected || 'item'}`; break;
+            case 'number': replacement = `1. ${selected || 'item'}`; break;
+        }
+
+        textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
+        textarea.focus();
+    }
+
+    renderMarkdown(text) {
+        // Escape HTML first
+        let html = text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        // Code blocks (triple backticks) - use RegExp constructor to avoid template literal issues
+        html = html.replace(new RegExp('```(\\w*)\\n([\\s\\S]*?)```', 'g'), '<pre><code>$2</code></pre>');
+
+        // Inline code
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+        // Headers
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+        // Bold and italic
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+        // Lists
+        html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+
+        // Line breaks
+        html = html.replace(/\n\n/g, '<br><br>');
+        html = html.replace(/\n/g, '<br>');
+
+        return html;
     }
 }
 

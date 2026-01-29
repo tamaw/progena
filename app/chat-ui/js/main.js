@@ -218,7 +218,7 @@ function setupThemeToggle() {
 /**
  * Setup settings modal.
  */
-function setupSettingsModal() {
+async function setupSettingsModal() {
     const settingsBtn = document.getElementById('btn-settings');
     const settingsModal = document.getElementById('settings-modal');
     const settingsClose = document.getElementById('settings-close');
@@ -226,49 +226,118 @@ function setupSettingsModal() {
     const backdrop = settingsModal?.querySelector('.modal-backdrop');
 
     // Open settings
-    settingsBtn?.addEventListener('click', () => {
-        // Populate current values
-        document.getElementById('setting-theme').value = Config.theme.default;
-        document.getElementById('setting-notifications').checked = Config.notifications.enabled;
-        document.getElementById('setting-sounds').checked = Config.notifications.soundEnabled;
-        document.getElementById('setting-api-url').value = Config.api.baseUrl;
+    settingsBtn?.addEventListener('click', async () => {
+        try {
+            // Fetch current settings from server
+            const response = await fetch('/api/ui/settings');
+            if (response.ok) {
+                const settings = await response.json();
 
+                // Populate UI settings
+                document.getElementById('setting-theme').value = settings.ui?.theme || 'system';
+                document.getElementById('setting-notifications').checked = settings.ui?.notifications !== false;
+                document.getElementById('setting-sounds').checked = settings.ui?.sounds || false;
+                document.getElementById('setting-api-url').value = settings.ui?.api_url || 'http://localhost:8000';
+
+                // Populate Progenitor settings
+                document.getElementById('setting-timezone').value = settings.progenitor?.timezone || '';
+                document.getElementById('setting-idle-backoff').value = settings.progenitor?.idle_backoff_seconds || '';
+                document.getElementById('setting-max-backoff').value = settings.progenitor?.max_backoff_seconds || '';
+                document.getElementById('setting-max-actions').value = settings.progenitor?.max_actions_per_cycle || '';
+                document.getElementById('setting-checkpoint-interval').value = settings.progenitor?.checkpoint_interval_seconds || '';
+                document.getElementById('setting-input-timeout').value = settings.progenitor?.input_timeout_seconds || '';
+                document.getElementById('setting-log-level').value = settings.progenitor?.log_level || 'info';
+
+                // Populate Environment settings
+                document.getElementById('setting-mock-llm').checked = settings.environment?.mock_llm || false;
+                document.getElementById('setting-azure-endpoint').value = settings.environment?.azure_openai_endpoint || '';
+                document.getElementById('setting-azure-key').value = settings.environment?.azure_openai_api_key || '';
+            }
+        } catch (error) {
+            console.warn('Failed to load settings from server, using defaults:', error);
+        }
+
+        // Show modal regardless of fetch success
         settingsModal?.classList.remove('hidden');
+        settingsModal?.classList.add('visible');
     });
 
     // Close settings
     settingsClose?.addEventListener('click', () => {
+        settingsModal?.classList.remove('visible');
         settingsModal?.classList.add('hidden');
     });
 
     backdrop?.addEventListener('click', () => {
+        settingsModal?.classList.remove('visible');
         settingsModal?.classList.add('hidden');
     });
 
     // Save settings
-    settingsSave?.addEventListener('click', () => {
-        const theme = document.getElementById('setting-theme').value;
-        const notificationsEnabled = document.getElementById('setting-notifications').checked;
-        const soundsEnabled = document.getElementById('setting-sounds').checked;
-        const apiUrl = document.getElementById('setting-api-url').value.trim();
+    settingsSave?.addEventListener('click', async () => {
+        try {
+            const uiSettings = {
+                theme: document.getElementById('setting-theme').value,
+                notifications: document.getElementById('setting-notifications').checked,
+                sounds: document.getElementById('setting-sounds').checked,
+                api_url: document.getElementById('setting-api-url').value.trim()
+            };
 
-        // Apply settings
-        Config.setTheme(theme);
-        applyTheme(theme);
+            const progenitorSettings = {
+                timezone: document.getElementById('setting-timezone').value.trim(),
+                idle_backoff_seconds: parseInt(document.getElementById('setting-idle-backoff').value) || 30,
+                max_backoff_seconds: parseInt(document.getElementById('setting-max-backoff').value) || 300,
+                max_actions_per_cycle: parseInt(document.getElementById('setting-max-actions').value) || 10,
+                checkpoint_interval_seconds: parseInt(document.getElementById('setting-checkpoint-interval').value) || 30,
+                input_timeout_seconds: parseInt(document.getElementById('setting-input-timeout').value) || 300,
+                log_level: document.getElementById('setting-log-level').value
+            };
 
-        Config.setNotifications(notificationsEnabled);
-        Config.setSounds(soundsEnabled);
+            const environmentSettings = {
+                mock_llm: document.getElementById('setting-mock-llm').checked,
+                azure_openai_endpoint: document.getElementById('setting-azure-endpoint').value.trim(),
+                azure_openai_api_key: document.getElementById('setting-azure-key').value.trim()
+            };
 
-        if (apiUrl && apiUrl !== Config.api.baseUrl) {
-            Config.setApiUrl(apiUrl);
-            // Reinitialize API
-            window.api = new ProgenitorAPI(Config);
-            // Refresh status
-            status.refreshStatus();
+            // Send to server
+            const response = await fetch('/api/ui/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ui: uiSettings,
+                    progenitor: progenitorSettings,
+                    environment: environmentSettings
+                })
+            });
+
+            if (response.ok) {
+                // Apply UI settings locally
+                Config.setTheme(uiSettings.theme);
+                applyTheme(uiSettings.theme);
+                Config.setNotifications(uiSettings.notifications);
+                Config.setSounds(uiSettings.sounds);
+
+                if (uiSettings.api_url && uiSettings.api_url !== Config.api.baseUrl) {
+                    Config.setApiUrl(uiSettings.api_url);
+                    // Reinitialize API
+                    window.api = new ProgenitorAPI(Config);
+                    // Refresh status
+                    status.refreshStatus();
+                }
+
+                settingsModal?.classList.remove('visible');
+                settingsModal?.classList.add('hidden');
+                notifications.show('success', 'Settings Saved', 'Your preferences have been updated.');
+            } else {
+                throw new Error('Failed to save settings');
+            }
+        } catch (error) {
+            console.error('Failed to save settings:', error);
+            // Still close the modal but show error
+            settingsModal?.classList.remove('visible');
+            settingsModal?.classList.add('hidden');
+            notifications.show('error', 'Settings Error', 'Failed to save settings to server.');
         }
-
-        settingsModal?.classList.add('hidden');
-        notifications.show('success', 'Settings Saved', 'Your preferences have been updated.');
     });
 }
 

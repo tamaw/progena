@@ -314,9 +314,13 @@ html, body {
     position: fixed;
     inset: 0;
     z-index: 1000;
-    display: flex;
+    display: none;
     align-items: center;
     justify-content: center;
+}
+
+.modal.visible {
+    display: flex;
 }
 
 .modal.hidden {
@@ -400,7 +404,9 @@ html, body {
 }
 
 .setting-group select,
-.setting-group input[type="text"] {
+.setting-group input[type="text"],
+.setting-group input[type="number"],
+.setting-group input[type="password"] {
     width: 100%;
     padding: var(--spacing-sm);
     margin-top: var(--spacing-xs);
@@ -409,6 +415,23 @@ html, body {
     background-color: var(--color-bg-tertiary);
     color: var(--color-text-primary);
     font-size: var(--font-size-md);
+}
+
+.settings-section {
+    margin-bottom: var(--spacing-lg);
+}
+
+.settings-section:last-child {
+    margin-bottom: 0;
+}
+
+.settings-section h4 {
+    font-size: var(--font-size-md);
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin-bottom: var(--spacing-sm);
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: var(--spacing-xs);
 }
 
 /* Utility Classes */

@@ -12,7 +12,7 @@ const Config = {
             chat: '/v1/chat/completions',
             responses: '/v1/responses',
             health: '/health',
-            healthDetailed: '/health/detailed',
+            events: '/api/ui/events',  // SSE endpoint for real-time status
             models: '/v1/models',
             metrics: '/metrics/json'
         },
@@ -29,10 +29,11 @@ const Config = {
         defaultModel: 'progenitor-v1'
     },
 
-    // Status Polling Configuration
-    status: {
-        pollingInterval: 5000, // 5 seconds
-        healthCheckInterval: 10000 // 10 seconds
+    // SSE Configuration (replaces polling)
+    sse: {
+        reconnectDelay: 2000,  // Initial reconnect delay
+        maxReconnectAttempts: 10,
+        keepaliveTimeout: 35000  // Server sends keepalive every 30s
     },
 
     // Notification Configuration

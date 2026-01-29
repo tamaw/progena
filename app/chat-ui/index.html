@@ -139,8 +139,25 @@
             </div>
         </main>
 
-        <!-- Notification Container -->
+        <!-- Notification Container (for toast notifications) -->
         <div id="notification-container" class="notification-container"></div>
+
+        <!-- Notifications Panel (slides from left) -->
+        <div id="notifications-panel" class="notifications-panel hidden">
+            <div class="panel-header">
+                <h3>🔔 Notifications</h3>
+                <button id="notifications-panel-close" class="btn-icon" title="Close">×</button>
+            </div>
+            <div class="panel-body">
+                <div id="notifications-list" class="notifications-list">
+                    <div class="empty-state">No notifications</div>
+                </div>
+            </div>
+            <div class="panel-footer">
+                <button id="clear-notifications" class="btn btn-secondary">Clear All</button>
+            </div>
+        </div>
+        <div id="notifications-backdrop" class="panel-backdrop hidden"></div>
 
         <!-- Alert Modal -->
         <div id="alert-modal" class="modal hidden">
@@ -169,29 +186,87 @@
                     <button class="modal-close" id="settings-close">×</button>
                 </div>
                 <div class="modal-body">
-                    <div class="setting-group">
-                        <label for="setting-theme">Theme</label>
-                        <select id="setting-theme">
-                            <option value="system">System</option>
-                            <option value="dark">Dark</option>
-                            <option value="light">Light</option>
-                        </select>
+                    <div class="settings-section">
+                        <h4>UI Settings</h4>
+                        <div class="setting-group">
+                            <label for="setting-theme">Theme</label>
+                            <select id="setting-theme">
+                                <option value="system">System</option>
+                                <option value="dark">Dark</option>
+                                <option value="light">Light</option>
+                            </select>
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-notifications">
+                                <input type="checkbox" id="setting-notifications" checked>
+                                Enable Browser Notifications
+                            </label>
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-sounds">
+                                <input type="checkbox" id="setting-sounds">
+                                Enable Sound Effects
+                            </label>
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-api-url">API URL</label>
+                            <input type="text" id="setting-api-url" value="http://localhost:8000">
+                        </div>
                     </div>
-                    <div class="setting-group">
-                        <label for="setting-notifications">
-                            <input type="checkbox" id="setting-notifications" checked>
-                            Enable Browser Notifications
-                        </label>
+
+                    <div class="settings-section">
+                        <h4>Progenitor Settings</h4>
+                        <div class="setting-group">
+                            <label for="setting-timezone">Timezone</label>
+                            <input type="text" id="setting-timezone" placeholder="Australia/Melbourne">
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-idle-backoff">Idle Backoff (seconds)</label>
+                            <input type="number" id="setting-idle-backoff" min="1">
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-max-backoff">Max Backoff (seconds)</label>
+                            <input type="number" id="setting-max-backoff" min="1">
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-max-actions">Max Actions per Cycle</label>
+                            <input type="number" id="setting-max-actions" min="1">
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-checkpoint-interval">Checkpoint Interval (seconds)</label>
+                            <input type="number" id="setting-checkpoint-interval" min="1">
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-input-timeout">Input Timeout (seconds)</label>
+                            <input type="number" id="setting-input-timeout" min="1">
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-log-level">Log Level</label>
+                            <select id="setting-log-level">
+                                <option value="debug">Debug</option>
+                                <option value="info">Info</option>
+                                <option value="warning">Warning</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
                     </div>
-                    <div class="setting-group">
-                        <label for="setting-sounds">
-                            <input type="checkbox" id="setting-sounds">
-                            Enable Sound Effects
-                        </label>
-                    </div>
-                    <div class="setting-group">
-                        <label for="setting-api-url">API URL</label>
-                        <input type="text" id="setting-api-url" value="http://localhost:8000">
+
+                    <div class="settings-section">
+                        <h4>Environment Settings</h4>
+                        <div class="setting-group">
+                            <label for="setting-mock-llm">
+                                <input type="checkbox" id="setting-mock-llm">
+                                Mock LLM (for testing)
+                            </label>
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-azure-endpoint">Azure OpenAI Endpoint</label>
+                            <input type="text" id="setting-azure-endpoint" placeholder="https://your-endpoint.openai.azure.com">
+                        </div>
+                        <div class="setting-group">
+                            <label for="setting-azure-key">Azure OpenAI API Key</label>
+                            <input type="password" id="setting-azure-key" placeholder="Your API key">
+                        </div>
                     </div>
                 </div>
                 <div class="modal-actions">
@@ -201,12 +276,12 @@
         </div>
     </div>
 
-    <!-- Scripts -->
-    <script src="/js/config.js"></script>
-    <script src="/js/api.js"></script>
-    <script src="/js/chat.js"></script>
-    <script src="/js/status.js"></script>
-    <script src="/js/notifications.js"></script>
-    <script src="/js/main.js"></script>
+    <!-- Scripts (cache-busted) -->
+    <script src="/js/config.js?v=2"></script>
+    <script src="/js/api.js?v=2"></script>
+    <script src="/js/chat.js?v=2"></script>
+    <script src="/js/status.js?v=4"></script>
+    <script src="/js/notifications.js?v=2"></script>
+    <script type="module" src="/js/main.js?v=2"></script>
 </body>
 </html>
