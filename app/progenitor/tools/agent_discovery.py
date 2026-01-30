@@ -305,20 +305,31 @@ For folders that are not valid agents, set is_valid_agent=false with a reason.""
 
         return AgentDiscoveryResult(agents=agents)
 
-    async def discover_and_register(self) -> dict[str, Any]:
+    async def discover_and_register(self, clear_existing: bool = True) -> dict[str, Any]:
         """
         Main entry point: scan, analyze, and register all agents.
+
+        Args:
+            clear_existing: If True, clear existing agents before registering new ones.
+                           This makes the operation a full rescan rather than additive.
 
         Returns:
             Summary of the discovery process.
         """
         logger.info("Starting agent discovery from %s", self.agents_dir)
 
+        # Clear existing agents if requested (full rescan mode)
+        if clear_existing:
+            logger.info("Clearing existing agents from registry")
+            await self.registry.clear_agents()
+
         # Scan folders
         folders = self.scan_agents_folder()
         logger.info("Found %d potential agent folders", len(folders))
 
         if not folders:
+            # Save the empty registry to persist the clear
+            await self.registry.save()
             return {
                 "success": True,
                 "agents_found": 0,

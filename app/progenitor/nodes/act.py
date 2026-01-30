@@ -418,4 +418,78 @@ async def _execute_system_tool(
             "tool": "list_schedule",
         }, None
 
+    elif tool_name == "list_tools":
+        # List all available tools including system tools, agents, and MCP tools
+        system_tools = [
+            {
+                "name": "list_tools",
+                "description": "List all available tools and their capabilities",
+                "type": "system_tool",
+                "capabilities": ["tool_discovery", "list_tools"],
+            },
+            {
+                "name": "rediscover_agents",
+                "description": "Scan the agents folder, analyze with LLM, and update registry.json",
+                "type": "system_tool",
+                "capabilities": ["agent_discovery", "registry_refresh"],
+            },
+            {
+                "name": "list_agents",
+                "description": "List all registered agents with their status",
+                "type": "system_tool",
+                "capabilities": ["agent_listing"],
+            },
+            {
+                "name": "schedule_task",
+                "description": "Schedule a task to run at a specific time",
+                "type": "system_tool",
+                "capabilities": ["scheduling", "reminders"],
+            },
+            {
+                "name": "list_schedule",
+                "description": "List all scheduled tasks",
+                "type": "system_tool",
+                "capabilities": ["scheduling"],
+            },
+        ]
+
+        # Get registered agents from registry
+        agents = tool_registry.get_agents()
+        agent_tools = [
+            {
+                "name": agent.get("name"),
+                "description": agent.get("description", ""),
+                "type": "a2a_agent",
+                "capabilities": agent.get("capabilities", []),
+                "status": agent.get("status", "unknown"),
+                "transport": agent.get("transport"),
+                "endpoint": agent.get("endpoint"),
+            }
+            for agent in agents
+        ]
+
+        # Get registered MCP tools from registry
+        mcp_tools = tool_registry.get_tools()
+        mcp_tool_entries = [
+            {
+                "name": tool.get("name"),
+                "description": tool.get("description", ""),
+                "type": "mcp_tool",
+                "capabilities": tool.get("capabilities", []),
+            }
+            for tool in mcp_tools
+        ]
+
+        return {
+            "system_tools": system_tools,
+            "agents": agent_tools,
+            "mcp_tools": mcp_tool_entries,
+            "total_count": len(system_tools) + len(agent_tools) + len(mcp_tool_entries),
+            "summary": {
+                "system_tools": len(system_tools),
+                "agents": len(agent_tools),
+                "mcp_tools": len(mcp_tool_entries),
+            },
+        }, None
+
     return None, f"Unknown system tool: {tool_name}"

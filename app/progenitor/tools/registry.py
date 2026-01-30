@@ -65,6 +65,12 @@ class ToolRegistry:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.registry_path, 'w') as f:
             json.dump(self._registry, f, indent=2, default=str)
+        logger.info("Saved registry to %s", self.registry_path)
+
+    async def clear_agents(self) -> None:
+        """Clear all registered agents from the registry."""
+        self._registry["agents"] = []
+        logger.info("Cleared all agents from registry")
 
     def get_all_capabilities(self) -> list[str]:
         """Get all registered capabilities (from agents and tools)."""
