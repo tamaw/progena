@@ -91,6 +91,7 @@ class GracefulShutdownManager:
         self._drained_event: Optional[asyncio.Event] = None
         self._lock = asyncio.Lock()
         self._callbacks: list[ShutdownCallback] = []
+        self._drain_callbacks: list[ShutdownCallback] = []  # Callbacks to run when draining starts
         self._stats = ShutdownStats()
 
         # Signal handling
@@ -148,6 +149,37 @@ class GracefulShutdownManager:
         ))
         self._callbacks.sort(key=lambda c: c.priority)
         logger.debug("Registered shutdown callback: %s (priority=%d)", name, priority)
+
+    def register_drain_callback(
+        self,
+        name: str,
+        callback: Callable[[], Awaitable[None]],
+        priority: int = 100,
+        timeout: float = 10.0,
+    ) -> None:
+        """
+        Register a callback to run when draining starts.
+
+        These callbacks run at the beginning of the drain phase to help
+        close long-running connections (like SSE) that would otherwise
+        block draining.
+
+        Lower priority values execute first.
+
+        Args:
+            name: Descriptive name for logging
+            callback: Async function to call when draining starts
+            priority: Execution order (lower = earlier)
+            timeout: Max seconds to wait for this callback
+        """
+        self._drain_callbacks.append(ShutdownCallback(
+            name=name,
+            callback=callback,
+            priority=priority,
+            timeout=timeout,
+        ))
+        self._drain_callbacks.sort(key=lambda c: c.priority)
+        logger.debug("Registered drain callback: %s (priority=%d)", name, priority)
 
     def install_signal_handlers(self) -> None:
         """Install signal handlers for graceful shutdown."""
@@ -219,7 +251,7 @@ class GracefulShutdownManager:
         Initiate graceful shutdown process.
 
         This method orchestrates the entire shutdown sequence:
-        1. Stop accepting new requests
+        1. Stop accepting new requests, run drain callbacks
         2. Drain active requests
         3. Execute shutdown callbacks
         4. Final cleanup
@@ -245,6 +277,10 @@ class GracefulShutdownManager:
         )
 
         start_time = time.monotonic()
+
+        # Execute drain callbacks first (e.g., close SSE connections)
+        # These run before waiting for drain to help connections close gracefully
+        await self._execute_drain_callbacks()
 
         # Phase 1: Drain requests
         try:
@@ -286,6 +322,25 @@ class GracefulShutdownManager:
             self._stats.requests_drained,
             self._stats.requests_timed_out,
         )
+
+    async def _execute_drain_callbacks(self) -> None:
+        """Execute drain callbacks to help connections close gracefully."""
+        if not self._drain_callbacks:
+            return
+
+        logger.info("Executing %d drain callbacks to close connections", len(self._drain_callbacks))
+        for cb in self._drain_callbacks:
+            logger.debug("Executing drain callback: %s", cb.name)
+            try:
+                await asyncio.wait_for(
+                    cb.callback(),
+                    timeout=cb.timeout,
+                )
+                logger.debug("Drain callback completed: %s", cb.name)
+            except asyncio.TimeoutError:
+                logger.warning("Drain callback timed out: %s", cb.name)
+            except Exception as e:
+                logger.error("Drain callback failed: %s - %s", cb.name, e)
 
     async def _execute_callbacks(self) -> None:
         """Execute registered shutdown callbacks."""

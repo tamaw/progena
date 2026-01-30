@@ -175,6 +175,8 @@ def normalize_schedule_entry(item: Any) -> Optional[ScheduleEntry]:
         return ScheduleEntry(
             id=item.get("id", "unknown"),
             description=item.get("description", ""),
+            instruction=item.get("instruction"),  # Processed instruction to execute
+            user_request=item.get("user_request"),  # Original user request
             cron_expression=item.get("cron_expression"),
             interval_minutes=item.get("interval_minutes"),
             run_at=item.get("run_at"),

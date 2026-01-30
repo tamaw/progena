@@ -62,6 +62,120 @@ def _looks_like_agent_build_request(user_input: str) -> bool:
     return has_build_intent and has_agent_intent and not has_non_agent_build
 
 
+def _looks_like_agent_discovery_request(user_input: str) -> bool:
+    """Heuristic: detect requests to rediscover/rewire agents."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    has_discovery_intent = any(
+        phrase in text
+        for phrase in (
+            "rewire",
+            "rediscover",
+            "rescan",
+            "refresh",
+            "reload",
+            "re-scan",
+            "re-discover",
+            "scan agents",
+            "discover agents",
+            "update registry",
+            "refresh registry",
+            "sync agents",
+        )
+    )
+
+    has_agent_context = any(
+        phrase in text
+        for phrase in (
+            "agent",
+            "registry",
+        )
+    )
+
+    return has_discovery_intent or (has_agent_context and "refresh" in text)
+
+
+def _looks_like_schedule_request(user_input: str) -> bool:
+    """Heuristic: detect requests to schedule/remind/do something at a time."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    # Time indicators
+    has_time_indicator = any(
+        phrase in text
+        for phrase in (
+            " at ",
+            "every day",
+            "every morning",
+            "every evening",
+            "every hour",
+            "every minute",
+            "in the morning",
+            "in the evening",
+            "tomorrow",
+            "next week",
+            "in 5 minutes",
+            "in 10 minutes",
+            "in 15 minutes",
+            "in 30 minutes",
+            "in an hour",
+            "in 1 hour",
+            "in 2 hours",
+            "daily",
+            "weekly",
+        )
+    )
+
+    # Schedule/reminder intent
+    has_schedule_intent = any(
+        phrase in text
+        for phrase in (
+            "remind",
+            "schedule",
+            "set a reminder",
+            "notify me",
+            "tell me at",
+            "say to me at",
+            "alert me",
+            "wake me",
+        )
+    )
+
+    # Time patterns like "9am", "10:30", "3pm"
+    has_time_pattern = bool(re.search(r'\d{1,2}(?::\d{2})?\s*(?:am|pm)', text))
+
+    return (has_time_indicator and has_time_pattern) or has_schedule_intent
+
+
+def _extract_schedule_params(user_input: str) -> dict:
+    """Extract schedule parameters from user input."""
+    text = user_input.lower()
+
+    # Try to extract time expression
+    time_patterns = [
+        r'(every day at \d{1,2}(?::\d{2})?\s*(?:am|pm)?)',
+        r'(at \d{1,2}(?::\d{2})?\s*(?:am|pm)?)',
+        r'(in \d+ (?:minute|hour|day)s?)',
+        r'(tomorrow(?: at \d{1,2}(?::\d{2})?\s*(?:am|pm)?)?)',
+        r'(every (?:morning|evening|hour|day|week))',
+    ]
+
+    time_expression = ""
+    for pattern in time_patterns:
+        match = re.search(pattern, text)
+        if match:
+            time_expression = match.group(1)
+            break
+
+    return {
+        "user_request": user_input,
+        "time_expression": time_expression,
+    }
+
+
 def _infer_target_capabilities(user_input: str) -> list[str]:
     """Infer a likely capability name from the user's request."""
     text = (user_input or "").lower()
@@ -133,7 +247,28 @@ def create_node(
             # but the user is explicitly asking to build an agent, force build routing.
             action_str = decision_data.get("action", "answer_directly")
             direct_response = decision_data.get("direct_response")
-            if (
+
+            # Check for system tool requests first (rediscover agents, etc.)
+            if _looks_like_agent_discovery_request(user_input):
+                decision_data = {
+                    "action": "system_tool",
+                    "reasoning": "User requested agent discovery/rescan operation.",
+                    "requires_planning": False,
+                    "target_capabilities": ["rediscover_agents"],
+                    "direct_response": None,
+                }
+            # Check for schedule requests (e.g., "remind me at 9am", "say hello every day")
+            elif _looks_like_schedule_request(user_input):
+                schedule_params = _extract_schedule_params(user_input)
+                decision_data = {
+                    "action": "schedule",
+                    "reasoning": "User requested a scheduled/timed task.",
+                    "requires_planning": True,  # Needs planner to process the instruction
+                    "target_capabilities": ["schedule_task"],
+                    "direct_response": None,
+                    "schedule_params": schedule_params,  # Pass extracted params
+                }
+            elif (
                 str(action_str).lower().strip() in ("answer", "answer_directly")
                 and not direct_response
                 and _looks_like_agent_build_request(user_input)

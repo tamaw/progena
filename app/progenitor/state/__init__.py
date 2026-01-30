@@ -21,6 +21,7 @@ from .models import (
     # Other models
     ScheduleEntry,
     AgentRegistryEntry,
+    AgentStatus,  # Runtime status for agents
     ConversationMessage,
     ValidationResult,
 )
@@ -55,6 +56,7 @@ __all__ = [
     # Other models
     "ScheduleEntry",
     "AgentRegistryEntry",
+    "AgentStatus",
     "ConversationMessage",
     "ValidationResult",
     # Helpers

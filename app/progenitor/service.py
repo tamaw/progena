@@ -116,6 +116,9 @@ class ProgenitorService:
             )
             await self.tool_registry.load()
 
+            # Run agent discovery to populate registry from agents/ folder
+            await self._discover_agents()
+
             # Create the LangGraph
             self.graph = create_progenitor_graph(
                 state_manager=self.state_manager,
@@ -339,6 +342,55 @@ class ProgenitorService:
 
         self._initialized = False
         logger.info("Progenitor service shutdown complete")
+
+    async def _discover_agents(self) -> None:
+        """Discover and register agents from the agents/ folder."""
+        try:
+            from .tools.agent_discovery import discover_agents
+            from pathlib import Path
+
+            # Determine agents directory relative to project root
+            # Assuming we're in app/progenitor/, agents is at app/agents/
+            project_root = Path(__file__).parent.parent.parent
+            agents_dir = project_root / "app" / "agents"
+
+            if not agents_dir.exists():
+                logger.warning("Agents directory not found: %s", agents_dir)
+                return
+
+            if not self.llm_client or not self.tool_registry:
+                logger.warning("LLM client or registry not available for discovery")
+                return
+
+            logger.info("Discovering agents from %s", agents_dir)
+            result = await discover_agents(
+                agents_dir=agents_dir,
+                llm_client=self.llm_client,
+                registry=self.tool_registry,
+            )
+
+            if result.get("agents_registered", 0) > 0:
+                logger.info(
+                    "Agent discovery complete: %d agents registered",
+                    result["agents_registered"],
+                )
+            elif result.get("agents_found", 0) == 0:
+                logger.info("No agents found in %s", agents_dir)
+            else:
+                logger.warning("Agent discovery issues: %s", result.get("errors"))
+
+        except Exception as e:
+            logger.error("Agent discovery failed: %s", e, exc_info=True)
+            # Non-fatal: continue with whatever was in registry
+
+    async def rediscover_agents(self) -> dict[str, Any]:
+        """Re-run agent discovery. Can be invoked as a tool."""
+        if not self._initialized:
+            await self.initialize()
+            return {"message": "Service was not initialized, ran full initialization"}
+
+        await self._discover_agents()
+        return {"message": "Agent rediscovery complete"}
 
 
 # Module-level service instance for singleton access

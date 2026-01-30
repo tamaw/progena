@@ -42,10 +42,10 @@ class ChatServerConfig:
     # CORS
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
-    # Rate limiting
+    # Rate limiting (high limits for personal/dev use)
     rate_limit_enabled: bool = True
-    rate_limit_per_minute: int = 60
-    rate_limit_per_hour: int = 500
+    rate_limit_per_minute: int = 10000
+    rate_limit_per_hour: int = 100000
     rate_limit_cleanup_interval: int = 300  # Cleanup stale clients every 5 minutes
     rate_limit_stale_client_timeout_seconds: int = 3600  # Seconds before removing inactive clients
 
@@ -72,8 +72,8 @@ class ChatServerConfig:
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),
             rate_limit_enabled=env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),
-            rate_limit_per_minute=env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 60),
-            rate_limit_per_hour=env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 500),
+            rate_limit_per_minute=env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 10000),
+            rate_limit_per_hour=env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 100000),
             stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
             stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
         )

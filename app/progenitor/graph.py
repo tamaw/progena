@@ -70,7 +70,7 @@ def route_after_decide(state: ProgenitorState) -> Literal["planner", "pick_next"
 
     Routes to:
         - 'respond': For direct answers (no further action needed)
-        - 'planner': For complex tasks requiring planning
+        - 'planner': For complex tasks requiring planning or system tools
         - 'pick_next': For simple delegation or tool use
     """
     decision = state.get("current_decision")
@@ -91,6 +91,10 @@ def route_after_decide(state: ProgenitorState) -> Literal["planner", "pick_next"
 
     if action_value in ("answer", "answer_directly"):
         return "respond"
+
+    # System tool requests go to planner to create the work item
+    if action_value == "system_tool":
+        return "planner"
 
     if requires_planning:
         return "planner"

@@ -32,6 +32,7 @@ class WorkItemType(str, Enum):
     MCP_CALL = "mcp_call"
     SCHEDULED = "scheduled"
     DIRECT_ANSWER = "direct_answer"
+    SYSTEM_TOOL = "system_tool"  # Internal system tools like agent discovery
 
 
 class DecisionAction(str, Enum):
@@ -44,6 +45,7 @@ class DecisionAction(str, Enum):
     UPGRADE = "upgrade"
     MIXED = "mixed"
     SCHEDULE = "schedule"
+    SYSTEM_TOOL = "system_tool"  # For internal system operations
 
 
 # Patterns for secret redaction - (pattern, replacement_or_handler)
@@ -227,32 +229,65 @@ class ScheduleEntry(BaseModel):
     Supports both recurring tasks (via cron_expression or interval_minutes)
     and one-off tasks (via run_at). One-off tasks are automatically disabled
     after execution.
+
+    The `instruction` field contains a processed prompt that will be executed
+    at the scheduled time as if it were a new user request to the agent.
     """
     model_config = {"use_enum_values": True}
 
     id: str
     description: str
+    instruction: Optional[str] = None  # Processed instruction to execute at scheduled time
+    user_request: Optional[str] = None  # Original user request for reference
     cron_expression: Optional[str] = None  # For recurring (e.g., "0 9 * * *")
     interval_minutes: Optional[int] = None  # Simple recurring interval
     run_at: Optional[datetime] = None  # For one-off
     enabled: bool = True
-    action_type: DecisionAction
+    action_type: DecisionAction = DecisionAction.ANSWER_DIRECTLY
     action_config: dict[str, Any] = Field(default_factory=dict)
     last_run: Optional[datetime] = None
     next_run: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class AgentStatus(str, Enum):
+    """Runtime status of an A2A agent."""
+    STOPPED = "stopped"      # Not running
+    STARTING = "starting"    # Process spawned, waiting for ready
+    RUNNING = "running"      # Healthy and accepting requests
+    EXECUTING = "executing"  # Currently processing a request
+    WAITING = "waiting"      # Idle, waiting for requests
+    FAILED = "failed"        # Failed to start or crashed
+    STOPPING = "stopping"    # Graceful shutdown in progress
+
+
 class AgentRegistryEntry(BaseModel):
-    """An agent in the registry."""
+    """An agent in the registry.
+
+    Agents are HTTP-based and expose an agent card endpoint per A2A standard.
+    The registry tracks runtime status derived from stdout/stderr streams.
+    """
     name: str
     kind: str = "a2a_agent"  # a2a_agent | mcp_server
     version: str = "0.1.0"
     description: str
     capabilities: list[str] = Field(default_factory=list)
-    entrypoint: str  # File path or command
-    endpoint: Optional[str] = None  # For HTTP-based agents
-    transport: str = "stdio"  # stdio | http
+    entrypoint: str  # File path to agent module
+
+    # HTTP endpoint configuration
+    transport: str = "http"  # http (default) | stdio (legacy)
+    port: Optional[int] = None  # Assigned HTTP port (e.g., 8100-8199)
+    endpoint: Optional[str] = None  # Base URL (e.g., http://localhost:8100)
+    agent_card_url: Optional[str] = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)
+
+    # Runtime status (updated from process stdout/stderr)
+    status: AgentStatus = AgentStatus.STOPPED
+    status_message: Optional[str] = None  # Human-readable status detail
+    pid: Optional[int] = None  # Process ID when running
+    startup_time: Optional[datetime] = None  # When agent was last started
+    last_heartbeat: Optional[datetime] = None  # Last health check
+    last_error: Optional[str] = None  # Last error message if failed
+
     enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -299,6 +334,7 @@ class WorkState(TypedDict, total=False):
 class SchedulingState(TypedDict, total=False):
     """Scheduling and registry state."""
     schedule: list[ScheduleEntry]
+    new_schedule_entry: Optional[ScheduleEntry]  # Pending entry to be added
     current_time: Optional[datetime]
     due_items: list[str]  # IDs of due schedule entries
     agents: list[AgentRegistryEntry]

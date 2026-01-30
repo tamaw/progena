@@ -39,6 +39,15 @@ class AgentInfo:
     enabled: bool
     created_at: str
     updated_at: str
+    # Runtime status fields
+    status: str = "stopped"
+    status_message: Optional[str] = None
+    port: Optional[int] = None
+    agent_card_url: Optional[str] = None
+    pid: Optional[int] = None
+    startup_time: Optional[str] = None
+    last_heartbeat: Optional[str] = None
+    last_error: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "AgentInfo":
@@ -50,10 +59,19 @@ class AgentInfo:
             capabilities=data.get("capabilities", []),
             entrypoint=data.get("entrypoint", ""),
             endpoint=data.get("endpoint"),
-            transport=data.get("transport", "stdio"),
+            transport=data.get("transport", "http"),
             enabled=data.get("enabled", True),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
+            # Runtime status
+            status=data.get("status", "stopped"),
+            status_message=data.get("status_message"),
+            port=data.get("port"),
+            agent_card_url=data.get("agent_card_url"),
+            pid=data.get("pid"),
+            startup_time=data.get("startup_time"),
+            last_heartbeat=data.get("last_heartbeat"),
+            last_error=data.get("last_error"),
         )
 
 
@@ -191,7 +209,11 @@ class StateReader:
         self._watch_task: Optional[asyncio.Task] = None
 
     def _read_json(self, filename: str) -> Any:
-        """Read and parse a JSON file with caching."""
+        """Read and parse a JSON file with caching.
+
+        IMPORTANT: Opens file in read-only mode and closes handle immediately
+        after reading to avoid blocking atomic renames by the progenitor agent.
+        """
         filepath = self.state_dir / filename
 
         try:
@@ -201,15 +223,16 @@ class StateReader:
             mtime = filepath.stat().st_mtime
             cache_key = str(filepath)
 
-            # Check cache
+            # Check cache - avoid unnecessary file reads
             if cache_key in self._cache:
                 cached_mtime, cached_data = self._cache[cache_key]
                 if cached_mtime == mtime:
                     return cached_data
 
-            # Read file
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            # Read file content into memory and close handle immediately
+            # This prevents holding file locks that block atomic renames on Windows
+            content = filepath.read_text(encoding="utf-8")
+            data = json.loads(content)
 
             # Update cache
             self._cache[cache_key] = (mtime, data)

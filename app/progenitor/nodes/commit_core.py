@@ -36,8 +36,23 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         await state_manager.save_backlog(work_items)
 
-        # Save schedule
-        schedule = state.get("schedule", [])
+        # Handle new schedule entry (from planner when scheduling a task)
+        new_schedule_entry = state.get("new_schedule_entry")
+
+        # Save schedule - merge with any new entries
+        schedule = list(state.get("schedule", []))
+
+        # Add new entry if present (from planner)
+        if new_schedule_entry:
+            if hasattr(new_schedule_entry, "model_dump"):
+                schedule.append(new_schedule_entry)
+            elif isinstance(new_schedule_entry, dict):
+                from ..state.models import ScheduleEntry
+                try:
+                    schedule.append(ScheduleEntry(**new_schedule_entry))
+                except (TypeError, ValueError) as e:
+                    logger.warning("Failed to add new schedule entry: %s", e)
+
         schedule_data = []
         for item in schedule:
             if hasattr(item, "model_dump"):
@@ -69,8 +84,11 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         }
         await state_manager.save_state(core_state)
 
+        # Return updated schedule so state reflects the new entry
         return {
             "last_commit_time": utcnow(),
+            "schedule": schedule_entries,  # Updated schedule with new entry
+            "new_schedule_entry": None,  # Clear the pending entry
         }
 
     return commit_core_node

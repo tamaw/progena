@@ -122,9 +122,6 @@ async function initApp() {
     setupThemeToggle();
     setupConnectionStateListener();
 
-    // Show ready notification
-    notifications.show('success', 'Ready', 'Chat UI initialized successfully');
-
     console.log('Progenitor Chat UI ready');
 }
 
