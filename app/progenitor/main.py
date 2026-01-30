@@ -220,7 +220,30 @@ class Progenitor:
         except ImportError:
             pass  # Langfuse not installed
 
+        # Write offline status to health file
+        await self._write_health_status("offline")
+
         logger.info("State persisted. Goodbye.")
+
+    async def _write_health_status(self, status: str) -> None:
+        """Write health status to health.json file."""
+        from .runtime.time_utils import utcnow_isoformat
+        import os
+
+        health_path = self.state_dir / "health.json"
+        health_data = {
+            "status": status,
+            "last_active": utcnow_isoformat(),
+            "run_id": None,
+            "cycle_count": 0,
+            "pid": os.getpid(),
+        }
+
+        try:
+            health_path.write_text(json.dumps(health_data))
+            logger.info("Health status set to '%s'", status)
+        except Exception as e:
+            logger.warning("Failed to write health status: %s", e)
 
     async def _stdin_listener(self) -> None:
         """Read user messages from stdin and enqueue them for processing."""
