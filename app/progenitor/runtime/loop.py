@@ -133,6 +133,9 @@ class ProgenitorLoop:
 
         logger.info("Starting perpetual loop (run_id: %s)", run_id)
 
+        # Update health immediately on startup
+        await self._update_health_file(state)
+
         while self.running:
             try:
                 # Check for user input
@@ -220,15 +223,18 @@ class ProgenitorLoop:
 
             except asyncio.CancelledError:
                 logger.info("Loop cancelled by signal")
+                await self._update_health_file(state, status="suspended")
                 break
             except Exception as e:
                 logger.error("Loop error: %s", e, exc_info=True)
                 if self._cycle_telemetry:
                     self._cycle_telemetry.complete(success=False, error=str(e))
+                await self._update_health_file(state, status="error", error=str(e))
                 await asyncio.sleep(backoff)
 
         # Final checkpoint and telemetry shutdown
         await self._checkpoint_state(state)
+        await self._update_health_file(state, status="stopped")
         self._shutdown_telemetry()
         logger.info("Loop terminated")
 
@@ -258,11 +264,16 @@ class ProgenitorLoop:
                 logger.debug("Failed to shutdown telemetry: %s", e)
 
     async def _get_input(self, timeout: float) -> Optional[str]:
-        """Get user input with timeout."""
+        """Get user input with timeout.
+
+        Caps timeout at 30 seconds to ensure health updates happen frequently.
+        """
+        # Cap timeout to ensure health gets updated frequently
+        effective_timeout = min(timeout, 30.0)
         try:
             return await asyncio.wait_for(
                 self._input_queue.get(),
-                timeout=timeout
+                timeout=effective_timeout
             )
         except asyncio.TimeoutError:
             return None
@@ -481,20 +492,33 @@ class ProgenitorLoop:
             },
         }
 
-    async def _update_health_file(self, state: dict[str, Any]) -> None:
+    async def _update_health_file(
+        self,
+        state: dict[str, Any],
+        status: str = "running",
+        error: Optional[str] = None,
+    ) -> None:
         """Update health file for Docker health checks.
 
         Creates/updates a JSON file with last activity timestamp.
         Docker can check this file's age to determine health.
+
+        Args:
+            state: Current loop state.
+            status: Health status - 'running', 'error', 'suspended', or 'stopped'.
+            error: Optional error message when status is 'error'.
         """
         health_path = self.state_manager.state_dir / HEALTH_FILE
         health_data = {
-            "status": "running",
+            "status": status,
             "last_active": utcnow_isoformat(),
             "run_id": state.get("run_id"),
             "cycle_count": state.get("cycle_count", 0),
             "pid": __import__("os").getpid(),
         }
+
+        if error:
+            health_data["error"] = error
 
         try:
             health_path.write_text(json.dumps(health_data))

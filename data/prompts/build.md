@@ -32,11 +32,28 @@ app/agents/<agent_name>/
 WRONG: Creating files directly in app/agents/ like `app/agents/my_agent.py`
 CORRECT: Creating files in subdirectory like `app/agents/my_agent/agent.py`
 
-The agent.py file MUST:
-1. Define a main agent class with an `invoke()` async method
-2. Include AGENT_ID, AGENT_NAME, DESCRIPTION, CAPABILITIES class attributes
-3. Have a `get_agent_card()` method for registry discovery
-4. Include a `main()` function for direct invocation (stdio transport)
+## Agent Implementation Requirements
+
+Each agent is **self-contained** - there is no base class to inherit from. The agent.py file MUST:
+
+1. Define a main agent class with these class attributes:
+   - `AGENT_ID` - Unique snake_case identifier
+   - `AGENT_NAME` - Human-readable name
+   - `DESCRIPTION` - What the agent does
+   - `CAPABILITIES` - List of capability strings
+
+2. For **HTTP agents** (preferred for complex agents), implement:
+   - `GET /.well-known/agent.json` - Agent card endpoint
+   - `GET /health` - Health check endpoint
+   - `POST /` - Main request handler
+   - Status protocol output to stdout (STATUS:running:message)
+
+3. For **stdio agents** (simpler agents), implement:
+   - `async invoke(self, request)` method
+   - `get_agent_card()` method
+   - `main()` function that reads JSON from stdin and writes to stdout
+
+See `data/prompts/agent_structure.md` for complete HTTP endpoint specifications and code examples.
 
 ## Requirements
 - Clear name and description
@@ -56,7 +73,7 @@ The agent.py file MUST:
         "inputs": [],
         "outputs": []
     },
-    "transport": "stdio",
+    "transport": "http|stdio",
     "entrypoint": "app/agents/<agent_name>/agent.py",
     "dependencies": [],
     "implementation_notes": "<guidance for implementation>",
@@ -65,3 +82,16 @@ The agent.py file MUST:
     ]
 }
 ```
+
+## Transport Selection
+
+- Use `http` transport for agents that:
+  - Need to handle multiple concurrent requests
+  - Require long-running processes
+  - Need to maintain state between requests
+  - Will be managed by the HTTPAgentManager
+
+- Use `stdio` transport for agents that:
+  - Are simple request-response style
+  - Don't need persistent state
+  - Are called occasionally

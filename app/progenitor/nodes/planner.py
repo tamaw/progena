@@ -29,6 +29,14 @@ def _get_telemetry():
         return None, None
 
 
+def _get_target_capabilities(state: ProgenitorState) -> list[str]:
+    """Safely extract target_capabilities from state's current_decision."""
+    decision = state.get("current_decision")
+    if decision and hasattr(decision, "target_capabilities"):
+        return decision.target_capabilities or []
+    return []
+
+
 def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the planner node function."""
 
@@ -69,7 +77,63 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
             return result
 
         # Otherwise, use traditional planning from decision
-        if not decision or not decision.requires_planning:
+        if not decision:
+            if span:
+                span.set_attribute("skipped", True)
+                span.end()
+            return {}
+
+        # Get decision action - Decision is always a Pydantic model
+        action = decision.action
+        action_value = action.value if hasattr(action, 'value') else str(action)
+
+        # Handle system tool requests directly without LLM planning
+        if action_value == "system_tool":
+            target_caps = decision.target_capabilities or []
+            tool_name = target_caps[0] if target_caps else "unknown"
+
+            work_item = WorkItem(
+                id=str(uuid.uuid4()),
+                item_type=WorkItemType.SYSTEM_TOOL,
+                status=WorkItemStatus.PENDING,
+                description=f"Execute system tool: {tool_name}",
+                target_tool=tool_name,
+                context={"tool_name": tool_name},
+            )
+            backlog = list(state.get("backlog", []))
+            backlog.append(work_item)
+
+            if span:
+                span.set_attribute("plan_type", "system_tool")
+                span.set_attribute("work_items_created", 1)
+                span.end()
+
+            return {"backlog": backlog}
+
+        # Handle schedule requests - use LLM to generate instruction
+        if action_value == "schedule" and user_input:
+            schedule_result = await _plan_schedule_task(
+                user_input=user_input,
+                decision=decision,
+                llm_client=llm_client,
+                state_manager=state_manager,
+            )
+
+            if schedule_result:
+                # Return schedule entry to be added to state
+                if span:
+                    span.set_attribute("plan_type", "schedule")
+                    span.set_attribute("work_items_created", 0)
+                    span.end()
+                # Cast to ProgenitorState since we're returning a partial state dict
+                return schedule_result  # type: ignore[return-value]
+
+            if span:
+                span.set_attribute("plan_type", "schedule_failed")
+                span.end()
+            return {}
+
+        if not decision.requires_planning:
             if span:
                 span.set_attribute("skipped", True)
                 span.end()
@@ -153,6 +217,109 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
     return planner_node
 
 
+async def _plan_schedule_task(
+    user_input: str,
+    decision,
+    llm_client,
+    state_manager,
+) -> dict | None:
+    """
+    Plan a scheduled task by using the LLM to generate an instruction.
+
+    The instruction is a processed version of the user's request that will
+    be executed at the scheduled time as if it were a new user input.
+    """
+    from ..tools.schedule import add_scheduled_task
+    from ..state.models import ScheduleEntry
+
+    # Get schedule params from decision
+    if hasattr(decision, "model_dump"):
+        decision_dict = decision.model_dump()
+    elif isinstance(decision, dict):
+        decision_dict = decision
+    else:
+        decision_dict = {}
+
+    schedule_params = decision_dict.get("schedule_params", {})
+    time_expression = schedule_params.get("time_expression", "")
+
+    if not time_expression:
+        logger.warning("No time expression found for schedule request")
+        return None
+
+    try:
+        # Use LLM to generate the instruction that will run at scheduled time
+        instruction_prompt = f"""The user wants to schedule a task. Convert their request into an instruction that will be executed at the scheduled time.
+
+User request: "{user_input}"
+Scheduled time: {time_expression}
+
+Generate a clear instruction that:
+1. Captures what the user wants done at that time
+2. Is written as if it's a new request to an AI assistant
+3. Includes any context needed to fulfill the request
+
+Example:
+- User: "say hello world to me at 9am"
+- Instruction: "Say 'Hello World!' to the user. This is a scheduled greeting they requested."
+
+Another example:
+- User: "check the weather every morning at 8am"
+- Instruction: "Check and report the current weather conditions for the user's location."
+
+Generate ONLY the instruction, nothing else:"""
+
+        instruction = await llm_client.complete(
+            prompt=instruction_prompt,
+            system_prompt="You generate clear instructions for scheduled tasks. Output only the instruction text.",
+        )
+
+        instruction = instruction.strip()
+        if not instruction:
+            instruction = f"Execute the user's scheduled request: {user_input}"
+
+        logger.info(f"Generated schedule instruction: {instruction[:100]}...")
+
+        # Create the schedule entry
+        result, entry_data = await add_scheduled_task(
+            user_request=user_input,
+            time_expression=time_expression,
+            instruction=instruction,
+            description=f"Scheduled: {user_input[:50]}...",
+            recurring="every" in time_expression.lower(),
+        )
+
+        if result.success and entry_data:
+            # Log the schedule creation
+            await state_manager.log_decision({
+                "event": "schedule_created",
+                "schedule_id": result.schedule_id,
+                "instruction": instruction,
+                "time_expression": time_expression,
+                "timestamp": utcnow_isoformat(),
+            })
+
+            # Create a ScheduleEntry from the entry_data
+            entry = ScheduleEntry(**entry_data)
+
+            # Return as "new_schedule_entry" - the commit node will merge it
+            return {
+                "new_schedule_entry": entry,
+                "pending_response": f"✅ Scheduled: {result.message}\nNext run: {result.next_run}",
+            }
+        else:
+            logger.warning(f"Failed to create schedule: {result.message}")
+            return {
+                "pending_response": f"❌ Could not schedule task: {result.message}",
+            }
+
+    except Exception as e:
+        logger.error(f"Error planning schedule task: {e}", exc_info=True)
+        return {
+            "pending_response": f"❌ Error scheduling task: {e}",
+        }
+
+
 async def _plan_from_ideal_state(
     state: ProgenitorState,
     ideal_state,
@@ -192,6 +359,8 @@ async def _plan_from_ideal_state(
         item_type = WorkItemType.A2A_CALL
     elif decision_action == "call_tool":
         item_type = WorkItemType.MCP_CALL
+    elif decision_action == "system_tool":
+        item_type = WorkItemType.SYSTEM_TOOL
     else:
         item_type = WorkItemType.DIRECT_ANSWER
 
@@ -258,7 +427,7 @@ Define:
                 "verification_method": experiment_details.get("verification_method", "Score against criteria"),
                 "targeted_gaps": gaps[:3] if gaps else [],
                 "plan_output": response,
-                "capabilities": state.get("current_decision", {}).get("target_capabilities", []) if isinstance(state.get("current_decision"), dict) else [],
+                "capabilities": _get_target_capabilities(state),
             },
         )
         backlog.append(work_item)
@@ -278,7 +447,6 @@ Define:
 
         return {
             "backlog": backlog,
-            "current_experiment": experiment_details,
         }
 
     except Exception as e:
@@ -293,7 +461,7 @@ Define:
                 "approach": chosen_approach,
                 "experiment": "Execute selected approach",
                 "expected_outcome": "Verification score improves",
-                "capabilities": state.get("current_decision", {}).get("target_capabilities", []) if isinstance(state.get("current_decision"), dict) else [],
+                "capabilities": _get_target_capabilities(state),
             },
         )
         backlog.append(work_item)

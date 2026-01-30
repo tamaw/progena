@@ -32,13 +32,14 @@ class StatusManager {
         this.eventSource = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
-        this.reconnectDelay = 2000;
+        this.reconnectDelay = 1000;  // Start with 1 second
         this.lastStatus = null;
 
         this.init();
     }
 
     init() {
+        // Connect immediately on page load
         this.connectEventSource();
     }
 
@@ -55,42 +56,42 @@ class StatusManager {
             this.eventSource = new EventSource(url);
 
             this.eventSource.onopen = () => {
-                console.log('SSE: Connection established');
+                console.log('SSE: Connection opened');
                 this.reconnectAttempts = 0;
+                this.updateConnectionStatus(true);
             };
 
             this.eventSource.addEventListener('connected', (event) => {
-                console.log('SSE: Received initial status', event.data);
+                console.log('SSE: Received connected event, data length:', event.data.length);
                 try {
                     const data = JSON.parse(event.data);
-                    console.log('SSE: Parsed initial data:', data);
+                    console.log('SSE: Initial status - running:', data.progenitor_running, 'status:', data.progenitor_status);
                     this.lastStatus = data;
-                    this.updateConnectionStatus(true);
                     this.updateAllStatus(data);
                 } catch (e) {
-                    console.warn('SSE: Failed to parse connected event:', e);
-                    this.updateConnectionStatus(true);
+                    console.error('SSE: Failed to parse connected event:', e);
                 }
             });
 
             this.eventSource.addEventListener('status', (event) => {
-                console.log('SSE: Status update received');
                 try {
                     const data = JSON.parse(event.data);
+                    console.log('SSE: Status update - running:', data.progenitor_running, 'cycles:', data.cycle_count);
                     this.lastStatus = data;
                     this.updateAllStatus(data);
                 } catch (e) {
-                    console.warn('SSE: Failed to parse status event:', e);
+                    console.error('SSE: Failed to parse status event:', e);
                 }
             });
 
             this.eventSource.addEventListener('heartbeat', (event) => {
                 try {
                     const data = JSON.parse(event.data);
+                    console.log('SSE: Heartbeat - running:', data.progenitor_running);
                     this.lastStatus = data;
                     this.updateAllStatus(data);
                 } catch (e) {
-                    console.warn('SSE: Failed to parse heartbeat:', e);
+                    console.error('SSE: Failed to parse heartbeat:', e);
                 }
             });
 
@@ -120,8 +121,8 @@ class StatusManager {
         this.updateConnectionStatus(false);
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1);
-            console.log('SSE: Reconnecting in ' + Math.round(delay) + 'ms');
+            const delay = Math.min(this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1), 10000);
+            console.log('SSE: Reconnecting in ' + Math.round(delay) + 'ms (attempt ' + this.reconnectAttempts + ')');
             setTimeout(() => {
                 if (!this.isConnected) this.connectEventSource();
             }, delay);
@@ -151,11 +152,18 @@ class StatusManager {
     }
 
     updateAgentStatus(data) {
+        // Use progenitor_running (boolean) for the main status indicator
+        // Also show progenitor_status (raw status from health.json) for debugging
         const running = data.progenitor_running;
+        const rawStatus = data.progenitor_status || 'unknown';
 
         if (this.agentRunning) {
-            this.agentRunning.textContent = running ? 'Running' : 'Stopped';
-            this.agentRunning.className = 'status-value ' + (running ? 'status-healthy' : 'status-error');
+            // Show both the computed running state and raw status
+            const displayText = running ? 'Running' : (rawStatus === 'running' ? 'Stale' : 'Stopped');
+            this.agentRunning.textContent = displayText;
+            this.agentRunning.className = 'status-value ' + (running ? 'status-healthy' : (rawStatus === 'running' ? 'status-warning' : 'status-error'));
+            // Add title for more detail
+            this.agentRunning.title = `Status: ${rawStatus}, Active: ${running}`;
         }
         if (this.agentUptime && data.uptime_seconds !== undefined) {
             this.agentUptime.textContent = this.formatUptime(data.uptime_seconds);

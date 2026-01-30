@@ -68,10 +68,13 @@ def create_node(
         spec = result_data.get("spec", {})
 
         if item_type == "build_agent":
-            # Register new A2A agent
+            # Register new A2A agent (HTTP-based)
             agent_name = spec.get("name", "unnamed_agent")
             # Use new directory structure: app/agents/<agent_name>/agent.py
             entrypoint = f"app/agents/{agent_name}/agent.py"
+
+            # Allocate a port for the HTTP agent
+            port = tool_registry.allocate_port()
 
             entry = AgentRegistryEntry(
                 name=agent_name,
@@ -79,7 +82,10 @@ def create_node(
                 description=spec.get("description", ""),
                 capabilities=spec.get("capabilities", []),
                 entrypoint=entrypoint,
-                transport="stdio",
+                transport="http",  # HTTP by default
+                port=port,
+                endpoint=f"http://localhost:{port}",
+                agent_card_url=f"http://localhost:{port}/.well-known/agent.json",
             )
 
             await tool_registry.register_agent(entry)

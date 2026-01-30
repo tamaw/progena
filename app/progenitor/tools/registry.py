@@ -3,6 +3,7 @@ Tool and Agent Registry for Progenitor.
 
 Maintains registry.json with agent manifests and MCP tools.
 Provides capability discovery and lookup for routing decisions.
+Tracks runtime status of HTTP-based A2A agents.
 """
 
 import json
@@ -10,10 +11,15 @@ import logging
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
-from ..state.models import AgentRegistryEntry
+from ..state.models import AgentRegistryEntry, AgentStatus
 from ..runtime.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+# Port range for A2A agents (8100-8199 by default)
+AGENT_PORT_RANGE_START = 8100
+AGENT_PORT_RANGE_END = 8199
 
 
 class RegistryData(TypedDict):
@@ -23,10 +29,17 @@ class RegistryData(TypedDict):
 
 
 class ToolRegistry:
-    """Registry for A2A agents and MCP tools."""
+    """Registry for A2A agents and MCP tools.
 
-    def __init__(self, registry_path: Path | str) -> None:
+    Manages agent lifecycle including:
+    - Port allocation for HTTP-based agents
+    - Runtime status tracking (running, failed, etc.)
+    - Agent card URL management
+    """
+
+    def __init__(self, registry_path: Path | str, host: str = "localhost") -> None:
         self.registry_path: Path = Path(registry_path)
+        self.host = host  # Host for agent endpoints
         self._registry: RegistryData = {"agents": [], "tools": []}
 
     async def load(self) -> None:
@@ -152,3 +165,167 @@ class ToolRegistry:
             self.find_agent_by_capability(capability) is not None or
             self.find_tool_by_capability(capability) is not None
         )
+
+    def allocate_port(self) -> int:
+        """Allocate an available port for a new agent.
+
+        Returns:
+            An unused port in the agent port range.
+
+        Raises:
+            RuntimeError: If no ports are available.
+        """
+        used_ports = set()
+        for agent in self._registry.get("agents", []):
+            port = agent.get("port")
+            if port is not None:
+                used_ports.add(port)
+
+        for port in range(AGENT_PORT_RANGE_START, AGENT_PORT_RANGE_END + 1):
+            if port not in used_ports:
+                return port
+
+        raise RuntimeError(
+            f"No available ports in range {AGENT_PORT_RANGE_START}-{AGENT_PORT_RANGE_END}"
+        )
+
+    async def update_agent_status(
+        self,
+        name: str,
+        status: AgentStatus,
+        *,
+        status_message: Optional[str] = None,
+        pid: Optional[int] = None,
+        port: Optional[int] = None,
+        last_error: Optional[str] = None,
+        update_heartbeat: bool = False,
+    ) -> bool:
+        """Update runtime status of an agent.
+
+        Called when agent process outputs status information or
+        when health checks detect state changes.
+
+        Args:
+            name: Agent name.
+            status: New status.
+            status_message: Optional human-readable status detail.
+            pid: Process ID (set when starting).
+            port: Assigned port (set when starting).
+            last_error: Error message if status is FAILED.
+            update_heartbeat: Whether to update last_heartbeat timestamp.
+
+        Returns:
+            True if agent was found and updated.
+        """
+        for agent in self._registry.get("agents", []):
+            if agent.get("name") == name:
+                now = utcnow()
+                agent["status"] = status.value if isinstance(status, AgentStatus) else status
+                agent["updated_at"] = now.isoformat()
+
+                if status_message is not None:
+                    agent["status_message"] = status_message
+
+                if pid is not None:
+                    agent["pid"] = pid
+
+                if port is not None:
+                    agent["port"] = port
+                    agent["endpoint"] = f"http://{self.host}:{port}"
+                    agent["agent_card_url"] = f"http://{self.host}:{port}/.well-known/agent.json"
+
+                if last_error is not None:
+                    agent["last_error"] = last_error
+                elif status == AgentStatus.RUNNING:
+                    # Clear error on successful start
+                    agent["last_error"] = None
+
+                if status == AgentStatus.RUNNING and agent.get("startup_time") is None:
+                    agent["startup_time"] = now.isoformat()
+
+                if status == AgentStatus.STOPPED:
+                    agent["pid"] = None
+                    agent["startup_time"] = None
+
+                if update_heartbeat:
+                    agent["last_heartbeat"] = now.isoformat()
+
+                await self.save()
+                logger.info(
+                    "Agent '%s' status updated: %s%s",
+                    name,
+                    status.value if isinstance(status, AgentStatus) else status,
+                    f" - {status_message}" if status_message else ""
+                )
+                return True
+
+        logger.warning("Agent '%s' not found for status update", name)
+        return False
+
+    async def mark_agent_starting(
+        self,
+        name: str,
+        pid: int,
+        port: int,
+    ) -> bool:
+        """Mark an agent as starting up.
+
+        Args:
+            name: Agent name.
+            pid: Process ID.
+            port: Assigned HTTP port.
+
+        Returns:
+            True if agent was found and updated.
+        """
+        return await self.update_agent_status(
+            name,
+            AgentStatus.STARTING,
+            pid=pid,
+            port=port,
+            status_message="Process spawned, waiting for ready signal",
+        )
+
+    async def mark_agent_running(self, name: str) -> bool:
+        """Mark an agent as running and healthy."""
+        return await self.update_agent_status(
+            name,
+            AgentStatus.RUNNING,
+            status_message="Accepting requests",
+            update_heartbeat=True,
+        )
+
+    async def mark_agent_failed(self, name: str, error: str) -> bool:
+        """Mark an agent as failed."""
+        return await self.update_agent_status(
+            name,
+            AgentStatus.FAILED,
+            status_message="Failed to start or crashed",
+            last_error=error,
+        )
+
+    async def mark_agent_stopped(self, name: str) -> bool:
+        """Mark an agent as stopped."""
+        return await self.update_agent_status(
+            name,
+            AgentStatus.STOPPED,
+            status_message="Process terminated",
+        )
+
+    def get_running_agents(self) -> list[dict[str, Any]]:
+        """Get all agents that are currently running."""
+        return [
+            agent for agent in self._registry.get("agents", [])
+            if agent.get("status") in (
+                AgentStatus.RUNNING.value,
+                AgentStatus.WAITING.value,
+                AgentStatus.EXECUTING.value,
+            )
+        ]
+
+    def get_agent_endpoint(self, name: str) -> Optional[str]:
+        """Get the HTTP endpoint for an agent."""
+        agent = self.find_by_name(name)
+        if agent:
+            return agent.get("endpoint")
+        return None

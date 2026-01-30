@@ -118,7 +118,8 @@ class TestAgentRegistryEntry:
         assert entry.name == "email_agent"
         assert "send_email" in entry.capabilities
         assert entry.kind == "a2a_agent"
-        assert entry.transport == "stdio"
+        assert entry.transport == "http"  # Default is HTTP (A2A standard)
+        assert entry.status.value == "stopped"  # Default status
 
 
 class TestConversationMessage:

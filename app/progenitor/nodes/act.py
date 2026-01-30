@@ -140,10 +140,13 @@ async def _execute_work_item(
         return await _execute_upgrade(work_item, tool_registry, copilot_cli, worktrees_dir)
 
     elif item_type == WorkItemType.SCHEDULED:
-        return await _execute_scheduled(work_item, tool_registry, a2a_client, mcp_client)
+        return await _execute_scheduled(work_item, tool_registry, a2a_client, mcp_client, llm_client)
 
     elif item_type == WorkItemType.DIRECT_ANSWER:
         return {"message": "Direct answer provided"}, None
+
+    elif item_type == WorkItemType.SYSTEM_TOOL:
+        return await _execute_system_tool(work_item, tool_registry, llm_client)
 
     return None, f"Unknown item type: {item_type}"
 
@@ -269,11 +272,47 @@ async def _execute_scheduled(
     tool_registry,
     a2a_client: A2AClient,
     mcp_client: MCPClient,
+    llm_client,
 ) -> tuple[dict | None, str | None]:
-    """Execute a scheduled task."""
+    """Execute a scheduled task.
+
+    If the schedule has an instruction, run it through the LLM as if it were
+    a new user request. This allows scheduled tasks to invoke other tools,
+    A2A agents, or generate responses.
+    """
     action_type = work_item.context.get("action_type")
     action_config = work_item.context.get("action_config", {})
+    instruction = work_item.context.get("instruction")
 
+    # If we have an instruction, execute it through the LLM
+    if instruction:
+        logger.info(f"Executing scheduled instruction: {instruction[:100]}...")
+
+        try:
+            # Generate a response to the instruction as if it were a user request
+            # This can trigger further actions like A2A calls based on LLM decision
+            response = await llm_client.complete(
+                prompt=instruction,
+                system_prompt="""You are Progenitor, an AI assistant executing a scheduled task.
+The following is an instruction that was scheduled to run at this time.
+Execute the instruction and provide the response.
+If the instruction requires calling another agent or tool, indicate that in your response.""",
+            )
+
+            logger.info(f"Scheduled instruction completed: {response[:100] if response else 'empty'}...")
+
+            return {
+                "message": "Scheduled instruction executed",
+                "instruction": instruction,
+                "response": response,
+                "schedule_id": work_item.context.get("schedule_id"),
+            }, None
+
+        except Exception as e:
+            logger.error(f"Failed to execute scheduled instruction: {e}")
+            return None, f"Failed to execute scheduled instruction: {e}"
+
+    # Legacy handling for action_type based scheduling
     if action_type == "a2a_call":
         agent_config = tool_registry.find_by_name(action_config.get("agent"))
         if agent_config:
@@ -294,3 +333,89 @@ async def _execute_scheduled(
             return result, None
 
     return {"message": "Scheduled task executed"}, None
+
+
+async def _execute_system_tool(
+    work_item: WorkItem,
+    tool_registry,
+    llm_client,
+) -> tuple[dict | None, str | None]:
+    """Execute an internal system tool.
+
+    System tools are built-in operations like agent discovery and schedule management.
+    """
+    tool_name = work_item.context.get("tool_name", work_item.target_tool)
+
+    if tool_name == "rediscover_agents":
+        from ..tools.agent_discovery import discover_agents
+        from pathlib import Path
+
+        # Get agents directory
+        project_root = Path(__file__).parent.parent.parent.parent
+        agents_dir = project_root / "app" / "agents"
+
+        logger.info("Executing system tool: rediscover_agents")
+
+        result = await discover_agents(
+            agents_dir=agents_dir,
+            llm_client=llm_client,
+            registry=tool_registry,
+        )
+
+        return result, None
+
+    elif tool_name == "list_agents":
+        # List all registered agents with their status
+        agents = await tool_registry.get_running_agents()
+        all_agents = []
+        data = tool_registry._data
+
+        for agent in data.get("agents", []):
+            all_agents.append({
+                "name": agent.get("name"),
+                "description": agent.get("description"),
+                "status": agent.get("status", "unknown"),
+                "transport": agent.get("transport"),
+                "port": agent.get("port"),
+            })
+
+        return {
+            "agents": all_agents,
+            "running_count": len(agents),
+            "total_count": len(all_agents),
+        }, None
+
+    elif tool_name == "schedule_task":
+        # Add a scheduled task - returns entry data to be added to state
+        from ..tools.schedule import add_scheduled_task
+
+        tool_params = work_item.context.get("tool_params", {})
+
+        result, entry_data = await add_scheduled_task(
+            user_request=tool_params.get("user_request", ""),
+            time_expression=tool_params.get("time_expression", ""),
+            instruction=tool_params.get("instruction", ""),
+            description=tool_params.get("description"),
+            recurring=tool_params.get("recurring", False),
+        )
+
+        if result.success and entry_data:
+            # Return the entry data to be added to schedule by the caller
+            return {
+                "result": result.model_dump(),
+                "schedule_entry": entry_data,
+                "add_to_schedule": True,  # Signal to add this entry
+            }, None
+        else:
+            return {"result": result.model_dump()}, None if result.success else result.message
+
+    elif tool_name == "list_schedule":
+        from ..tools.schedule import list_scheduled_tasks
+
+        # This would need the schedule from state - return instruction to check state
+        return {
+            "message": "Use get_schedule from state manager to list scheduled tasks",
+            "tool": "list_schedule",
+        }, None
+
+    return None, f"Unknown system tool: {tool_name}"

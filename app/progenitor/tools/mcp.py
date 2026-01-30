@@ -195,21 +195,52 @@ class MCPClient:
 
 
 class A2AClient:
-    """Client for calling A2A agents."""
+    """Client for calling A2A agents.
+
+    Supports both HTTP (preferred) and stdio transports.
+    HTTP agents should expose endpoints at their registered URL.
+    """
 
     async def call_agent(
         self,
         agent_config: dict[str, Any],
         request: str,
         context: Optional[dict[str, Any]] = None,
+        timeout: float = 60.0,
     ) -> dict[str, Any]:
-        """Call an A2A agent with a request."""
-        transport = agent_config.get("transport", "stdio")
+        """Call an A2A agent with a request.
 
-        if transport == "stdio":
-            return await self._call_stdio_agent(agent_config, request, context)
-        elif transport == "http":
-            return await self._call_http_agent(agent_config, request, context)
+        Args:
+            agent_config: Agent configuration from registry.
+            request: Request message.
+            context: Additional context.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Response dict with success/error fields.
+        """
+        transport = agent_config.get("transport", "http")  # Default to HTTP
+
+        # Check agent status
+        status = agent_config.get("status", "stopped")
+        if status == "failed":
+            return {
+                "success": False,
+                "error": f"Agent is in failed state: {agent_config.get('last_error', 'Unknown error')}",
+            }
+
+        if transport == "http":
+            # For HTTP, check if endpoint is available
+            endpoint = agent_config.get("endpoint")
+            if not endpoint:
+                # Fall back to stdio if no endpoint configured
+                if agent_config.get("entrypoint"):
+                    logger.info("No HTTP endpoint for agent, falling back to stdio")
+                    return await self._call_stdio_agent(agent_config, request, context, timeout)
+                return {"success": False, "error": "No endpoint or entrypoint specified"}
+            return await self._call_http_agent(agent_config, request, context, timeout)
+        elif transport == "stdio":
+            return await self._call_stdio_agent(agent_config, request, context, timeout)
         else:
             raise ValueError(f"Unknown transport: {transport}")
 
@@ -218,8 +249,9 @@ class A2AClient:
         agent_config: dict[str, Any],
         request: str,
         context: Optional[dict[str, Any]] = None,
+        timeout: float = 60.0,
     ) -> dict[str, Any]:
-        """Call an agent via stdio."""
+        """Call an agent via stdio (legacy support)."""
         entrypoint = agent_config.get("entrypoint")
         if not entrypoint:
             raise ValueError("No entrypoint specified for agent")
@@ -241,7 +273,7 @@ class A2AClient:
         input_bytes = json.dumps(payload).encode() + b"\n"
         stdout, stderr = await asyncio.wait_for(
             process.communicate(input=input_bytes),
-            timeout=60
+            timeout=timeout
         )
 
         if process.returncode != 0:
@@ -264,6 +296,7 @@ class A2AClient:
         agent_config: dict[str, Any],
         request: str,
         context: Optional[dict[str, Any]] = None,
+        timeout: float = 60.0,
     ) -> dict[str, Any]:
         """Call an agent via HTTP."""
         import aiohttp
@@ -282,8 +315,61 @@ class A2AClient:
                 async with session.post(
                     endpoint,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=60),
+                    timeout=aiohttp.ClientTimeout(total=timeout),
                 ) as response:
+                    if response.status >= 400:
+                        text = await response.text()
+                        return {
+                            "success": False,
+                            "error": f"HTTP {response.status}: {text[:200]}",
+                        }
                     return await response.json()
+        except aiohttp.ClientConnectorError as e:
+            return {
+                "success": False,
+                "error": f"Connection failed: {e}. Agent may not be running.",
+            }
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": f"Request timeout after {timeout}s",
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def get_agent_card(
+        self,
+        agent_config: dict[str, Any],
+        timeout: float = 5.0,
+    ) -> Optional[dict[str, Any]]:
+        """Fetch the agent card from an HTTP agent.
+
+        Args:
+            agent_config: Agent configuration from registry.
+            timeout: Request timeout.
+
+        Returns:
+            Agent card dict or None if unavailable.
+        """
+        import aiohttp
+
+        agent_card_url = agent_config.get("agent_card_url")
+        if not agent_card_url:
+            endpoint = agent_config.get("endpoint")
+            if endpoint:
+                agent_card_url = f"{endpoint}/.well-known/agent.json"
+            else:
+                return None
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    agent_card_url,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+        except Exception as e:
+            logger.debug("Failed to fetch agent card: %s", e)
+
+        return None

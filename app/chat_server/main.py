@@ -93,6 +93,7 @@ from .shutdown import (
     stop_client_safely,
     commit_state_safely,
 )
+from .ui_routes import close_all_sse_connections
 
 logger = logging.getLogger(__name__)
 
@@ -384,7 +385,16 @@ async def lifespan(app: FastAPI):
     # Install graceful shutdown signal handlers
     graceful_shutdown.install_signal_handlers()
 
-    # Register shutdown callbacks
+    # Register drain callbacks - these run at the start of draining to help
+    # close long-running connections that would otherwise block draining
+    graceful_shutdown.register_drain_callback(
+        "close_sse_connections",
+        close_all_sse_connections,
+        priority=10,  # Run early to unblock request draining
+        timeout=5.0,
+    )
+
+    # Register shutdown callbacks - these run after draining completes
     graceful_shutdown.register_callback(
         "stop_session_manager",
         session_manager.stop,

@@ -32,18 +32,24 @@ class UIStatusResponse(BaseModel):
     connected: bool
     server_status: str
     progenitor_running: bool
+    progenitor_status: str = "unknown"  # Raw status from health.json
     uptime_seconds: float
     version: str
     memory_mb: Optional[float] = None
     active_requests: int
     rate_limit_minute_limit: int
     rate_limit_hour_limit: int
-    # New fields from state reader
+    # State data
     cycle_count: int = 0
     run_id: Optional[str] = None
     messages_count: int = 0
     pid: Optional[int] = None
     last_active: Optional[str] = None
+    # Lists
+    loops: list["LoopInfo"] = []
+    agents: list["SubAgentInfo"] = []
+    backlog: list["BacklogItemInfo"] = []
+    schedule: list["ScheduleItemInfo"] = []
 
 
 class LoopInfo(BaseModel):
@@ -156,6 +162,9 @@ async def get_ui_status():
 
     Aggregates health, rate limit, and progenitor status into a single response.
     Uses real data from data/state/ files.
+
+    This is the main status endpoint - the SSE /events endpoint pushes this same
+    data structure every 3 seconds for real-time updates.
     """
     from . import main as chat_main
 
@@ -165,30 +174,54 @@ async def get_ui_status():
         # Get basic health from chat server
         health = await chat_main.health_check_detailed()
 
-        # Get state from files
-        state_health = state_reader.get_health()
-        current_state = state_reader.get_current_state()
+        # Get state snapshot (includes loops, agents, backlog, schedule)
+        snapshot = state_reader.get_snapshot()
 
         # Determine if progenitor is running from state file
-        progenitor_running = state_health.is_running()
+        progenitor_running = snapshot.health.is_running()
 
-        # Build response
+        # Build response with full data
         return UIStatusResponse(
             connected=True,
             server_status=health.get("status", "unknown"),
             progenitor_running=progenitor_running,
+            progenitor_status=snapshot.health.status,  # Raw status from health.json
             uptime_seconds=health.get("uptime_seconds", 0),
             version=health.get("version", "unknown"),
             memory_mb=health.get("memory", {}).get("rss_mb"),
             active_requests=health.get("shutdown", {}).get("active_requests", 0),
             rate_limit_minute_limit=health.get("rate_limiter", {}).get("requests_per_minute_limit", 60),
             rate_limit_hour_limit=health.get("rate_limiter", {}).get("requests_per_hour_limit", 500),
-            # New fields from state
-            cycle_count=state_health.cycle_count,
-            run_id=state_health.run_id,
-            messages_count=len(current_state.get("messages", [])),
-            pid=state_health.pid,
-            last_active=state_health.last_active,
+            # State data
+            cycle_count=snapshot.health.cycle_count,
+            run_id=snapshot.health.run_id,
+            messages_count=len(state_reader.get_current_state().get("messages", [])),
+            pid=snapshot.health.pid,
+            last_active=snapshot.health.last_active,
+            # Lists
+            loops=[
+                LoopInfo(name=l.name, status=l.status, current_task=l.current_task)
+                for l in snapshot.loops
+            ],
+            agents=[
+                SubAgentInfo(
+                    name=a.name,
+                    status="ready" if progenitor_running else "offline",
+                    kind=a.kind,
+                    version=a.version,
+                    description=a.description,
+                    transport=a.transport,
+                )
+                for a in snapshot.agents
+            ],
+            backlog=[
+                BacklogItemInfo(id=b.id, type=b.item_type, status=b.status, description=b.description)
+                for b in snapshot.backlog
+            ],
+            schedule=[
+                ScheduleItemInfo(id=s.id, name=s.name, schedule=s.schedule, next_run=s.next_run, enabled=s.enabled)
+                for s in snapshot.schedule
+            ],
         )
     except Exception as e:
         logger.error("Failed to get UI status: %s", e)
@@ -430,9 +463,15 @@ def create_alert(
 # Event subscribers for SSE
 _event_subscribers: list[asyncio.Queue] = []
 
+# Shutdown event for SSE connections
+_sse_shutdown_event: Optional[asyncio.Event] = None
+
 # Status monitor state
 _status_monitor_task: Optional[asyncio.Task] = None
 _last_status: dict = {}
+
+# Track active SSE response tasks so we can cancel them on shutdown
+_active_sse_tasks: list[asyncio.Task] = []
 
 
 async def _get_current_status() -> dict:
@@ -451,10 +490,11 @@ async def _get_current_status() -> dict:
         "status": "healthy",
         "uptime_seconds": round(now - start_time, 1),
         "progenitor_running": snapshot.health.is_running(),
+        "progenitor_status": snapshot.health.status,  # Raw status from health.json
         "version": getattr(chat_main.config, 'api_version', '0.1.0'),
         # State data
-        "cycle_count": snapshot.cycle_count,
-        "run_id": snapshot.run_id,
+        "cycle_count": snapshot.health.cycle_count,  # Use health.cycle_count for accuracy
+        "run_id": snapshot.health.run_id or snapshot.run_id,
         "messages_count": snapshot.messages_count,
         "pid": snapshot.health.pid,
         "last_active": snapshot.health.last_active,
@@ -503,28 +543,26 @@ async def _get_current_status() -> dict:
 async def _status_monitor():
     """Background task that polls status and broadcasts to SSE subscribers.
 
-    Pushes status updates every 10 seconds.
+    Pushes status updates every 3 seconds for responsive UI.
     """
     global _last_status
 
-    update_interval = 10  # Push status every 10 seconds
+    update_interval = 3  # Push status every 3 seconds for responsive updates
 
-    print("[StatusMonitor] Starting status monitor loop", flush=True)
+    logger.info("[StatusMonitor] Starting status monitor loop")
 
     while True:
         try:
             await asyncio.sleep(update_interval)
 
             subscriber_count = len(_event_subscribers)
-            print(f"[StatusMonitor] Check: {subscriber_count} subscribers", flush=True)
-
             if subscriber_count == 0:
                 continue  # No subscribers, skip
 
             current = await _get_current_status()
             _last_status = current.copy()
             broadcast_event("status", current)
-            print(f"[StatusMonitor] Pushed status (uptime: {current.get('uptime_seconds', 0):.1f}s)", flush=True)
+            logger.debug(f"[StatusMonitor] Pushed status to {subscriber_count} subscribers")
 
         except asyncio.CancelledError:
             print("[StatusMonitor] Cancelled", flush=True)
@@ -569,12 +607,78 @@ def stop_status_monitor():
         logger.info("Status monitor stopped")
 
 
+def get_sse_shutdown_event() -> asyncio.Event:
+    """Get or create the SSE shutdown event."""
+    global _sse_shutdown_event
+    if _sse_shutdown_event is None:
+        _sse_shutdown_event = asyncio.Event()
+    return _sse_shutdown_event
+
+
+async def close_all_sse_connections():
+    """
+    Signal all SSE connections to close gracefully.
+
+    Called during server shutdown to ensure SSE connections don't block
+    the graceful shutdown process.
+    """
+    global _sse_shutdown_event, _active_sse_tasks
+
+    subscriber_count = len(_event_subscribers)
+    logger.info("Closing %d SSE connections for shutdown", subscriber_count)
+
+    # Set the shutdown event to signal all SSE generators to exit
+    shutdown_event = get_sse_shutdown_event()
+    shutdown_event.set()
+
+    # Send shutdown event to all subscribers so they can close gracefully
+    shutdown_data = {
+        "type": "shutdown",
+        "data": '{"reason": "server_shutdown", "message": "Server is shutting down"}'
+    }
+    for queue in _event_subscribers:
+        try:
+            queue.put_nowait(shutdown_data)
+        except asyncio.QueueFull:
+            pass
+
+    # Give connections a moment to receive the shutdown message and exit cleanly
+    await asyncio.sleep(0.5)
+
+    # Stop the status monitor
+    stop_status_monitor()
+
+    # Cancel any remaining SSE tasks that haven't exited
+    tasks_to_cancel = [t for t in _active_sse_tasks if not t.done()]
+    if tasks_to_cancel:
+        logger.info("Force-cancelling %d SSE tasks", len(tasks_to_cancel))
+        for task in tasks_to_cancel:
+            task.cancel()
+        # Wait for cancellation with timeout
+        done, pending = await asyncio.wait(tasks_to_cancel, timeout=2.0)
+        if pending:
+            logger.warning("%d SSE tasks did not cancel in time", len(pending))
+
+    # Clear the list
+    _active_sse_tasks.clear()
+
+    logger.info("SSE shutdown signal sent to all connections")
+
+
 async def _generate_events() -> AsyncGenerator[str, None]:
     """Generate SSE events for a subscriber."""
     import json
 
     queue: asyncio.Queue = asyncio.Queue()
     _event_subscribers.append(queue)
+
+    # Track current task for cancellation during shutdown
+    current_task = asyncio.current_task()
+    if current_task:
+        _active_sse_tasks.append(current_task)
+
+    # Get shutdown event to watch for server shutdown
+    shutdown_event = get_sse_shutdown_event()
 
     # Start status monitor if not running
     start_status_monitor()
@@ -585,19 +689,43 @@ async def _generate_events() -> AsyncGenerator[str, None]:
         yield f"event: connected\ndata: {json.dumps(initial_status)}\n\n"
 
         while True:
+            # Check if shutdown has been requested
+            if shutdown_event.is_set():
+                logger.debug("SSE connection closing due to server shutdown")
+                yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
+                break
+
             try:
                 # Wait for event with timeout (30s keepalive)
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                # Use shorter timeout during shutdown check
+                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+
+                # Check if this is a shutdown event
+                if event.get('type') == 'shutdown':
+                    yield f"event: shutdown\ndata: {event['data']}\n\n"
+                    break
+
                 yield f"event: {event['type']}\ndata: {event['data']}\n\n"
             except asyncio.TimeoutError:
+                # Check shutdown again on timeout
+                if shutdown_event.is_set():
+                    yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
+                    break
                 # Send heartbeat with current status (keeps connection alive)
                 heartbeat_status = await _get_current_status()
                 yield f"event: heartbeat\ndata: {json.dumps(heartbeat_status)}\n\n"
     except asyncio.CancelledError:
-        pass
+        # Send shutdown event on cancellation
+        try:
+            yield 'event: shutdown\ndata: {"reason": "connection_cancelled", "message": "Connection closed"}\n\n'
+        except Exception:
+            pass
     finally:
         if queue in _event_subscribers:
             _event_subscribers.remove(queue)
+        # Remove from active tasks
+        if current_task and current_task in _active_sse_tasks:
+            _active_sse_tasks.remove(current_task)
 
 
 @router.get("/events")

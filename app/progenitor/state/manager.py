@@ -147,6 +147,9 @@ class StateManager:
 
     async def _ensure_initial_state(self) -> None:
         """Ensure all state files exist with defaults."""
+        # Clean up any stale temp files from previous failed writes
+        self._cleanup_stale_temp_files()
+
         defaults = {
             "current_state": {
                 "cycle_count": 0,
@@ -164,6 +167,18 @@ class StateManager:
             if not filepath.exists():
                 await self._atomic_write_json(filepath, defaults[name])
             self._state_cache[name] = await self._read_json(filepath)
+
+    def _cleanup_stale_temp_files(self) -> None:
+        """Remove leftover .tmp files from failed atomic writes."""
+        try:
+            for tmp_file in self.state_dir.glob(".*.tmp"):
+                try:
+                    tmp_file.unlink()
+                    logger.info("Cleaned up stale temp file: %s", tmp_file.name)
+                except Exception as e:
+                    logger.warning("Failed to clean up %s: %s", tmp_file.name, e)
+        except Exception as e:
+            logger.warning("Error scanning for stale temp files: %s", e)
 
     @asynccontextmanager
     async def _file_lock(self, name: str):
@@ -207,8 +222,24 @@ class StateManager:
                 f.flush()
                 os.fsync(f.fileno())
 
-            # Atomic rename
-            os.replace(tmp_path, filepath)
+            # Atomic rename with retry for Windows file locking issues
+            # On Windows, os.replace can fail if target is held open by another process
+            max_retries = 5
+            retry_delay = 0.1
+            for attempt in range(max_retries):
+                try:
+                    os.replace(tmp_path, filepath)
+                    break
+                except PermissionError as pe:
+                    if attempt < max_retries - 1:
+                        logger.debug(
+                            "Retry %d/%d: os.replace failed for %s: %s",
+                            attempt + 1, max_retries, filepath.name, pe
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        raise
             logger.debug("Atomically wrote %s", filepath)
 
             # Record success metrics
