@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 
+class BuildInfoResponse(BaseModel):
+    """Build status information."""
+    in_progress: bool = False
+    phase: Optional[str] = None  # observe, think, plan, build, execute, verify, learn
+    task_description: Optional[str] = None
+    started_at: Optional[str] = None
+    iteration: int = 0
+    score: float = 0.0
+    message_count: int = 0
+
+
 class UIStatusResponse(BaseModel):
     """Combined status response for the UI."""
     connected: bool
@@ -44,6 +55,8 @@ class UIStatusResponse(BaseModel):
     messages_count: int = 0
     pid: Optional[int] = None
     last_active: Optional[str] = None
+    # Build status
+    build: Optional[BuildInfoResponse] = None
     # Lists
     loops: list["LoopInfo"] = []
     agents: list["SubAgentInfo"] = []
@@ -173,11 +186,24 @@ async def get_ui_status():
         # Get basic health from chat server
         health = await chat_main.health_check_detailed()
 
-        # Get state snapshot (includes loops, agents, backlog, schedule)
+        # Get state snapshot (includes loops, agents, backlog, schedule, build)
         snapshot = state_reader.get_snapshot()
 
         # Determine if progenitor is running from state file
         progenitor_running = snapshot.health.is_running()
+
+        # Build info from snapshot
+        build_info = None
+        if snapshot.build:
+            build_info = BuildInfoResponse(
+                in_progress=snapshot.build.in_progress,
+                phase=snapshot.build.phase,
+                task_description=snapshot.build.task_description,
+                started_at=snapshot.build.started_at,
+                iteration=snapshot.build.iteration,
+                score=snapshot.build.score,
+                message_count=snapshot.build.message_count,
+            )
 
         # Build response with full data
         return UIStatusResponse(
@@ -197,6 +223,8 @@ async def get_ui_status():
             messages_count=len(state_reader.get_current_state().get("messages", [])),
             pid=snapshot.health.pid,
             last_active=snapshot.health.last_active,
+            # Build status
+            build=build_info,
             # Lists
             loops=[
                 LoopInfo(name=l.name, status=l.status, current_task=l.current_task)
@@ -399,6 +427,411 @@ async def respond_to_alert(alert_id: str, response: str = "acknowledged"):
     return {"status": "responded", "alert_id": alert_id, "response": response}
 
 
+class TokenHistoryEntry(BaseModel):
+    """Single entry in token history."""
+    timestamp: float
+    input_tokens: int
+    output_tokens: int
+    cached_tokens: int = 0
+    total_tokens: int
+    model: str = "unknown"
+    request_type: str = "chat"
+
+
+class MetricsResponse(BaseModel):
+    """Response containing detailed metrics."""
+    timestamp: float
+    session_id: Optional[str] = None
+    # Token consumption
+    tokens: dict = {
+        "input_total": 0,
+        "output_total": 0,
+        "cached_total": 0,
+        "total": 0,
+        "session_input": 0,
+        "session_output": 0,
+    }
+    # Token history for charts
+    token_history: list[TokenHistoryEntry] = []
+    # Cost estimation (USD)
+    estimated_cost: float = 0.0
+    cost_breakdown: dict = {
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "cached_cost": 0.0,
+    }
+    # Response times (last 100)
+    response_times: list[float] = []
+    response_time_avg: float = 0.0
+    response_time_p95: float = 0.0
+    response_time_p50: float = 0.0
+    response_time_min: float = 0.0
+    response_time_max: float = 0.0
+    # Latency histogram buckets (for visualization)
+    latency_histogram: dict = {
+        "0-100ms": 0,
+        "100-250ms": 0,
+        "250-500ms": 0,
+        "500-1000ms": 0,
+        "1000-2500ms": 0,
+        "2500ms+": 0,
+    }
+    # Throughput
+    requests_per_minute: float = 0.0
+    requests_per_hour: float = 0.0
+    requests_total: int = 0
+    successful_requests: int = 0
+    # Errors
+    error_count: int = 0
+    error_rate: float = 0.0
+    errors_by_type: dict = {}
+    # Agent-specific
+    cycles_per_hour: float = 0.0
+    avg_cycle_duration: float = 0.0
+    active_agents: int = 0
+
+
+class AgentDetailResponse(BaseModel):
+    """Detailed information about a single agent."""
+    name: str
+    status: str
+    kind: str = "a2a_agent"
+    version: str = "0.1.0"
+    description: str = ""
+    transport: str = "stdio"
+    enabled: bool = True
+    # Statistics
+    total_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    total_tokens_input: int = 0
+    total_tokens_output: int = 0
+    avg_response_time: float = 0.0
+    last_active: Optional[str] = None
+    uptime_seconds: float = 0.0
+    # Recent activity
+    recent_requests: list[dict] = []
+    # Performance
+    success_rate: float = 100.0
+    tokens_per_request_avg: float = 0.0
+
+
+# In-memory metrics storage with enhanced tracking
+_metrics_data = {
+    "tokens_input": 0,
+    "tokens_output": 0,
+    "tokens_cached": 0,
+    "response_times": [],
+    "requests_total": 0,
+    "successful_requests": 0,
+    "errors_total": 0,
+    "errors_by_type": {},
+    "session_start": time.time(),
+    "token_history": [],  # List of TokenHistoryEntry dicts
+    "agent_metrics": {},  # Per-agent metrics
+    "latency_histogram": {
+        "0-100ms": 0,
+        "100-250ms": 0,
+        "250-500ms": 0,
+        "500-1000ms": 0,
+        "1000-2500ms": 0,
+        "2500ms+": 0,
+    },
+}
+
+# Cost per 1000 tokens (approximate for GPT-4 Turbo)
+_token_costs = {
+    "input": 0.01,      # $0.01 per 1K input tokens
+    "output": 0.03,     # $0.03 per 1K output tokens
+    "cached": 0.0025,   # $0.0025 per 1K cached tokens
+}
+
+
+@router.get("/metrics", response_model=MetricsResponse)
+async def get_metrics():
+    """
+    Get detailed metrics for the dashboard.
+    
+    Returns token consumption, response times, throughput, and error rates.
+    Used by the dashboard for charts and statistics.
+    """
+    now = time.time()
+    session_duration = now - _metrics_data["session_start"]
+    
+    # Calculate response time stats
+    times = _metrics_data["response_times"][-100:]  # Last 100
+    avg_time = sum(times) / len(times) if times else 0
+    sorted_times = sorted(times)
+    p95_time = sorted_times[int(len(sorted_times) * 0.95)] if len(sorted_times) > 0 else 0
+    p50_time = sorted_times[int(len(sorted_times) * 0.50)] if len(sorted_times) > 0 else 0
+    min_time = min(times) if times else 0
+    max_time = max(times) if times else 0
+    
+    # Calculate rates
+    requests_per_minute = (_metrics_data["requests_total"] / session_duration) * 60 if session_duration > 0 else 0
+    requests_per_hour = requests_per_minute * 60
+    error_rate = (_metrics_data["errors_total"] / _metrics_data["requests_total"]) * 100 if _metrics_data["requests_total"] > 0 else 0
+    
+    # Calculate costs
+    input_cost = (_metrics_data["tokens_input"] / 1000) * _token_costs["input"]
+    output_cost = (_metrics_data["tokens_output"] / 1000) * _token_costs["output"]
+    cached_cost = (_metrics_data["tokens_cached"] / 1000) * _token_costs["cached"]
+    total_cost = input_cost + output_cost + cached_cost
+    
+    # Get active agents count
+    state_reader = get_state_reader()
+    agents, _ = state_reader.get_registry()
+    active_agents = len([a for a in agents if a.enabled])
+    
+    # Prepare token history entries (convert dicts to TokenHistoryEntry)
+    token_history = [
+        TokenHistoryEntry(**entry) if isinstance(entry, dict) else entry
+        for entry in _metrics_data.get("token_history", [])[-100:]
+    ]
+    
+    return MetricsResponse(
+        timestamp=now,
+        tokens={
+            "input_total": _metrics_data["tokens_input"],
+            "output_total": _metrics_data["tokens_output"],
+            "cached_total": _metrics_data["tokens_cached"],
+            "total": _metrics_data["tokens_input"] + _metrics_data["tokens_output"],
+            "session_input": _metrics_data["tokens_input"],
+            "session_output": _metrics_data["tokens_output"],
+        },
+        token_history=token_history,
+        estimated_cost=round(total_cost, 4),
+        cost_breakdown={
+            "input_cost": round(input_cost, 4),
+            "output_cost": round(output_cost, 4),
+            "cached_cost": round(cached_cost, 4),
+        },
+        response_times=times,
+        response_time_avg=round(avg_time, 2),
+        response_time_p95=round(p95_time, 2),
+        response_time_p50=round(p50_time, 2),
+        response_time_min=round(min_time, 2),
+        response_time_max=round(max_time, 2),
+        latency_histogram=_metrics_data.get("latency_histogram", {}),
+        requests_per_minute=round(requests_per_minute, 2),
+        requests_per_hour=round(requests_per_hour, 2),
+        requests_total=_metrics_data["requests_total"],
+        successful_requests=_metrics_data.get("successful_requests", 0),
+        error_count=_metrics_data["errors_total"],
+        error_rate=round(error_rate, 2),
+        errors_by_type=_metrics_data.get("errors_by_type", {}),
+        active_agents=active_agents,
+    )
+
+
+def record_request_metrics(
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cached_tokens: int = 0,
+    response_time_ms: float = 0.0,
+    is_error: bool = False,
+    error_type: str = None,
+    model: str = "unknown",
+    request_type: str = "chat",
+    agent_name: str = None,
+):
+    """
+    Record metrics for a request.
+    
+    Called by chat handlers to track token consumption and response times.
+    
+    Args:
+        input_tokens: Number of input tokens used
+        output_tokens: Number of output tokens generated
+        cached_tokens: Number of cached tokens used
+        response_time_ms: Response time in milliseconds
+        is_error: Whether the request resulted in an error
+        error_type: Type of error (e.g., "timeout", "rate_limit", "server_error")
+        model: Model used for the request
+        request_type: Type of request (e.g., "chat", "completion", "embedding")
+        agent_name: Name of the agent making the request
+    """
+    now = time.time()
+    
+    # Update token counts
+    _metrics_data["tokens_input"] += input_tokens
+    _metrics_data["tokens_output"] += output_tokens
+    _metrics_data["tokens_cached"] += cached_tokens
+    _metrics_data["requests_total"] += 1
+    
+    if not is_error:
+        _metrics_data["successful_requests"] += 1
+    
+    # Add to token history
+    _metrics_data["token_history"].append({
+        "timestamp": now,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "model": model,
+        "request_type": request_type,
+    })
+    
+    # Keep only last 1000 history entries
+    if len(_metrics_data["token_history"]) > 1000:
+        _metrics_data["token_history"] = _metrics_data["token_history"][-1000:]
+    
+    # Update response times and latency histogram
+    if response_time_ms > 0:
+        _metrics_data["response_times"].append(response_time_ms)
+        # Keep only last 1000 response times
+        if len(_metrics_data["response_times"]) > 1000:
+            _metrics_data["response_times"] = _metrics_data["response_times"][-1000:]
+        
+        # Update latency histogram
+        if response_time_ms < 100:
+            _metrics_data["latency_histogram"]["0-100ms"] += 1
+        elif response_time_ms < 250:
+            _metrics_data["latency_histogram"]["100-250ms"] += 1
+        elif response_time_ms < 500:
+            _metrics_data["latency_histogram"]["250-500ms"] += 1
+        elif response_time_ms < 1000:
+            _metrics_data["latency_histogram"]["500-1000ms"] += 1
+        elif response_time_ms < 2500:
+            _metrics_data["latency_histogram"]["1000-2500ms"] += 1
+        else:
+            _metrics_data["latency_histogram"]["2500ms+"] += 1
+    
+    # Track errors
+    if is_error:
+        _metrics_data["errors_total"] += 1
+        if error_type:
+            _metrics_data["errors_by_type"][error_type] = \
+                _metrics_data["errors_by_type"].get(error_type, 0) + 1
+    
+    # Track per-agent metrics
+    if agent_name:
+        if agent_name not in _metrics_data["agent_metrics"]:
+            _metrics_data["agent_metrics"][agent_name] = {
+                "total_requests": 0,
+                "successful_requests": 0,
+                "failed_requests": 0,
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "response_times": [],
+                "last_active": None,
+                "recent_requests": [],
+            }
+        
+        agent_metrics = _metrics_data["agent_metrics"][agent_name]
+        agent_metrics["total_requests"] += 1
+        agent_metrics["tokens_input"] += input_tokens
+        agent_metrics["tokens_output"] += output_tokens
+        agent_metrics["last_active"] = now
+        
+        if is_error:
+            agent_metrics["failed_requests"] += 1
+        else:
+            agent_metrics["successful_requests"] += 1
+        
+        if response_time_ms > 0:
+            agent_metrics["response_times"].append(response_time_ms)
+            if len(agent_metrics["response_times"]) > 100:
+                agent_metrics["response_times"] = agent_metrics["response_times"][-100:]
+        
+        # Track recent requests
+        agent_metrics["recent_requests"].append({
+            "timestamp": now,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "response_time_ms": response_time_ms,
+            "is_error": is_error,
+        })
+        if len(agent_metrics["recent_requests"]) > 20:
+            agent_metrics["recent_requests"] = agent_metrics["recent_requests"][-20:]
+
+
+def reset_metrics():
+    """Reset all metrics (for testing)."""
+    global _metrics_data
+    _metrics_data = {
+        "tokens_input": 0,
+        "tokens_output": 0,
+        "tokens_cached": 0,
+        "response_times": [],
+        "requests_total": 0,
+        "successful_requests": 0,
+        "errors_total": 0,
+        "errors_by_type": {},
+        "session_start": time.time(),
+        "token_history": [],
+        "agent_metrics": {},
+        "latency_histogram": {
+            "0-100ms": 0,
+            "100-250ms": 0,
+            "250-500ms": 0,
+            "500-1000ms": 0,
+            "1000-2500ms": 0,
+            "2500ms+": 0,
+        },
+    }
+
+
+@router.get("/agents/{agent_name}", response_model=AgentDetailResponse)
+async def get_agent_detail(agent_name: str):
+    """
+    Get detailed information about a specific agent.
+    
+    Returns agent configuration, statistics, and recent activity.
+    """
+    state_reader = get_state_reader()
+    agents, _ = state_reader.get_registry()
+    health = state_reader.get_health()
+    progenitor_running = health.is_running()
+    
+    # Find the agent
+    agent = next((a for a in agents if a.name == agent_name), None)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+    
+    # Get agent-specific metrics
+    agent_metrics = _metrics_data.get("agent_metrics", {}).get(agent_name, {})
+    
+    # Calculate statistics
+    total_requests = agent_metrics.get("total_requests", 0)
+    successful_requests = agent_metrics.get("successful_requests", 0)
+    failed_requests = agent_metrics.get("failed_requests", 0)
+    tokens_input = agent_metrics.get("tokens_input", 0)
+    tokens_output = agent_metrics.get("tokens_output", 0)
+    response_times = agent_metrics.get("response_times", [])
+    
+    avg_response_time = sum(response_times) / len(response_times) if response_times else 0
+    success_rate = (successful_requests / total_requests * 100) if total_requests > 0 else 100.0
+    tokens_per_request = (tokens_input + tokens_output) / total_requests if total_requests > 0 else 0
+    
+    last_active = agent_metrics.get("last_active")
+    if last_active:
+        from datetime import datetime
+        last_active = datetime.fromtimestamp(last_active).isoformat()
+    
+    return AgentDetailResponse(
+        name=agent.name,
+        status="ready" if progenitor_running else "offline",
+        kind=agent.kind,
+        version=agent.version,
+        description=agent.description,
+        transport=agent.transport,
+        enabled=agent.enabled,
+        total_requests=total_requests,
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
+        total_tokens_input=tokens_input,
+        total_tokens_output=tokens_output,
+        avg_response_time=round(avg_response_time, 2),
+        last_active=last_active,
+        uptime_seconds=health.uptime_seconds if hasattr(health, 'uptime_seconds') else 0,
+        recent_requests=agent_metrics.get("recent_requests", []),
+        success_rate=round(success_rate, 2),
+        tokens_per_request_avg=round(tokens_per_request, 2),
+    )
+
+
 @router.get("/prompts")
 async def get_prompts():
     """
@@ -411,14 +844,99 @@ async def get_prompts():
 
 
 @router.get("/logs")
-async def get_logs():
+async def get_logs(
+    level: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 500,
+    format: str = "text",
+):
     """
-    Get agent logs.
+    Get agent logs with optional filtering.
+
+    Args:
+        level: Filter by log level (debug, info, warn, error)
+        search: Search string to filter logs
+        limit: Maximum number of lines to return (default 500)
+        format: Response format - "text" for raw logs, "json" for structured
 
     Returns recent logs from the agent.
     """
-    # TODO: Implement actual log reading from logs/
-    return {"logs": ""}
+    from pathlib import Path
+    import json as json_module
+    import re
+    
+    logs_dir = Path("logs")
+    log_entries = []
+    log_content = ""
+    
+    # Try to read the most recent log file
+    try:
+        log_files = list(logs_dir.glob("*.log")) + list(logs_dir.glob("*.jsonl"))
+        if log_files:
+            # Get most recent by modification time
+            log_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            recent_log = log_files[0]
+            
+            # Read last N lines
+            with open(recent_log, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                lines = lines[-limit:]
+            
+            # Parse and filter logs
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Try to parse as JSON (jsonl format)
+                try:
+                    entry = json_module.loads(line)
+                    log_level = entry.get("level", "info").lower()
+                    message = entry.get("message", entry.get("msg", line))
+                    timestamp = entry.get("timestamp", entry.get("time", ""))
+                except json_module.JSONDecodeError:
+                    # Parse standard log format: [TIMESTAMP] [LEVEL] MESSAGE
+                    log_level = "info"
+                    message = line
+                    timestamp = ""
+                    
+                    # Try to extract level from common patterns
+                    level_match = re.search(r'\[(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL)\]', line, re.I)
+                    if level_match:
+                        log_level = level_match.group(1).lower()
+                        if log_level == "warning":
+                            log_level = "warn"
+                    
+                    # Try to extract timestamp
+                    time_match = re.search(r'^\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})', line)
+                    if time_match:
+                        timestamp = time_match.group(1)
+                    entry = {"level": log_level, "message": message, "timestamp": timestamp}
+                
+                # Apply filters
+                if level and log_level != level.lower():
+                    continue
+                if search and search.lower() not in message.lower():
+                    continue
+                
+                log_entries.append({
+                    "level": log_level,
+                    "message": message,
+                    "timestamp": timestamp,
+                })
+            
+            log_content = '\n'.join(lines)
+    except Exception as e:
+        logger.warning("Failed to read logs: %s", e)
+    
+    if format == "json":
+        return {
+            "entries": log_entries,
+            "total": len(log_entries),
+            "filtered": level is not None or search is not None,
+        }
+    
+    return {"logs": log_content, "total": len(log_entries)}
 
 
 def create_alert(
@@ -524,6 +1042,16 @@ async def _get_current_status() -> dict:
             {"id": s.id, "name": s.name, "schedule": s.schedule, "enabled": s.enabled}
             for s in snapshot.schedule
         ],
+        # Build status
+        "build": {
+            "in_progress": snapshot.build.in_progress if snapshot.build else False,
+            "phase": snapshot.build.phase if snapshot.build else None,
+            "task_description": snapshot.build.task_description if snapshot.build else None,
+            "started_at": snapshot.build.started_at if snapshot.build else None,
+            "iteration": snapshot.build.iteration if snapshot.build else 0,
+            "score": snapshot.build.score if snapshot.build else 0.0,
+            "message_count": snapshot.build.message_count if snapshot.build else 0,
+        } if snapshot.build else None,
     }
 
     if shutdown_mgr and shutdown_mgr.is_shutting_down:

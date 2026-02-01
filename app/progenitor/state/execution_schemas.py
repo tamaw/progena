@@ -1,0 +1,867 @@
+"""
+Execution Schemas - Structured output types for the inner loop.
+
+BL-001: ExecutionRun/ExecutionResult schema
+BL-002: ExperimentPlan schema
+BL-003: StructuredApproach schema
+
+These schemas ensure consistent data flow between nodes and enable
+deterministic processing without guessing what data is available.
+"""
+
+from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
+from pydantic import BaseModel, Field
+
+from ..runtime.time_utils import utcnow
+
+
+# =============================================================================
+# BL-001: ExecutionRun / ExecutionResult Schema
+# =============================================================================
+
+class ExecutionStatus(str, Enum):
+    """Status of an execution run."""
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    PARTIAL = "partial"  # Some prompts succeeded, some failed
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    SKIPPED = "skipped"
+
+
+class PromptResult(BaseModel):
+    """Result of running a single prompt against an agent."""
+
+    prompt_id: str = Field(description="Identifier for this prompt")
+    prompt_text: str = Field(description="The prompt that was sent")
+
+    # Response data
+    response_text: Optional[str] = Field(default=None, description="Agent's response text")
+    response_data: Optional[dict[str, Any]] = Field(default=None, description="Structured response if applicable")
+
+    # Timing
+    started_at: Optional[datetime] = Field(default=None, description="When prompt was sent")
+    completed_at: Optional[datetime] = Field(default=None, description="When response was received")
+    duration_ms: Optional[float] = Field(default=None, description="Response time in milliseconds")
+
+    # Status
+    success: bool = Field(default=False, description="Whether the prompt executed successfully")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    error_type: Optional[str] = Field(default=None, description="Error classification")
+
+    # Transcript for debugging
+    transcript: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Full conversation transcript if multi-turn"
+    )
+
+
+class ExecutionRun(BaseModel):
+    """A single execution run against a built agent.
+
+    Captures everything needed to reproduce and analyze the run:
+    - Agent identification
+    - Prompts sent and responses received
+    - Timing and performance data
+    - Errors and their classification
+    """
+
+    run_id: str = Field(description="Unique identifier for this run")
+    iteration: int = Field(description="Inner loop iteration number")
+
+    # Agent identification
+    agent_name: str = Field(description="Name of the agent being exercised")
+    agent_endpoint: Optional[str] = Field(default=None, description="HTTP endpoint if applicable")
+    agent_transport: str = Field(default="http", description="Transport: http or stdio")
+
+    # Execution details
+    started_at: datetime = Field(default_factory=utcnow, description="When run started")
+    completed_at: Optional[datetime] = Field(default=None, description="When run completed")
+    duration_ms: Optional[float] = Field(default=None, description="Total duration in ms")
+
+    # Prompt results
+    prompt_results: list[PromptResult] = Field(
+        default_factory=list,
+        description="Results for each prompt in the experiment"
+    )
+
+    # Overall status
+    status: ExecutionStatus = Field(default=ExecutionStatus.PENDING)
+
+    # Aggregated metrics
+    prompts_total: int = Field(default=0, description="Total prompts attempted")
+    prompts_succeeded: int = Field(default=0, description="Prompts that succeeded")
+    prompts_failed: int = Field(default=0, description="Prompts that failed")
+
+    avg_response_time_ms: Optional[float] = Field(default=None, description="Average response time")
+
+    # Errors (aggregated)
+    errors: list[str] = Field(default_factory=list, description="All error messages")
+
+    def finalize(self) -> "ExecutionRun":
+        """Compute aggregated metrics after all prompts are run."""
+        self.completed_at = utcnow()
+        if self.started_at and self.completed_at:
+            delta = self.completed_at - self.started_at
+            self.duration_ms = delta.total_seconds() * 1000
+
+        self.prompts_total = len(self.prompt_results)
+        self.prompts_succeeded = sum(1 for p in self.prompt_results if p.success)
+        self.prompts_failed = self.prompts_total - self.prompts_succeeded
+
+        # Compute average response time
+        times = [p.duration_ms for p in self.prompt_results if p.duration_ms is not None]
+        if times:
+            self.avg_response_time_ms = sum(times) / len(times)
+
+        # Aggregate errors
+        self.errors = [p.error for p in self.prompt_results if p.error]
+
+        # Determine overall status
+        if self.prompts_total == 0:
+            self.status = ExecutionStatus.SKIPPED
+        elif self.prompts_failed == 0:
+            self.status = ExecutionStatus.SUCCESS
+        elif self.prompts_succeeded == 0:
+            self.status = ExecutionStatus.FAILED
+        else:
+            self.status = ExecutionStatus.PARTIAL
+
+        return self
+
+
+class ExecutionResult(BaseModel):
+    """Complete execution result for an iteration.
+
+    This is the stable JSON structure stored in state.execution_result
+    and/or embedded in last_iteration_output.
+
+    Every iteration produces this payload, even on failures (with errors populated).
+    """
+
+    iteration: int = Field(description="Inner loop iteration number")
+    task_id: Optional[str] = Field(default=None, description="Task identifier")
+
+    # Execution runs (typically one, but could be multiple for retries)
+    runs: list[ExecutionRun] = Field(
+        default_factory=list,
+        description="All execution runs for this iteration"
+    )
+
+    # Primary run (convenience accessor)
+    @property
+    def primary_run(self) -> Optional[ExecutionRun]:
+        """Get the primary (last successful or last) execution run."""
+        if not self.runs:
+            return None
+        # Prefer successful runs
+        for run in reversed(self.runs):
+            if run.status == ExecutionStatus.SUCCESS:
+                return run
+        return self.runs[-1]
+
+    # Aggregated status
+    status: ExecutionStatus = Field(default=ExecutionStatus.PENDING)
+
+    # Build output (from BUILD phase, preserved for reference)
+    build_output: Optional[dict[str, Any]] = Field(default=None, description="Output from BUILD phase")
+
+    # Overall timing
+    started_at: datetime = Field(default_factory=utcnow)
+    completed_at: Optional[datetime] = Field(default=None)
+    total_duration_ms: Optional[float] = Field(default=None)
+
+    # Aggregated errors
+    all_errors: list[str] = Field(default_factory=list, description="All errors across runs")
+
+    # Success indicators
+    smoke_test_passed: bool = Field(default=False, description="Did the smoke test pass?")
+    all_prompts_passed: bool = Field(default=False, description="Did all experiment prompts pass?")
+
+    # Raw data for downstream analysis
+    raw_transcripts: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="All conversation transcripts for analysis"
+    )
+
+    def finalize(self) -> "ExecutionResult":
+        """Compute aggregated metrics after all runs complete."""
+        self.completed_at = utcnow()
+        if self.started_at and self.completed_at:
+            delta = self.completed_at - self.started_at
+            self.total_duration_ms = delta.total_seconds() * 1000
+
+        # Aggregate errors from all runs
+        self.all_errors = []
+        for run in self.runs:
+            self.all_errors.extend(run.errors)
+
+        # Determine overall status
+        if not self.runs:
+            self.status = ExecutionStatus.SKIPPED
+        else:
+            statuses = [run.status for run in self.runs]
+            if ExecutionStatus.SUCCESS in statuses:
+                self.status = ExecutionStatus.SUCCESS
+            elif ExecutionStatus.PARTIAL in statuses:
+                self.status = ExecutionStatus.PARTIAL
+            elif all(s == ExecutionStatus.FAILED for s in statuses):
+                self.status = ExecutionStatus.FAILED
+            else:
+                self.status = ExecutionStatus.PARTIAL
+
+        # Check smoke test (first prompt of first run)
+        if self.runs and self.runs[0].prompt_results:
+            self.smoke_test_passed = self.runs[0].prompt_results[0].success
+
+        # Check if all prompts passed
+        all_passed = all(
+            p.success
+            for run in self.runs
+            for p in run.prompt_results
+        )
+        self.all_prompts_passed = all_passed and len(self.runs) > 0
+
+        # Collect all transcripts
+        self.raw_transcripts = []
+        for run in self.runs:
+            for prompt_result in run.prompt_results:
+                if prompt_result.transcript:
+                    self.raw_transcripts.append({
+                        "run_id": run.run_id,
+                        "prompt_id": prompt_result.prompt_id,
+                        "transcript": prompt_result.transcript,
+                    })
+
+        return self
+
+
+# =============================================================================
+# BL-002: ExperimentPlan Schema
+# =============================================================================
+
+class PromptSpec(BaseModel):
+    """Specification for a single prompt in the experiment."""
+
+    id: str = Field(description="Unique prompt identifier")
+    text: str = Field(description="The prompt text to send")
+
+    # Expected behavior
+    expected_response_contains: list[str] = Field(
+        default_factory=list,
+        description="Substrings that should appear in response"
+    )
+    expected_response_not_contains: list[str] = Field(
+        default_factory=list,
+        description="Substrings that should NOT appear in response"
+    )
+    expected_response_format: Optional[str] = Field(
+        default=None,
+        description="Expected format: 'json', 'text', 'markdown', etc."
+    )
+
+    # Scoring
+    max_score: float = Field(default=1.0, description="Maximum score for this prompt")
+    weight: float = Field(default=1.0, description="Weight in overall experiment score")
+
+    # Timing
+    timeout_ms: int = Field(default=30000, description="Timeout for this prompt in ms")
+
+    # Flags
+    is_smoke_test: bool = Field(default=False, description="Is this the required smoke test?")
+    is_optional: bool = Field(default=False, description="Can experiment continue if this fails?")
+
+
+class ScoringHook(BaseModel):
+    """A scoring hook for evaluating responses."""
+
+    id: str = Field(description="Hook identifier")
+    name: str = Field(description="Human-readable name")
+    hook_type: str = Field(description="Type: contains, regex, json_path, llm_judge, custom")
+
+    # Configuration per type
+    pattern: Optional[str] = Field(default=None, description="Pattern for regex/contains hooks")
+    json_path: Optional[str] = Field(default=None, description="JSONPath for json_path hooks")
+    llm_prompt: Optional[str] = Field(default=None, description="Prompt for llm_judge hooks")
+    custom_function: Optional[str] = Field(default=None, description="Function name for custom hooks")
+
+    # Scoring
+    max_score: float = Field(default=1.0, description="Max score this hook can award")
+    weight: float = Field(default=1.0, description="Weight in final calculation")
+
+
+class StopEarlyRule(BaseModel):
+    """Rule for stopping the experiment early."""
+
+    id: str = Field(description="Rule identifier")
+    rule_type: str = Field(
+        description="Type: consecutive_failures, score_threshold, timeout"
+    )
+
+    # Parameters per type
+    threshold: float = Field(default=0, description="Threshold value")
+    description: str = Field(default="", description="Human-readable description")
+
+
+class ExperimentPlan(BaseModel):
+    """Structured experiment plan emitted by PLAN phase.
+
+    This allows EXECUTE to run without guessing what prompts to send.
+    Contains all information needed to exercise the built agent.
+    """
+
+    plan_id: str = Field(description="Unique plan identifier")
+    iteration: int = Field(description="Target iteration number")
+
+    # What we're testing
+    agent_name: str = Field(description="Name of agent to exercise")
+    experiment_description: str = Field(description="What this experiment tests")
+
+    # Prompts to run
+    prompts: list[PromptSpec] = Field(
+        default_factory=list,
+        description="Prompts to send, in order"
+    )
+
+    # Scoring configuration
+    scoring_hooks: list[ScoringHook] = Field(
+        default_factory=list,
+        description="Hooks for scoring responses"
+    )
+
+    # Execution parameters
+    num_trials: int = Field(default=1, description="Number of times to run the experiment")
+    parallel_trials: bool = Field(default=False, description="Run trials in parallel?")
+
+    # Stop-early rules
+    stop_early_rules: list[StopEarlyRule] = Field(
+        default_factory=list,
+        description="Rules for stopping early"
+    )
+
+    # Timeouts
+    total_timeout_ms: int = Field(default=120000, description="Total experiment timeout")
+    per_prompt_timeout_ms: int = Field(default=30000, description="Default per-prompt timeout")
+
+    # Expected measurable outcome (from loop.spec.md PLAN phase)
+    expected_outcome: str = Field(
+        default="",
+        description="What success looks like for this experiment"
+    )
+    verification_method: str = Field(
+        default="score_threshold",
+        description="How to verify success"
+    )
+
+    @classmethod
+    def create_smoke_test_plan(
+        cls,
+        agent_name: str,
+        iteration: int,
+        smoke_prompt: str = "Hello, are you working?",
+    ) -> "ExperimentPlan":
+        """Create a minimal smoke test plan."""
+        import uuid
+        return cls(
+            plan_id=f"smoke_{uuid.uuid4().hex[:8]}",
+            iteration=iteration,
+            agent_name=agent_name,
+            experiment_description="Smoke test - verify agent responds",
+            prompts=[
+                PromptSpec(
+                    id="smoke_1",
+                    text=smoke_prompt,
+                    is_smoke_test=True,
+                    timeout_ms=10000,
+                )
+            ],
+            expected_outcome="Agent responds without error",
+            verification_method="response_received",
+        )
+
+
+# =============================================================================
+# BL-003: StructuredApproach Schema
+# =============================================================================
+
+class TradeOff(BaseModel):
+    """A trade-off associated with an approach."""
+
+    aspect: str = Field(description="What aspect this trade-off affects")
+    positive: str = Field(description="What we gain")
+    negative: str = Field(description="What we give up")
+    severity: str = Field(default="medium", description="low, medium, high")
+
+
+class Risk(BaseModel):
+    """A risk associated with an approach."""
+
+    id: str = Field(description="Risk identifier")
+    description: str = Field(description="What could go wrong")
+    likelihood: str = Field(default="medium", description="low, medium, high")
+    impact: str = Field(default="medium", description="low, medium, high")
+    mitigation: Optional[str] = Field(default=None, description="How to mitigate")
+
+
+class ExperimentPlanDelta(BaseModel):
+    """Recommended changes to the experiment plan for this approach."""
+
+    additional_prompts: list[PromptSpec] = Field(
+        default_factory=list,
+        description="Additional prompts to add"
+    )
+    remove_prompt_ids: list[str] = Field(
+        default_factory=list,
+        description="Prompt IDs to remove"
+    )
+    modify_scoring: list[ScoringHook] = Field(
+        default_factory=list,
+        description="Scoring hooks to add/modify"
+    )
+    adjust_timeout_ms: Optional[int] = Field(
+        default=None,
+        description="New timeout if different"
+    )
+
+
+class StructuredApproach(BaseModel):
+    """A structured approach from THINK phase.
+
+    BL-003: Approaches become typed/JSON with explicit tradeoffs/risks
+    and recommended experiment plan deltas.
+
+    PLAN can select one approach deterministically (or with a simple policy).
+    """
+
+    id: str = Field(description="Unique approach identifier")
+    name: str = Field(description="Short name for the approach")
+    description: str = Field(description="Detailed description of what to do")
+
+    # Strategy details
+    strategy: str = Field(description="The core strategy/technique")
+    implementation_steps: list[str] = Field(
+        default_factory=list,
+        description="Concrete steps to implement"
+    )
+
+    # Trade-offs and risks (BL-003 requirement)
+    trade_offs: list[TradeOff] = Field(
+        default_factory=list,
+        description="Explicit trade-offs"
+    )
+    risks: list[Risk] = Field(
+        default_factory=list,
+        description="Known risks"
+    )
+
+    # Experiment plan recommendations (BL-003 requirement)
+    recommended_plan_delta: Optional[ExperimentPlanDelta] = Field(
+        default=None,
+        description="Recommended changes to experiment plan"
+    )
+
+    # Scoring for approach selection
+    expected_success_probability: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Estimated probability of success"
+    )
+    expected_effort: str = Field(
+        default="medium",
+        description="low, medium, high"
+    )
+
+    # Targeting gaps
+    addresses_gaps: list[str] = Field(
+        default_factory=list,
+        description="Which gaps from last verification this addresses"
+    )
+
+    # Priority/ranking
+    priority: int = Field(
+        default=1,
+        description="Priority rank (1=highest)"
+    )
+
+
+class ThinkOutput(BaseModel):
+    """Structured output from THINK phase.
+
+    Contains 2-3 structured approaches with explicit tradeoffs/risks.
+    """
+
+    iteration: int = Field(description="Current iteration")
+
+    # The approaches (BL-003: 2-3 structured approaches)
+    approaches: list[StructuredApproach] = Field(
+        min_length=1,
+        max_length=5,
+        description="2-3 approaches with tradeoffs/risks"
+    )
+
+    # Analysis context
+    gaps_analyzed: list[str] = Field(
+        default_factory=list,
+        description="Gaps from previous verification that were analyzed"
+    )
+    constraints_considered: list[str] = Field(
+        default_factory=list,
+        description="Constraints that influenced approach selection"
+    )
+
+    # Recommendation
+    recommended_approach_id: Optional[str] = Field(
+        default=None,
+        description="ID of the recommended approach"
+    )
+    recommendation_reasoning: str = Field(
+        default="",
+        description="Why this approach is recommended"
+    )
+
+
+# =============================================================================
+# BL-005: ValidationResult (data-only, non-mutating)
+# =============================================================================
+
+class ValidationFinding(BaseModel):
+    """A single finding from validation."""
+
+    finding_id: str = Field(description="Unique finding identifier")
+    category: str = Field(description="Category: error, warning, info, suggestion")
+    source: str = Field(description="What produced this finding")
+    message: str = Field(description="Human-readable message")
+
+    # Location (if applicable)
+    file_path: Optional[str] = Field(default=None, description="File where issue was found")
+    line_number: Optional[int] = Field(default=None, description="Line number")
+
+    # Severity
+    severity: str = Field(default="medium", description="low, medium, high, critical")
+
+    # Evidence
+    evidence: Optional[str] = Field(default=None, description="Supporting evidence")
+
+
+class ValidationResultV2(BaseModel):
+    """Data-only validation result (BL-005).
+
+    VALIDATE reads ExecutionResult and produces ValidationResult that is
+    purely findings (no lint/tests, no code changes).
+
+    VALIDATE does not invoke external commands; if it must (future),
+    it records it explicitly as a "validation action" in the result.
+    """
+
+    iteration: int = Field(description="Iteration number")
+    validated_at: datetime = Field(default_factory=utcnow)
+
+    # What was validated
+    execution_result_ref: Optional[str] = Field(
+        default=None,
+        description="Reference to the ExecutionResult being validated"
+    )
+
+    # Findings (purely observational)
+    findings: list[ValidationFinding] = Field(
+        default_factory=list,
+        description="All validation findings"
+    )
+
+    # Aggregated counts
+    error_count: int = Field(default=0)
+    warning_count: int = Field(default=0)
+    info_count: int = Field(default=0)
+
+    # Overall assessment
+    has_blocking_issues: bool = Field(
+        default=False,
+        description="Are there issues that block progress?"
+    )
+
+    # Validation actions (for auditability if external commands needed in future)
+    validation_actions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Any external actions taken (should be empty per BL-005)"
+    )
+
+    def compute_counts(self) -> "ValidationResultV2":
+        """Compute aggregated counts from findings."""
+        self.error_count = sum(1 for f in self.findings if f.category == "error")
+        self.warning_count = sum(1 for f in self.findings if f.category == "warning")
+        self.info_count = sum(1 for f in self.findings if f.category == "info")
+        self.has_blocking_issues = self.error_count > 0
+        return self
+
+
+# =============================================================================
+# BL-006: VerificationEvidence for VERIFY scoring
+# =============================================================================
+
+class CriterionEvidence(BaseModel):
+    """Evidence for scoring a criterion."""
+
+    criterion_id: str = Field(description="Which criterion this is for")
+
+    # Score
+    score: float = Field(ge=0.0, le=1.0, description="Score 0-1")
+    passed: bool = Field(description="Did it meet target?")
+
+    # Evidence sources
+    execution_evidence: Optional[str] = Field(
+        default=None,
+        description="Evidence from ExecutionResult"
+    )
+    validation_evidence: Optional[str] = Field(
+        default=None,
+        description="Evidence from ValidationResult"
+    )
+
+    # How score was computed
+    scoring_method: str = Field(
+        default="heuristic",
+        description="heuristic, mechanical, llm_judge"
+    )
+    mechanical_check: Optional[str] = Field(
+        default=None,
+        description="Description of mechanical check if applicable"
+    )
+
+    # LLM assessment (only if needed for subjective criteria)
+    llm_assessment: Optional[str] = Field(
+        default=None,
+        description="LLM's assessment if used"
+    )
+
+
+class VerificationReportV2(BaseModel):
+    """Enhanced verification report (BL-006).
+
+    VERIFY consumes structured execution+validation data to compute
+    as many criterion scores as possible mechanically, then optionally
+    uses LLM for subjective criteria.
+
+    Verification report cites concrete evidence from execution runs.
+    """
+
+    iteration: int = Field(description="Iteration number")
+    verified_at: datetime = Field(default_factory=utcnow)
+
+    # Data sources
+    execution_result_ref: Optional[str] = Field(
+        default=None,
+        description="Reference to ExecutionResult"
+    )
+    validation_result_ref: Optional[str] = Field(
+        default=None,
+        description="Reference to ValidationResult"
+    )
+
+    # Per-criterion scoring with evidence
+    criterion_scores: list[CriterionEvidence] = Field(
+        default_factory=list,
+        description="Score and evidence per criterion"
+    )
+
+    # Anti-criterion violations
+    anti_criterion_violations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Anti-criteria that were violated"
+    )
+
+    # Overall score
+    overall_score: float = Field(ge=0.0, le=1.0, description="Weighted overall score")
+    passed: bool = Field(description="Did it pass minimum threshold?")
+
+    # Mechanical vs LLM scoring breakdown
+    mechanical_score_count: int = Field(
+        default=0,
+        description="How many criteria were scored mechanically"
+    )
+    llm_score_count: int = Field(
+        default=0,
+        description="How many criteria needed LLM judgment"
+    )
+
+    # Gaps and next actions
+    gaps: list[str] = Field(default_factory=list, description="What's still missing")
+    next_actions: list[str] = Field(default_factory=list, description="Suggested next steps")
+
+    # Summary with evidence citations
+    summary: str = Field(description="Human-readable summary")
+    evidence_citations: list[str] = Field(
+        default_factory=list,
+        description="Citations to concrete evidence from execution runs"
+    )
+
+    def compute_score_breakdown(self) -> "VerificationReportV2":
+        """Compute the mechanical vs LLM score breakdown."""
+        self.mechanical_score_count = sum(
+            1 for c in self.criterion_scores
+            if c.scoring_method in ("heuristic", "mechanical")
+        )
+        self.llm_score_count = sum(
+            1 for c in self.criterion_scores
+            if c.scoring_method == "llm_judge"
+        )
+        return self
+
+
+# =============================================================================
+# SpecDoc: Persistent Spec Artifact (PLAN-owned, BUILD-consumed)
+# =============================================================================
+
+class SpecDocHistory(BaseModel):
+    """A single history entry for spec document changes."""
+
+    revision: int = Field(description="Revision number at this point")
+    updated_at: datetime = Field(description="When this change was made")
+    summary: str = Field(description="Brief summary of what changed")
+    changed_by: str = Field(default="PLAN", description="Which node made the change")
+
+
+class SpecDoc(BaseModel):
+    """
+    Persistent spec artifact owned by PLAN, consumed by BUILD.
+
+    Stored in build_state.json under the key 'spec_doc'.
+    Evolves each iteration based on THINK outputs and verification results.
+
+    This makes the inner loop self-documenting:
+    - First run: PLAN seeds from a canonical template (e.g., agent_structure.md)
+    - Every iteration: PLAN updates based on THINK outputs
+    - BUILD consumes the latest spec_doc.content in its prompt/context
+    """
+
+    # Core content
+    content: str = Field(description="The markdown spec content")
+
+    # Provenance
+    source_seed_path: str = Field(
+        description="Path to the original seed template (e.g., 'prompts/agent_structure.md')"
+    )
+
+    # Versioning
+    revision: int = Field(default=1, description="Revision number, increments on each update")
+    created_at: datetime = Field(default_factory=utcnow, description="When first created")
+    updated_at: datetime = Field(default_factory=utcnow, description="When last updated")
+
+    # Context for what/who this spec is for
+    task_id: Optional[str] = Field(default=None, description="Work item ID this spec is for")
+    agent_name: Optional[str] = Field(default=None, description="Target agent name if applicable")
+
+    # File path for copilot CLI consumption (now in app/agents/)
+    spec_file_path: Optional[str] = Field(
+        default=None,
+        description="Path to the spec file in app/agents/ for copilot to reference"
+    )
+
+    # The prompt that instructs Copilot to read and build from the spec file
+    # This is separate from the spec content itself - the prompt references the spec file
+    copilot_prompt: Optional[str] = Field(
+        default=None,
+        description="The prompt to send to Copilot that references the spec file"
+    )
+
+    # Auditability
+    history: list[SpecDocHistory] = Field(
+        default_factory=list,
+        description="History of changes for auditability"
+    )
+
+    # Metadata about updates
+    last_think_output_ref: Optional[str] = Field(
+        default=None,
+        description="Reference to THINK output that informed last update"
+    )
+    iteration_last_updated: int = Field(
+        default=0,
+        description="Inner loop iteration when last updated"
+    )
+
+    def update_from_think(
+        self,
+        think_outputs: list[dict],
+        iteration: int,
+        verification_gaps: list[str] | None = None,
+    ) -> "SpecDoc":
+        """
+        Update spec content based on THINK phase outputs.
+
+        Appends relevant insights from approaches/tradeoffs/risks to the spec,
+        and notes any gaps that verification identified.
+        """
+        additions = []
+
+        # Extract key insights from THINK approaches
+        for i, approach in enumerate(think_outputs[:3]):  # Max 3 approaches
+            name = approach.get("name", f"Approach {i+1}")
+            description = approach.get("description", "")
+            if description:
+                additions.append(f"- **{name}**: {description[:200]}")
+
+            # Include tradeoffs
+            tradeoffs = approach.get("tradeoffs", [])
+            for tradeoff in tradeoffs[:2]:
+                if isinstance(tradeoff, dict):
+                    aspect = tradeoff.get("aspect", "")
+                    gain = tradeoff.get("gain", "")
+                    if aspect and gain:
+                        additions.append(f"  - Trade-off ({aspect}): {gain[:100]}")
+
+        # Include verification gaps if provided
+        if verification_gaps:
+            additions.append("\n### Gaps to Address")
+            for gap in verification_gaps[:5]:
+                additions.append(f"- {gap}")
+
+        if additions:
+            # Append to content
+            update_section = f"\n\n## Iteration {iteration} Updates\n" + "\n".join(additions)
+            self.content += update_section
+
+            # Update metadata
+            self.revision += 1
+            self.updated_at = utcnow()
+            self.iteration_last_updated = iteration
+
+            # Add to history
+            self.history.append(SpecDocHistory(
+                revision=self.revision,
+                updated_at=self.updated_at,
+                summary=f"Updated from THINK outputs (iteration {iteration})",
+                changed_by="PLAN",
+            ))
+
+        return self
+
+    @classmethod
+    def create_from_seed(
+        cls,
+        seed_content: str,
+        seed_path: str,
+        task_id: str | None = None,
+        agent_name: str | None = None,
+    ) -> "SpecDoc":
+        """Create a new SpecDoc from a seed template."""
+        now = utcnow()
+        return cls(
+            content=seed_content,
+            source_seed_path=seed_path,
+            revision=1,
+            created_at=now,
+            updated_at=now,
+            task_id=task_id,
+            agent_name=agent_name,
+            history=[SpecDocHistory(
+                revision=1,
+                updated_at=now,
+                summary=f"Seeded from {seed_path}",
+                changed_by="PLAN",
+            )],
+        )
+

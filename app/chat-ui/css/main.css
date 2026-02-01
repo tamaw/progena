@@ -145,6 +145,32 @@ html, body {
     color: var(--color-text-primary);
 }
 
+/* Navigation */
+.header-nav {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-left: var(--spacing-lg);
+}
+
+.nav-link {
+    padding: var(--spacing-sm) var(--spacing-md);
+    color: var(--color-text-secondary);
+    text-decoration: none;
+    border-radius: var(--border-radius-md);
+    transition: all var(--transition-fast);
+    font-size: var(--font-size-sm);
+}
+
+.nav-link:hover {
+    color: var(--color-text-primary);
+    background: var(--color-bg-hover);
+}
+
+.nav-link.active {
+    color: var(--color-accent);
+    background: rgba(88, 166, 255, 0.1);
+}
+
 .header-status {
     display: flex;
     align-items: center;

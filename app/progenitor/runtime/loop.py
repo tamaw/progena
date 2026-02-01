@@ -17,10 +17,11 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 import uuid
 
 from .time_utils import utcnow, utcnow_isoformat
+from .scheduler import Scheduler
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -67,6 +68,14 @@ def _init_telemetry(config: "ProgenitorConfig"):
         _telemetry_initialized = True
 
 
+# Module-level reference to the current loop instance for streaming access
+_current_loop: Optional["ProgenitorLoop"] = None
+
+
+def get_current_loop() -> Optional["ProgenitorLoop"]:
+    """Get the current loop instance for streaming access."""
+
+
 class ProgenitorLoop:
     """Manages the perpetual execution loop."""
 
@@ -92,7 +101,19 @@ class ProgenitorLoop:
         self._stream_queue: asyncio.Queue = asyncio.Queue(
             maxsize=runtime.max_stream_queue_size
         )
+        # Event to signal when a graph cycle completes (for IPC synchronization)
+        self._cycle_complete_event: asyncio.Event = asyncio.Event()
         self._cycle_telemetry = None
+        self._scheduler = Scheduler(timezone=config.runtime.timezone)
+
+        # Stream callback for real-time LLM streaming
+        # Nodes can use this to stream tokens directly to the client
+        self._stream_callback: Optional[Callable[[str, bool], Awaitable[None]]] = None
+
+        # Streaming state - controlled by the loop, accessed by nodes
+        self._streaming_enabled = False
+        self._response_was_streamed = False
+        self._stream_final_sent = False
 
     async def run_forever(self) -> None:
         """Run the perpetual loop.
@@ -101,6 +122,8 @@ class ProgenitorLoop:
         When idle, it backs off exponentially to avoid busy-waiting.
         State is checkpointed after each cycle for crash recovery.
         """
+        global _current_loop
+        _current_loop = self
         self.running = True
 
         # Initialize telemetry
@@ -124,6 +147,8 @@ class ProgenitorLoop:
             "backlog": [],
             "schedule": [],
             "agents": [],
+            "idle_cycles": 0,
+            "current_backoff_seconds": backoff,
         }
 
         # Load persisted state (recover from previous run)
@@ -145,10 +170,18 @@ class ProgenitorLoop:
                     logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
                     # Reset backoff on input
                     backoff = runtime.idle_backoff_seconds
+                    state["current_backoff_seconds"] = backoff
+                    state["idle_cycles"] = 0
 
                     state["current_input"] = user_input
                     state["cycle_count"] = state.get("cycle_count", 0) + 1
                     state["actions_this_cycle"] = 0
+
+                    # Enable streaming mode - set flag that nodes can check
+                    # The actual callback is accessed via self.stream_token
+                    self._streaming_enabled = True
+                    self._response_was_streamed = False
+                    self._stream_final_sent = False
 
                     # Run graph cycle
                     thread_id = f"cycle_{state['cycle_count']}"
@@ -171,15 +204,31 @@ class ProgenitorLoop:
                             if cycle_telem:
                                 cycle_telem.add_event(f"node.{node_name}", {"output_keys": str(output_info)})
 
-                        # Check for response to send
+                        # Check for response to send - stream it if not already streamed
                         pending = state.get("pending_response")
-                        if pending:
-                            await self._send_output(str(pending))
+                        if self._response_was_streamed and not self._stream_final_sent:
+                            # Response was already streamed by a node, just send final marker ONCE
+                            await self.stream_final()
+                            self._stream_final_sent = True
+                            state["pending_response"] = None
+                        elif pending:
+                            # Send complete response as a single chunk
+                            await self._stream_response(str(pending))
                             state["pending_response"] = None
 
                     # End cycle telemetry
                     if cycle_telem:
                         cycle_telem.complete(success=True)
+
+                    # Signal that the cycle is complete (for IPC synchronization)
+                    # This allows the IPC server to know when it's safe to process the next request
+                    logger.info("Graph cycle complete, signaling")
+                    await self._signal_cycle_complete()
+
+                    # Disable streaming mode and reset streaming state
+                    self._streaming_enabled = False
+                    self._response_was_streamed = False
+                    self._stream_final_sent = False
 
                     # Checkpoint state after each cycle
                     await self._checkpoint_state(state)
@@ -192,6 +241,8 @@ class ProgenitorLoop:
                     if has_work:
                         # Reset backoff when work is available
                         backoff = runtime.idle_backoff_seconds
+                        state["current_backoff_seconds"] = backoff
+                        state["idle_cycles"] = 0
                         # Run a cycle to process pending work
                         state["current_input"] = None
                         state["cycle_count"] = state.get("cycle_count", 0) + 1
@@ -218,7 +269,9 @@ class ProgenitorLoop:
                         # Increase backoff exponentially when truly idle
                         # Still update health to show we're alive
                         await self._update_health_file(state)
+                        state["idle_cycles"] = state.get("idle_cycles", 0) + 1
                         backoff = min(backoff * backoff_multiplier, max_backoff)
+                        state["current_backoff_seconds"] = backoff
                         logger.debug("Idle, backoff now %.1f s", backoff)
 
             except asyncio.CancelledError:
@@ -294,6 +347,70 @@ class ProgenitorLoop:
                 self._output_queue.maxsize
             )
 
+    async def _signal_cycle_complete(self) -> None:
+        """Signal that a graph cycle has completed.
+
+        This sets the cycle_complete_event which the IPC server can wait on
+        to ensure it doesn't start processing the next request until the
+        current cycle is fully done.
+        """
+        self._cycle_complete_event.set()
+
+    async def wait_cycle_complete(self, timeout: Optional[float] = None) -> bool:
+        """Wait for the current graph cycle to complete.
+
+        Args:
+            timeout: Max seconds to wait. None = wait forever.
+
+        Returns:
+            True if cycle completed, False if timed out.
+        """
+        try:
+            if timeout:
+                await asyncio.wait_for(
+                    self._cycle_complete_event.wait(),
+                    timeout=timeout
+                )
+            else:
+                await self._cycle_complete_event.wait()
+            # Clear the event for the next cycle
+            self._cycle_complete_event.clear()
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    async def _stream_response(self, text: str) -> None:
+        """Stream a response text directly through the stream queue.
+
+        If text is already streamed via stream_token(), this just sends the final marker.
+        Otherwise, sends the complete text as a single chunk.
+
+        Args:
+            text: The complete response text to stream.
+        """
+        if not text:
+            return
+
+        # Send complete response as final chunk
+        # (Real-time streaming should have already sent tokens via stream_token)
+        await self._send_stream_chunk(text, is_final=True)
+        logger.debug("Sent complete response (%d chars)", len(text))
+
+    async def stream_token(self, token: str) -> None:
+        """Stream a single token directly to the client.
+
+        This is called by LLM streaming to send tokens in real-time.
+
+        Args:
+            token: A single token/chunk from the LLM.
+        """
+        if token:
+            await self._send_stream_chunk(token, is_final=False)
+
+    async def stream_final(self) -> None:
+        """Mark the end of a streaming response."""
+        await self._send_stream_chunk("", is_final=True)
+
     async def _send_stream_chunk(self, chunk: str, is_final: bool = False) -> None:
         """Send a streaming chunk to the output stream.
 
@@ -352,8 +469,22 @@ class ProgenitorLoop:
         if pending:
             return True
 
-        # Check schedule
-        # (Simplified - full implementation would check due times)
+        # Check schedule for due items
+        schedule = state.get("schedule", [])
+        schedule_dicts: list[dict[str, Any]] = []
+        for item in schedule:
+            if hasattr(item, "model_dump"):
+                schedule_dicts.append(item.model_dump())
+            elif isinstance(item, dict):
+                schedule_dicts.append(item)
+
+        if schedule_dicts:
+            due_items = self._scheduler.get_due_items(schedule_dicts, utcnow())
+            due_ids = [item.get("id") for item in due_items if item.get("id")]
+            if due_ids:
+                state["due_items"] = due_ids
+                return True
+
         return False
 
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
@@ -515,6 +646,11 @@ class ProgenitorLoop:
             "run_id": state.get("run_id"),
             "cycle_count": state.get("cycle_count", 0),
             "pid": __import__("os").getpid(),
+            "idle_cycles": state.get("idle_cycles", 0),
+            "current_backoff_seconds": state.get("current_backoff_seconds"),
+            "backlog_count": len(state.get("backlog", []) or []),
+            "schedule_count": len(state.get("schedule", []) or []),
+            "queues": self.get_queue_stats(),
         }
 
         if error:

@@ -224,10 +224,9 @@ For folders that are valid agents, include full details.
 For folders that are not valid agents, set is_valid_agent=false with a reason."""
 
         try:
-            # Import here to avoid circular imports
-            from ..llm.client import _build_json_schema_format
-
-            response_format = _build_json_schema_format(
+            # Get the appropriate response format based on provider and API version
+            # Uses _get_json_response_format which handles Azure API version checks
+            response_format = self.llm_client._get_json_response_format(
                 AgentDiscoveryResult, "agent_discovery_result"
             )
 

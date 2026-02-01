@@ -104,10 +104,10 @@ client: Union[ProgenitorClient, IPCProgenitorClient, None] = None
 
 # Enhanced feature managers
 session_manager: SessionManager = SessionManager(SessionConfig(
-    persist_dir=Path("state/sessions") if config.host else None,
+    persist_dir=Path("data/state/sessions") if config.host else None,
 ))
 attachment_manager: AttachmentManager = AttachmentManager(AttachmentConfig(
-    cache_dir=Path("state/attachments"),
+    cache_dir=Path("data/state/attachments"),
 ))
 conversation_history: ConversationHistory = ConversationHistory()
 graceful_shutdown: GracefulShutdownManager = GracefulShutdownManager(
@@ -468,8 +468,44 @@ from .ui_routes import router as ui_router
 app.include_router(ui_router)
 
 # Mount static files for the Chat UI
+# Check for React build first (new), then fallback to legacy HTML (old)
+_chat_ui_react_path = Path(__file__).parent.parent / "chat-ui-react" / "dist"
 _chat_ui_path = Path(__file__).parent.parent / "chat-ui"
-if _chat_ui_path.exists():
+
+if _chat_ui_react_path.exists():
+    # Serve React build (new)
+    app.mount("/ui/assets", StaticFiles(directory=_chat_ui_react_path / "assets"), name="ui-assets")
+
+    @app.get("/")
+    async def serve_ui():
+        """Serve the Chat UI at root."""
+        return FileResponse(_chat_ui_react_path / "index.html")
+
+    @app.get("/ui")
+    @app.get("/ui/")
+    async def serve_ui_alias():
+        """Serve the Chat UI at /ui (alias for /)."""
+        return FileResponse(_chat_ui_react_path / "index.html")
+
+    @app.get("/ui/dashboard")
+    async def serve_dashboard():
+        """Serve the React Dashboard UI (React Router handles this)."""
+        return FileResponse(_chat_ui_react_path / "index.html")
+
+    @app.get("/ui/agents")
+    async def serve_agents_page():
+        """Serve the React Agents page (React Router handles this)."""
+        return FileResponse(_chat_ui_react_path / "index.html")
+
+    @app.get("/ui/logs")
+    async def serve_logs_page():
+        """Serve the React Logs page (React Router handles this)."""
+        return FileResponse(_chat_ui_react_path / "index.html")
+
+    logger.info("React Chat UI mounted at / and /ui (from %s)", _chat_ui_react_path)
+
+elif _chat_ui_path.exists():
+    # Fallback to legacy HTML UI
     app.mount("/css", StaticFiles(directory=_chat_ui_path / "css"), name="ui-css")
     app.mount("/js", StaticFiles(directory=_chat_ui_path / "js"), name="ui-js")
 
@@ -478,9 +514,39 @@ if _chat_ui_path.exists():
         """Serve the Chat UI at root."""
         return FileResponse(_chat_ui_path / "index.html")
 
-    logger.info("Chat UI mounted at /")
+    @app.get("/ui")
+    async def serve_ui_alias():
+        """Serve the Chat UI at /ui (alias for /)."""
+        return FileResponse(_chat_ui_path / "index.html")
+
+    @app.get("/ui/dashboard")
+    async def serve_dashboard():
+        """Serve the comprehensive Dashboard UI."""
+        dashboard_path = _chat_ui_path / "dashboard.html"
+        if dashboard_path.exists():
+            return FileResponse(dashboard_path)
+        # Fallback to main UI if dashboard not found
+        return FileResponse(_chat_ui_path / "index.html")
+
+    @app.get("/ui/agents")
+    async def serve_agents_page():
+        """Serve the dedicated Agents management page."""
+        agents_path = _chat_ui_path / "agents.html"
+        if agents_path.exists():
+            return FileResponse(agents_path)
+        return FileResponse(_chat_ui_path / "index.html")
+
+    @app.get("/ui/logs")
+    async def serve_logs_page():
+        """Serve the dedicated Logs viewer page."""
+        logs_path = _chat_ui_path / "logs.html"
+        if logs_path.exists():
+            return FileResponse(logs_path)
+        return FileResponse(_chat_ui_path / "index.html")
+
+    logger.info("Legacy Chat UI mounted at / and /ui, Dashboard at /ui/dashboard, Agents at /ui/agents, Logs at /ui/logs")
 else:
-    logger.warning("Chat UI not found at %s", _chat_ui_path)
+    logger.warning("Chat UI not found at %s or %s", _chat_ui_react_path, _chat_ui_path)
 
 # CORS middleware
 app.add_middleware(
@@ -896,6 +962,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             return StreamingResponse(
                 stream_response(last_user_msg, body.model, request_id),
                 media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering if present
+                },
             )
 
         response_text = await client.send_message(last_user_msg, request_id=request_id)

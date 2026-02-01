@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 from ..state.models import ProgenitorState
-from ..state.ideal_state import IdealStateBuilder
+from ..state.ideal_state import IdealStateBuilder, IdealState
 from ..state.clarification import create_clarification_history_entry
 from ..runtime.time_utils import utcnow_isoformat
 from . import NodeFunction, NodeStateUpdate
@@ -56,6 +56,16 @@ def create_node(
 
         iteration = state.get("current_iteration", 0)
         ideal_state = state.get("ideal_state")
+
+        # Convert ideal_state from dict to IdealState object if necessary
+        # (LangGraph may serialize/deserialize state as dicts)
+        if ideal_state is not None and isinstance(ideal_state, dict):
+            try:
+                ideal_state = IdealState(**ideal_state)
+                logger.debug("Converted ideal_state from dict to IdealState object")
+            except Exception as e:
+                logger.warning(f"Failed to convert ideal_state dict to IdealState: {e}")
+                ideal_state = None
 
         # Check if we have a clarification response to incorporate
         clarification_response = state.get("clarification_response")

@@ -73,6 +73,10 @@ class IPCServer:
         self._client_count = 0
         self._clients: dict[str, asyncio.StreamWriter] = {}
         self._shutdown_event = asyncio.Event()
+        # Serialize requests to prevent output queue race conditions
+        # Only one request can be processed at a time since the loop
+        # doesn't track request IDs through the output queue
+        self._request_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the IPC server."""
@@ -256,27 +260,45 @@ class IPCServer:
             request_id: Request identifier.
             writer: Client stream writer.
         """
-        logger.info("Processing request %s: %s", request_id, content[:50])
+        # Serialize requests to prevent output queue race conditions.
+        # The loop doesn't track request IDs, so we must ensure only
+        # one request is processed at a time.
+        async with self._request_lock:
+            logger.info("Processing request %s: %s", request_id, content[:50])
 
-        # Enqueue input and wait for output
-        success = await self.loop_runner.enqueue_input(content)
-        logger.info("Input enqueued for %s: success=%s, queue_size=%d",
-                    request_id, success, self.loop_runner._input_queue.qsize())
+            # Drain any stale output from previous requests that may have timed out
+            while not self.loop_runner._output_queue.empty():
+                try:
+                    stale = self.loop_runner._output_queue.get_nowait()
+                    logger.warning("Drained stale output (%d chars) for %s",
+                                   len(stale) if stale else 0, request_id)
+                except Exception:
+                    break
 
-        # Wait for the response (with timeout)
-        try:
-            response = await asyncio.wait_for(
-                self._wait_for_response(request_id),
-                timeout=300,  # 5 minute timeout
-            )
-            logger.info("Got response for %s: %d chars", request_id, len(response))
-            await write_message(writer, assistant_message(response, request_id))
-        except asyncio.TimeoutError:
-            logger.error("Request %s timed out waiting for response", request_id)
-            await write_message(
-                writer,
-                error_message("Request timed out", error_code="TIMEOUT", request_id=request_id),
-            )
+            # Enqueue input and wait for output
+            await self.loop_runner.enqueue_input(content)
+
+            # Wait for the response (with timeout)
+            try:
+                response = await asyncio.wait_for(
+                    self._wait_for_response(request_id),
+                    timeout=300,  # 5 minute timeout
+                )
+                logger.info("Got response for %s: %d chars", request_id, len(response))
+                await write_message(writer, assistant_message(response, request_id))
+
+                # CRITICAL: Wait for the graph cycle to fully complete
+                # before releasing the lock.
+                cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                if not cycle_done:
+                    logger.warning("Cycle complete timeout for %s", request_id)
+
+            except asyncio.TimeoutError:
+                logger.error("Request %s timed out waiting for response", request_id)
+                await write_message(
+                    writer,
+                    error_message("Request timed out", error_code="TIMEOUT", request_id=request_id),
+                )
 
     async def _wait_for_response(self, request_id: str) -> str:
         """Wait for a response from the loop runner.
@@ -289,13 +311,10 @@ class IPCServer:
         while True:
             poll_count += 1
             if poll_count % 10 == 0:
-                logger.debug("Still waiting for response %s (poll %d, output_queue_size=%d)",
-                            request_id, poll_count, self.loop_runner._output_queue.qsize())
+                logger.debug("Still waiting for %s (poll %d)", request_id, poll_count)
             chunk = await self.loop_runner.get_output(timeout=1.0)
             if chunk:
                 full_response += chunk
-                logger.debug("Got chunk for %s: %d chars", request_id, len(chunk))
-                # Check if this is the final response
                 # The loop runner sends complete messages
                 return full_response
             await asyncio.sleep(0.1)
@@ -313,54 +332,86 @@ class IPCServer:
             request_id: Request identifier.
             writer: Client stream writer.
         """
-        logger.info("Processing streaming request %s", request_id)
+        # Serialize requests to prevent output queue race conditions.
+        # The loop doesn't track request IDs, so we must ensure only
+        # one request is processed at a time.
+        async with self._request_lock:
+            logger.info("Processing streaming request %s: %s", request_id, content[:50])
 
-        # Enqueue input
-        await self.loop_runner.enqueue_input(content)
+            # Drain any stale output/stream data from previous requests
+            drained_count = 0
+            while not self.loop_runner._output_queue.empty():
+                try:
+                    stale = self.loop_runner._output_queue.get_nowait()
+                    drained_count += 1
+                    logger.warning("Drained stale output (%d chars) for %s",
+                                   len(stale) if stale else 0, request_id)
+                except Exception:
+                    break
+            while not self.loop_runner._stream_queue.empty():
+                try:
+                    self.loop_runner._stream_queue.get_nowait()
+                    logger.warning("Drained stale stream chunk for %s", request_id)
+                except Exception:
+                    break
 
-        # Stream chunks from the loop runner
-        try:
-            chunks_sent = 0
-            while True:
-                # Try to get a stream chunk first
-                chunk_data = await self.loop_runner.get_stream_chunk(timeout=0.5)
+            if drained_count > 0:
+                logger.info("Drained %d stale items before processing %s", drained_count, request_id)
 
-                if chunk_data:
-                    content_chunk = chunk_data.get("content", "")
-                    is_final = chunk_data.get("is_final", False)
+            # Enqueue input
+            await self.loop_runner.enqueue_input(content)
 
-                    if content_chunk:
-                        await write_message(
-                            writer,
-                            stream_chunk(content_chunk, request_id, is_final),
-                        )
-                        chunks_sent += 1
+            # Stream chunks from the loop runner's stream queue
+            try:
+                poll_count = 0
+                max_polls = 3000  # 5 minutes with 0.1s sleep
 
-                    if is_final:
-                        await write_message(writer, stream_end(request_id))
-                        break
-                else:
-                    # Check for complete output
-                    output = await self.loop_runner.get_output(timeout=0.1)
-                    if output:
-                        # Send as final chunk
-                        await write_message(
-                            writer,
-                            stream_chunk(output, request_id, is_final=True),
-                        )
-                        await write_message(writer, stream_end(request_id))
-                        break
+                while poll_count < max_polls:
+                    poll_count += 1
 
-                # Timeout check (5 minutes)
-                if chunks_sent == 0:
-                    await asyncio.sleep(0.1)
+                    # Get stream chunk from the stream queue
+                    chunk_data = await self.loop_runner.get_stream_chunk(timeout=0.1)
 
-        except Exception as e:
-            logger.error("Streaming error for %s: %s", request_id, e)
-            await write_message(
-                writer,
-                error_message(str(e), error_code="STREAM_ERROR", request_id=request_id),
-            )
+                    if chunk_data:
+                        chunk_content = chunk_data.get("content", "")
+                        is_final = chunk_data.get("is_final", False)
+
+                        # Send chunk to client (including final empty chunk)
+                        if chunk_content or is_final:
+                            await write_message(
+                                writer,
+                                stream_chunk(chunk_content, request_id, is_final=is_final),
+                            )
+
+                        if is_final:
+                            logger.info("Stream complete for %s", request_id)
+
+                            # CRITICAL: Wait for the graph cycle to fully complete
+                            # before releasing the lock. This prevents the next request
+                            # from being enqueued before the progenitor is ready.
+                            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                            if not cycle_done:
+                                logger.warning("Cycle complete timeout for %s", request_id)
+
+                            return  # Success - exit the handler
+
+                    # Brief yield to allow other tasks
+                    if poll_count % 100 == 0:
+                        logger.debug("Still waiting for stream chunks %s (poll %d)", request_id, poll_count)
+
+                # If we exited the loop without finding output, we timed out
+                logger.error("Streaming request %s timed out after %d polls", request_id, poll_count)
+                await write_message(
+                    writer,
+                    error_message("Streaming timed out", error_code="TIMEOUT", request_id=request_id),
+                )
+
+            except Exception as e:
+                logger.error("Streaming error for %s: %s", request_id, e)
+                await write_message(
+                    writer,
+                    error_message(str(e), error_code="STREAM_ERROR", request_id=request_id),
+                )
 
     @property
     def is_running(self) -> bool:

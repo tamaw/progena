@@ -66,6 +66,16 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 **clarification_updates,
             })
 
+        # Check if response was already streamed by the decide node
+        from ..runtime.loop import get_current_loop
+        loop = get_current_loop()
+        if loop and loop._response_was_streamed:
+            # Response was already streamed, don't generate another one
+            # Just clear the input - loop will handle stream_final
+            return cast(ProgenitorState, {
+                "current_input": None,
+            })
+
         response_text = _generate_response(decision, current_item, state)
 
         # Don't respond if no meaningful response
@@ -111,6 +121,9 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 # Keep build_task_description and build_started_at for history
                 # but mark as no longer active
             }
+            # Also clear the spec_doc from build_state.json to avoid stale data on next build
+            # Note: The spec file remains in app/agents/ as it's part of the built agent
+            await state_manager.clear_spec_doc()
 
         return {
             "pending_response": response_text,

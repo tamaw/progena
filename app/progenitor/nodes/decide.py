@@ -224,6 +224,72 @@ def _looks_like_schedule_request(user_input: str) -> bool:
     return (has_time_indicator and has_time_pattern) or has_schedule_intent
 
 
+def _looks_like_self_reflect_request(user_input: str) -> bool:
+    """Heuristic: detect requests for self-reflection/introspection."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    # Direct self-reflection patterns
+    direct_patterns = [
+        "how do you work",
+        "how do you handle",
+        "how do you process",
+        "what is your",
+        "what are your",
+        "explain your",
+        "describe your",
+        "your source code",
+        "your implementation",
+        "your architecture",
+        "how are you built",
+        "how were you built",
+        "how are you implemented",
+        "self reflect",
+        "self-reflect",
+        "introspect",
+        "understand yourself",
+        "examine yourself",
+        "look at your code",
+        "read your code",
+        "your own code",
+        "your capabilities",
+        "what can you do",
+    ]
+
+    # Check for self-referential questions about internals
+    has_self_reference = any(
+        phrase in text
+        for phrase in (
+            "yourself",
+            "your code",
+            "your source",
+            "your implementation",
+            "your internal",
+            "how you ",
+            "what you ",
+        )
+    )
+
+    has_introspection_intent = any(
+        phrase in text
+        for phrase in (
+            "work",
+            "function",
+            "implement",
+            "process",
+            "handle",
+            "built",
+            "design",
+            "architecture",
+        )
+    )
+
+    return any(pattern in text for pattern in direct_patterns) or (
+        has_self_reference and has_introspection_intent
+    )
+
+
 def _extract_schedule_params(user_input: str) -> dict:
     """Extract schedule parameters from user input."""
     text = user_input.lower()
@@ -314,6 +380,11 @@ async def _execute_system_tool_inline(
             {
                 "name": "list_schedule",
                 "description": "List all scheduled tasks",
+                "type": "system_tool",
+            },
+            {
+                "name": "self_reflect",
+                "description": "Introspect own source code to understand how Progenitor works",
                 "type": "system_tool",
             },
         ]
@@ -415,6 +486,34 @@ async def _execute_system_tool_inline(
 
         return result, None
 
+    elif tool_name == "self_reflect":
+        # Self-reflection tool - introspect progenitor's own source code
+        from ..tools.self_reflect import SelfReflection
+
+        logger.info("Executing system tool: self_reflect")
+        reflection = SelfReflection(llm_client=llm_client)
+
+        # For inline execution, return module listing
+        # Full reflection with specific queries should use execute_self_reflect
+        modules = reflection.list_modules()
+
+        return {
+            "description": "Progenitor self-reflection - exploring own source code",
+            "root_path": str(reflection.root),
+            "modules": [
+                {
+                    "name": m.name,
+                    "path": m.path,
+                    "is_directory": m.is_directory,
+                    "description": m.description,
+                }
+                for m in modules
+            ],
+            "module_count": len([m for m in modules if m.is_directory]),
+            "file_count": len([m for m in modules if not m.is_directory]),
+            "tip": "Use follow-up questions to explore specific modules or search for code patterns.",
+        }, None
+
     return None, f"Unknown system tool: {tool_name}"
 
 
@@ -497,6 +596,33 @@ def _format_tool_result(tool_name: str, result: dict) -> str:
                 if len(msg.get("content", "")) > 100:
                     content += "..."
                 lines.append(f"  [{role}] {content}")
+
+        return "\n".join(lines)
+
+    elif tool_name == "self_reflect":
+        modules = result.get("modules", [])
+        dirs = [m for m in modules if m.get("is_directory")]
+        files = [m for m in modules if not m.get("is_directory")]
+
+        lines = ["**🔍 Progenitor Self-Reflection**\n"]
+        lines.append(f"Source location: `{result.get('root_path', 'unknown')}`\n")
+
+        if dirs:
+            lines.append("**Modules (directories):**")
+            for d in dirs:
+                lines.append(f"  • `{d['name']}/`")
+
+        if files:
+            lines.append("\n**Root files:**")
+            for f in files:
+                desc = f" - {f['description']}" if f.get('description') else ""
+                lines.append(f"  • `{f['name']}`{desc}")
+
+        lines.append(f"\n**Summary:** {result.get('module_count', 0)} modules, {result.get('file_count', 0)} root files")
+
+        tip = result.get("tip")
+        if tip:
+            lines.append(f"\n💡 *{tip}*")
 
         return "\n".join(lines)
 
@@ -644,6 +770,31 @@ def create_node(
                     "direct_response": None,
                     "schedule_params": schedule_params,  # Pass extracted params
                 }
+            # Check for self-reflection requests
+            elif _looks_like_self_reflect_request(user_input):
+                # Execute self_reflect system tool inline
+                tool_name = "self_reflect"
+                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
+                if error:
+                    response_text = f"Error executing {tool_name}: {error}"
+                else:
+                    response_text = _format_tool_result(tool_name, result)
+
+                decision = Decision(
+                    action=DecisionAction.ANSWER_DIRECTLY,
+                    reasoning="Executed self_reflect system tool inline for introspection request.",
+                    requires_planning=False,
+                    direct_response=response_text,
+                )
+
+                if state_manager:
+                    await state_manager.log_decision({
+                        "event": "system_tool_executed",
+                        "tool_name": tool_name,
+                        "timestamp": utcnow_isoformat(),
+                    })
+
+                return {"current_decision": decision}
             elif (
                 str(action_str).lower().strip() in ("answer", "answer_directly")
                 and not direct_response
@@ -691,13 +842,57 @@ def create_node(
                 logger.warning("Unknown action '%s', falling back to answer_directly", action_str)
                 action = DecisionAction.ANSWER_DIRECTLY
 
+            # For direct answers, ALWAYS stream if streaming is enabled (ignore LLM's direct_response)
+            direct_resp = None
+            response_streamed = False
+
+            # Check if loop has streaming enabled
+            from ..runtime.loop import get_current_loop
+            loop = get_current_loop()
+
+            logger.info("Streaming check: action=%s, loop=%s, streaming_enabled=%s",
+                        action, loop is not None, loop._streaming_enabled if loop else "N/A")
+
+            if action == DecisionAction.ANSWER_DIRECTLY and loop and loop._streaming_enabled:
+                # Generate a streaming conversational response
+                logger.info("STREAMING: Starting (loop id=%s)", id(loop))
+                messages = _extract_history(state.get("messages", []), limit=10)
+                messages.append({"role": "user", "content": user_input})
+
+                streamed_text = ""
+                token_count = 0
+                try:
+                    async for token in llm_client.chat_stream(
+                        messages=messages,
+                        temperature=0.7,
+                    ):
+                        token_count += 1
+                        streamed_text += token
+                        await loop.stream_token(token)
+                    logger.info("STREAMING: Completed - %d tokens", token_count)
+                except Exception as e:
+                    logger.error("STREAMING: Error after %d tokens: %s", token_count, e)
+                    raise
+
+                # DON'T set direct_resp here - it was already streamed
+                # Setting direct_resp = None prevents respond node from duplicating
+                direct_resp = None
+                response_streamed = True
+                loop._response_was_streamed = True
+                logger.info("STREAMING: Set _response_was_streamed=True (loop id=%s)", id(loop))
+            elif action == DecisionAction.ANSWER_DIRECTLY:
+                # Fallback to LLM's direct_response when streaming not enabled
+                direct_resp = decision_data.get("direct_response")
+
             decision = Decision(
                 action=action,
                 reasoning=decision_data.get("reasoning", ""),
                 requires_planning=decision_data.get("requires_planning", False),
                 target_capabilities=decision_data.get("target_capabilities", []),
-                direct_response=decision_data.get("direct_response"),
+                direct_response=direct_resp,
             )
+
+            result = {"current_decision": decision}
 
             # Log decision
             if state_manager:
@@ -710,7 +905,7 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
-            return {"current_decision": decision}
+            return result
 
         except (RateLimitError, APIConnectionError) as e:
             # Recoverable errors - log and raise for retry handling

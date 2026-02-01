@@ -1,10 +1,17 @@
 """
 Planner Node - Generates work items for complex tasks.
+
+BL-002: Extended to emit experiment_plan - a structured plan with prompts,
+expected response shape, scoring hooks, number of trials, and stop-early rules.
+
+Spec Artifact: PLAN owns a persistent "Spec" Markdown artifact stored in
+build_state.json that evolves each iteration and is consumed by BUILD.
 """
 
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Coroutine, Any
 import uuid
 
@@ -14,6 +21,13 @@ from ..state.models import (
     WorkItemType,
     WorkItemStatus,
     DecisionAction,
+)
+from ..state.execution_schemas import (
+    ExperimentPlan,
+    PromptSpec,
+    ScoringHook,
+    StopEarlyRule,
+    SpecDoc,
 )
 from ..runtime.time_utils import utcnow_isoformat
 
@@ -332,6 +346,10 @@ async def _plan_from_ideal_state(
 
     Choose experiment from THINK approaches and define expected measurable outcome.
     Per spec: "PLAN – choose experiment and expected measurable outcome"
+
+    Also manages the persistent SpecDoc artifact:
+    - First run (no spec present): Seeds from canonical template
+    - Subsequent iterations: Updates spec based on THINK outputs
     """
     iteration = state.get("current_iteration", 0)
     backlog = list(state.get("backlog", []))
@@ -386,72 +404,107 @@ async def _plan_from_ideal_state(
     else:
         gaps = []
 
+    # Get agent name from context or decision
+    agent_name = "unknown_agent"
+    if decision:
+        target_caps = _get_target_capabilities(state)
+        if target_caps:
+            agent_name = target_caps[0] if target_caps else "agent"
+
+    # Generate work item ID early for spec file naming
+    work_item_id = str(uuid.uuid4())
+
+    # =========================================================================
+    # SpecDoc Management: Seed or Update the persistent spec artifact
+    # =========================================================================
+    spec_doc = await _ensure_spec_doc(
+        state_manager=state_manager,
+        agent_name=agent_name,
+        task_description=task_description,
+        approaches=approaches,
+        gaps=gaps,
+        iteration=iteration,
+        llm_client=llm_client,
+        work_item_id=work_item_id,
+    )
+
+    # Store spec_doc in state for BUILD to consume
+    spec_doc_dict = spec_doc.model_dump() if hasattr(spec_doc, "model_dump") else spec_doc
+
     try:
-        # Generate experiment with expected measurable outcome
-        prompt = f"""Define an experiment to test this approach:
-
-APPROACH: {chosen_approach.get('name')}
-{chosen_approach.get('description', '')}
-
-GOAL: {task_description}
-
-SUCCESS CRITERIA TO TARGET:
-{chr(10).join([f"- {c.get('description', '')} (target: {c.get('target_score', 0.8)})" for c in success_criteria[:3]])}
-
-{"GAPS TO ADDRESS:" + chr(10) + chr(10).join([f"- {gap}" for gap in gaps[:3]]) if gaps else ""}
-
-Define:
-1. EXPERIMENT: What specific action/change to make
-2. EXPECTED MEASURABLE OUTCOME: How we'll know it worked (specific, measurable)
-3. VERIFICATION METHOD: How to verify success"""
-
-        response = await llm_client.generate(
-            prompt=prompt,
-            system_prompt="Define experiments with clear measurable outcomes. Be specific.",
+        # BL-002: Generate structured ExperimentPlan
+        experiment_plan = await _generate_experiment_plan(
+            llm_client=llm_client,
+            chosen_approach=chosen_approach,
+            task_description=task_description,
+            success_criteria=success_criteria,
+            gaps=gaps,
+            iteration=iteration,
+            agent_name=agent_name,
         )
 
-        # Parse experiment details
-        experiment_details = _parse_experiment(response)
+        # Get spec file path and copilot prompt
+        spec_file_path = getattr(spec_doc, 'spec_file_path', None)
+        copilot_prompt = getattr(spec_doc, 'copilot_prompt', None)
 
-        # Create work item with experiment context and correct type
+        # Create work item with experiment plan in context
         work_item = WorkItem(
-            id=str(uuid.uuid4()),
+            id=work_item_id,  # Use pre-generated ID for consistency with spec file
             item_type=item_type,
             status=WorkItemStatus.PENDING,
-            description=f"Experiment: {experiment_details.get('name', chosen_approach.get('name', 'approach'))}",
+            description=f"Experiment: {chosen_approach.get('name', 'approach')}",
             context={
                 "iteration": iteration,
                 "approach": chosen_approach,
-                "experiment": experiment_details.get("experiment", response),
-                "expected_outcome": experiment_details.get("expected_outcome", "Verification passes"),
-                "verification_method": experiment_details.get("verification_method", "Score against criteria"),
+                "experiment_plan": experiment_plan.model_dump(),  # BL-002: Structured plan
+                "expected_outcome": experiment_plan.expected_outcome,
+                "verification_method": experiment_plan.verification_method,
                 "targeted_gaps": gaps[:3] if gaps else [],
-                "plan_output": response,
                 "capabilities": _get_target_capabilities(state),
+                "spec_doc": spec_doc_dict,  # SpecDoc: Include for BUILD consumption
+                "spec_file_path": spec_file_path,  # Path to spec file in app/agents/
+                "copilot_prompt": copilot_prompt,  # The prompt that references the spec file
             },
         )
         backlog.append(work_item)
         logger.info(f"PLANNER: Created work item id={work_item.id}, type={item_type}, status={work_item.status}")
+        logger.info(f"PLANNER: Experiment plan has {len(experiment_plan.prompts)} prompts")
         logger.info(f"PLANNER: Backlog now has {len(backlog)} items")
+        logger.info(f"PLANNER: SpecDoc revision={spec_doc.revision}, spec_file_path={spec_file_path}")
+        logger.info(f"PLANNER: Copilot prompt generated ({len(copilot_prompt or '')} chars)")
 
-        # Log planning with experiment details
+        # Log planning with experiment plan details
         await state_manager.log_decision({
             "event": "plan_from_ideal_state",
             "iteration": iteration,
             "approach": chosen_approach.get("name"),
-            "experiment": experiment_details.get("experiment", "")[:200],
-            "expected_outcome": experiment_details.get("expected_outcome", "")[:200],
+            "experiment_plan_id": experiment_plan.plan_id,
+            "prompts_count": len(experiment_plan.prompts),
+            "expected_outcome": experiment_plan.expected_outcome[:200],
+            "spec_doc_revision": spec_doc.revision,
             "work_items_created": 1,
             "timestamp": utcnow_isoformat(),
         })
 
         return {
             "backlog": backlog,
+            "experiment_plan": experiment_plan.model_dump(),  # BL-002: Store in state
+            "spec_doc": spec_doc_dict,  # SpecDoc: Persistent spec artifact for BUILD
             "build_phase": "plan",
         }
 
     except Exception as e:
-        # Fallback - create simple experiment work item with correct type
+        logger.warning(f"Failed to generate experiment plan: {e}, using fallback")
+        # Fallback - create smoke test plan
+        experiment_plan = ExperimentPlan.create_smoke_test_plan(
+            agent_name=agent_name,
+            iteration=iteration,
+        )
+
+        # Get spec file path and copilot prompt from spec_doc (even in fallback)
+        fallback_spec_file_path = getattr(spec_doc, 'spec_file_path', None)
+        fallback_copilot_prompt = getattr(spec_doc, 'copilot_prompt', None)
+
         work_item = WorkItem(
             id=str(uuid.uuid4()),
             item_type=item_type,
@@ -460,9 +513,12 @@ Define:
             context={
                 "iteration": iteration,
                 "approach": chosen_approach,
-                "experiment": "Execute selected approach",
+                "experiment_plan": experiment_plan.model_dump(),
                 "expected_outcome": "Verification score improves",
                 "capabilities": _get_target_capabilities(state),
+                "spec_doc": spec_doc_dict,  # SpecDoc: Include for BUILD consumption
+                "spec_file_path": fallback_spec_file_path,  # Include spec file path
+                "copilot_prompt": fallback_copilot_prompt,  # Include copilot prompt
             },
         )
         backlog.append(work_item)
@@ -473,7 +529,493 @@ Define:
             "timestamp": utcnow_isoformat(),
         })
 
-        return {"backlog": backlog, "build_phase": "plan"}
+        return {
+            "backlog": backlog,
+            "experiment_plan": experiment_plan.model_dump(),
+            "spec_doc": spec_doc_dict,  # SpecDoc: Still include even in fallback
+            "build_phase": "plan",
+        }
+
+
+async def _ensure_spec_doc(
+    state_manager,
+    agent_name: str,
+    task_description: str,
+    approaches: list[dict],
+    gaps: list[str],
+    iteration: int,
+    llm_client=None,
+    work_item_id: str | None = None,
+) -> SpecDoc:
+    """
+    Ensure a SpecDoc exists for the current build task.
+
+    NEW APPROACH:
+    - Spec file is dropped into app/agents/<agent_name>_spec.md
+    - Copilot prompt references the spec file (not embedding content)
+    - On first run: LLM generates BOTH spec content AND copilot prompt
+    - Subsequent iterations: Updates spec and regenerates prompt
+
+    Persists updates back to build_state.json and saves spec file to app/agents/.
+    """
+    # Try to load existing spec_doc from build_state
+    existing_spec_doc_data = await state_manager.get_spec_doc()
+
+    if existing_spec_doc_data:
+        # Load existing spec and update it
+        spec_doc = SpecDoc(**existing_spec_doc_data)
+
+        # Update from current THINK outputs
+        spec_doc.update_from_think(
+            think_outputs=approaches,
+            iteration=iteration,
+            verification_gaps=gaps,
+        )
+
+        logger.info(f"PLANNER: Updated SpecDoc to revision {spec_doc.revision}")
+    else:
+        # First run - use LLM to customize from canonical template AND generate prompt
+        spec_doc = await _seed_spec_doc_from_template(
+            agent_name=agent_name,
+            task_description=task_description,
+            llm_client=llm_client,
+        )
+        logger.info(f"PLANNER: Seeded new SpecDoc from template with LLM customization, revision {spec_doc.revision}")
+
+    # Save spec file to app/agents/ for copilot to reference
+    spec_file_path = await _save_spec_file(spec_doc, agent_name=agent_name, work_item_id=work_item_id)
+    if spec_file_path:
+        spec_doc.spec_file_path = str(spec_file_path)
+        logger.info(f"PLANNER: Saved spec file to {spec_file_path}")
+
+    # Generate the copilot prompt that references the spec file
+    # This is the key change: prompt references file, doesn't embed content
+    spec_doc.copilot_prompt = await _generate_copilot_prompt(
+        spec_file_path=spec_file_path,
+        agent_name=agent_name,
+        task_description=task_description,
+        iteration=iteration,
+        gaps=gaps,
+        llm_client=llm_client,
+    )
+    logger.info(f"PLANNER: Generated copilot prompt ({len(spec_doc.copilot_prompt or '')} chars)")
+
+    # Persist updated spec_doc to build_state.json
+    await state_manager.save_spec_doc(spec_doc)
+
+    return spec_doc
+
+
+async def _generate_copilot_prompt(
+    spec_file_path: Path | None,
+    agent_name: str,
+    task_description: str,
+    iteration: int,
+    gaps: list[str],
+    llm_client=None,
+) -> str:
+    """
+    Generate the prompt that instructs Copilot to read and build from the spec file.
+
+    The prompt:
+    1. Tells Copilot where the spec file is
+    2. Provides high-level context about the task
+    3. On subsequent iterations, mentions what to fix/improve
+    """
+    # Calculate relative path for the prompt (from project root)
+    if spec_file_path:
+        # Convert to relative path from project root for cleaner prompt
+        try:
+            project_root = Path(__file__).parent.parent.parent.parent
+            rel_path = spec_file_path.relative_to(project_root)
+        except ValueError:
+            rel_path = spec_file_path
+    else:
+        rel_path = f"app/agents/{agent_name}_spec.md"
+
+    # Build context about what iteration we're on and what to focus on
+    iteration_context = ""
+    if iteration > 0 and gaps:
+        iteration_context = f"""
+
+This is iteration {iteration} of the build. Focus on addressing these gaps:
+{chr(10).join(f'- {gap}' for gap in gaps[:5])}
+"""
+
+    # Base prompt that references the spec file
+    base_prompt = f"""Build an AI agent based on the specification file.
+
+SPEC FILE: {rel_path}
+
+Read the spec file above and implement the agent according to its requirements.
+{iteration_context}
+IMPORTANT:
+- Read the spec file FIRST to understand the full requirements
+- Create all required files in app/agents/{agent_name}/
+- Follow the directory structure and file organization in the spec
+- Implement all specified behaviors and responses"""
+
+    # Optionally use LLM to enhance the prompt with task-specific guidance
+    if llm_client and iteration == 0:
+        try:
+            enhancement_prompt = f"""Given this build task, generate a focused instruction for Copilot.
+
+TASK: {task_description}
+AGENT NAME: {agent_name}
+SPEC FILE LOCATION: {rel_path}
+
+Generate a concise, actionable prompt (2-4 sentences) that:
+1. References the spec file for details
+2. Emphasizes the key behavior/capability the agent should have
+3. Mentions any critical implementation details
+
+Output ONLY the prompt text, nothing else:"""
+
+            enhanced_guidance = await llm_client.generate(
+                prompt=enhancement_prompt,
+                system_prompt="You generate focused build instructions. Be concise and actionable.",
+            )
+
+            if enhanced_guidance and len(enhanced_guidance.strip()) > 20:
+                # Combine base structure with enhanced guidance
+                return f"""{base_prompt}
+
+TASK FOCUS:
+{enhanced_guidance.strip()}"""
+
+        except Exception as e:
+            logger.warning(f"PLANNER: LLM prompt enhancement failed: {e}, using base prompt")
+
+    return base_prompt
+
+
+async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work_item_id: str | None = None) -> Path | None:
+    """
+    Save the spec content to a file in app/agents/ for copilot CLI to reference.
+
+    The spec file is placed in the agents directory where copilot will build,
+    making it easy to reference in the prompt: "Read the spec file at app/agents/<name>_spec.md"
+
+    Returns the path to the saved file.
+    """
+    try:
+        # Determine project root and agents directory
+        project_root = Path(__file__).parent.parent.parent.parent
+        agents_dir = project_root / "app" / "agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create filename based on agent name (preferred) or work_item_id
+        if agent_name:
+            # Sanitize agent name for filename
+            safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
+            filename = f"{safe_name}_spec.md"
+        else:
+            filename = f"build_spec_{work_item_id or 'current'}.md"
+
+        spec_file_path = agents_dir / filename
+
+        # Write spec content to file
+        spec_file_path.write_text(spec_doc.content, encoding="utf-8")
+
+        logger.info(f"PLANNER: Saved spec file to {spec_file_path}")
+        return spec_file_path
+    except Exception as e:
+        logger.error(f"Failed to save spec file: {e}")
+        return None
+
+
+async def _seed_spec_doc_from_template(
+    agent_name: str,
+    task_description: str,
+    llm_client=None,
+) -> SpecDoc:
+    """
+    Seed a new SpecDoc by using LLM to customize the canonical template (agent_structure.md)
+    with the user's specific task requirements.
+    """
+    # Determine path to seed template
+    # Try project-relative path first
+    seed_paths = [
+        Path("data/prompts/agent_structure.md"),
+        Path(__file__).parent.parent.parent.parent / "data/prompts/agent_structure.md",
+    ]
+
+    template_content = ""
+    seed_path = "prompts/agent_structure.md"  # Default reference path
+
+    for path in seed_paths:
+        if path.exists():
+            template_content = path.read_text(encoding="utf-8")
+            seed_path = str(path.relative_to(path.parent.parent) if path.parent.parent.exists() else path.name)
+            break
+
+    if not template_content:
+        # Fallback: Create a minimal spec if template not found
+        template_content = """# Agent Structure Specification
+
+## Directory Structure
+Create the agent in `app/agents/{agent_name}/`:
+- `app/agents/{agent_name}/__init__.py`
+- `app/agents/{agent_name}/agent.py` - Main implementation
+
+## Requirements
+- Python best practices
+- Docstrings and type hints
+- Implement required A2A endpoints
+"""
+        seed_path = "generated/minimal_spec.md"
+        logger.warning("SpecDoc: Template not found, using minimal fallback spec")
+
+    # Use LLM to customize the template with user's task
+    if llm_client:
+        try:
+            customization_prompt = f"""You are generating a build specification for an AI agent.
+
+TASK FROM USER: {task_description}
+
+AGENT NAME: {agent_name}
+
+TEMPLATE TO CUSTOMIZE:
+{template_content}
+
+Generate a COMPLETE, DETAILED build specification that:
+1. Replaces {{agent_name}} with "{agent_name}"
+2. Replaces {{agent_class}} with "{agent_name.title().replace('_', '')}"
+3. Adds specific implementation details based on the user's task
+4. Includes the exact behavior the agent should have
+5. Specifies what the agent's invoke() method should return for different inputs
+
+For this task "{task_description}", specify:
+- EXACTLY what the agent should respond with
+- Any specific text/format requirements
+- How it should handle various inputs
+
+Output the complete customized specification markdown:"""
+
+            customized_content = await llm_client.generate(
+                prompt=customization_prompt,
+                system_prompt="You are a technical specification writer. Generate detailed, actionable agent specifications. Be precise about expected behaviors and outputs.",
+            )
+
+            if customized_content and len(customized_content) > 100:
+                logger.info(f"PLANNER: LLM customized spec ({len(customized_content)} chars)")
+                seed_content = customized_content
+            else:
+                # Fallback to manual replacement
+                logger.warning("PLANNER: LLM customization too short, using manual replacement")
+                seed_content = template_content.replace("{agent_name}", agent_name)
+                seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
+        except Exception as e:
+            logger.error(f"PLANNER: LLM customization failed: {e}, using manual replacement")
+            seed_content = template_content.replace("{agent_name}", agent_name)
+            seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
+    else:
+        # No LLM client - do manual replacement
+        seed_content = template_content.replace("{agent_name}", agent_name)
+        seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
+
+    # Add task-specific header
+    header = f"""# Build Spec: {agent_name}
+
+> Task: {task_description}
+> Generated at: {utcnow_isoformat()}
+
+---
+
+"""
+
+    return SpecDoc.create_from_seed(
+        seed_content=header + seed_content,
+        seed_path=seed_path,
+        agent_name=agent_name,
+    )
+
+
+async def _generate_experiment_plan(
+    llm_client,
+    chosen_approach: dict,
+    task_description: str,
+    success_criteria: list[dict],
+    gaps: list[str],
+    iteration: int,
+    agent_name: str,
+) -> ExperimentPlan:
+    """Generate a structured ExperimentPlan from approach and criteria.
+
+    BL-002: Creates a structured plan with prompts, expected response shape,
+    scoring hooks, number of trials, and stop-early rules.
+    """
+    # Build prompt for LLM to generate experiment details
+    prompt = f"""Generate an experiment plan to test this approach:
+
+APPROACH: {chosen_approach.get('name', 'primary')}
+{chosen_approach.get('description', '')}
+
+GOAL: {task_description}
+
+SUCCESS CRITERIA:
+{chr(10).join([f"- {c.get('description', '')} (target: {c.get('target_score', 0.8)})" for c in success_criteria[:3]])}
+
+{"GAPS TO ADDRESS:" + chr(10) + chr(10).join([f"- {gap}" for gap in gaps[:3]]) if gaps else ""}
+
+Generate:
+1. 2-4 test prompts to send to the agent (first should be a smoke test)
+2. Expected responses or patterns for each prompt
+3. How to score responses (what to check for)
+4. Expected measurable outcome
+
+Format each prompt as:
+PROMPT [n]: <the prompt text>
+EXPECT: <what the response should contain or be like>
+SCORE_BY: <how to score: contains "X", matches pattern, etc.>"""
+
+    response = await llm_client.generate(
+        prompt=prompt,
+        system_prompt="Generate detailed experiment plans with specific test prompts. Be concrete and measurable.",
+    )
+
+    # Parse the response into structured PromptSpecs
+    prompts = _parse_prompts_from_response(response)
+
+    # Ensure we have at least a smoke test
+    if not prompts:
+        prompts = [
+            PromptSpec(
+                id="smoke_1",
+                text="Hello, are you working?",
+                is_smoke_test=True,
+                expected_response_contains=["hello", "yes", "hi", "working"],
+            )
+        ]
+    else:
+        # Mark first prompt as smoke test
+        prompts[0].is_smoke_test = True
+
+    # Generate scoring hooks from success criteria
+    scoring_hooks = _generate_scoring_hooks(success_criteria)
+
+    # Generate stop-early rules
+    stop_early_rules = [
+        StopEarlyRule(
+            id="consecutive_failures",
+            rule_type="consecutive_failures",
+            threshold=2,
+            description="Stop if 2 consecutive prompts fail",
+        ),
+        StopEarlyRule(
+            id="score_threshold",
+            rule_type="score_threshold",
+            threshold=0.9,
+            description="Stop early if score exceeds 0.9",
+        ),
+    ]
+
+    # Extract expected outcome from response
+    expected_outcome = _extract_expected_outcome(response, chosen_approach)
+
+    return ExperimentPlan(
+        plan_id=f"exp_{uuid.uuid4().hex[:8]}",
+        iteration=iteration,
+        agent_name=agent_name,
+        experiment_description=f"Test approach: {chosen_approach.get('name', 'primary')}",
+        prompts=prompts,
+        scoring_hooks=scoring_hooks,
+        num_trials=1,
+        stop_early_rules=stop_early_rules,
+        expected_outcome=expected_outcome,
+        verification_method="score_threshold",
+    )
+
+
+def _parse_prompts_from_response(response: str) -> list[PromptSpec]:
+    """Parse PromptSpec objects from LLM response."""
+    prompts = []
+    lines = response.split("\n")
+
+    current_prompt = None
+    prompt_count = 0
+
+    for line in lines:
+        line_stripped = line.strip()
+        line_lower = line_stripped.lower()
+
+        # Look for PROMPT [n]: pattern
+        if line_lower.startswith("prompt") and ":" in line_stripped:
+            # Save previous prompt if exists
+            if current_prompt:
+                prompts.append(current_prompt)
+
+            prompt_count += 1
+            prompt_text = line_stripped.split(":", 1)[-1].strip()
+            current_prompt = PromptSpec(
+                id=f"prompt_{prompt_count}",
+                text=prompt_text,
+            )
+
+        # Look for EXPECT: pattern
+        elif current_prompt and line_lower.startswith("expect"):
+            expect_text = line_stripped.split(":", 1)[-1].strip()
+            # Extract keywords from expectation
+            keywords = [w.strip().strip('"\'') for w in expect_text.split() if len(w) > 3]
+            current_prompt.expected_response_contains = keywords[:5]
+
+        # Look for SCORE_BY: pattern
+        elif current_prompt and line_lower.startswith("score"):
+            pass  # Could add custom scoring logic here
+
+    # Don't forget the last prompt
+    if current_prompt:
+        prompts.append(current_prompt)
+
+    return prompts
+
+
+def _generate_scoring_hooks(success_criteria: list[dict]) -> list[ScoringHook]:
+    """Generate scoring hooks from success criteria."""
+    hooks = []
+
+    for i, criterion in enumerate(success_criteria[:5]):
+        criterion_desc = criterion.get("description", "").lower()
+
+        # Determine hook type based on criterion description
+        if "respond" in criterion_desc or "answer" in criterion_desc:
+            hooks.append(ScoringHook(
+                id=f"hook_{i+1}",
+                name=f"Response check: {criterion.get('id', f'criterion_{i+1}')}",
+                hook_type="contains",
+                pattern=None,  # Will be filled based on specific responses
+                weight=criterion.get("weight", 1.0),
+            ))
+        elif "format" in criterion_desc or "json" in criterion_desc:
+            hooks.append(ScoringHook(
+                id=f"hook_{i+1}",
+                name=f"Format check: {criterion.get('id', f'criterion_{i+1}')}",
+                hook_type="json_path",
+                weight=criterion.get("weight", 1.0),
+            ))
+        else:
+            # Default to LLM judge for complex criteria
+            hooks.append(ScoringHook(
+                id=f"hook_{i+1}",
+                name=f"Quality check: {criterion.get('id', f'criterion_{i+1}')}",
+                hook_type="llm_judge",
+                llm_prompt=f"Does the response satisfy: {criterion.get('description', '')}?",
+                weight=criterion.get("weight", 1.0),
+            ))
+
+    return hooks
+
+
+def _extract_expected_outcome(response: str, approach: dict) -> str:
+    """Extract expected outcome from LLM response or approach."""
+    # Look for expected outcome in response
+    lines = response.split("\n")
+    for line in lines:
+        if "expected" in line.lower() and "outcome" in line.lower():
+            return line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+
+    # Fall back to approach expected outcome
+    return approach.get("expected_outcome", "Agent responds correctly to all test prompts")
 
 
 def _select_best_approach(approaches: list[dict], last_verification) -> dict:
@@ -504,32 +1046,3 @@ def _select_best_approach(approaches: list[dict], last_verification) -> dict:
 
     return approaches[0]
 
-
-def _parse_experiment(response: str) -> dict:
-    """Parse experiment details from LLM response."""
-    result = {
-        "name": "experiment",
-        "experiment": "",
-        "expected_outcome": "",
-        "verification_method": "",
-    }
-
-    lines = response.split("\n")
-    current_section = None
-
-    for line in lines:
-        line_lower = line.lower().strip()
-
-        if "experiment:" in line_lower:
-            current_section = "experiment"
-            result["experiment"] = line.split(":", 1)[-1].strip()
-        elif "expected" in line_lower and "outcome" in line_lower:
-            current_section = "expected_outcome"
-            result["expected_outcome"] = line.split(":", 1)[-1].strip()
-        elif "verification" in line_lower:
-            current_section = "verification_method"
-            result["verification_method"] = line.split(":", 1)[-1].strip()
-        elif current_section and line.strip() and not line.strip().startswith(("#", "-", "1", "2", "3")):
-            result[current_section] += " " + line.strip()
-
-    return result

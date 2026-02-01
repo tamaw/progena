@@ -277,21 +277,104 @@ class TestVerificationSummary:
 class TestPlanExperiment:
     """Test PLAN phase experiment generation per loop.spec.md."""
 
-    def test_parse_experiment(self):
-        """Test experiment parsing from LLM response."""
-        from app.progenitor.nodes.planner import _parse_experiment
+    def test_experiment_plan_schema(self):
+        """Test ExperimentPlan schema structure."""
+        from app.progenitor.state.execution_schemas import ExperimentPlan, PromptSpec, ScoringHook
 
-        response = """
-EXPERIMENT: Add caching layer to reduce latency
-EXPECTED MEASURABLE OUTCOME: Response time drops below 100ms
-VERIFICATION METHOD: Run benchmark tests and measure p95 latency
-"""
+        # Create an ExperimentPlan
+        plan = ExperimentPlan(
+            plan_id="test-plan-1",
+            experiment_description="Test caching behavior",
+            agent_name="test-agent",
+            iteration=1,
+            prompts=[
+                PromptSpec(
+                    id="p1",
+                    text="Hello",
+                    expected_response_contains=["success"],
+                    is_smoke_test=True,
+                ),
+            ],
+            scoring_hooks=[
+                ScoringHook(
+                    id="h1",
+                    name="check_success",
+                    hook_type="contains",
+                    pattern="success",
+                ),
+            ],
+            num_trials=3,
+        )
 
-        result = _parse_experiment(response)
+        assert plan.plan_id == "test-plan-1"
+        assert plan.agent_name == "test-agent"
+        assert len(plan.prompts) == 1
+        assert plan.prompts[0].is_smoke_test is True
+        assert len(plan.scoring_hooks) == 1
+        assert plan.num_trials == 3
 
-        assert "caching" in result["experiment"].lower()
-        assert "100ms" in result["expected_outcome"]
-        assert "benchmark" in result["verification_method"].lower()
+    def test_spec_doc_schema(self):
+        """Test SpecDoc schema for persistent spec artifact."""
+        from app.progenitor.state.execution_schemas import SpecDoc, SpecDocHistory
+
+        # Create a SpecDoc from seed
+        spec = SpecDoc.create_from_seed(
+            seed_content="# Agent Spec\n\nBuild a hello world agent.",
+            seed_path="prompts/agent_structure.md",
+            agent_name="hello_agent",
+        )
+
+        assert spec.revision == 1
+        assert "hello world" in spec.content.lower()
+        assert spec.source_seed_path == "prompts/agent_structure.md"
+        assert spec.agent_name == "hello_agent"
+        assert len(spec.history) == 1
+        assert spec.history[0].summary.startswith("Seeded from")
+
+        # Update from THINK outputs
+        approaches = [
+            {"name": "approach_1", "description": "Use simple HTTP handler"},
+            {"name": "approach_2", "description": "Use async patterns"},
+        ]
+        gaps = ["Response time too slow"]
+
+        spec.update_from_think(
+            think_outputs=approaches,
+            iteration=1,
+            verification_gaps=gaps,
+        )
+
+        assert spec.revision == 2
+        assert spec.iteration_last_updated == 1
+        assert "approach_1" in spec.content.lower() or "http handler" in spec.content.lower()
+        assert "gaps to address" in spec.content.lower()
+        assert len(spec.history) == 2
+
+    def test_spec_doc_copilot_prompt_field(self):
+        """Test SpecDoc has copilot_prompt field for referencing spec file."""
+        from app.progenitor.state.execution_schemas import SpecDoc
+
+        # Create a SpecDoc and set copilot_prompt
+        spec = SpecDoc.create_from_seed(
+            seed_content="# Agent Spec\n\nBuild a hello world agent.",
+            seed_path="prompts/agent_structure.md",
+            agent_name="hello_agent",
+        )
+
+        # copilot_prompt should be None initially (set by PLAN phase)
+        assert spec.copilot_prompt is None
+
+        # Set the copilot_prompt (as PLAN would do)
+        spec.copilot_prompt = "Build based on spec at app/agents/hello_agent_spec.md"
+        spec.spec_file_path = "app/agents/hello_agent_spec.md"
+
+        assert "Build based on spec" in spec.copilot_prompt
+        assert spec.spec_file_path == "app/agents/hello_agent_spec.md"
+
+        # Verify it serializes correctly
+        spec_dict = spec.model_dump()
+        assert "copilot_prompt" in spec_dict
+        assert spec_dict["copilot_prompt"] == spec.copilot_prompt
 
     def test_select_best_approach_with_gaps(self):
         """Test approach selection considers gaps."""
@@ -361,9 +444,10 @@ class TestExecutePhase:
         result = await node_fn(state)
 
         assert result.get("execution_completed") is True
-        # Should report error for unknown tool
+        # Should report error for unknown tool - check in build_output
         exec_result = result.get("last_iteration_output", {})
-        assert exec_result.get("all_succeeded") is False
+        build_output = exec_result.get("build_output", {})
+        assert build_output.get("all_succeeded") is False
 
 
 class TestIdealStateRefinement:

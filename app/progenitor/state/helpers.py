@@ -6,7 +6,8 @@ which is common when working with LangGraph state that can be updated
 partially with dicts.
 """
 
-from typing import Any, Optional, TypeVar, Type
+import logging
+from typing import Any, Optional, TypeVar, Type, TYPE_CHECKING
 from .models import (
     WorkItem,
     WorkItemType,
@@ -17,6 +18,11 @@ from .models import (
     AgentRegistryEntry,
     ConversationMessage,
 )
+
+if TYPE_CHECKING:
+    from .ideal_state import IdealState
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
 
@@ -330,7 +336,16 @@ def trim_conversation_history(
         other_messages = []
 
         for msg in messages:
-            role = msg.role if hasattr(msg, "role") else msg.get("role", "")
+            # Handle various message formats: objects, dicts, or raw strings
+            if hasattr(msg, "role"):
+                role = msg.role
+            elif isinstance(msg, dict):
+                role = msg.get("role", "")
+            else:
+                # Skip or treat non-standard messages as non-system
+                other_messages.append(msg)
+                continue
+
             if role == "system" and not other_messages:
                 system_messages.append(msg)
             else:
@@ -386,3 +401,49 @@ def summarize_old_messages(
         return recent_messages, summary
 
     return recent_messages, None
+
+
+def ensure_ideal_state(ideal_state: Any, allow_none: bool = True) -> Optional["IdealState"]:
+    """Convert ideal_state dict to IdealState object if needed.
+
+    This is the canonical helper for IdealState conversion - use this
+    instead of duplicating the conversion logic in multiple places.
+
+    LangGraph state may serialize IdealState to dict when passing through nodes.
+    This helper ensures we always have an IdealState object for methods.
+
+    Args:
+        ideal_state: IdealState, dict, or None
+        allow_none: If True, returns None for None/invalid input.
+                    If False, raises TypeError for None/invalid input.
+
+    Returns:
+        IdealState instance, or None if allow_none=True and input is None/invalid
+
+    Raises:
+        TypeError: If allow_none=False and ideal_state is not valid
+    """
+    # Late import to avoid circular imports
+    from .ideal_state import IdealState
+
+    if ideal_state is None:
+        if allow_none:
+            return None
+        raise TypeError("ideal_state cannot be None")
+
+    if isinstance(ideal_state, IdealState):
+        return ideal_state
+
+    if isinstance(ideal_state, dict):
+        try:
+            return IdealState(**ideal_state)
+        except Exception as e:
+            logger.warning("Failed to convert ideal_state dict to IdealState: %s", e)
+            if allow_none:
+                return None
+            raise TypeError(f"Invalid ideal_state dict: {e}") from e
+
+    if allow_none:
+        logger.warning("Unknown ideal_state type: %s", type(ideal_state))
+        return None
+    raise TypeError(f"Expected IdealState or dict, got {type(ideal_state)}")

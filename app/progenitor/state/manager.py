@@ -376,6 +376,28 @@ class StateManager:
             )
             self._state_cache["schedule"] = data
 
+    # SpecDoc management (persistent spec artifact in build_state.json)
+    async def get_spec_doc(self) -> dict[str, Any] | None:
+        """Get the current spec_doc from build_state, if it exists."""
+        state = await self.get_state()
+        return state.get("spec_doc")
+
+    async def save_spec_doc(self, spec_doc) -> None:
+        """Save spec_doc to build_state.json (backward compatible - only adds key)."""
+        state = await self.get_state()
+        if hasattr(spec_doc, "model_dump"):
+            state["spec_doc"] = spec_doc.model_dump()
+        else:
+            state["spec_doc"] = spec_doc
+        await self.save_state(state)
+
+    async def clear_spec_doc(self) -> None:
+        """Clear the spec_doc from build_state (for task completion/reset)."""
+        state = await self.get_state()
+        if "spec_doc" in state:
+            del state["spec_doc"]
+            await self.save_state(state)
+
     # Registry management
     async def get_registry(self) -> dict[str, Any]:
         """Get the agent/tool registry."""

@@ -21,9 +21,10 @@ You are the routing decision maker for Progenitor. Analyze the user's input and 
     "action": "<decision_type>",
     "reasoning": "<brief explanation>",
     "requires_planning": true/false,
-    "target_capabilities": ["<capability_name>"],
-    "direct_response": "<only if action is answer_directly>"
+    "target_capabilities": ["<capability_name>"]
 }
 ```
+
+**Important**: Do NOT include a "direct_response" field. The response will be generated separately.
 
 Choose the most efficient path. Prefer existing capabilities over building new ones.

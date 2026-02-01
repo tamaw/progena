@@ -178,6 +178,30 @@ class LoopInfo:
 
 
 @dataclass
+class BuildInfo:
+    """Information about current build status."""
+    in_progress: bool
+    phase: Optional[str] = None  # observe, think, plan, build, execute, verify, learn
+    task_description: Optional[str] = None
+    started_at: Optional[str] = None
+    iteration: int = 0
+    score: float = 0.0
+    message_count: int = 0
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BuildInfo":
+        return cls(
+            in_progress=data.get("build_in_progress", False),
+            phase=data.get("build_phase"),
+            task_description=data.get("build_task_description"),
+            started_at=data.get("build_started_at"),
+            iteration=data.get("current_iteration", 0),
+            score=data.get("verification_score", 0.0),
+            message_count=len(data.get("build_messages", [])),
+        )
+
+
+@dataclass
 class StateSnapshot:
     """Complete state snapshot."""
     timestamp: float
@@ -190,6 +214,7 @@ class StateSnapshot:
     cycle_count: int
     run_id: Optional[str]
     messages_count: int
+    build: Optional[BuildInfo] = None
 
 
 class StateReader:
@@ -324,6 +349,9 @@ class StateReader:
         loops = self.get_loops(health)
         current = self.get_current_state()
 
+        # Extract build info from current state
+        build = BuildInfo.from_dict(current)
+
         return StateSnapshot(
             timestamp=time.time(),
             health=health,
@@ -335,6 +363,7 @@ class StateReader:
             cycle_count=current.get("cycle_count", 0),
             run_id=current.get("run_id"),
             messages_count=len(current.get("messages", [])),
+            build=build,
         )
 
     def snapshot_to_dict(self, snapshot: StateSnapshot) -> dict:

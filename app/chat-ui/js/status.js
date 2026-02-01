@@ -28,6 +28,10 @@ class StatusManager {
         this.scheduleList = document.getElementById('schedule-list');
         this.activeTasks = document.getElementById('active-tasks');
 
+        // Build status elements
+        this.buildStatus = document.getElementById('build-status');
+        this.buildIndicator = document.getElementById('build-status-indicator');
+
         this.isConnected = false;
         this.eventSource = null;
         this.reconnectAttempts = 0;
@@ -140,6 +144,7 @@ class StatusManager {
         this.updateAgents(data);
         this.updateBacklog(data);
         this.updateSchedule(data);
+        this.updateBuildStatus(data);
     }
 
     updateConnectionStatus(connected) {
@@ -289,6 +294,95 @@ class StatusManager {
                 </div>
             `;
         }).join('');
+    }
+
+    updateBuildStatus(data) {
+        if (!this.buildStatus) return;
+
+        const build = data.build;
+
+        // Update the indicator
+        if (this.buildIndicator) {
+            if (build && build.in_progress) {
+                this.buildIndicator.className = 'build-indicator active';
+                this.buildIndicator.title = `Building: ${build.phase || 'unknown phase'}`;
+            } else {
+                this.buildIndicator.className = 'build-indicator idle';
+                this.buildIndicator.title = 'No build in progress';
+            }
+        }
+
+        // No build in progress - show idle state
+        if (!build || !build.in_progress) {
+            this.buildStatus.innerHTML = `
+                <div class="build-idle-state">
+                    <span class="build-icon">✓</span>
+                    <span>No build in progress</span>
+                </div>
+            `;
+            return;
+        }
+
+        // Build in progress - show details
+        const phaseIcon = this.getBuildPhaseIcon(build.phase);
+        const phaseLabel = this.formatBuildPhase(build.phase);
+        const elapsed = build.started_at ? this.formatElapsedTime(build.started_at) : '--';
+        const scorePercent = Math.round((build.score || 0) * 100);
+
+        this.buildStatus.innerHTML = `
+            <div class="build-active">
+                <div class="build-phase">
+                    <span class="phase-icon">${phaseIcon}</span>
+                    <span class="phase-label">${phaseLabel}</span>
+                </div>
+                <div class="build-task" title="${this.escapeHtml(build.task_description || '')}">
+                    ${this.truncate(build.task_description || 'Building...', 60)}
+                </div>
+                <div class="build-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${scorePercent}%"></div>
+                    </div>
+                    <span class="progress-text">${scorePercent}%</span>
+                </div>
+                <div class="build-meta">
+                    <span class="build-iteration">Iteration ${build.iteration || 0}</span>
+                    <span class="build-elapsed">${elapsed}</span>
+                    <span class="build-messages">${build.message_count || 0} msgs</span>
+                </div>
+            </div>
+        `;
+    }
+
+    getBuildPhaseIcon(phase) {
+        const icons = {
+            'observe': '👁️',
+            'think': '🧠',
+            'plan': '📋',
+            'build': '🏗️',
+            'execute': '⚡',
+            'verify': '✅',
+            'learn': '📚',
+        };
+        return icons[phase] || '🔄';
+    }
+
+    formatBuildPhase(phase) {
+        if (!phase) return 'Starting...';
+        return phase.charAt(0).toUpperCase() + phase.slice(1);
+    }
+
+    formatElapsedTime(startedAt) {
+        try {
+            const start = new Date(startedAt);
+            const now = new Date();
+            const seconds = Math.floor((now - start) / 1000);
+
+            if (seconds < 60) return `${seconds}s`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+            return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+        } catch (e) {
+            return '--';
+        }
     }
 
     getAgentIcon(kind) {

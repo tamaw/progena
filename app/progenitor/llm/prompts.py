@@ -65,7 +65,11 @@ class PromptTemplates:
         return template.replace("{item_type}", item_type)
 
     def get_copilot_task_prompt(self, spec: dict) -> str:
-        """Generate a task prompt for Copilot CLI."""
+        """Generate a task prompt for Copilot CLI.
+
+        If spec contains 'spec_doc_content', it will be included as
+        additional guidance for the build (set by PLAN phase).
+        """
         capabilities = spec.get('capabilities', [])
         caps_str = '\n'.join(['- ' + c for c in capabilities]) if capabilities else '- None specified'
 
@@ -82,6 +86,22 @@ class PromptTemplates:
             )
         else:
             structure_guidance = ""
+
+        # SpecDoc: Include persistent spec artifact if available
+        spec_doc_content = spec.get('spec_doc_content', '')
+        if spec_doc_content:
+            # Append spec_doc as additional context for Copilot
+            spec_doc_section = f"""
+
+## Build Specification (from inner loop iterations)
+
+The following specification has evolved through planning iterations and should guide your implementation:
+
+{spec_doc_content}
+
+---
+"""
+            structure_guidance = spec_doc_section + structure_guidance
 
         template = self._load_prompt("copilot_task.md")
         return template.replace(
