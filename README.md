@@ -86,8 +86,7 @@ worktrees/           # Git worktrees for builds
 
 ### State Files
 
-- `data/state/current_state.json` - Runtime state
-- `data/state/backlog.json` - Work item queue
+- `data/state/build_state.json` - Build state (backlog, messages, ideal_state)
 - `data/state/registry.json` - Agent and tool registry
 - `data/state/schedule.json` - Scheduled tasks
 

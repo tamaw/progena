@@ -7,9 +7,8 @@ Watches for changes and notifies subscribers.
 State files:
 - health.json: Agent health status (status, last_active, run_id, cycle_count, pid)
 - registry.json: Registered agents and tools
-- current_state.json: Current execution state (messages, backlog, run_id)
+- build_state.json: Build state (messages, backlog, schedule, ideal_state, verification)
 - schedule.json: Scheduled tasks
-- backlog.json: Task backlog
 """
 
 import asyncio
@@ -263,11 +262,14 @@ class StateReader:
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:
-        """Get backlog items."""
-        data = self._read_json("backlog.json")
-        if not data or not isinstance(data, list):
+        """Get backlog items from build_state.json."""
+        data = self._read_json("build_state.json")
+        if not data:
             return []
-        return [BacklogItem.from_dict(item) for item in data]
+        backlog = data.get("backlog", [])
+        if not isinstance(backlog, list):
+            return []
+        return [BacklogItem.from_dict(item) for item in backlog]
 
     def get_schedule(self) -> list[ScheduleItem]:
         """Get scheduled items."""
@@ -276,10 +278,15 @@ class StateReader:
             return []
         return [ScheduleItem.from_dict(item) for item in data]
 
-    def get_current_state(self) -> dict:
-        """Get current execution state."""
-        data = self._read_json("current_state.json")
+    def get_build_state(self) -> dict:
+        """Get build state (execution state, backlog, messages, ideal_state)."""
+        data = self._read_json("build_state.json")
         return data or {}
+
+    # Alias for backwards compatibility
+    def get_current_state(self) -> dict:
+        """Alias for get_build_state (backwards compatibility)."""
+        return self.get_build_state()
 
     def get_loops(self, health: HealthInfo) -> list[LoopInfo]:
         """Get loop status based on health and current state."""

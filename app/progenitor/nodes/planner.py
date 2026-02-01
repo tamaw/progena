@@ -447,6 +447,7 @@ Define:
 
         return {
             "backlog": backlog,
+            "build_phase": "plan",
         }
 
     except Exception as e:
@@ -472,7 +473,7 @@ Define:
             "timestamp": utcnow_isoformat(),
         })
 
-        return {"backlog": backlog}
+        return {"backlog": backlog, "build_phase": "plan"}
 
 
 def _select_best_approach(approaches: list[dict], last_verification) -> dict:

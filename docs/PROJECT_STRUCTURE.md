@@ -38,8 +38,7 @@ scripts/
 ```
 data/
 ├── state/                  # Runtime state (gitignored)
-│   ├── backlog.json        # Work item queue
-│   ├── current_state.json  # Agent state
+│   ├── build_state.json    # Build state (backlog, messages, ideal_state)
 │   ├── registry.json       # Registered agents/tools
 │   └── schedule.json       # Scheduled tasks
 │

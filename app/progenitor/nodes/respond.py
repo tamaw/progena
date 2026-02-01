@@ -101,10 +101,22 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Trim conversation history to prevent unbounded growth (TD-008)
         messages = trim_conversation_history(messages)
 
+        # Clear build state if we were building (inner loop completed)
+        build_clear_updates: dict[str, Any] = {}
+        if state.get("build_in_progress") and state.get("ideal_state"):
+            # Build has completed - clear build state
+            build_clear_updates = {
+                "build_in_progress": False,
+                "build_phase": None,
+                # Keep build_task_description and build_started_at for history
+                # but mark as no longer active
+            }
+
         return {
             "pending_response": response_text,
             "messages": messages,
             "current_input": None,  # Clear input after responding
+            **build_clear_updates,
         }
 
     return respond_node

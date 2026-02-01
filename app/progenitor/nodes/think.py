@@ -109,6 +109,7 @@ def create_node(
             return {
                 "current_approaches": approaches,
                 "thinking_output": response,
+                "build_phase": "think",
             }
 
         except Exception as e:
@@ -125,6 +126,7 @@ def create_node(
                     "description": "Proceed with standard execution",
                     "risks": ["Unknown risks due to thinking error"],
                 }],
+                "build_phase": "think",
             }
 
     return think_node

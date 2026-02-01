@@ -69,6 +69,7 @@ def create_node(
         state_updates = {}
         if iteration == 0 and not state.get("task_id"):
             import uuid
+            task_description = state.get("current_input") or state.get("task_description", "Build task")
             state_updates = {
                 "current_iteration": 0,
                 "iteration_start_time": time.time(),
@@ -79,8 +80,14 @@ def create_node(
                 "best_artefact": None,
                 "best_artefact_score": 0.0,
                 "verification_reports": [],
+                # Build state tracking
+                "build_in_progress": True,
+                "build_started_at": utcnow_isoformat(),
+                "build_task_description": task_description[:200],
+                "build_messages": [],
+                "build_phase": "observe",
             }
-            logger.info("Initialized inner loop state for task %s", state_updates["task_id"])
+            logger.info("Initialized inner loop state for task %s (build_in_progress=True)", state_updates["task_id"])
 
         if tracer:
             span = tracer.start_span(
@@ -227,7 +234,13 @@ def create_node(
                 span.end()
 
             # Merge state updates with ideal_state and clarification updates
-            return {**state_updates, **clarification_updates, "ideal_state": ideal_state}
+            # Always update build_phase to show current phase
+            return {
+                **state_updates,
+                **clarification_updates,
+                "ideal_state": ideal_state,
+                "build_phase": "observe",
+            }
 
         except Exception as e:
             if metrics:

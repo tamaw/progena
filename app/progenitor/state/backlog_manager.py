@@ -1,6 +1,12 @@
 """
 Backlog Manager - Business logic for work items.
 
+DEPRECATED: This module is no longer used. Backlog is now embedded in build_state.json
+and managed directly by StateManager. This file is kept for reference but will be
+removed in a future version.
+
+See: StateManager.get_backlog(), StateManager.save_backlog(), StateManager.add_work_item()
+
 ARCH-006: Split StateManager into focused responsibilities.
 
 This module handles work item business logic:
@@ -12,6 +18,7 @@ This module handles work item business logic:
 For persistence, uses StatePersistence.
 """
 
+import warnings
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -21,6 +28,13 @@ from .persistence import StatePersistence
 from ..runtime.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+warnings.warn(
+    "BacklogManager is deprecated. Use StateManager for backlog operations. "
+    "Backlog is now embedded in build_state.json.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 class BacklogManager:

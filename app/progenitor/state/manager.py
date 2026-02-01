@@ -76,8 +76,7 @@ class StateManager:
     """
 
     CORE_FILES: dict[str, str] = {
-        "current_state": "current_state.json",
-        "backlog": "backlog.json",
+        "build_state": "build_state.json",
         "registry": "registry.json",
         "schedule": "schedule.json",
     }
@@ -151,13 +150,21 @@ class StateManager:
         self._cleanup_stale_temp_files()
 
         defaults = {
-            "current_state": {
+            "build_state": {
                 "cycle_count": 0,
                 "actions_this_cycle": 0,
                 "shutdown_requested": False,
                 "run_id": utcnow_isoformat(),
+                "backlog": [],
+                "messages": [],
+                "schedule": [],
+                # Build tracking (inner loop)
+                "build_in_progress": False,
+                "build_started_at": None,
+                "build_task_description": None,
+                "build_messages": [],
+                "build_phase": None,
             },
-            "backlog": [],
             "registry": {"agents": [], "tools": []},
             "schedule": [],
         }
@@ -217,7 +224,7 @@ class StateManager:
         )
 
         try:
-            with os.fdopen(fd, 'w') as f:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, default=str)
                 f.flush()
                 os.fsync(f.fileno())
@@ -273,7 +280,7 @@ class StateManager:
         if not filepath.exists():
             return None
 
-        async with aiofiles.open(filepath, 'r') as f:
+        async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
             content = await f.read()
             return json.loads(content)
 
@@ -293,7 +300,7 @@ class StateManager:
         line = json.dumps(entry, default=str)
         line = redact_secrets(line) + "\n"
 
-        async with aiofiles.open(filepath, 'a') as f:
+        async with aiofiles.open(filepath, 'a', encoding='utf-8') as f:
             await f.write(line)
             await f.flush()
             # fsync for durability - use os.fsync on the file descriptor
@@ -324,22 +331,18 @@ class StateManager:
         """Log a schedule event."""
         await self.append_jsonl("schedule", event)
 
-    # Backlog management
+    # Backlog management (embedded in build_state.json)
     async def get_backlog(self) -> list[WorkItem]:
-        """Get the current backlog."""
-        async with self._file_lock("backlog"):
-            data = await self._read_json(self.state_dir / self.CORE_FILES["backlog"])
-            return [WorkItem(**item) for item in (data or [])]
+        """Get the current backlog from build_state."""
+        state = await self.get_state()
+        backlog_data = state.get("backlog", [])
+        return [WorkItem(**item) for item in backlog_data]
 
     async def save_backlog(self, backlog: list[WorkItem]) -> None:
-        """Save the backlog."""
-        async with self._file_lock("backlog"):
-            data = [item.model_dump() for item in backlog]
-            await self._atomic_write_json(
-                self.state_dir / self.CORE_FILES["backlog"],
-                data
-            )
-            self._state_cache["backlog"] = data
+        """Save the backlog to build_state."""
+        state = await self.get_state()
+        state["backlog"] = [item.model_dump() for item in backlog]
+        await self.save_state(state)
 
     async def add_work_item(self, item: WorkItem) -> None:
         """Add a work item to the backlog."""
@@ -392,20 +395,20 @@ class StateManager:
 
     # Core state management
     async def get_state(self) -> dict[str, Any]:
-        """Get current state."""
-        async with self._file_lock("current_state"):
+        """Get build state (formerly current_state)."""
+        async with self._file_lock("build_state"):
             return await self._read_json(
-                self.state_dir / self.CORE_FILES["current_state"]
+                self.state_dir / self.CORE_FILES["build_state"]
             ) or {}
 
     async def save_state(self, state: dict[str, Any]) -> None:
-        """Save current state."""
-        async with self._file_lock("current_state"):
+        """Save build state (formerly current_state)."""
+        async with self._file_lock("build_state"):
             await self._atomic_write_json(
-                self.state_dir / self.CORE_FILES["current_state"],
+                self.state_dir / self.CORE_FILES["build_state"],
                 state
             )
-            self._state_cache["current_state"] = state
+            self._state_cache["build_state"] = state
 
     async def commit_state(self) -> None:
         """Commit all cached state to disk."""
