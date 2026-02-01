@@ -6,9 +6,8 @@ Additional API endpoints specifically for the Chat UI frontend.
 Reads real state data from data/state/ directory:
 - health.json: Agent health status
 - registry.json: Registered agents and tools
-- current_state.json: Current execution state
+- build_state.json: Build state (messages, backlog, schedule, ideal_state)
 - schedule.json: Scheduled tasks
-- backlog.json: Task backlog
 """
 
 import asyncio
@@ -278,7 +277,7 @@ async def get_sub_agents():
 @router.get("/backlog", response_model=BacklogResponse)
 async def get_backlog():
     """
-    Get backlog items from backlog.json.
+    Get backlog items from build_state.json.
     """
     state_reader = get_state_reader()
     backlog = state_reader.get_backlog()
@@ -619,7 +618,7 @@ async def close_all_sse_connections():
     """
     Signal all SSE connections to close gracefully.
 
-    Called during server shutdown to ensure SSE connections don't block
+    Called during server shutdown to ensure SSE connections do not block
     the graceful shutdown process.
     """
     global _sse_shutdown_event, _active_sse_tasks
@@ -648,7 +647,7 @@ async def close_all_sse_connections():
     # Stop the status monitor
     stop_status_monitor()
 
-    # Cancel any remaining SSE tasks that haven't exited
+    # Cancel any remaining SSE tasks that have not exited
     tasks_to_cancel = [t for t in _active_sse_tasks if not t.done()]
     if tasks_to_cancel:
         logger.info("Force-cancelling %d SSE tasks", len(tasks_to_cancel))

@@ -143,6 +143,34 @@ def _looks_like_list_tools_request(user_input: str) -> bool:
     return has_list_intent or any(pattern in text for pattern in direct_patterns)
 
 
+def _looks_like_build_status_request(user_input: str) -> bool:
+    """Heuristic: detect requests to check build status/progress."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    # Direct patterns for build status
+    direct_patterns = [
+        "build status",
+        "build progress",
+        "build state",
+        "what are you building",
+        "what's being built",
+        "current build",
+        "is there a build",
+        "check build",
+        "building status",
+        "how is the build",
+        "how's the build",
+        "build update",
+        "update on build",
+        "building progress",
+        "are you building",
+    ]
+
+    return any(pattern in text for pattern in direct_patterns)
+
+
 def _looks_like_schedule_request(user_input: str) -> bool:
     """Heuristic: detect requests to schedule/remind/do something at a time."""
     text = (user_input or "").lower()
@@ -247,6 +275,7 @@ async def _execute_system_tool_inline(
     tool_name: str,
     tool_registry,
     llm_client,
+    state: "ProgenitorState | None" = None,
 ) -> tuple[dict | None, str | None]:
     """
     Execute a system tool inline and return (result, error).
@@ -260,6 +289,11 @@ async def _execute_system_tool_inline(
             {
                 "name": "list_tools",
                 "description": "List all available tools and their capabilities",
+                "type": "system_tool",
+            },
+            {
+                "name": "build_status",
+                "description": "Check the current build status, progress, and messages",
                 "type": "system_tool",
             },
             {
@@ -342,6 +376,45 @@ async def _execute_system_tool_inline(
             "total_count": len(all_agents),
         }, None
 
+    elif tool_name == "build_status":
+        # Return current build status from state
+        if state is None:
+            return {
+                "build_in_progress": False,
+                "message": "No state available - likely no build in progress",
+            }, None
+
+        build_in_progress = state.get("build_in_progress", False)
+        build_phase = state.get("build_phase")
+        build_task = state.get("build_task_description")
+        build_started = state.get("build_started_at")
+        current_iteration = state.get("current_iteration", 0)
+        verification_score = state.get("verification_score", 0)
+        build_messages = state.get("build_messages", [])
+        ideal_state = state.get("ideal_state")
+
+        # Get the last few build messages
+        recent_messages = build_messages[-5:] if build_messages else []
+
+        result = {
+            "build_in_progress": build_in_progress,
+            "phase": build_phase,
+            "task_description": build_task,
+            "started_at": build_started,
+            "current_iteration": current_iteration,
+            "verification_score": verification_score,
+            "message_count": len(build_messages),
+            "recent_messages": recent_messages,
+        }
+
+        if ideal_state and isinstance(ideal_state, dict):
+            result["target_score"] = ideal_state.get("stop_conditions", [{}])[0].get("threshold", 0.8)
+            result["success_criteria"] = [
+                c.get("description") for c in ideal_state.get("success_criteria", [])
+            ]
+
+        return result, None
+
     return None, f"Unknown system tool: {tool_name}"
 
 
@@ -393,6 +466,38 @@ def _format_tool_result(tool_name: str, result: dict) -> str:
             lines.append(f"    - Endpoint: {endpoint}")
 
         lines.append(f"\n**Running:** {result.get('running_count', 0)}/{result.get('total_count', 0)}")
+        return "\n".join(lines)
+
+    elif tool_name == "build_status":
+        build_in_progress = result.get("build_in_progress", False)
+
+        if not build_in_progress:
+            return "**No build in progress.** The system is idle and ready for new build requests."
+
+        lines = ["**Build Status:**"]
+        lines.append(f"  • **Status:** In Progress")
+        lines.append(f"  • **Phase:** {result.get('phase', 'unknown')}")
+        lines.append(f"  • **Task:** {result.get('task_description', 'No description')}")
+        lines.append(f"  • **Started:** {result.get('started_at', 'unknown')}")
+        lines.append(f"  • **Iteration:** {result.get('current_iteration', 0)}")
+        lines.append(f"  • **Score:** {result.get('verification_score', 0):.2f} / {result.get('target_score', 0.8):.2f}")
+
+        criteria = result.get("success_criteria", [])
+        if criteria:
+            lines.append("\n**Success Criteria:**")
+            for c in criteria:
+                lines.append(f"  • {c}")
+
+        recent = result.get("recent_messages", [])
+        if recent:
+            lines.append(f"\n**Recent Activity ({result.get('message_count', 0)} total messages):**")
+            for msg in recent[-3:]:
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")[:100]
+                if len(msg.get("content", "")) > 100:
+                    content += "..."
+                lines.append(f"  [{role}] {content}")
+
         return "\n".join(lines)
 
     # Default: return JSON-like representation
@@ -477,6 +582,32 @@ def create_node(
 
                 return {"current_decision": decision}
 
+            # Check for build status requests
+            elif _looks_like_build_status_request(user_input):
+                # Execute build_status system tool inline
+                tool_name = "build_status"
+                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
+                if error:
+                    response_text = f"Error executing {tool_name}: {error}"
+                else:
+                    response_text = _format_tool_result(tool_name, result)
+
+                decision = Decision(
+                    action=DecisionAction.ANSWER_DIRECTLY,
+                    reasoning="Executed build_status system tool inline.",
+                    requires_planning=False,
+                    direct_response=response_text,
+                )
+
+                if state_manager:
+                    await state_manager.log_decision({
+                        "event": "system_tool_executed",
+                        "tool_name": tool_name,
+                        "timestamp": utcnow_isoformat(),
+                    })
+
+                return {"current_decision": decision}
+
             # Check for system tool requests (rediscover agents, etc.)
             elif _looks_like_agent_discovery_request(user_input):
                 # Execute system tool inline and return direct response
@@ -518,6 +649,32 @@ def create_node(
                 and not direct_response
                 and _looks_like_agent_build_request(user_input)
             ):
+                # Check if a build is already in progress - reject new builds
+                if state.get("build_in_progress", False):
+                    current_task = state.get("build_task_description", "unknown task")
+                    phase = state.get("build_phase", "unknown")
+                    decision = Decision(
+                        action=DecisionAction.ANSWER_DIRECTLY,
+                        reasoning="Build already in progress - rejecting new build request.",
+                        requires_planning=False,
+                        direct_response=(
+                            f"⚠️ **Build Already In Progress**\n\n"
+                            f"I'm currently working on: *{current_task}*\n"
+                            f"Current phase: `{phase}`\n\n"
+                            f"Please wait for the current build to complete, or ask me for `build status` to check progress."
+                        ),
+                    )
+
+                    if state_manager:
+                        await state_manager.log_decision({
+                            "event": "build_rejected",
+                            "reason": "build_in_progress",
+                            "current_task": current_task,
+                            "timestamp": utcnow_isoformat(),
+                        })
+
+                    return {"current_decision": decision}
+
                 decision_data = {
                     "action": "build_agent",
                     "reasoning": "User explicitly requested creation of a new agent.",

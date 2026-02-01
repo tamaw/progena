@@ -354,7 +354,20 @@ class InnerLoopState(TypedDict, total=False):
     """Inner loop (OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN) state.
 
     Per loop.spec.md ideal state architecture.
+
+    Build State Management:
+    - build_in_progress: True when actively building, rejects new build requests
+    - build_messages: LLM communications specific to the build loop only
+    - build_started_at: When the current build began
+    - build_task_description: What we're building (from user request)
     """
+    # Build control
+    build_in_progress: bool  # True while building, blocks new builds
+    build_started_at: Optional[str]  # ISO timestamp when build started
+    build_task_description: Optional[str]  # Human-readable description of build task
+    build_messages: list[dict[str, Any]]  # LLM messages specific to build loop only
+    build_phase: Optional[str]  # Current phase: observe, think, plan, build, execute, verify, learn
+
     # Ideal state and iteration tracking
     ideal_state: Optional[Any]  # IdealState object
     current_iteration: int  # Inner loop iteration count

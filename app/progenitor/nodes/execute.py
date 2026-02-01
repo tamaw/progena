@@ -201,6 +201,7 @@ def create_node(
             "execution_completed": True,
             "pending_tool_calls": [],  # Clear pending tools
             "actions_this_cycle": state.get("actions_this_cycle", 0) + len(pending_tools),
+            "build_phase": "execute",
         }
 
     return execute_node

@@ -33,8 +33,8 @@ class TestStateManager:
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
 
-        assert (state_dir / "current_state.json").exists()
-        assert (state_dir / "backlog.json").exists()
+        # build_state.json replaces both current_state.json and backlog.json
+        assert (state_dir / "build_state.json").exists()
         assert (state_dir / "registry.json").exists()
         assert (state_dir / "schedule.json").exists()
 

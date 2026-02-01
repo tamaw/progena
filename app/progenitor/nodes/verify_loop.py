@@ -245,6 +245,7 @@ def create_node(
                 "best_artefact": best_artefact,
                 "best_artefact_score": best_score,
                 "verification_reports": verification_reports,
+                "build_phase": "verify",
                 **clarification_updates,
             }
 
@@ -266,6 +267,7 @@ def create_node(
                 "verification_passed": False,
                 "verification_score": 0.5,
                 "clarification_needed": False,
+                "build_phase": "verify",
             }
 
     return verify_node

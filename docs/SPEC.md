@@ -271,8 +271,7 @@ print(response.choices[0].message.content)
 
 ### Core Files
 
-* `state/current_state.json`
-* `state/backlog.json`
+* `state/build_state.json` (backlog, messages, ideal_state, verification)
 * `state/registry.json` (agents + MCP tools)
 * `state/schedule.json`
 * `logs/conversation.jsonl`
@@ -510,8 +509,7 @@ Keep it boring. Boring survives.
   * `progenitor.json` (timezone, backoff, limits)
 * `state/` (mounted volume)
 
-  * `current_state.json`
-  * `backlog.json`
+  * `build_state.json`
   * `registry.json`
   * `schedule.json`
 * `logs/` (mounted volume)
