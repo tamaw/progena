@@ -1,6 +1,13 @@
 """
 EXECUTE Node - Execute tools if needed (loop.spec.md).
 
+BL-004: Implements "agent exercise harness" - starts the built agent
+(HTTP preferred, stdio fallback), runs the prompt suite, captures
+transcripts + timing + errors into ExecutionResult.
+
+At least one "smoke" prompt always runs; multiple prompts run when
+provided by experiment_plan.
+
 Separate from BUILD phase per spec:
 - BUILD produces candidate output
 - EXECUTE runs tools if needed
@@ -14,6 +21,12 @@ import time
 from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus
+from ..state.execution_schemas import (
+    ExecutionResult,
+    ExecutionRun,
+    ExecutionStatus,
+    ExperimentPlan,
+)
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
@@ -31,21 +44,40 @@ def _get_telemetry():
 def create_node(
     tool_registry,
     state_manager=None,
+    project_root=None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the execute node function.
 
     Args:
         tool_registry: Registry of available tools for execution.
         state_manager: Optional state manager for logging.
+        project_root: Project root path for agent harness.
     """
+    from pathlib import Path
+    from ..runtime.exercise_harness import AgentExerciseHarness, create_execution_result_from_build
+
+    # Initialize exercise harness for agent testing
+    if project_root:
+        harness = AgentExerciseHarness(
+            project_root=Path(project_root),
+            state_manager=state_manager,
+        )
+    else:
+        harness = None
 
     async def execute_node(state: ProgenitorState) -> ProgenitorState:
         """
-        EXECUTE phase: Run tools if needed.
+        EXECUTE phase: Run tools if needed, exercise built agents.
+
+        BL-004: Implements agent exercise harness:
+        - Starts the built agent (HTTP preferred, stdio fallback)
+        - Runs the prompt suite from experiment_plan
+        - Captures transcripts + timing + errors into ExecutionResult
+        - At least one "smoke" prompt always runs
 
         Per loop.spec.md:
         - BUILD produces candidate output
-        - EXECUTE runs tools if needed
+        - EXECUTE runs tools/exercises agents
 
         This node handles the actual tool execution after BUILD
         has prepared the work.
@@ -57,6 +89,7 @@ def create_node(
         current_item = state.get("current_work_item")
         build_output = state.get("last_iteration_output")
         iteration = state.get("current_iteration", 0)
+        experiment_plan_data = state.get("experiment_plan")  # BL-002: From PLAN phase
 
         if tracer:
             span = tracer.start_span(
@@ -65,6 +98,7 @@ def create_node(
                     "iteration": iteration,
                     "has_work_item": current_item is not None,
                     "has_build_output": build_output is not None,
+                    "has_experiment_plan": experiment_plan_data is not None,
                 },
             )
 
@@ -73,7 +107,12 @@ def create_node(
             if span:
                 span.set_attribute("skipped", True)
                 span.end()
-            return {}
+            # BL-001: Still produce ExecutionResult even when skipped
+            exec_result = ExecutionResult(
+                iteration=iteration,
+                status=ExecutionStatus.SKIPPED,
+            ).finalize()
+            return {"execution_result": exec_result.model_dump()}
 
         # Check if execution is needed (some work items are already complete after BUILD)
         work_completed = state.get("work_item_completed", False)
@@ -82,24 +121,72 @@ def create_node(
             if span:
                 span.set_attribute("already_completed", True)
                 span.end()
+            # BL-001: Wrap in ExecutionResult
+            exec_result = await create_execution_result_from_build(
+                build_output or {},
+                iteration,
+                current_item,
+            )
             return {
-                "execution_result": build_output,
+                "execution_result": exec_result.model_dump(),
                 "execution_completed": True,
+            }
+
+        # Check if this is an agent-type work item that needs exercising
+        item_type = _get_item_type(current_item)
+        is_agent_item = item_type in ("build_agent", "a2a_call")
+
+        # BL-004: If we have an experiment plan and harness, exercise the agent
+        if experiment_plan_data and harness and is_agent_item:
+            logger.info("Executing agent exercise harness with experiment plan")
+            exec_result = await _exercise_agent(
+                harness=harness,
+                experiment_plan_data=experiment_plan_data,
+                current_item=current_item,
+                build_output=build_output,
+                iteration=iteration,
+                state=state,
+            )
+
+            duration = time.perf_counter() - start_time
+            if metrics:
+                metrics.record_histogram("node_duration_seconds", duration, {"node": "execute"})
+                metrics.increment("node_invocations_total", {"node": "execute", "success": str(exec_result.smoke_test_passed).lower()})
+
+            if span:
+                span.set_attribute("exercise_harness", True)
+                span.set_attribute("prompts_total", exec_result.runs[0].prompts_total if exec_result.runs else 0)
+                span.set_attribute("smoke_test_passed", exec_result.smoke_test_passed)
+                span.end()
+
+            return {
+                "execution_result": exec_result.model_dump(),
+                "last_iteration_output": exec_result.model_dump(),
+                "execution_completed": True,
+                "build_phase": "execute",
             }
 
         # Get pending tools from BUILD phase
         pending_tools = state.get("pending_tool_calls", [])
 
         if not pending_tools:
-            # No tools to execute - pass through build output
+            # No tools to execute - create ExecutionResult from build output
             logger.debug("No pending tools to execute")
             if metrics:
                 metrics.increment("node_invocations_total", {"node": "execute", "success": "true"})
             if span:
                 span.set_attribute("no_tools", True)
                 span.end()
+
+            # BL-001: Always produce ExecutionResult
+            exec_result = await create_execution_result_from_build(
+                build_output or {},
+                iteration,
+                current_item,
+            )
             return {
-                "execution_result": build_output,
+                "execution_result": exec_result.model_dump(),
+                "last_iteration_output": exec_result.model_dump(),
                 "execution_completed": True,
             }
 
@@ -195,9 +282,17 @@ def create_node(
             span.add_event("execution_complete", {"errors": len(errors)})
             span.end()
 
+        # BL-001: Wrap tool execution results in ExecutionResult
+        exec_result = ExecutionResult(
+            iteration=iteration,
+            build_output=execution_output,
+            status=ExecutionStatus.SUCCESS if len(errors) == 0 else ExecutionStatus.PARTIAL,
+            all_errors=errors,
+        ).finalize()
+
         return {
-            "execution_result": execution_output,
-            "last_iteration_output": execution_output,  # Update for VERIFY phase
+            "execution_result": exec_result.model_dump(),
+            "last_iteration_output": exec_result.model_dump(),  # Update for VERIFY phase
             "execution_completed": True,
             "pending_tool_calls": [],  # Clear pending tools
             "actions_this_cycle": state.get("actions_this_cycle", 0) + len(pending_tools),
@@ -205,6 +300,75 @@ def create_node(
         }
 
     return execute_node
+
+
+def _get_item_type(work_item: Any) -> str:
+    """Get the item type as a string from a work item."""
+    if hasattr(work_item, "item_type"):
+        item_type = work_item.item_type
+        return item_type.value if hasattr(item_type, "value") else str(item_type)
+    elif isinstance(work_item, dict):
+        item_type = work_item.get("item_type", "direct_answer")
+        return item_type.value if hasattr(item_type, "value") else str(item_type)
+    return "direct_answer"
+
+
+async def _exercise_agent(
+    harness,
+    experiment_plan_data: dict,
+    current_item: Any,
+    build_output: Any,
+    iteration: int,
+    state: ProgenitorState,
+) -> ExecutionResult:
+    """
+    Exercise an agent using the experiment harness.
+
+    BL-004: Runs the prompt suite from experiment_plan.
+    """
+    # Parse experiment plan
+    experiment_plan = ExperimentPlan(**experiment_plan_data)
+
+    # Get agent endpoint/entrypoint from context or registry
+    agent_endpoint = None
+    agent_entrypoint = None
+
+    # Check build output for agent info
+    if isinstance(build_output, dict):
+        agent_endpoint = build_output.get("agent_endpoint")
+        agent_entrypoint = build_output.get("agent_entrypoint")
+
+    # Check work item context
+    if hasattr(current_item, "context"):
+        context = current_item.context
+    elif isinstance(current_item, dict):
+        context = current_item.get("context", {})
+    else:
+        context = {}
+
+    if not agent_endpoint:
+        agent_endpoint = context.get("agent_endpoint")
+    if not agent_entrypoint:
+        agent_entrypoint = context.get("agent_entrypoint")
+
+    # Check registry for agent info
+    agents = state.get("agents", [])
+    for agent in agents:
+        if hasattr(agent, "name") and agent.name == experiment_plan.agent_name:
+            agent_endpoint = agent_endpoint or getattr(agent, "endpoint", None)
+        elif isinstance(agent, dict) and agent.get("name") == experiment_plan.agent_name:
+            agent_endpoint = agent_endpoint or agent.get("endpoint")
+
+    # Run the experiment
+    result = await harness.execute_experiment(
+        experiment_plan=experiment_plan,
+        agent_endpoint=agent_endpoint,
+        agent_entrypoint=agent_entrypoint,
+        iteration=iteration,
+        task_id=state.get("task_id"),
+    )
+
+    return result
 
 
 async def _execute_tool(tool_name: str, tool_args: dict, tool_registry) -> Any:

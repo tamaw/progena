@@ -36,6 +36,7 @@ DEFAULT_TIMEOUT = 300  # 5 minutes
 RECONNECT_DELAY_INITIAL = 1.0
 RECONNECT_DELAY_MAX = 30.0
 HEARTBEAT_INTERVAL = 30
+HEARTBEAT_MISS_THRESHOLD = 3  # Disconnect after this many consecutive misses
 
 
 class IPCClient:
@@ -77,6 +78,8 @@ class IPCClient:
         self._reconnect_delay = RECONNECT_DELAY_INITIAL
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._streaming = False  # Flag to pause heartbeats during streaming
+        self._request_in_progress = False  # Flag to pause heartbeats during requests
+        self._missed_heartbeats = 0  # Track consecutive missed heartbeats
 
     async def connect(self) -> bool:
         """Connect to the Progenitor IPC server.
@@ -187,14 +190,25 @@ class IPCClient:
                 if not self._connected or not self._writer:
                     break
 
+                # Skip heartbeat if we're in the middle of streaming or a request
+                # (another operation has priority and will update last_activity)
+                if self._streaming or self._request_in_progress:
+                    self._missed_heartbeats = 0  # Reset counter - we're active
+                    continue
+
+                # Skip heartbeat if there was recent activity (within 2x interval)
+                time_since_activity = time.time() - self._last_activity
+                if time_since_activity < HEARTBEAT_INTERVAL * 2:
+                    self._missed_heartbeats = 0
+                    continue
+
                 # Acquire lock for heartbeat - prevents conflict with send_message
                 async with self._lock:
                     if not self._connected or not self._writer or not self._reader:
                         break
 
-                    # Skip heartbeat if we're in the middle of streaming
-                    # (another operation has priority)
-                    if self._streaming:
+                    # Double-check streaming/request state after acquiring lock
+                    if self._streaming or self._request_in_progress:
                         continue
 
                     # Send heartbeat
@@ -204,15 +218,24 @@ class IPCClient:
                     msg = await read_message(self._reader, timeout=10)
                     if msg and msg.type == MessageType.HEARTBEAT_ACK:
                         self._last_activity = time.time()
+                        self._missed_heartbeats = 0
                     else:
-                        logger.warning("No heartbeat ack received")
+                        self._missed_heartbeats += 1
+                        logger.debug("No heartbeat ack received (miss %d/%d)",
+                                    self._missed_heartbeats, HEARTBEAT_MISS_THRESHOLD)
+                        if self._missed_heartbeats >= HEARTBEAT_MISS_THRESHOLD:
+                            logger.warning("Too many missed heartbeats, connection may be stale")
+                            # Don't disconnect yet - let the next request attempt reconnect
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("Heartbeat error: %s", e)
-                self._connected = False
-                break
+                logger.debug("Heartbeat error (may be normal during requests): %s", e)
+                self._missed_heartbeats += 1
+                if self._missed_heartbeats >= HEARTBEAT_MISS_THRESHOLD:
+                    logger.warning("Heartbeat errors exceeded threshold, marking disconnected")
+                    self._connected = False
+                    break
 
     async def send_message(
         self,
@@ -236,10 +259,13 @@ class IPCClient:
 
         # Pause heartbeats during message exchange
         self._streaming = True
+        self._request_in_progress = True
+        self._missed_heartbeats = 0  # Reset on new request
 
         async with self._lock:
             if not self._writer or not self._reader:
                 self._streaming = False
+                self._request_in_progress = False
                 raise ConnectionError("Not connected")
 
             try:
@@ -277,6 +303,7 @@ class IPCClient:
             finally:
                 # Resume heartbeats
                 self._streaming = False
+                self._request_in_progress = False
 
     async def send_message_stream(
         self,
@@ -300,56 +327,60 @@ class IPCClient:
 
         # Pause heartbeats BEFORE acquiring lock to prevent race condition
         self._streaming = True
+        self._request_in_progress = True
+        self._missed_heartbeats = 0  # Reset on new request
 
-        # Don't hold lock during streaming - just for sending
+        # CRITICAL: Hold lock for ENTIRE request-response cycle.
+        # Without this, concurrent requests would interleave on the socket,
+        # causing responses to be delivered to the wrong caller.
         async with self._lock:
-            if not self._writer or not self._reader:
-                self._streaming = False
-                raise ConnectionError("Not connected")
+            try:
+                if not self._writer or not self._reader:
+                    raise ConnectionError("Not connected")
 
-            # Send user message (streaming)
-            await write_message(
-                self._writer,
-                user_message(message, request_id, stream=True),
-            )
+                # Send user message (streaming)
+                await write_message(
+                    self._writer,
+                    user_message(message, request_id, stream=True),
+                )
 
-        # Read stream chunks (without lock - heartbeat is paused via _streaming flag)
-        try:
-            while True:
-                msg = await read_message(self._reader, timeout=self.timeout)
+                # Read stream chunks
+                while True:
+                    msg = await read_message(self._reader, timeout=self.timeout)
 
-                if msg is None:
-                    self._connected = False
-                    raise ConnectionError("Connection closed during streaming")
+                    if msg is None:
+                        self._connected = False
+                        raise ConnectionError("Connection closed during streaming")
 
-                self._last_activity = time.time()
+                    self._last_activity = time.time()
 
-                if msg.type == MessageType.ERROR:
-                    raise RuntimeError(f"Progenitor error: {msg.content}")
+                    if msg.type == MessageType.ERROR:
+                        raise RuntimeError(f"Progenitor error: {msg.content}")
 
-                if msg.type == MessageType.STREAM_CHUNK:
-                    if msg.content:
-                        yield msg.content
-                    if msg.is_final:
+                    if msg.type == MessageType.STREAM_CHUNK:
+                        if msg.content:
+                            yield msg.content
+                        if msg.is_final:
+                            break
+
+                    elif msg.type == MessageType.STREAM_END:
                         break
 
-                elif msg.type == MessageType.STREAM_END:
-                    break
+                    elif msg.type == MessageType.ASSISTANT_MESSAGE:
+                        # Fallback: got complete message instead of stream
+                        yield msg.content
+                        break
 
-                elif msg.type == MessageType.ASSISTANT_MESSAGE:
-                    # Fallback: got complete message instead of stream
-                    yield msg.content
-                    break
-
-        except asyncio.TimeoutError:
-            raise TimeoutError(f"Streaming timed out after {self.timeout}s")
-        except Exception as e:
-            if "Connection" in str(type(e).__name__):
-                self._connected = False
-            raise
-        finally:
-            # Resume heartbeats after streaming completes
-            self._streaming = False
+            except asyncio.TimeoutError:
+                raise TimeoutError(f"Streaming timed out after {self.timeout}s")
+            except Exception as e:
+                if "Connection" in str(type(e).__name__):
+                    self._connected = False
+                raise
+            finally:
+                # Resume heartbeats after streaming completes
+                self._streaming = False
+                self._request_in_progress = False
 
     async def request_shutdown(self) -> None:
         """Request the Progenitor server to shutdown."""

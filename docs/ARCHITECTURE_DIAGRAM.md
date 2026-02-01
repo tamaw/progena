@@ -91,22 +91,31 @@
 │       │                                                         │
 │       ▼                                                         │
 │  ┌──────────┐                                                  │
-│  │  BUILD   │  (ACT node - produces candidate output)          │
+│  │  BUILD   │  (ACT node - produces candidate code/agent)       │
 │  └────┬─────┘                                                  │
 │       │                                                         │
-│       │  • Execute work items                                  │
-│       │  • Call tools/agents                                   │
-│       │  • Generate artifacts                                  │
-│       │  • Produce candidate output                            │
+│       │  • Generate code / agent files                          │
+│       │  • Run Copilot CLI or other code-gen tools              │
+│       │  • Produce candidate artifacts                          │
 │       │                                                         │
 │       ▼                                                         │
 │  ┌──────────┐                                                  │
-│  │ VALIDATE │  (Optional - only for code builds)               │
+│  │ EXECUTE  │  ◀── Start agent & run test prompts               │
 │  └────┬─────┘                                                  │
 │       │                                                         │
-│       │  • Run syntax checks                                   │
-│       │  • Execute tests                                       │
-│       │  • Verify structure                                    │
+│       │  • Start the built agent (HTTP or stdio)                │
+│       │  • Run chat prompts / test cases against it             │
+│       │  • Collect responses & execution data                   │
+│       │  • Store results in last_iteration_output               │
+│       │                                                         │
+│       ▼                                                         │
+│  ┌──────────┐                                                  │
+│  │ VALIDATE │  (Uses execution data to check correctness)       │
+│  └────┬─────┘                                                  │
+│       │                                                         │
+│       │  • Run syntax/lint checks on generated code             │
+│       │  • Compare execution output to expected results         │
+│       │  • Check for errors/exceptions during EXECUTE           │
 │       │                                                         │
 │       ▼                                                         │
 │  ┌──────────┐                                                  │
@@ -149,6 +158,13 @@
 │                                                                │
 └────────────────────────────────────────────────────────────────┘
 ```
+
+Notes:
+- BUILD produces code/agent artifacts (via Copilot CLI or other tools).
+- EXECUTE starts the built agent and runs test prompts to gather real execution data.
+- VALIDATE uses execution results to check correctness (syntax, expected outputs, errors).
+- VERIFY scores execution + validation data against ideal state criteria.
+- REGISTER is NOT part of the inner loop; users invoke it separately via chat tool when ready to deploy.
 
 ## Ideal State Structure
 
@@ -316,7 +332,10 @@ Task       Task
 │  Builder     │  │              │  │              │
 │              │  │ • Scores     │  │ • OBSERVE    │
 │ • Extracts   │  │ • Reports    │  │ • THINK      │
-│ • Refines    │  │ • Checks     │  │ • VERIFY     │
+│ • Refines    │  │ • Checks     │  │ • PLAN       │
+│              │  │              │  │ • BUILD      │
+│              │  │              │  │ • EXECUTE    │
+│              │  │              │  │ • VERIFY     │
 │              │  │              │  │ • LEARN      │
 └──────────────┘  └──────────────┘  └──────────────┘
         │                 │                  │
@@ -337,20 +356,20 @@ Task       Task
 ```
 TIME ─────────────────────────────────────────────────▶
 
-ITER 0:  OBSERVE → THINK → PLAN → BUILD → VERIFY → LEARN
-         └─ Build    Generate  Create   Code    Score:   Lessons:
-            ideal    approaches items   gen     0.65     "Need tests"
-            state                                ✗
+ITER 0:  OBSERVE → THINK → PLAN → BUILD → EXECUTE → VALIDATE → VERIFY → LEARN
+         └─ Build    Generate  Create   Code    Run      Check    Score:   Lessons:
+            ideal    approaches items   gen     agent    results  0.65     "Need tests"
+            state                                                  ✗
 
-ITER 1:  OBSERVE → THINK → PLAN → BUILD → VERIFY → LEARN
-         └─ Refine   New       Add     Add      Score:   Lessons:
-            criteria approach  tests   tests    0.75     "Tests help"
-                                                 ✗
+ITER 1:  OBSERVE → THINK → PLAN → BUILD → EXECUTE → VALIDATE → VERIFY → LEARN
+         └─ Refine   New       Add     Add      Run      Check    Score:   Lessons:
+            criteria approach  tests   tests    agent    results  0.75     "Tests help"
+                                                                   ✗
 
-ITER 2:  OBSERVE → THINK → PLAN → BUILD → VERIFY → LEARN
-         └─ Tighten  Optimize  Fix     Refine   Score:   Lessons:
-            targets  approach  gaps    code     0.85     "Quality up!"
-                                                 ✓
+ITER 2:  OBSERVE → THINK → PLAN → BUILD → EXECUTE → VALIDATE → VERIFY → LEARN
+         └─ Tighten  Optimize  Fix     Refine   Run      Check    Score:   Lessons:
+            targets  approach  gaps    code     agent    results  0.85     "Quality up!"
+                                                                   ✓
 
          STOP: Score threshold reached (0.85 >= 0.8)
 

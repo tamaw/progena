@@ -233,7 +233,7 @@ class TestAgentDiscoveryIntegration:
         agents_dir.mkdir()
 
         mock_llm = AsyncMock()
-        mock_registry = MagicMock()
+        mock_registry = AsyncMock()
 
         discovery = AgentDiscovery(
             agents_dir=agents_dir,

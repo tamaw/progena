@@ -1,6 +1,8 @@
 """
 VERIFY Node - Verification phase of inner loop (loop.spec.md).
 
+BL-006: Updated to use structured execution+validation data for mechanical scoring.
+
 Scores candidate output against ideal state criteria.
 Produces verification report with scores, gaps, next actions.
 Tracks artefacts and best artefact per loop.spec.md.
@@ -15,6 +17,7 @@ import time
 from ..state.models import ProgenitorState
 from ..state.verifier import Verifier
 from ..state.clarification import ClarificationDetector, create_clarification_history_entry
+from ..state.execution_schemas import ExecutionResult, ValidationResultV2, VerificationReportV2
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
@@ -161,12 +164,34 @@ def create_node(
                                 "confidence": clarification_result.confidence,
                             })
 
-            verification_report = await verifier.verify(
-                ideal_state=ideal_state,
-                output=output,
-                iteration=iteration,
-                context=context,
-            )
+            # BL-006: Prefer structured data verification when available
+            execution_result = state.get("execution_result")
+            validation_result = state.get("validation_result")
+
+            if execution_result or validation_result:
+                # Use new structured verification method
+                logger.info("Using structured data verification (BL-006)")
+                verification_report = await verifier.verify_with_structured_data(
+                    ideal_state=ideal_state,
+                    execution_result=execution_result,
+                    validation_result=validation_result,
+                    iteration=iteration,
+                )
+                # Convert VerificationReportV2 to dict for state compatibility
+                if hasattr(verification_report, "model_dump"):
+                    verification_report_dict = verification_report.model_dump()
+                else:
+                    verification_report_dict = verification_report
+            else:
+                # Fallback to legacy verification
+                logger.debug("Using legacy verification (no structured data)")
+                verification_report = await verifier.verify(
+                    ideal_state=ideal_state,
+                    output=output,
+                    iteration=iteration,
+                    context=context,
+                )
+                verification_report_dict = None
 
             # Track artefacts (loop.spec.md Task State requirement)
             artefacts = list(state.get("artefacts", []))
@@ -177,6 +202,11 @@ def create_node(
                 "passed": verification_report.passed,
                 "timestamp": utcnow_isoformat(),
             }
+
+            # BL-006: Add evidence citations to artefact if using V2 report
+            if verification_report_dict and "evidence_citations" in verification_report_dict:
+                current_artefact["evidence_citations"] = verification_report_dict["evidence_citations"][:5]
+
             artefacts.append(current_artefact)
 
             # Track best artefact (for early-stop scenarios per spec)
@@ -190,7 +220,10 @@ def create_node(
 
             # Track all verification reports (loop.spec.md Task State)
             verification_reports = list(state.get("verification_reports", []))
-            if hasattr(verification_report, "model_dump"):
+            if verification_report_dict:
+                # Use the V2 dict we already prepared
+                report_dict = verification_report_dict
+            elif hasattr(verification_report, "model_dump"):
                 report_dict = verification_report.model_dump()
             else:
                 report_dict = verification_report if isinstance(verification_report, dict) else {}

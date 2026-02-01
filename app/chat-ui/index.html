@@ -19,6 +19,12 @@
                 <span class="brand-icon">🧬</span>
                 <h1>Progenitor</h1>
             </div>
+            <nav class="header-nav">
+                <a href="/ui" class="nav-link active">💬 Chat</a>
+                <a href="/ui/dashboard" class="nav-link">📊 Dashboard</a>
+                <a href="/ui/agents" class="nav-link">🤖 Agents</a>
+                <a href="/ui/logs" class="nav-link">📜 Logs</a>
+            </nav>
             <div class="header-status">
                 <span id="connection-status" class="status-indicator" data-status="disconnected">
                     <span class="status-dot"></span>
@@ -70,6 +76,19 @@
                     <h3 class="sidebar-title">Loops</h3>
                     <div id="loops-list" class="sub-agents-list">
                         <div class="empty-state">No active loops</div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section build-status-section">
+                    <h3 class="sidebar-title">
+                        <span>Build Status</span>
+                        <span id="build-status-indicator" class="build-indicator idle"></span>
+                    </h3>
+                    <div id="build-status" class="build-status-panel">
+                        <div class="build-idle-state">
+                            <span class="build-icon">✓</span>
+                            <span>No build in progress</span>
+                        </div>
                     </div>
                 </div>
 

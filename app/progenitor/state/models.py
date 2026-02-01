@@ -360,6 +360,9 @@ class InnerLoopState(TypedDict, total=False):
     - build_messages: LLM communications specific to the build loop only
     - build_started_at: When the current build began
     - build_task_description: What we're building (from user request)
+
+    SpecDoc: PLAN owns a persistent "Spec" Markdown artifact stored in
+    build_state.json that evolves each iteration and is consumed by BUILD.
     """
     # Build control
     build_in_progress: bool  # True while building, blocks new builds
@@ -378,6 +381,9 @@ class InnerLoopState(TypedDict, total=False):
     thinking_output: Optional[str]  # THINK phase output
     current_approaches: list[dict[str, Any]]  # From THINK phase
     last_iteration_output: Optional[Any]  # Output from BUILD phase
+
+    # SpecDoc: Persistent spec artifact (PLAN-owned, BUILD-consumed)
+    spec_doc: Optional[dict[str, Any]]  # SpecDoc containing content, revision, history
 
     # Verification
     last_verification_report: Optional[Any]  # VerificationReport object

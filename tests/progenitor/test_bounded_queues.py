@@ -20,6 +20,7 @@ class MockRuntimeConfig:
     max_input_queue_size: int = 5
     max_output_queue_size: int = 5
     max_stream_queue_size: int = 10
+    timezone: str = "UTC"
 
 
 @dataclass

@@ -261,6 +261,11 @@ class IdealStateBuilder:
         - Add anti-criteria for observed issues
         - Update based on verification gaps
         """
+        # Defensive: convert dict to IdealState if necessary
+        if isinstance(current_ideal_state, dict):
+            logger.debug("Converting current_ideal_state from dict to IdealState")
+            current_ideal_state = IdealState(**current_ideal_state)
+
         # First, extract anti-criteria from violations (loop.spec.md behavioral rule)
         violations = iteration_results.get("violations", [])
         existing_anti_ids = {ac.id for ac in current_ideal_state.anti_criteria}
@@ -511,6 +516,11 @@ Return only the refinements as structured data."""
         Returns:
             Updated IdealState with clarification incorporated
         """
+        # Defensive: convert dict to IdealState if necessary
+        if isinstance(current_ideal_state, dict):
+            logger.debug("Converting current_ideal_state from dict to IdealState in refine_with_clarification")
+            current_ideal_state = IdealState(**current_ideal_state)
+
         user_clarification = clarification_context.get("user_clarification", "")
         original_context = clarification_context.get("original_context", "")
 

@@ -21,12 +21,29 @@ class MockLoopRunner:
         self._output_queue = asyncio.Queue()
         self._stream_queue = asyncio.Queue()
         self._response = "Mock response"
+        self._cycle_complete_event = asyncio.Event()
+        # Auto-set event for mocking
+        self._cycle_complete_event.set()
+        # Flag to enable automatic streaming (tests can disable to control manually)
+        self._auto_stream = True
 
     async def enqueue_input(self, content: str) -> None:
         """Enqueue input message."""
         await self._input_queue.put(content)
-        # Simulate processing and produce output
+        # Simulate processing and produce output (for non-streaming)
         await self._output_queue.put(self._response)
+        # Also put streaming chunks (for streaming handler)
+        if self._auto_stream:
+            # Split response into words like the real loop does
+            words = self._response.split(' ')
+            for i, word in enumerate(words):
+                is_last = (i == len(words) - 1)
+                chunk = word if is_last else word + ' '
+                await self._stream_queue.put({
+                    "type": "stream_chunk",
+                    "content": chunk,
+                    "is_final": is_last,
+                })
 
     async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from queue."""
@@ -51,6 +68,10 @@ class MockLoopRunner:
             return self._stream_queue.get_nowait()
         except (asyncio.TimeoutError, asyncio.QueueEmpty):
             return None
+
+    async def wait_cycle_complete(self, timeout: float | None = None) -> bool:
+        """Wait for cycle to complete (mock always returns True immediately)."""
+        return True
 
     def set_response(self, response: str) -> None:
         """Set the mock response."""
@@ -254,6 +275,9 @@ class TestIPCStreaming:
         self, ipc_client, ipc_server, mock_loop_runner
     ):
         """Test streaming response."""
+        # Disable auto streaming so we can manually control chunks
+        mock_loop_runner._auto_stream = False
+
         # Set up stream chunks
         chunks = [
             {"content": "Hello ", "is_final": False, "type": "stream_chunk"},
