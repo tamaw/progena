@@ -35,13 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 14 new JavaScript modules
 
 ### Changed
-- Chat server now serves static UI files from `/ui/` endpoint
+- Backend now serves static UI files from `/ui/` endpoint
 - API responses include thinking indicators via metadata field
 
 ## [0.5.0] - 2026-01-28
 
 ### Added
-- **Sprint 4: IPC Protocol** - Length-prefixed JSON protocol between chat_server and progenitor
+- **Sprint 4: IPC Protocol** - Length-prefixed JSON protocol between backend and progenitor
   - Bidirectional async streaming
   - Heartbeat and health monitoring
   - Automatic reconnection with exponential backoff
@@ -98,7 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial project setup
 - Basic chat completion with OpenAI/Azure OpenAI
-- FastAPI chat server with OpenAI-compatible API
+- FastAPI backend with OpenAI-compatible API
 - Pydantic configuration management
 - Basic test suite
 

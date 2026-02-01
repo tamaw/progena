@@ -4,7 +4,7 @@ Progenitor Service - In-process async service for direct integration.
 ARCH-004: Replace subprocess IPC with direct async calls.
 
 This provides an in-process Progenitor service that can be used by the
-chat server without subprocess communication, eliminating:
+backend without subprocess communication, eliminating:
 - Deadlock risks from pipe buffering
 - JSON parsing errors
 - Zombie processes
@@ -40,7 +40,7 @@ class ProgenitorService:
     """In-process Progenitor service for direct async calls.
 
     This eliminates the need for subprocess IPC by running Progenitor
-    directly within the same process as the chat server.
+    directly within the same process as the backend.
 
     Benefits:
     - No subprocess management overhead

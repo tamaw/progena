@@ -23,8 +23,8 @@ def test_imports():
         ("Original graph", "from app.progenitor.graph import create_progenitor_graph"),
         ("Dual-loop graph", "from app.progenitor.graph_dual_loop import create_progenitor_graph as create_dual_loop_graph"),
         ("Progenitor main", "from app.progenitor.main import Progenitor"),
-        ("Chat server", "from app.chat_server.main import app"),
-        ("Chat client", "from app.chat_server.client import ProgenitorClient"),
+        ("Backend", "from app.backend.main import app"),
+        ("Backend client", "from app.backend.client import ProgenitorClient"),
     ]
 
     all_passed = True
@@ -53,8 +53,8 @@ def test_file_compilation():
         "app/progenitor/graph.py",
         "app/progenitor/graph_dual_loop.py",
         "app/progenitor/config.py",
-        "app/chat_server/main.py",
-        "app/chat_server/client.py",
+        "app/backend/main.py",
+        "app/backend/client.py",
         "cli.py",
     ]
 
@@ -78,7 +78,7 @@ def test_fastapi_app():
     print("=" * 70)
 
     try:
-        from app.chat_server.main import app
+        from app.backend.main import app
 
         print(f"✓ FastAPI app created")
         print(f"✓ Routes: {len(app.routes)} endpoints")

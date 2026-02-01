@@ -30,8 +30,8 @@ All Python files compile without syntax errors:
 - app/progenitor/graph.py
 - app/progenitor/graph_dual_loop.py
 - app/progenitor/config.py
-- app/chat_server/main.py
-- app/chat_server/client.py
+- app/backend/main.py
+- app/backend/client.py
 - cli.py
 
 ### ✓ Module Imports
@@ -43,8 +43,8 @@ All critical modules import successfully:
 - Original graph
 - Dual-loop graph
 - Progenitor main
-- Chat server
-- Chat client
+- Backend
+- Backend client
 
 ### ✓ FastAPI App
 - FastAPI app created successfully
@@ -85,7 +85,7 @@ All required configuration files exist:
 
 ### Development
 ```bash
-# Start chat server
+# Start backend
 python cli.py serve
 
 # Run tests
@@ -102,12 +102,12 @@ python scripts/validate_app.py
 # Build and start all services
 docker-compose up --build
 
-# Access chat server
+# Access backend
 curl http://localhost:8000/health
 
 # View logs
 docker-compose logs -f progenitor
-docker-compose logs -f chat_server
+docker-compose logs -f backend
 ```
 
 ### Testing API

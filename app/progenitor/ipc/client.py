@@ -1,7 +1,7 @@
 """
 IPC Client for connecting to Progenitor.
 
-Used by the chat_server to communicate with the Progenitor agent
+Used by the backend to communicate with the Progenitor agent
 via socket-based IPC instead of stdin/stdout.
 
 Features:

@@ -19,36 +19,65 @@ logger = logging.getLogger(__name__)
 
 
 def _looks_like_agent_build_request(user_input: str) -> bool:
-    """Heuristic: detect explicit requests to build/create a new agent."""
+    """Heuristic: detect explicit requests to build/create a new agent.
+
+    This should only trigger for very explicit agent creation requests.
+    The user must clearly express intent to BUILD/CREATE an AGENT.
+    Questions about agents, general mentions, or ambiguous requests should NOT trigger this.
+    """
     text = (user_input or "").lower()
     if not text.strip():
         return False
 
-    has_build_intent = any(
-        phrase in text
-        for phrase in (
-            "build ",
-            "create ",
-            "scaffold ",
-            "generate ",
-            "make ",
-            "implement ",
-        )
-    )
-    has_agent_intent = any(
-        phrase in text
-        for phrase in (
-            " a2a agent",
-            " an a2a agent",
-            " agent",
-            " assistant agent",
-        )
-    )
+    # Explicit combined phrases that clearly indicate agent building intent
+    # These are very specific to avoid false positives
+    explicit_build_phrases = [
+        "build an agent",
+        "build a new agent",
+        "build me an agent",
+        "build an a2a agent",
+        "build a2a agent",
+        "build me an a2a agent",
+        "create an agent",
+        "create a new agent",
+        "create me an agent",
+        "create an a2a agent",
+        "create a2a agent",
+        "create me an a2a agent",
+        "scaffold an agent",
+        "scaffold a new agent",
+        "scaffold an a2a agent",
+        "generate an agent",
+        "generate a new agent",
+        "generate an a2a agent",
+        "make an agent",
+        "make a new agent",
+        "make me an agent",
+        "make an a2a agent",
+        "implement an agent",
+        "implement a new agent",
+        "implement an a2a agent",
+        # With specific agent names
+        "build a hello world agent",
+        "create a hello world agent",
+        "build a weather agent",
+        "create a weather agent",
+    ]
 
-    # Reduce false positives like "build a plan" or "build a docker image".
-    has_non_agent_build = any(
-        phrase in text
-        for phrase in (
+    # Check for explicit phrases first
+    if any(phrase in text for phrase in explicit_build_phrases):
+        return True
+
+    # Fallback: require BOTH strong build verb AND agent noun in close proximity
+    # This is more strict than before
+    import re
+
+    # Pattern: build/create/scaffold + optional words + agent (but not just "agent" alone)
+    build_agent_pattern = r'\b(build|create|scaffold|generate|implement)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:[a-z]+\s+){0,3}agent\b'
+
+    if re.search(build_agent_pattern, text):
+        # Exclude false positives
+        false_positives = [
             "build a plan",
             "build the plan",
             "build a docker",
@@ -56,10 +85,18 @@ def _looks_like_agent_build_request(user_input: str) -> bool:
             "build the image",
             "build a container",
             "build the container",
-        )
-    )
+            "what agent",
+            "which agent",
+            "about agent",
+            "the agent",  # Referring to existing agent
+            "your agent",
+            "this agent",
+        ]
+        if any(fp in text for fp in false_positives):
+            return False
+        return True
 
-    return has_build_intent and has_agent_intent and not has_non_agent_build
+    return False
 
 
 def _looks_like_agent_discovery_request(user_input: str) -> bool:
@@ -224,6 +261,42 @@ def _looks_like_schedule_request(user_input: str) -> bool:
     return (has_time_indicator and has_time_pattern) or has_schedule_intent
 
 
+def _looks_like_list_schedule_request(user_input: str) -> bool:
+    """Heuristic: detect requests to list/view scheduled tasks."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    # Direct patterns for listing schedule
+    direct_patterns = [
+        "what is your schedule",
+        "what's your schedule",
+        "whats your schedule",
+        "show schedule",
+        "show my schedule",
+        "show the schedule",
+        "list schedule",
+        "list schedules",
+        "list scheduled",
+        "view schedule",
+        "view schedules",
+        "scheduled tasks",
+        "what is scheduled",
+        "what's scheduled",
+        "whats scheduled",
+        "any scheduled",
+        "pending schedule",
+        "upcoming tasks",
+        "upcoming schedule",
+        "my reminders",
+        "show reminders",
+        "list reminders",
+        "what reminders",
+    ]
+
+    return any(pattern in text for pattern in direct_patterns)
+
+
 def _looks_like_self_reflect_request(user_input: str) -> bool:
     """Heuristic: detect requests for self-reflection/introspection."""
     text = (user_input or "").lower()
@@ -379,7 +452,7 @@ async def _execute_system_tool_inline(
             },
             {
                 "name": "list_schedule",
-                "description": "List all scheduled tasks",
+                "description": "List all scheduled tasks and reminders",
                 "type": "system_tool",
             },
             {
@@ -514,6 +587,41 @@ async def _execute_system_tool_inline(
             "tip": "Use follow-up questions to explore specific modules or search for code patterns.",
         }, None
 
+    elif tool_name == "list_schedule":
+        # List all scheduled tasks
+        if state is None:
+            return {
+                "scheduled_tasks": [],
+                "total_count": 0,
+                "message": "No state available - schedule information unavailable",
+            }, None
+
+        schedule = state.get("schedule", [])
+
+        # Convert schedule entries to readable format
+        tasks = []
+        for item in schedule:
+            if hasattr(item, "model_dump"):
+                item_dict = item.model_dump()
+            elif isinstance(item, dict):
+                item_dict = item
+            else:
+                continue
+
+            tasks.append({
+                "id": item_dict.get("id"),
+                "description": item_dict.get("description", "No description"),
+                "cron_expression": item_dict.get("cron_expression"),
+                "next_run": item_dict.get("next_run"),
+                "action_type": item_dict.get("action_type"),
+                "enabled": item_dict.get("enabled", True),
+            })
+
+        return {
+            "scheduled_tasks": tasks,
+            "total_count": len(tasks),
+        }, None
+
     return None, f"Unknown system tool: {tool_name}"
 
 
@@ -626,6 +734,27 @@ def _format_tool_result(tool_name: str, result: dict) -> str:
 
         return "\n".join(lines)
 
+    elif tool_name == "list_schedule":
+        tasks = result.get("scheduled_tasks", [])
+
+        if not tasks:
+            return "**📅 No Scheduled Tasks**\n\nYou don't have any scheduled tasks or reminders set up.\n\n💡 *You can schedule tasks by saying things like 'remind me at 9am to check emails' or 'every day at 5pm run a status check'.*"
+
+        lines = ["**📅 Scheduled Tasks:**\n"]
+        for task in tasks:
+            enabled = "✓" if task.get("enabled", True) else "○"
+            lines.append(f"  {enabled} **{task.get('description', 'Unnamed task')}**")
+            if task.get("cron_expression"):
+                lines.append(f"      Schedule: `{task['cron_expression']}`")
+            if task.get("next_run"):
+                lines.append(f"      Next run: {task['next_run']}")
+            if task.get("action_type"):
+                lines.append(f"      Action: {task['action_type']}")
+            lines.append("")  # Blank line between tasks
+
+        lines.append(f"**Total:** {result.get('total_count', 0)} scheduled task(s)")
+        return "\n".join(lines)
+
     # Default: return JSON-like representation
     import json
     return f"**Result:**\n```json\n{json.dumps(result, indent=2)}\n```"
@@ -695,6 +824,32 @@ def create_node(
                 decision = Decision(
                     action=DecisionAction.ANSWER_DIRECTLY,
                     reasoning="Executed list_tools system tool inline.",
+                    requires_planning=False,
+                    direct_response=response_text,
+                )
+
+                if state_manager:
+                    await state_manager.log_decision({
+                        "event": "system_tool_executed",
+                        "tool_name": tool_name,
+                        "timestamp": utcnow_isoformat(),
+                    })
+
+                return {"current_decision": decision}
+
+            # Check for list schedule requests (before schedule creation check)
+            elif _looks_like_list_schedule_request(user_input):
+                # Execute list_schedule system tool inline
+                tool_name = "list_schedule"
+                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
+                if error:
+                    response_text = f"Error executing {tool_name}: {error}"
+                else:
+                    response_text = _format_tool_result(tool_name, result)
+
+                decision = Decision(
+                    action=DecisionAction.ANSWER_DIRECTLY,
+                    reasoning="Executed list_schedule system tool inline.",
                     requires_planning=False,
                     direct_response=response_text,
                 )
@@ -908,34 +1063,62 @@ def create_node(
             return result
 
         except (RateLimitError, APIConnectionError) as e:
-            # Recoverable errors - log and raise for retry handling
+            # Recoverable errors - show to user with helpful message
             logger.warning("Recoverable LLM error in decide node: %s", e)
-            raise LLMError(
-                message=f"LLM API error: {e}",
-                node_name="decide",
-                context={"user_input": user_input[:100] if user_input else None},
-                retry_after_seconds=5.0,
-            ) from e
+
+            error_message = (
+                "⚠️ **Temporary Issue**\n\n"
+                f"I encountered an issue connecting to the AI service: {type(e).__name__}\n\n"
+                "This is usually temporary. Please try again in a moment."
+            )
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning=f"LLM API error: {e}",
+                requires_planning=False,
+                direct_response=error_message,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "routing_decision_error",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "recoverable": True,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            return {"current_decision": decision}
 
         except Exception as e:
-            # Unexpected errors - log at error level, but still try to recover
+            # Unexpected errors - show to user with error details
             logger.error("Unexpected error in decide node: %s", e, exc_info=True)
 
-            # Fallback to direct answer
+            error_message = (
+                "❌ **Error Processing Request**\n\n"
+                f"I encountered an unexpected error while processing your request:\n"
+                f"```\n{type(e).__name__}: {str(e)[:200]}\n```\n\n"
+                "This has been logged. You can try rephrasing your request or ask for help."
+            )
+
             decision = Decision(
                 action=DecisionAction.ANSWER_DIRECTLY,
                 reasoning=f"Fallback due to error: {type(e).__name__}: {e}",
                 requires_planning=False,
+                direct_response=error_message,
             )
 
             # Log the fallback
             if state_manager:
                 await state_manager.log_decision({
-                    "event": "routing_decision_fallback",
+                    "event": "routing_decision_error",
                     "error_type": type(e).__name__,
                     "error_message": str(e),
+                    "recoverable": False,
                     "timestamp": utcnow_isoformat(),
                 })
+
+            return {"current_decision": decision}
 
             return {"current_decision": decision}
 

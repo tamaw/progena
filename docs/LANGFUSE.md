@@ -58,7 +58,7 @@ LANGFUSE_SECRET_KEY=sk-lf-your-secret-key
 ### 5. Restart Progenitor
 
 ```bash
-docker compose restart progenitor chat_server
+docker compose restart progenitor backend
 ```
 
 ## Viewing Traces
@@ -197,7 +197,7 @@ docker compose up -d
 ```
 ┌─────────────────────┐     ┌─────────────────────┐
 │    Progenitor       │────▶│    Langfuse Web     │
-│    Chat Server      │     │    (port 3000)      │
+│    Backend          │     │    (port 3000)      │
 └─────────────────────┘     └──────────┬──────────┘
                                        │
                                        ▼

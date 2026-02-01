@@ -22,9 +22,9 @@ Fixed `should_iterate()` to be a pure routing function that doesn't mutate state
 
 ---
 
-### 3. No Rate Limiting on Chat Server
+### 3. No Rate Limiting on Backend
 **Status:** ✅ Completed
-**Files:** `app/chat_server/main.py`, `app/chat_server/config.py`
+**Files:** `app/backend/main.py`, `app/backend/config.py`
 
 Added in-memory rate limiting with configurable per-minute and per-hour limits. Includes `X-RateLimit-*` headers and proper 429 responses.
 
@@ -116,7 +116,7 @@ Upon review, the exports already use a clean pattern with explicit `__all__` for
 
 ---
 
-### 14. Docker Health Check Only for Chat Server
+### 14. Docker Health Check Only for Backend
 **Status:** ✅ Completed
 **Files:** `docker-compose.yml`, `scripts/healthcheck.py`, `app/progenitor/runtime/loop.py`
 
@@ -160,7 +160,7 @@ Added `log_format` config option ("text" or "json"). JSON format outputs structu
 
 ### 19. Add Metrics / Observability
 **Status:** ✅ Completed
-**Files:** `app/progenitor/telemetry/` (new module), `app/progenitor/config.py`, `app/progenitor/runtime/loop.py`, `app/progenitor/runtime/agent_runner.py`, `app/chat_server/main.py`
+**Files:** `app/progenitor/telemetry/` (new module), `app/progenitor/config.py`, `app/progenitor/runtime/loop.py`, `app/progenitor/runtime/agent_runner.py`, `app/backend/main.py`
 
 Implemented OpenTelemetry-style metrics and tracing:
 - **Metrics**: Counter, Gauge, Histogram with Prometheus-compatible export
@@ -178,9 +178,9 @@ Tracked metrics include: cycle counts, iteration counts/duration, verification s
 ### 20. Cancellation Tokens for Long-Running Tasks
 Copilot CLI calls can timeout at 300s - should support user cancellation mid-build.
 
-### 21. Streaming Responses in Chat Server
+### 21. Streaming Responses in Backend
 **Status:** ✅ Completed
-**Files:** `app/progenitor/llm/client.py`, `app/progenitor/runtime/loop.py`, `app/progenitor/main.py`, `app/chat_server/client.py`, `app/chat_server/config.py`, `.env.example`
+**Files:** `app/progenitor/llm/client.py`, `app/progenitor/runtime/loop.py`, `app/progenitor/main.py`, `app/backend/client.py`, `app/backend/config.py`, `.env.example`
 
 Implemented real-time token streaming for better UX:
 - **LLM Client**: Added `chat_stream()` async generator method that yields tokens from the OpenAI streaming API
@@ -217,7 +217,7 @@ Implemented real-time token streaming for better UX:
 | 2026-01-27 | #17 Retry jitter added | ✅ |
 | 2026-01-27 | #18 JSON structured logging | ✅ |
 | 2026-01-27 | #19 Metrics / Observability (OTLP) | ✅ |
-| 2026-01-27 | #21 Streaming Responses in Chat Server | ✅ || 2026-01-27 | #22 Remove unused datetime import | ✅ |
+| 2026-01-27 | #21 Streaming Responses in Backend | ✅ || 2026-01-27 | #22 Remove unused datetime import | ✅ |
 | 2026-01-27 | #23 RateLimiter memory leak fix | ✅ |
 | 2026-01-27 | #24 Extract shared env utils | ✅ |
 | 2026-01-27 | #25 Add dict/object access helpers | ✅ |
@@ -233,7 +233,7 @@ Implemented real-time token streaming for better UX:
 
 ### 30. Conversation Sessions
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/sessions.js`, `app/chat-ui/css/status.css`
+**Files:** `app/frontend/src/sessions.js`, `app/frontend/src/styles/status.css`
 
 Multi-conversation session management:
 - Create, rename, delete sessions
@@ -246,7 +246,7 @@ Multi-conversation session management:
 
 ### 31. Syntax Highlighting
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/syntax.js`, `app/chat-ui/css/chat.css`
+**Files:** `app/frontend/src/syntax.js`, `app/frontend/src/styles/chat.css`
 
 Lightweight syntax highlighting without external dependencies:
 - Support for 12+ languages (JS, TS, Python, JSON, HTML, CSS, SQL, Bash, YAML, etc.)
@@ -258,7 +258,7 @@ Lightweight syntax highlighting without external dependencies:
 
 ### 32. Prompt Templates
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/templates.js`, `app/chat-ui/css/chat.css`
+**Files:** `app/frontend/src/templates.js`, `app/frontend/src/styles/chat.css`
 
 Quick-access prompt templates:
 - 12 built-in templates (system queries, coding tasks, general)
@@ -271,7 +271,7 @@ Quick-access prompt templates:
 
 ### 33. Context Menu
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/context-menu.js`, `app/chat-ui/css/chat.css`
+**Files:** `app/frontend/src/context-menu.js`, `app/frontend/src/styles/chat.css`
 
 Right-click context menu for messages:
 - Copy message content
@@ -286,7 +286,7 @@ Right-click context menu for messages:
 
 ### 34. Message Actions
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/chat.js`, `app/chat-ui/css/chat.css`
+**Files:** `app/frontend/src/chat.js`, `app/frontend/src/styles/chat.css`
 
 Message action buttons:
 - Copy button with visual feedback
@@ -298,7 +298,7 @@ Message action buttons:
 
 ### 35. Metrics Dashboard
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/metrics.js`, `app/chat-ui/css/status.css`
+**Files:** `app/frontend/src/metrics.js`, `app/frontend/src/styles/status.css`
 
 Real-time metrics visualization:
 - Messages sent/received counters
@@ -313,7 +313,7 @@ Real-time metrics visualization:
 
 ### 36. Logs Viewer
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/logs-viewer.js`, `app/chat-ui/css/status.css`
+**Files:** `app/frontend/src/logs-viewer.js`, `app/frontend/src/styles/status.css`
 
 Real-time agent logs viewer:
 - Level filtering (debug, info, warn, error)
@@ -327,7 +327,7 @@ Real-time agent logs viewer:
 
 ### 37. Draft Auto-Save
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/drafts.js`
+**Files:** `app/frontend/src/drafts.js`
 
 Auto-save message drafts:
 - Debounced saving (500ms)
@@ -340,7 +340,7 @@ Auto-save message drafts:
 
 ### 38. Accessibility Features
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/accessibility.js`
+**Files:** `app/frontend/src/accessibility.js`
 
 Comprehensive accessibility support:
 - ARIA landmarks and labels
@@ -356,7 +356,7 @@ Comprehensive accessibility support:
 
 ### 39. Export/Import Sessions
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/export-import.js`
+**Files:** `app/frontend/src/export-import.js`
 
 Session export and import:
 - Export current session
@@ -369,7 +369,7 @@ Session export and import:
 
 ### 40. Performance Optimizations
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/performance.js`
+**Files:** `app/frontend/src/performance.js`
 
 Performance monitoring and optimization:
 - Performance observer for metrics
@@ -384,7 +384,7 @@ Performance monitoring and optimization:
 
 ### 41. File Attachments
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/attachments.js`
+**Files:** `app/frontend/src/attachments.js`
 
 File upload and attachment support:
 - Click to upload
@@ -400,7 +400,7 @@ File upload and attachment support:
 
 ### 42. Typing Indicator
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/typing-indicator.js`
+**Files:** `app/frontend/src/typing-indicator.js`
 
 Assistant typing indicator:
 - Animated typing dots
@@ -412,7 +412,7 @@ Assistant typing indicator:
 
 ### 43. Message Reactions
 **Status:** ✅ Completed
-**Files:** `app/chat-ui/js/reactions.js`
+**Files:** `app/frontend/src/reactions.js`
 
 Emoji reactions on messages:
 - 8 available reactions
@@ -426,9 +426,9 @@ Emoji reactions on messages:
 
 ## 📋 Remaining Backlog Items
 
-### 22. Unused Import in Chat Server Models
+### 22. Unused Import in Backend Models
 **Status:** ✅ Completed
-**Files:** `app/chat_server/models.py`
+**Files:** `app/backend/models.py`
 
 Removed unused `datetime` import.
 
@@ -436,7 +436,7 @@ Removed unused `datetime` import.
 
 ### 23. RateLimiter Memory Leak
 **Status:** ✅ Completed
-**Files:** `app/chat_server/main.py`
+**Files:** `app/backend/main.py`
 
 Added `cleanup_stale_clients()` method that removes client entries older than 1 hour. Called periodically during `is_allowed()` checks.
 
@@ -444,7 +444,7 @@ Added `cleanup_stale_clients()` method that removes client entries older than 1 
 
 ### 24. Duplicate Environment Helper Functions
 **Status:** ✅ Completed
-**Files:** `app/common/env_utils.py` (new), `app/chat_server/config.py`, `app/progenitor/config.py`
+**Files:** `app/common/env_utils.py` (new), `app/backend/config.py`, `app/progenitor/config.py`
 
 Extracted `_env_bool`, `_env_int`, `_env_float`, `_env_list` to shared `app/common/env_utils.py` module. Updated both config files to import from common module.
 
@@ -460,7 +460,7 @@ Created `get_attr()` helper function for unified access to attributes from both 
 
 ### 26. Enhanced Health Endpoint
 **Status:** ✅ Completed
-**Files:** `app/chat_server/main.py`
+**Files:** `app/backend/main.py`
 
 Added to health response: `uptime_seconds`, `last_activity`, `rate_limit_status`, and `version`.
 
@@ -487,7 +487,7 @@ Added comprehensive return type hints to all public methods.
 
 ### 29. Request ID Propagation
 **Status:** ✅ Completed
-**Files:** `app/chat_server/main.py`
+**Files:** `app/backend/main.py`
 
 Added middleware that:
 - Reads `X-Request-ID` header if present
@@ -507,7 +507,7 @@ Added tiktoken integration for accurate OpenAI token counting. Created new token
 
 ### Configurable Shutdown Timeout
 **Status:** ✅ Completed (Sprint 4)
-**Files:** `app/chat_server/config.py`, `app/chat_server/client.py`
+**Files:** `app/backend/config.py`, `app/backend/client.py`
 
 Added `progenitor_stop_timeout` config option with `CHAT_SERVER_PROGENITOR_STOP_TIMEOUT` env var.
 

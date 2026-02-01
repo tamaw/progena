@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Progenitor Chat CLI - Interactive chat client for the chat server.
+"""Progenitor Chat CLI - Interactive chat client for the backend.
 
-Connects to the chat_server and provides a terminal-based chat interface
+Connects to the backend and provides a terminal-based chat interface
 with streaming support and conversation history.
 """
 
@@ -292,7 +292,7 @@ def print_help() -> None:
     print("  /help               - Show this help")
     print()
     print("\033[1;33mEnvironment Variables:\033[0m")
-    print("  PROGENITOR_CHAT_URL    - Chat server URL")
+    print("  PROGENITOR_CHAT_URL    - Backend URL")
     print("  PROGENITOR_MODEL       - Model name")
     print("  PROGENITOR_TIMEOUT     - Request timeout (seconds)")
     print("  PROGENITOR_LOG_RESPONSES - Log responses to file (true/false)")
@@ -347,7 +347,7 @@ def main() -> None:
             try:
                 send_message(user_input, stream=streaming)
             except error.URLError as exc:
-                print(f"\n\033[1;31mError: Failed to reach chat server: {exc}\033[0m")
+                print(f"\n\033[1;31mError: Failed to reach backend: {exc}\033[0m")
                 print(f"Make sure the server is running at {BASE_URL}")
                 continue
 

@@ -1,7 +1,7 @@
 """
 IPC Message Protocol for Progenitor.
 
-Defines the wire format for communication between chat_server and Progenitor.
+Defines the wire format for communication between backend and Progenitor.
 Uses a simple length-prefixed JSON protocol for reliability.
 
 Wire Format:

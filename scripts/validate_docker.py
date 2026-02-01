@@ -29,7 +29,7 @@ def validate_dockerfile():
 
     checks = [
         ("python:3.12", "Base image"),
-        ("app.chat_server", "Chat server package"),
+        ("app.backend", "Backend package"),
         ("EXPOSE 8000", "Exposed port"),
         ("curl", "Health check dependency"),
     ]
@@ -54,10 +54,10 @@ def validate_compose():
     content = compose.read_text()
 
     checks = [
-        ("chat_server:", "Chat server service"),
+        ("backend:", "Backend service"),
         ("progenitor:", "Progenitor service"),
         ("8000:8000", "Port mapping"),
-        ("uvicorn", "Chat server command"),
+        ("uvicorn", "Backend command"),
         ("healthcheck:", "Health check"),
         ("progenitor-net", "Network"),
     ]
@@ -84,7 +84,7 @@ def validate_env_example():
     checks = [
         ("OPENAI_API_KEY", "OpenAI key"),
         ("AZURE_OPENAI_ENDPOINT", "Azure endpoint"),
-        ("CHAT_SERVER", "Chat server config"),
+        ("CHAT_SERVER", "Backend config"),
     ]
 
     all_good = True
@@ -183,7 +183,7 @@ def main():
         print("To start the services:")
         print("  1. Copy .env.example to .env and configure")
         print("  2. Run: docker-compose up --build")
-        print("  3. Access chat server at http://localhost:8000")
+        print("  3. Access backend at http://localhost:8000")
         return 0
     else:
         print("✗ Some validations failed")

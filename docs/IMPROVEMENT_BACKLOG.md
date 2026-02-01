@@ -48,7 +48,7 @@ The Progenitor codebase demonstrates strong foundational architecture with a sop
 - Security vulnerabilities in command handling
 - State management complexity (40+ fields in ProgenitorState)
 - Scattered telemetry boilerplate across all nodes
-- Subprocess-based IPC between chat server and progenitor (fragile)
+- Subprocess-based IPC between backend and progenitor (fragile)
 - Missing dependency injection patterns
 
 ---
@@ -147,7 +147,7 @@ async def enqueue_input(self, msg: str) -> bool:
 ---
 
 ### REL-004: Rate Limiter Memory Growth
-**File:** `app/chat_server/main.py`
+**File:** `app/backend/main.py`
 **Issue:** Rate limiter dictionaries can grow unbounded with many unique client IPs (DDoS scenario).
 **Fix:** Add LRU eviction with maximum client count.
 ```python
@@ -250,8 +250,8 @@ def traced_node(node_name: str):
 ---
 
 ### ARCH-004: Replace Subprocess IPC with Direct Async
-**Files:** `app/chat_server/client.py`, `app/chat_server/main.py`
-**Issue:** Chat server spawns Progenitor as subprocess, communicates via stdin/stdout pipes.
+**Files:** `app/backend/client.py`, `app/backend/main.py`
+**Issue:** Backend spawns Progenitor as subprocess, communicates via stdin/stdout pipes.
 **Risk:** Deadlocks, parsing errors, zombie processes, no structured error handling.
 **Fix:** Run Progenitor as in-process async service or use message queue (Redis streams).
 ```python
@@ -346,7 +346,7 @@ except (IOError, OSError) as e:
 ---
 
 ### CQ-002: Add Config Validation at Startup
-**Files:** `app/progenitor/config.py`, `app/chat_server/config.py`
+**Files:** `app/progenitor/config.py`, `app/backend/config.py`
 **Issue:** Invalid config values (negative timeouts, invalid paths) aren't caught until runtime.
 **Fix:** Add Pydantic validation.
 ```python
@@ -397,8 +397,8 @@ async def _read_json(self, filepath: Path) -> Any:
 
 | File | Value | Description |
 |------|-------|-------------|
-| `chat_server/main.py` | `300` | Cleanup interval |
-| `chat_server/main.py` | `3600` | Stale threshold |
+| `backend/main.py` | `300` | Cleanup interval |
+| `backend/main.py` | `3600` | Stale threshold |
 | `runtime/loop.py` | `120` | Health stale seconds |
 | `graph_dual_loop.py` | `5` | Default max iterations |
 
@@ -414,7 +414,7 @@ async def _read_json(self, filepath: Path) -> Any:
 |------|---------|--------|
 | `observability/__init__.py` | `# type: ignore[import-untyped]` | Add type stubs or inline types |
 | `main.py` | Type mismatch | Fix return type annotation |
-| `chat_server/main.py` | Late initialization | Use `Optional` or sentinel |
+| `backend/main.py` | Late initialization | Use `Optional` or sentinel |
 
 **Effort:** Medium | **Impact:** Low
 
@@ -438,8 +438,8 @@ async def _read_json(self, filepath: Path) -> Any:
 ## 📊 Priority 4: Observability & Debugging
 
 ### OBS-001: Add Request ID Correlation
-**Files:** `chat_server/main.py`, `progenitor/main.py`
-**Issue:** No request ID propagation between chat server and progenitor subprocess.
+**Files:** `backend/main.py`, `progenitor/main.py`
+**Issue:** No request ID propagation between backend and progenitor subprocess.
 **Impact:** Cannot trace requests across service boundary.
 **Fix:** Generate and propagate X-Request-ID header.
 ```python
@@ -525,7 +525,7 @@ def test_iteration_never_exceeds_max(max_iterations):
 
 ---
 
-### TEST-003: Add Load Tests for Chat Server
+### TEST-003: Add Load Tests for Backend
 **Issue:** No performance/load testing.
 **Fix:** Add locust or k6 load tests.
 **Effort:** Medium | **Impact:** Medium
@@ -547,7 +547,7 @@ def test_iteration_never_exceeds_max(max_iterations):
 ## 🐳 Priority 6: Deployment & Operations
 
 ### OPS-001: Add Health Check Endpoint with Detailed Diagnostics
-**File:** `app/chat_server/main.py`
+**File:** `app/backend/main.py`
 **Current:** Basic health endpoint exists.
 **Improve:** Add detailed diagnostics.
 ```python

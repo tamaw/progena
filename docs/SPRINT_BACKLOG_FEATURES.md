@@ -373,11 +373,11 @@ This backlog captures features extracted from the text-generation-webui project 
 ## Implementation Roadmap
 
 ### ✅ Sprint 0 (Completed 2026-01-29): User-Selected Features
-- [x] Streaming Generation with Callbacks (5 pts) → `app/chat_server/streaming.py`
-- [x] Conversation History with Metadata (8 pts) → `app/chat_server/conversation.py`
-- [x] File Attachment System (5 pts) → `app/chat_server/attachments.py`
-- [x] Session Management (3 pts) → `app/chat_server/session.py`
-- [x] Graceful Shutdown Handling (2 pts) → `app/chat_server/shutdown.py`
+- [x] Streaming Generation with Callbacks (5 pts) → `app/backend/streaming.py`
+- [x] Conversation History with Metadata (8 pts) → `app/backend/conversation.py`
+- [x] File Attachment System (5 pts) → `app/backend/attachments.py`
+- [x] Session Management (3 pts) → `app/backend/session.py`
+- [x] Graceful Shutdown Handling (2 pts) → `app/backend/shutdown.py`
 - **Total: 23 points ✅**
 
 ### Sprint 1 (Week 1-2): Foundation
@@ -435,7 +435,7 @@ This backlog captures features extracted from the text-generation-webui project 
 
 For each feature:
 1. ✅ Unit tests with >80% coverage
-2. ✅ Integration test with chat server
+2. ✅ Integration test with backend
 3. ✅ Documentation in `docs/`
 4. ✅ Type hints for all public functions
 5. ✅ Error handling with meaningful messages

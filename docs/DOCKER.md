@@ -5,7 +5,7 @@
 The Docker setup includes two services:
 
 1. **progenitor** - The main Progenitor agent (perpetual loop)
-2. **chat_server** - FastAPI gateway (OpenAI-compatible REST API)
+2. **backend** - FastAPI gateway (OpenAI-compatible REST API)
 
 Both run in the same network and share state/logs volumes.
 
@@ -27,7 +27,7 @@ docker-compose up -d
 docker-compose logs -f
 
 # Specific service
-docker-compose logs -f chat_server
+docker-compose logs -f backend
 docker-compose logs -f progenitor
 ```
 
@@ -58,8 +58,8 @@ AZURE_OPENAI_DEPLOYMENT_DEFAULT=your-deployment-name
 - **Mode**: Perpetual loop with stdin/stdout
 - **Network**: Internal only (no exposed ports)
 
-### Chat Server
-- **Container**: `progenitor-chat-server`
+### Backend
+- **Container**: `progenitor-backend`
 - **Purpose**: REST API gateway
 - **Port**: 8000 (exposed to host)
 - **Endpoints**:
@@ -68,9 +68,9 @@ AZURE_OPENAI_DEPLOYMENT_DEFAULT=your-deployment-name
   - `POST /v1/chat/completions` - Chat (OpenAI-compatible)
   - `POST /chat` - Simple chat
 
-### Access Chat Server
+### Access Backend
 
-Once running, the chat server is available at:
+Once running, the backend is available at:
 ```
 http://localhost:8000
 ```
@@ -108,16 +108,16 @@ Both services run in a bridge network (`progenitor-net`) allowing them to commun
 
 ## Health Check
 
-The chat server includes a health check that runs every 30s:
+The backend includes a health check that runs every 30s:
 ```bash
 docker-compose ps
 ```
 
 ## Troubleshooting
 
-### Chat server not responding
+### Backend not responding
 ```bash
-docker-compose logs chat_server
+docker-compose logs backend
 ```
 
 ### Progenitor agent not starting
@@ -132,8 +132,8 @@ docker-compose up --build
 
 ### Access container shell
 ```bash
-# Chat server
-docker exec -it progenitor-chat-server sh
+# Backend
+docker exec -it progenitor-backend sh
 
 # Progenitor agent
 docker exec -it progenitor sh
@@ -145,10 +145,10 @@ For development, you can mount the source code:
 
 ```yaml
 services:
-  chat_server:
+  backend:
     volumes:
       - ./app:/app/app:ro  # Mount source code
-    command: ["python", "-m", "uvicorn", "app.chat_server.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["python", "-m", "uvicorn", "app.backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 ```
 
 This enables auto-reload on code changes.

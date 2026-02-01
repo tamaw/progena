@@ -95,11 +95,13 @@ app/
 │       ├── scheduler.py    # Task scheduling
 │       └── time_utils.py   # Time utilities
 │
-├── chat_server/            # HTTP chat server
+├── backend/                # HTTP backend
 │   ├── main.py             # FastAPI server
 │   ├── client.py           # Client SDK
 │   ├── config.py           # Server config
 │   └── models.py           # API models
+│
+├── frontend/               # React UI (Vite)
 │
 ├── agents/                 # Built agents (empty initially)
 └── mcp/                    # MCP servers (empty initially)
@@ -118,8 +120,8 @@ tests/
 ├── test_helpers.py         # Helper tests
 ├── test_config.py          # Config tests
 │
-└── chat_server/            # Chat server tests
-    ├── test_chat_server.py
+└── backend/                # Backend tests
+    ├── test_backend.py
     ├── test_integration.py
     ├── test_e2e.py
     └── mock_progenitor.py
@@ -135,7 +137,7 @@ docs/
 ├── LOOP_IMPROVEMENTS.md             # Improvement notes
 ├── LOOP_IMPROVEMENTS_SUMMARY.md     # Improvement summary
 ├── VALIDATION_SUMMARY.md            # Validation results
-├── CHAT_SERVER.md                   # Chat server API
+├── BACKEND.md                       # Backend API
 └── DOCKER.md                        # Docker guide
 ```
 

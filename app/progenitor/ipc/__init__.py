@@ -1,7 +1,7 @@
 """
 IPC (Inter-Process Communication) module for Progenitor.
 
-Provides socket-based communication between the chat_server and Progenitor agent,
+Provides socket-based communication between the backend and Progenitor agent,
 replacing the unreliable stdin/stdout mechanism.
 
 Features:

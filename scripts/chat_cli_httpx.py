@@ -28,7 +28,7 @@ DEFAULT_TIMEOUT = 300
 
 
 class ChatClient:
-    """HTTP client for the Progenitor chat server."""
+    """HTTP client for the Progenitor backend."""
 
     def __init__(
         self,
@@ -189,7 +189,7 @@ def main() -> None:
     parser.add_argument(
         "--url",
         default=os.getenv("PROGENITOR_CHAT_URL", DEFAULT_URL),
-        help=f"Chat server URL (default: {DEFAULT_URL})",
+        help=f"Backend URL (default: {DEFAULT_URL})",
     )
     parser.add_argument(
         "--model",
