@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-Quick Start: Running Chat Server
+Quick Start: Running Backend
 
-This guide shows you how to run and test the chat server.
+This guide shows you how to run and test the backend.
 """
 
 import subprocess
@@ -19,7 +19,7 @@ def run_tests():
     # Unit tests
     print("\n1. Unit Tests (pytest)...")
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/chat_server/", "-v"],
+        [sys.executable, "-m", "pytest", "tests/backend/", "-v"],
         cwd=Path(__file__).parent,
     )
     if result.returncode != 0:
@@ -28,7 +28,7 @@ def run_tests():
     # Integration tests
     print("\n2. Integration Tests...")
     result = subprocess.run(
-        [sys.executable, "tests/chat_server/test_integration.py"],
+        [sys.executable, "tests/backend/test_integration.py"],
         cwd=Path(__file__).parent,
     )
     if result.returncode != 0:
@@ -37,7 +37,7 @@ def run_tests():
     # E2E tests
     print("\n3. End-to-End Tests (with mock Progenitor)...")
     result = subprocess.run(
-        [sys.executable, "tests/chat_server/test_e2e.py"],
+        [sys.executable, "tests/backend/test_e2e.py"],
         cwd=Path(__file__).parent,
     )
     if result.returncode != 0:
@@ -50,11 +50,11 @@ def run_tests():
 
 
 def start_server():
-    """Start the chat server."""
+    """Start the backend."""
     print("\n" + "=" * 70)
-    print("STARTING CHAT SERVER")
+    print("STARTING BACKEND")
     print("=" * 70)
-    print("\nChat server will start on http://localhost:8000")
+    print("\nBackend will start on http://localhost:8000")
     print("API Docs available at http://localhost:8000/docs")
     print("\nPress Ctrl+C to stop\n")
 
@@ -64,7 +64,7 @@ def start_server():
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "app.chat_server.main:app",
+                "app.backend.main:app",
                 "--host",
                 "0.0.0.0",
                 "--port",
@@ -79,7 +79,7 @@ def start_server():
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Chat Server CLI")
+    parser = argparse.ArgumentParser(description="Backend CLI")
     parser.add_argument(
         "command",
         choices=["test", "serve", "mock"],
@@ -98,6 +98,6 @@ if __name__ == "__main__":
     elif args.command == "mock":
         print("Starting mock Progenitor...")
         subprocess.run(
-            [sys.executable, "tests/chat_server/mock_progenitor.py"],
+            [sys.executable, "tests/backend/mock_progenitor.py"],
             cwd=Path(__file__).parent,
         )

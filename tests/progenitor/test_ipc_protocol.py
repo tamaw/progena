@@ -1,7 +1,7 @@
 """
 Tests for IPC (Inter-Process Communication) module.
 
-Tests the socket-based communication protocol between chat_server and Progenitor.
+Tests the socket-based communication protocol between backend and Progenitor.
 """
 
 import asyncio

@@ -33,8 +33,23 @@ pip install -r requirements.txt
 ### Running Locally
 
 ```bash
+# Option 1: Use VS Code Tasks (recommended)
+# Run "Start All (dev)" task from VS Code
+
+# Option 2: Start each component manually
+# Terminal 1: Progenitor agent
 python -m app.progenitor.main
+
+# Terminal 2: Backend API
+python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+
+# Terminal 3: Frontend (from app/frontend directory)
+cd app/frontend
+npm install
+npm run dev
 ```
+
+Open `http://localhost:5173` for the UI (proxies to backend automatically).
 
 ### Running with Docker
 
@@ -166,7 +181,7 @@ See [docs/](docs/) for detailed documentation:
 - [SPEC.md](docs/SPEC.md) - Original system specification
 - [loop.spec.md](docs/loop.spec.md) - Inner loop architecture
 - [ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) - Visual architecture
-- [CHAT_SERVER.md](docs/CHAT_SERVER.md) - Chat server API
+- [BACKEND.md](docs/BACKEND.md) - Backend API
 - [DOCKER.md](docs/DOCKER.md) - Docker deployment
 
 ## Development

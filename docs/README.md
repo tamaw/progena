@@ -17,7 +17,7 @@
 
 ## Components
 
-- **[CHAT_SERVER.md](CHAT_SERVER.md)** - Chat server API documentation and endpoints
+- **[BACKEND.md](BACKEND.md)** - Backend API documentation and endpoints
 - **[DOCKER.md](DOCKER.md)** - Docker deployment guide and container configuration
 
 ## Validation

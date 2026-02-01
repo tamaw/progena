@@ -1,7 +1,7 @@
 """
 IPC Server for Progenitor.
 
-Provides a socket-based server that accepts connections from the chat_server
+Provides a socket-based server that accepts connections from the backend
 and handles message processing through the Progenitor loop.
 
 Features:
@@ -44,7 +44,7 @@ MAX_CLIENTS = 10
 class IPCServer:
     """Socket-based IPC server for Progenitor.
 
-    Accepts connections from chat_server clients and routes messages
+    Accepts connections from backend clients and routes messages
     to the Progenitor loop for processing.
     """
 

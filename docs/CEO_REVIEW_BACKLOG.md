@@ -16,7 +16,7 @@ The Progenitor codebase demonstrates **strong architectural foundations** with a
 3. **Security-First Design** - Command injection protection, secret redaction, rate limiting
 4. **Production-Ready Infrastructure** - Docker health checks, graceful shutdown, bounded queues
 5. **Observability** - Langfuse integration for LLM tracing, telemetry throughout
-6. **Clean API Design** - OpenAI-compatible chat server interface
+6. **Clean API Design** - OpenAI-compatible backend interface
 
 ### 🟡 Areas for Improvement
 | Priority | Count | Category |
@@ -31,7 +31,7 @@ The Progenitor codebase demonstrates **strong architectural foundations** with a
 ## 🔴 Priority 1: Critical ~~(Fix Before Demo If Possible)~~ ✅ ALL FIXED
 
 ### CR-001: Subprocess IPC Fragility ✅ FIXED
-**Files:** [client.py](../app/chat_server/client.py), [config.py](../app/chat_server/config.py)
+**Files:** [client.py](../app/backend/client.py), [config.py](../app/backend/config.py)
 **Status:** ✅ **RESOLVED** on 2026-01-29
 
 **Fixes Applied:**
@@ -45,7 +45,7 @@ The Progenitor codebase demonstrates **strong architectural foundations** with a
 ---
 
 ### CR-002: Missing Input Validation on WebSocket/Streaming ✅ FIXED
-**Files:** [main.py](../app/chat_server/main.py), [models.py](../app/chat_server/models.py)
+**Files:** [main.py](../app/backend/main.py), [models.py](../app/backend/models.py)
 **Status:** ✅ **RESOLVED** on 2026-01-29
 
 **Fixes Applied:**
@@ -135,7 +135,7 @@ except Exception:
 ---
 
 ### CQ-011: Hardcoded Timeout in ProgenitorClient Stop
-**File:** [client.py](../app/chat_server/client.py#L95-L100)
+**File:** [client.py](../app/backend/client.py#L95-L100)
 **Issue:** 5-second timeout is hardcoded:
 ```python
 await asyncio.wait_for(self._process.wait(), timeout=5)
@@ -214,7 +214,7 @@ def _get_telemetry():
 ---
 
 ### TD-005: Rate Limiter Stale Client Age Uses Hour Calculation ✅ FIXED
-**File:** [main.py](../app/chat_server/main.py#L136)
+**File:** [main.py](../app/backend/main.py#L136)
 **Issue:** `stale_client_age` was confusingly named - it's in seconds but called "age".
 
 **Fix Applied:** Renamed to `stale_client_timeout_seconds` throughout codebase for clarity.
@@ -263,7 +263,7 @@ def _get_telemetry():
 ## 🟢 Priority 4: Low (Enhancements & Polish)
 
 ### EN-001: Add OpenAPI Schema Validation Tests
-**Issue:** Chat server exposes OpenAI-compatible API but no tests validate schema compliance.
+**Issue:** Backend exposes OpenAI-compatible API but no tests validate schema compliance.
 
 **Recommended Fix:** Add conformance tests against OpenAI schema.
 **Effort:** Medium | **Impact:** Low
@@ -329,7 +329,7 @@ def _get_telemetry():
 
 ## 🧪 Test Coverage Gaps
 
-### TC-001: No Load Tests for Chat Server Streaming
+### TC-001: No Load Tests for Backend Streaming
 **Current:** Load tests exist for sync endpoints but not streaming.
 
 ### TC-002: No Chaos/Fault Injection Tests

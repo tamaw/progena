@@ -102,7 +102,7 @@ class RuntimeConfig:
     # Health check settings
     health_stale_seconds: int = 120  # Consider unhealthy if not updated in 2 minutes
 
-    # IPC settings (socket-based communication with chat_server)
+    # IPC settings (socket-based communication with backend)
     ipc_enabled: bool = True  # Enable socket IPC (vs stdin/stdout)
     ipc_host: str = "127.0.0.1"  # IPC server bind host
     ipc_port: int = 9500  # IPC server bind port

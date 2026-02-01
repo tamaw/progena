@@ -253,11 +253,11 @@ services:
         reservations:
           memory: 512M
 
-  chat_server:
+  backend:
     build: .
-    container_name: progenitor-chat-server
+    container_name: progenitor-backend
     restart: unless-stopped
-    command: ["python", "-m", "uvicorn", "app.chat_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["python", "-m", "uvicorn", "app.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       progenitor:
         condition: service_started

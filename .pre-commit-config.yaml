@@ -8,9 +8,9 @@ repos:
     rev: v4.5.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^(app/chat-ui/|\.md$)
+        exclude: ^(app/frontend/|\.md$)
       - id: end-of-file-fixer
-        exclude: ^app/chat-ui/
+        exclude: ^app/frontend/
       - id: check-yaml
       - id: check-json
       - id: check-toml
@@ -30,7 +30,7 @@ repos:
         exclude: ^(tests/|scripts/)
       # Formatting (replaces black)
       - id: ruff-format
-        exclude: ^app/chat-ui/
+        exclude: ^app/frontend/
 
   # Type checking with mypy
   - repo: https://github.com/pre-commit/mirrors-mypy

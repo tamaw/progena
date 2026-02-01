@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Demo: Chat Server Usage Examples
+Demo: Backend Usage Examples
 
 Run with: python examples/demo.py [1|2|3]
 """
@@ -12,8 +12,8 @@ import sys
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.chat_server.config import ChatServerConfig
-from app.chat_server.client import ProgenitorClient
+from app.backend.config import ChatServerConfig
+from app.backend.client import ProgenitorClient
 
 
 async def demo_async_client():
@@ -23,7 +23,7 @@ async def demo_async_client():
     print("=" * 70)
 
     config = ChatServerConfig(
-        progenitor_script=Path(__file__).parent.parent / "tests" / "chat_server" / "mock_progenitor.py"
+        progenitor_script=Path(__file__).parent.parent / "tests" / "backend" / "mock_progenitor.py"
     )
 
     client = ProgenitorClient(config)
@@ -125,7 +125,7 @@ if __name__ == "__main__":
             print(f"Unknown demo: {demo}")
             print("Usage: python examples/demo.py [1|2|3]")
     else:
-        print("Chat Server Demos")
+        print("Backend Demos")
         print("=" * 70)
         print("\nRun one of these:")
         print("  python examples/demo.py 1  - Direct async client with mock")

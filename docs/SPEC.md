@@ -101,7 +101,7 @@ The gateway normalises inbound messages and relays outbound responses. Progenito
 
 ### Transports
 
-* **Chat Server (FastAPI)**: OpenAI-compatible REST API gateway (primary for development/testing)
+* **Backend (FastAPI)**: OpenAI-compatible REST API gateway (primary for development/testing)
 * WhatsApp gateway (production)
 * Pluggable transports (webhook, CLI, future Slack/Matrix)
 
@@ -170,7 +170,7 @@ Notes:
 * `PROGENITOR_SCHEDULER_ENABLED` (`true|false`, default: `true`)
 * `PROGENITOR_SCHEDULER_POLL_SECONDS` (default: `30`)
 
-### Chat Server
+### Backend
 
 * `CHAT_SERVER_HOST` (default: `0.0.0.0`)
 * `CHAT_SERVER_PORT` (default: `8000`)
@@ -198,13 +198,13 @@ WhatsApp is simply the first concrete implementation. Other transports (CLI, web
 
 ---
 
-## Chat Server (FastAPI Gateway)
+## Backend (FastAPI Gateway)
 
-The Chat Server is a separate FastAPI application that provides an **OpenAI-compatible REST API** for interacting with Progenitor.
+The Backend is a separate FastAPI application that provides an **OpenAI-compatible REST API** for interacting with Progenitor.
 
 ### Architecture
 
-* **Separate process**: Chat Server runs independently of Progenitor
+* **Separate process**: Backend runs independently of Progenitor
 * **Subprocess communication**: Spawns Progenitor as a subprocess, communicates via stdin/stdout JSON lines
 * **OpenAI compatibility**: Implements `/v1/chat/completions` and `/v1/models` endpoints
 * **Streaming support**: Supports SSE streaming responses
@@ -218,14 +218,14 @@ The Chat Server is a separate FastAPI application that provides an **OpenAI-comp
 
 ### Communication Protocol
 
-Messages between Chat Server and Progenitor use JSON lines:
+Messages between Backend and Progenitor use JSON lines:
 
-**Request** (Chat Server → Progenitor stdin):
+**Request** (Backend → Progenitor stdin):
 ```json
 {"type": "user_message", "content": "Hello, Progenitor!"}
 ```
 
-**Response** (Progenitor stdout → Chat Server):
+**Response** (Progenitor stdout → Backend):
 ```json
 {"content": "Hello! I'm Progenitor. How can I help you today?"}
 ```
@@ -233,11 +233,11 @@ Messages between Chat Server and Progenitor use JSON lines:
 ### Running
 
 ```bash
-# Start Chat Server (will spawn Progenitor on first request)
-uvicorn app.chat_server.main:app --host 0.0.0.0 --port 8000
+# Start Backend (will spawn Progenitor on first request)
+uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
 
 # Or with auto-reload for development
-uvicorn app.chat_server.main:app --reload
+uvicorn app.backend.main:app --reload
 ```
 
 ### Usage with OpenAI SDK
@@ -495,7 +495,7 @@ Keep it boring. Boring survives.
     * `tools/` (Codex wrapper, git/worktree helpers, MCP runner/client)
     * `runtime/` (loop, idle/backoff, time, scheduler)
     * `state/` (state load/save + locking)
-  * `chat_server/` (FastAPI gateway with OpenAI-compatible interface)
+  * `backend/` (FastAPI gateway with OpenAI-compatible interface)
 
     * `main.py` (FastAPI application)
     * `client.py` (Progenitor subprocess client)
