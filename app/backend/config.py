@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from .env_utils import env_int, env_bool, env_float
+
+# Load .env file from project root
+load_dotenv()
 
 
 @dataclass
@@ -62,6 +67,12 @@ class ChatServerConfig:
     telegram_max_message_length: int = 4096  # Telegram max message length
     telegram_rate_limit_per_minute: int = 30  # Rate limit for outgoing messages
 
+    # Telegram polling settings (for receiving messages)
+    telegram_polling_enabled: bool = True  # Enable polling for incoming messages
+    telegram_polling_interval: float = 1.0  # Polling interval in seconds
+    telegram_polling_timeout: int = 30  # Long polling timeout (getUpdates timeout param)
+    telegram_allowed_users: str = ""  # Comma-separated chat IDs allowed to send messages (empty = only chat_id)
+
     @classmethod
     def from_env(cls) -> "ChatServerConfig":
         """Load config from environment variables."""
@@ -93,4 +104,9 @@ class ChatServerConfig:
             telegram_retry_delay=env_float("TELEGRAM_RETRY_DELAY", 1.0),
             telegram_max_message_length=env_int("TELEGRAM_MAX_MESSAGE_LENGTH", 4096),
             telegram_rate_limit_per_minute=env_int("TELEGRAM_RATE_LIMIT_PER_MINUTE", 30),
+            # Telegram polling settings
+            telegram_polling_enabled=env_bool("TELEGRAM_POLLING_ENABLED", True),
+            telegram_polling_interval=env_float("TELEGRAM_POLLING_INTERVAL", 1.0),
+            telegram_polling_timeout=env_int("TELEGRAM_POLLING_TIMEOUT", 30),
+            telegram_allowed_users=os.getenv("TELEGRAM_ALLOWED_USERS", ""),
         )

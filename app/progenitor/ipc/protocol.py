@@ -203,6 +203,10 @@ async def read_message(
         return None
     except asyncio.TimeoutError:
         raise
+    except OSError as e:
+        # Handle Windows-specific network errors (e.g., WinError 64)
+        logger.warning("Network error reading message: %s", e)
+        return None
     except Exception as e:
         logger.error("Error reading message: %s", e)
         raise

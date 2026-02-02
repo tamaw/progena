@@ -8,7 +8,15 @@ Tests:
 - Rate limiting under load
 - Response latency distribution
 - Memory usage patterns
+
+NOTE: This file must be run with locust CLI, not pytest.
+      The locust import causes recursion errors with pytest due to gevent monkey-patching.
+      Run with: locust -f tests/backend/test_load_backend.py
 """
+
+import pytest
+# Skip entire module when running under pytest - locust has gevent monkey-patching issues
+pytest.skip("Locust tests must be run via locust CLI, not pytest", allow_module_level=True)
 
 from locust import HttpUser, task, between, events
 import json
