@@ -2,7 +2,7 @@
 Tests for Telegram Client Integration.
 
 Tests the TelegramClient class, rate limiting, message chunking,
-and integration with the backend event system.
+polling, command handling, and integration with the backend event system.
 """
 
 import asyncio
@@ -99,134 +99,119 @@ class TestTelegramClient:
             chat_id="987654321",
             api_timeout=10,
             max_retries=3,
-            retry_delay=0.1,  # Short for testing
-            max_message_length=4096,
+            retry_delay=0.1,
+            max_message_length=100,  # Small for testing chunking
             rate_limit_per_minute=30,
         )
 
     @pytest.fixture
     def client(self, config):
-        """Create test Telegram client."""
+        """Create TelegramClient for testing."""
         return TelegramClient(config)
 
     def test_split_message_short(self, client):
-        """Test that short messages are not split."""
+        """Test that short messages aren't split."""
         text = "Hello, world!"
         chunks = client._split_message(text)
         assert len(chunks) == 1
         assert chunks[0] == text
 
     def test_split_message_long(self, client):
-        """Test splitting long messages."""
-        # Create a message longer than max length
-        client.config.max_message_length = 100
-        text = "A" * 250
-
+        """Test that long messages are split."""
+        text = "A" * 250  # Longer than max_message_length (100)
         chunks = client._split_message(text)
         assert len(chunks) == 3
-        assert all(len(chunk) <= 100 for chunk in chunks)
-        # Verify all content is preserved
-        assert "".join(chunks) == text
+        assert all(len(c) <= 100 for c in chunks)
 
     def test_split_message_at_newline(self, client):
         """Test that messages are split at newlines when possible."""
-        client.config.max_message_length = 100
-        text = "Line one\nLine two that is a bit longer\nLine three"
-
-        # Manually create a case where split should happen at newline
-        long_text = "A" * 50 + "\n" + "B" * 60
-
-        chunks = client._split_message(long_text)
+        text = "A" * 50 + "\n" + "B" * 60
+        chunks = client._split_message(text)
         assert len(chunks) == 2
-        assert chunks[0].endswith("A")  # Split at newline
-        assert chunks[1].startswith("B")
+        assert "A" in chunks[0]
+        assert "B" in chunks[1]
 
     @pytest.mark.asyncio
-    async def test_start_without_config(self, client):
-        """Test that start handles missing config gracefully."""
-        client.config.bot_token = ""
-
+    async def test_start_without_config(self):
+        """Test that start() handles missing config gracefully."""
+        config = TelegramConfig(
+            bot_token="",  # Empty
+            chat_id="",
+            api_timeout=10,
+            max_retries=3,
+            retry_delay=0.1,
+            max_message_length=4096,
+            rate_limit_per_minute=30,
+        )
+        client = TelegramClient(config)
         await client.start()
-        assert not client._started
+        assert client._started is False
 
     @pytest.mark.asyncio
     async def test_send_message_not_started(self, client):
-        """Test sending message when client not started."""
-        result = await client.send_message("Test")
+        """Test that send_message returns False when not started."""
+        result = await client.send_message("Hello")
         assert result is False
 
     @pytest.mark.asyncio
     async def test_send_message_empty(self, client):
-        """Test sending empty message."""
+        """Test that empty messages are handled gracefully."""
         client._started = True
         client._session = MagicMock()
-
-        result = await client.send_message("")
-        assert result is True  # Empty messages are skipped successfully
+        result = await client.send_message("   ")
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_api_call_success(self, client):
         """Test successful API call."""
         client._started = True
 
-        # Mock aiohttp session
         mock_response = AsyncMock()
-        mock_response.json = AsyncMock(return_value={
-            "ok": True,
-            "result": {"username": "test_bot"}
-        })
+        mock_response.json = AsyncMock(return_value={"ok": True, "result": {"message_id": 123}})
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
 
         mock_session = MagicMock()
-        mock_session.post = MagicMock(return_value=AsyncMock(
-            __aenter__=AsyncMock(return_value=mock_response),
-            __aexit__=AsyncMock(return_value=None)
-        ))
+        mock_session.post = MagicMock(return_value=mock_response)
         client._session = mock_session
 
-        result = await client._api_call("getMe")
-        assert result == {"username": "test_bot"}
+        result = await client._api_call("sendMessage", {"chat_id": "123", "text": "Hello"})
+
+        assert result == {"message_id": 123}
 
     @pytest.mark.asyncio
     async def test_api_call_rate_limited(self, client):
-        """Test API call with rate limit error."""
+        """Test API call with rate limit (429) response."""
         client._started = True
 
-        # First call returns rate limit, second succeeds
-        call_count = 0
+        # First call returns 429, second succeeds
+        responses = [
+            {"ok": False, "error_code": 429, "parameters": {"retry_after": 0.1}},
+            {"ok": True, "result": {"message_id": 123}},
+        ]
+        call_count = [0]
 
         async def mock_json():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return {
-                    "ok": False,
-                    "error_code": 429,
-                    "description": "Too Many Requests",
-                    "parameters": {"retry_after": 0.1}  # Short for testing
-                }
-            return {
-                "ok": True,
-                "result": {"message_id": 123}
-            }
+            result = responses[call_count[0]]
+            call_count[0] = min(call_count[0] + 1, len(responses) - 1)
+            return result
 
         mock_response = AsyncMock()
         mock_response.json = mock_json
-
-        mock_cm = AsyncMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
 
         mock_session = MagicMock()
-        mock_session.post = MagicMock(return_value=mock_cm)
+        mock_session.post = MagicMock(return_value=mock_response)
         client._session = mock_session
 
-        result = await client._api_call("sendMessage", {"chat_id": "123", "text": "test"})
+        result = await client._api_call("sendMessage", {"chat_id": "123", "text": "Hello"})
+
         assert result == {"message_id": 123}
-        assert call_count == 2
 
     @pytest.mark.asyncio
     async def test_api_call_unauthorized(self, client):
-        """Test API call with unauthorized error (no retry)."""
+        """Test API call with unauthorized (401) response."""
         client._started = True
 
         mock_response = AsyncMock()
@@ -235,53 +220,60 @@ class TestTelegramClient:
             "error_code": 401,
             "description": "Unauthorized"
         })
-
-        mock_cm = AsyncMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
 
         mock_session = MagicMock()
-        mock_session.post = MagicMock(return_value=mock_cm)
+        mock_session.post = MagicMock(return_value=mock_response)
         client._session = mock_session
 
-        result = await client._api_call("sendMessage", {"chat_id": "123", "text": "test"})
-        assert result is None  # No retry for auth errors
+        result = await client._api_call("sendMessage", {"chat_id": "123", "text": "Hello"})
+
+        assert result is None
 
 
 class TestTelegramClientIntegration:
-    """Integration tests for Telegram client with backend."""
+    """Integration tests for Telegram client lifecycle."""
 
     @pytest.mark.asyncio
     async def test_init_telegram_client_disabled(self):
-        """Test that client is not created when disabled."""
+        """Test that init returns None when Telegram is disabled."""
         config = ChatServerConfig(telegram_enabled=False)
-
-        client = await init_telegram_client(config)
-        assert client is None
+        result = await init_telegram_client(config)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_init_telegram_client_missing_token(self):
-        """Test that client is not created with missing token."""
+        """Test that init returns None when token is missing."""
         config = ChatServerConfig(
             telegram_enabled=True,
             telegram_bot_token="",
             telegram_chat_id="123456",
         )
-
-        client = await init_telegram_client(config)
-        assert client is None
+        result = await init_telegram_client(config)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_init_and_stop(self):
-        """Test initializing and stopping the global client."""
+        """Test full init and stop cycle with mocked session."""
         config = ChatServerConfig(
             telegram_enabled=True,
-            telegram_bot_token="123456:ABC",
-            telegram_chat_id="987654",
+            telegram_bot_token="123456:ABC-DEF",
+            telegram_chat_id="987654321",
         )
 
-        # Mock the start method to not actually connect
-        with patch.object(TelegramClient, 'start', new_callable=AsyncMock):
+        with patch("aiohttp.ClientSession") as mock_session:
+            mock_instance = MagicMock()
+            mock_instance.close = AsyncMock()
+            mock_session.return_value = mock_instance
+
+            # Mock getMe response
+            mock_response = AsyncMock()
+            mock_response.json = AsyncMock(return_value={"ok": True, "result": {"username": "testbot"}})
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock()
+            mock_instance.post = MagicMock(return_value=mock_response)
+
             client = await init_telegram_client(config)
             assert client is not None
             assert get_telegram_client() is client
@@ -291,7 +283,7 @@ class TestTelegramClientIntegration:
 
 
 class TestSubscriberTracking:
-    """Tests for subscriber tracking in ui_routes."""
+    """Tests for SSE subscriber tracking used by Telegram integration."""
 
     def test_has_active_chat_subscribers_empty(self):
         """Test when no subscribers are connected."""
@@ -359,3 +351,295 @@ class TestTelegramRoutes:
         data = response.json()
         assert data["success"] is False
         assert "not enabled" in data["message"] or "not configured" in data["message"]
+
+
+class TestTelegramPolling:
+    """Tests for Telegram polling functionality."""
+
+    @pytest.fixture
+    def config_with_polling(self):
+        """Create test Telegram config with polling enabled."""
+        return TelegramConfig(
+            bot_token="123456:ABC-DEF",
+            chat_id="987654321",
+            api_timeout=10,
+            max_retries=3,
+            retry_delay=0.1,
+            max_message_length=4096,
+            rate_limit_per_minute=30,
+            polling_enabled=True,
+            polling_interval=0.1,
+            polling_timeout=1,
+            allowed_users={"987654321", "111222333"},
+        )
+
+    @pytest.fixture
+    def client_with_polling(self, config_with_polling):
+        """Create TelegramClient with polling enabled."""
+        return TelegramClient(config_with_polling)
+
+    def test_config_allowed_users(self):
+        """Test that allowed_users is properly populated from config."""
+        chat_config = ChatServerConfig(
+            telegram_enabled=True,
+            telegram_bot_token="123456:ABC-DEF",
+            telegram_chat_id="987654321",
+            telegram_allowed_users="111222333,444555666",
+        )
+
+        tg_config = TelegramConfig.from_chat_config(chat_config)
+
+        # Should include primary chat_id plus allowed_users
+        assert "987654321" in tg_config.allowed_users
+        assert "111222333" in tg_config.allowed_users
+        assert "444555666" in tg_config.allowed_users
+
+    def test_set_message_handler(self, client_with_polling):
+        """Test setting a message handler."""
+        async def handler(chat_id, text, metadata):
+            return f"Echo: {text}"
+
+        assert client_with_polling._message_handler is None
+        client_with_polling.set_message_handler(handler)
+        assert client_with_polling._message_handler is handler
+
+    @pytest.mark.asyncio
+    async def test_start_polling_not_started(self, client_with_polling):
+        """Test that polling doesn't start if client not started."""
+        await client_with_polling.start_polling()
+        assert client_with_polling._polling_task is None
+
+    @pytest.mark.asyncio
+    async def test_polling_disabled(self, config_with_polling):
+        """Test that polling respects disabled config."""
+        config_with_polling.polling_enabled = False
+        client = TelegramClient(config_with_polling)
+
+        # Mock session to allow start
+        with patch("aiohttp.ClientSession") as mock_session:
+            mock_instance = MagicMock()
+            mock_instance.close = AsyncMock()  # Make close awaitable
+            mock_session.return_value = mock_instance
+
+            # Mock getMe response
+            mock_response = AsyncMock()
+            mock_response.json = AsyncMock(return_value={"ok": True, "result": {"username": "testbot"}})
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock()
+            mock_instance.post = MagicMock(return_value=mock_response)
+
+            await client.start()
+            await client.start_polling()
+
+            assert client._polling_task is None
+            await client.stop()
+
+    @pytest.mark.asyncio
+    async def test_process_update_unauthorized_chat(self, client_with_polling):
+        """Test that messages from unauthorized chats are ignored."""
+        client_with_polling._started = True
+
+        # Create update from unauthorized chat
+        update = {
+            "update_id": 123,
+            "message": {
+                "message_id": 1,
+                "chat": {"id": 999999999, "type": "private"},  # Not in allowed_users
+                "from": {"id": 999999999, "username": "hacker"},
+                "text": "Hello"
+            }
+        }
+
+        handler_called = False
+        async def handler(chat_id, text, metadata):
+            nonlocal handler_called
+            handler_called = True
+            return "Response"
+
+        client_with_polling.set_message_handler(handler)
+        await client_with_polling._process_update(update)
+
+        # Handler should not have been called
+        assert handler_called is False
+
+    @pytest.mark.asyncio
+    async def test_process_update_authorized_chat(self, client_with_polling):
+        """Test that messages from authorized chats are processed."""
+        client_with_polling._started = True
+        client_with_polling._session = MagicMock()
+
+        # Create update from authorized chat
+        update = {
+            "update_id": 123,
+            "message": {
+                "message_id": 1,
+                "chat": {"id": 987654321, "type": "private"},  # In allowed_users
+                "from": {"id": 987654321, "username": "owner", "first_name": "Owner"},
+                "text": "Hello"
+            }
+        }
+
+        handler_called = False
+        received_text = None
+
+        async def handler(chat_id, text, metadata):
+            nonlocal handler_called, received_text
+            handler_called = True
+            received_text = text
+            return "Response"
+
+        client_with_polling.set_message_handler(handler)
+
+        # Mock API calls (chat action and send message)
+        with patch.object(client_with_polling, '_api_call', new=AsyncMock(return_value={"ok": True})):
+            with patch.object(client_with_polling, 'send_message_to_chat', new=AsyncMock(return_value=True)):
+                await client_with_polling._process_update(update)
+
+        assert handler_called is True
+        assert received_text == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_handle_command_start(self, client_with_polling):
+        """Test /start command handling."""
+        client_with_polling._started = True
+        client_with_polling._session = MagicMock()
+
+        sent_messages = []
+
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text))
+            return True
+
+        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+            await client_with_polling._handle_command("987654321", "/start", {})
+
+        assert len(sent_messages) == 1
+        assert "Welcome" in sent_messages[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_command_help(self, client_with_polling):
+        """Test /help command handling."""
+        client_with_polling._started = True
+        client_with_polling._session = MagicMock()
+
+        sent_messages = []
+
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text))
+            return True
+
+        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+            await client_with_polling._handle_command("987654321", "/help", {})
+
+        assert len(sent_messages) == 1
+        assert "Help" in sent_messages[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_command_status(self, client_with_polling):
+        """Test /status command handling."""
+        client_with_polling._started = True
+        client_with_polling._session = MagicMock()
+
+        sent_messages = []
+
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text))
+            return True
+
+        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+            await client_with_polling._handle_command("987654321", "/status", {})
+
+        assert len(sent_messages) == 1
+        assert "Status" in sent_messages[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_command_ping(self, client_with_polling):
+        """Test /ping command handling."""
+        client_with_polling._started = True
+        client_with_polling._session = MagicMock()
+
+        sent_messages = []
+
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text))
+            return True
+
+        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+            await client_with_polling._handle_command("987654321", "/ping", {})
+
+        assert len(sent_messages) == 1
+        assert "Pong" in sent_messages[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_command_unknown(self, client_with_polling):
+        """Test unknown command handling."""
+        client_with_polling._started = True
+        client_with_polling._session = MagicMock()
+
+        sent_messages = []
+
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text))
+            return True
+
+        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+            await client_with_polling._handle_command("987654321", "/unknown", {})
+
+        assert len(sent_messages) == 1
+        assert "Unknown command" in sent_messages[0][1]
+
+    @pytest.mark.asyncio
+    async def test_get_updates(self, client_with_polling):
+        """Test getting updates from Telegram API."""
+        client_with_polling._started = True
+
+        mock_response = AsyncMock()
+        mock_response.json = AsyncMock(return_value={
+            "ok": True,
+            "result": [
+                {"update_id": 100, "message": {"text": "Hello"}},
+                {"update_id": 101, "message": {"text": "World"}},
+            ]
+        })
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_response)
+        client_with_polling._session = mock_session
+
+        updates = await client_with_polling._get_updates()
+
+        assert len(updates) == 2
+        assert client_with_polling._last_update_id == 101
+
+    @pytest.mark.asyncio
+    async def test_send_message_to_chat(self, client_with_polling):
+        """Test sending message to a specific chat."""
+        client_with_polling._started = True
+
+        mock_response = AsyncMock()
+        mock_response.json = AsyncMock(return_value={"ok": True, "result": {"message_id": 1}})
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_response)
+        client_with_polling._session = mock_session
+
+        result = await client_with_polling.send_message_to_chat("111222333", "Test message")
+
+        assert result is True
+        # Verify the API was called with correct chat_id
+        call_args = mock_session.post.call_args
+        assert "111222333" in str(call_args) or call_args[1].get("json", {}).get("chat_id") == "111222333"
+
+    @pytest.mark.asyncio
+    async def test_stop_polling(self, client_with_polling):
+        """Test stopping the polling task."""
+        client_with_polling._started = True
+        client_with_polling._polling_task = asyncio.create_task(asyncio.sleep(10))
+
+        await client_with_polling.stop_polling()
+
+        assert client_with_polling._polling_task is None

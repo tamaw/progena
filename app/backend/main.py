@@ -24,7 +24,7 @@ import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Union
+from typing import Any, AsyncIterator, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -508,6 +508,82 @@ async def lifespan(app: FastAPI):
             priority=30,
             timeout=15.0,
         )
+
+    # Set up Telegram message handler and start polling if enabled
+    if telegram_client and client:
+        async def handle_telegram_message(
+            chat_id: str,
+            message: str,
+            metadata: dict
+        ) -> Optional[str]:
+            """Handle incoming Telegram messages by forwarding to Progenitor.
+
+            Args:
+                chat_id: The Telegram chat ID.
+                message: The user's message text.
+                metadata: Additional message metadata.
+
+            Returns:
+                Response from the agent, or None if failed.
+            """
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    logger.info(
+                        "Processing Telegram message from %s (attempt %d): %s",
+                        metadata.get("username", chat_id),
+                        attempt + 1,
+                        message[:50] + "..." if len(message) > 50 else message
+                    )
+
+                    # Ensure client is started/connected
+                    if not client.is_running:
+                        logger.info("IPC client not running, starting...")
+                        await client.start()
+
+                    # Create a unique request ID for correlation
+                    request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
+
+                    # Use streaming API and collect chunks into full response
+                    # (The Progenitor loop always streams, so we must use stream mode)
+                    response_chunks = []
+                    async for chunk in client.send_message_stream(message, request_id=request_id):
+                        if chunk:
+                            response_chunks.append(chunk)
+
+                    response = "".join(response_chunks)
+
+                    logger.info(
+                        "Got response for Telegram message (%d chars)",
+                        len(response) if response else 0
+                    )
+
+                    return response if response else None
+
+                except TimeoutError:
+                    logger.error("Timeout waiting for agent response")
+                    return "⏱️ Sorry, the request timed out. Please try again."
+                except (ConnectionError, OSError) as e:
+                    logger.warning("Connection error on attempt %d: %s", attempt + 1, e)
+                    if attempt < max_retries:
+                        # Try to reconnect
+                        try:
+                            await client.stop()
+                        except Exception:
+                            pass
+                        await asyncio.sleep(1)
+                        continue
+                    logger.error("Failed after %d attempts: %s", max_retries + 1, e)
+                    return "⚠️ Connection error. Please try again in a moment."
+                except Exception as e:
+                    logger.error("Error processing Telegram message: %s", e)
+                    return None
+
+            return None
+
+        telegram_client.set_message_handler(handle_telegram_message)
+        await telegram_client.start_polling()
+        logger.info("Telegram polling started with message handler")
 
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues
