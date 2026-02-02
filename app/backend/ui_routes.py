@@ -168,16 +168,15 @@ def generate_alert_id() -> str:
     return f"alert-{int(time.time())}-{_alert_id_counter}"
 
 
-@router.get("/status", response_model=UIStatusResponse)
-async def get_ui_status():
+@router.get("/status/snapshot", response_model=UIStatusResponse)
+async def get_ui_status_snapshot():
     """
-    Get combined status information for the UI.
+    Get a one-shot snapshot of status information.
 
     Aggregates health, rate limit, and progenitor status into a single response.
     Uses real data from data/state/ files.
 
-    This is the main status endpoint - the SSE /events endpoint pushes this same
-    data structure every 3 seconds for real-time updates.
+    For continuous updates, use the SSE stream at /status instead.
     """
     from . import main as chat_main
 
@@ -346,6 +345,99 @@ async def get_schedule():
         ],
         total=len(schedule),
     )
+
+
+class TelegramStatusResponse(BaseModel):
+    """Telegram integration status."""
+    enabled: bool
+    connected: bool
+    chat_id: str = ""  # Masked for security
+    web_clients_active: int
+    will_forward_to_telegram: bool
+    rate_limit_per_minute: int
+
+
+@router.get("/telegram/status", response_model=TelegramStatusResponse)
+async def get_telegram_status():
+    """
+    Get Telegram integration status.
+
+    Shows whether Telegram is enabled, connected, and whether
+    messages will be forwarded to Telegram (no web clients connected).
+    """
+    from .telegram_client import get_telegram_client
+    from . import main as chat_main
+
+    telegram = get_telegram_client()
+    subscriber_counts = get_subscriber_counts()
+    config = chat_main.config
+
+    # Mask the chat_id for security
+    chat_id = config.telegram_chat_id
+    masked_chat_id = f"{chat_id[:4]}...{chat_id[-4:]}" if len(chat_id) > 8 else "*" * len(chat_id)
+
+    return TelegramStatusResponse(
+        enabled=config.telegram_enabled,
+        connected=telegram is not None and telegram._started,
+        chat_id=masked_chat_id if config.telegram_enabled else "",
+        web_clients_active=subscriber_counts["chat"],
+        will_forward_to_telegram=(
+            telegram is not None
+            and telegram._started
+            and subscriber_counts["chat"] == 0
+        ),
+        rate_limit_per_minute=config.telegram_rate_limit_per_minute,
+    )
+
+
+class TelegramTestRequest(BaseModel):
+    """Request to test Telegram integration."""
+    message: str = "Test message from Progenitor"
+
+
+class TelegramTestResponse(BaseModel):
+    """Response from Telegram test."""
+    success: bool
+    message: str
+
+
+@router.post("/telegram/test", response_model=TelegramTestResponse)
+async def test_telegram():
+    """
+    Send a test message to Telegram.
+
+    Used to verify the Telegram integration is working correctly.
+    """
+    from .telegram_client import get_telegram_client
+
+    telegram = get_telegram_client()
+    if not telegram:
+        return TelegramTestResponse(
+            success=False,
+            message="Telegram integration not enabled or not configured"
+        )
+
+    try:
+        success = await telegram.send_message(
+            "🧪 Test message from Progenitor Backend\n\n"
+            "If you see this, Telegram integration is working!"
+        )
+        if success:
+            return TelegramTestResponse(
+                success=True,
+                message="Test message sent successfully"
+            )
+        else:
+            return TelegramTestResponse(
+                success=False,
+                message="Failed to send test message - check logs for details"
+            )
+    except Exception as e:
+        logger.error("Telegram test failed: %s", e)
+        return TelegramTestResponse(
+            success=False,
+            message=f"Error: {str(e)}"
+        )
 
 
 @router.get("/tasks", response_model=TasksResponse)
@@ -998,6 +1090,32 @@ _active_chat_tasks: list[asyncio.Task] = []
 _active_status_tasks: list[asyncio.Task] = []
 
 
+def has_active_chat_subscribers() -> bool:
+    """Check if there are any active SSE chat subscribers (web UI connected).
+
+    Used by Telegram integration to determine whether to send messages to Telegram.
+    If there are active chat subscribers, messages go to web UI and not Telegram.
+
+    Returns:
+        True if at least one chat subscriber is connected.
+    """
+    return len(_chat_subscribers) > 0
+
+
+def get_subscriber_counts() -> dict[str, int]:
+    """Get counts of all subscriber types.
+
+    Returns:
+        Dictionary with chat, status, and legacy subscriber counts.
+    """
+    return {
+        "chat": len(_chat_subscribers),
+        "status": len(_status_subscribers),
+        "legacy": len(_event_subscribers),
+        "total": len(_chat_subscribers) + len(_status_subscribers) + len(_event_subscribers),
+    }
+
+
 async def _get_current_status() -> dict:
     """Get current server status for SSE broadcast."""
     from . import main as chat_main
@@ -1298,13 +1416,13 @@ async def _generate_events() -> AsyncGenerator[str, None]:
             _active_sse_tasks.remove(current_task)
 
 
-@router.get("/events")
-async def event_stream():
+@router.get("/events-legacy")
+async def event_stream_legacy():
     """
     Server-Sent Events endpoint for real-time updates.
 
-    DEPRECATED: Use /chat for IPC events and /status for health updates.
-    This combined endpoint is kept for backwards compatibility.
+    DEPRECATED: Use /events for IPC events and /status for health updates.
+    This combined endpoint is kept for backwards compatibility only.
 
     Connect to receive real-time notifications about:
     - Status changes
@@ -1459,14 +1577,14 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
             _active_status_tasks.remove(current_task)
 
 
-@router.get("/chat")
-async def chat_stream():
+@router.get("/events")
+async def events_stream():
     """
-    Server-Sent Events endpoint for chat/IPC events only.
+    Server-Sent Events endpoint for IPC events.
 
     Connect to receive real-time notifications about:
     - scheduled_response: Scheduled task responses
-    - agent_message: Agent-initiated messages
+    - agent_message: Agent-initiated messages (talk to user)
     - alert: System alerts requiring attention
     - task: Task status updates
     - agent: Agent activity updates
@@ -1494,10 +1612,10 @@ async def chat_stream():
     )
 
 
-@router.get("/status/stream")
+@router.get("/status")
 async def status_stream():
     """
-    Server-Sent Events endpoint for status/health updates only.
+    Server-Sent Events endpoint for continuous status updates.
 
     Connect to receive real-time status updates about:
     - Server health and uptime
@@ -1509,7 +1627,7 @@ async def status_stream():
     - Build status
 
     This stream does NOT include chat/IPC events.
-    Use /chat for chat messages and alerts.
+    Use /events for chat messages and alerts.
 
     Events are formatted as:
         event: <type>

@@ -74,7 +74,7 @@ class TestUIStatusEndpoint:
 
     def test_status_returns_all_required_fields(self, client):
         """Test /api/ui/status returns all fields needed by UI."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
         data = response.json()
 
@@ -102,7 +102,7 @@ class TestUIStatusEndpoint:
 
     def test_status_loops_structure(self, client):
         """Test that loops have the correct structure for UI rendering."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         data = response.json()
 
         # Loops should be a list
@@ -117,7 +117,7 @@ class TestUIStatusEndpoint:
 
     def test_status_agents_structure(self, client):
         """Test that agents have the correct structure for UI rendering."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         data = response.json()
 
         # Agents should be a list
@@ -131,7 +131,7 @@ class TestUIStatusEndpoint:
 
     def test_status_build_structure(self, client):
         """Test that build info has correct structure."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         data = response.json()
 
         build = data.get("build")
@@ -614,7 +614,7 @@ class TestUINavigation:
 
     def test_api_ui_status_works(self, client):
         """Test /api/ui/status endpoint works."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
 
     def test_api_ui_agents_works(self, client):

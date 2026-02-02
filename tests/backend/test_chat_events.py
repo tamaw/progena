@@ -310,7 +310,7 @@ class TestSSEEventDelivery:
     def test_sse_events_endpoint_exists(self, client):
         """Test SSE events endpoint is accessible."""
         # Note: Full SSE tests require async handling, but we can test endpoint exists
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
 
     def test_broadcast_event_functionality(self):
@@ -509,7 +509,7 @@ class TestEventPayloadValidation:
 
     def test_status_event_payload_structure(self, client):
         """Test status endpoint returns properly structured payload."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         data = response.json()
 
         # Required fields
@@ -611,7 +611,7 @@ class TestEventOrdering:
     def test_status_update_sequence(self, client):
         """Test status updates maintain proper sequence."""
         # Make multiple status requests
-        responses = [client.get("/api/ui/status") for _ in range(5)]
+        responses = [client.get("/api/ui/status/snapshot") for _ in range(5)]
 
         for response in responses:
             assert response.status_code == 200
@@ -623,7 +623,7 @@ class TestEventOrdering:
         import concurrent.futures
 
         def get_status():
-            return client.get("/api/ui/status")
+            return client.get("/api/ui/status/snapshot")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(get_status) for _ in range(20)]
@@ -738,7 +738,7 @@ class TestAgentActivityEvents:
 
     def test_agent_status_in_response(self, client):
         """Test agent status is included in status response."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         data = response.json()
 
         assert "agents" in data
@@ -749,7 +749,7 @@ class TestAgentActivityEvents:
 
     def test_loop_status_in_response(self, client):
         """Test loop status is included in status response."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         data = response.json()
 
         assert "loops" in data
@@ -759,7 +759,7 @@ class TestAgentActivityEvents:
 
     def test_build_status_in_response(self, client):
         """Test build status is included in status response."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         data = response.json()
 
         assert "build" in data

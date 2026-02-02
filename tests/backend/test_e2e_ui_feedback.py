@@ -135,7 +135,7 @@ class TestUIFeedbackIntegration:
 
     def test_status_endpoint_provides_complete_info(self, client):
         """Test that status endpoint provides all information needed by UI."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
 
         data = response.json()
@@ -460,7 +460,7 @@ class TestUIPageContent:
 
     def test_api_ui_routes_still_work(self, client):
         """Test /api/ui/* routes still work (these are API routes)."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         # API routes should work
         assert response.status_code == 200
 

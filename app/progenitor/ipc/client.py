@@ -35,7 +35,7 @@ DEFAULT_PORT = 9500
 DEFAULT_TIMEOUT = 300  # 5 minutes
 RECONNECT_DELAY_INITIAL = 1.0
 RECONNECT_DELAY_MAX = 30.0
-HEARTBEAT_INTERVAL = 30
+HEARTBEAT_INTERVAL = 5  # 5 seconds for responsive event delivery
 HEARTBEAT_MISS_THRESHOLD = 3  # Disconnect after this many consecutive misses
 
 
@@ -189,19 +189,47 @@ class IPCClient:
         )
 
     async def _heartbeat_loop(self) -> None:
-        """Send periodic heartbeats to keep connection alive."""
+        """Send periodic heartbeats and poll for events."""
+        heartbeat_timer = 0.0
+        poll_interval = 0.5  # Check for events every 0.5 seconds
+
         while self._connected:
             try:
-                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                await asyncio.sleep(poll_interval)
+                heartbeat_timer += poll_interval
 
                 if not self._connected or not self._writer:
                     break
 
-                # Skip heartbeat if we're in the middle of streaming or a request
-                # (another operation has priority and will update last_activity)
+                # Skip operations if we're in the middle of streaming or a request
                 if self._streaming or self._request_in_progress:
                     self._missed_heartbeats = 0  # Reset counter - we're active
+                    heartbeat_timer = 0  # Reset heartbeat timer too
                     continue
+
+                # Try to read any pending events (non-blocking check)
+                async with self._lock:
+                    if not self._connected or not self._reader:
+                        break
+
+                    # Skip if now streaming/in request (after lock)
+                    if self._streaming or self._request_in_progress:
+                        continue
+
+                    # Quick non-blocking check for events
+                    try:
+                        msg = await read_message(self._reader, timeout=0.1)
+                        if msg and msg.type == MessageType.AGENT_EVENT:
+                            await self._handle_event(msg)
+                            self._last_activity = time.time()
+                    except asyncio.TimeoutError:
+                        pass  # No events pending, that's fine
+
+                # Send heartbeat only when timer exceeds interval
+                if heartbeat_timer < HEARTBEAT_INTERVAL:
+                    continue
+
+                heartbeat_timer = 0  # Reset timer
 
                 # Skip heartbeat if there was recent activity (within 2x interval)
                 time_since_activity = time.time() - self._last_activity

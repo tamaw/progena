@@ -182,7 +182,7 @@ class TestCriticalUIDataPipeline:
     def test_all_endpoints_return_200(self, client):
         """All UI endpoints must be accessible - alien visitors must not see errors."""
         endpoints = [
-            "/api/ui/status",
+            "/api/ui/status/snapshot",
             "/api/ui/agents",
             "/api/ui/backlog",
             "/api/ui/schedule",
@@ -199,7 +199,7 @@ class TestCriticalUIDataPipeline:
 
     def test_status_endpoint_complete_data(self, client):
         """Status endpoint must provide ALL data needed by the UI."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
         data = response.json()
 
@@ -476,7 +476,7 @@ class TestErrorRecoveryAndGracefulDegradation:
     def test_api_endpoints_handle_missing_state(self, client):
         """API endpoints should work even without state files."""
         # All these should return valid responses
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
         data = response.json()
         assert "connected" in data
@@ -651,7 +651,7 @@ class TestUIPageIntegrity:
 
     def test_navigation_elements_present(self, client):
         """Test that API endpoints for UI are accessible."""
-        api_endpoints = ["/api/ui/status", "/api/ui/agents", "/api/ui/backlog"]
+        api_endpoints = ["/api/ui/status/snapshot", "/api/ui/agents", "/api/ui/backlog"]
 
         for endpoint in api_endpoints:
             response = client.get(endpoint)

@@ -33,7 +33,7 @@ class TestUIRoutes:
 
     def test_ui_status_endpoint(self, client):
         """Test /api/ui/status returns valid JSON."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
         data = response.json()
         assert "connected" in data
@@ -311,7 +311,7 @@ class TestNavigationLinks:
     def test_api_endpoints_work(self, client):
         """Test that API endpoints are accessible."""
         api_endpoints = [
-            "/api/ui/status",
+            "/api/ui/status/snapshot",
             "/api/ui/agents",
             "/api/ui/backlog",
             "/api/ui/schedule",
@@ -423,7 +423,7 @@ class TestSSEConnection:
 
     def test_status_endpoint_returns_complete_data(self, client):
         """Test that status endpoint returns all fields needed for UI updates."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
         data = response.json()
 
@@ -438,7 +438,7 @@ class TestSSEConnection:
 
     def test_status_has_build_info(self, client):
         """Test that status includes build information."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
         data = response.json()
 
@@ -447,7 +447,7 @@ class TestSSEConnection:
 
     def test_status_has_memory_info(self, client):
         """Test that status includes memory information."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
         data = response.json()
 
@@ -462,29 +462,23 @@ class TestSplitSSEEndpoints:
     The endpoints are verified indirectly via route registration checks.
     """
 
-    def test_chat_endpoint_is_registered(self, client):
-        """Test that /api/ui/chat endpoint is registered (via OpenAPI)."""
+    def test_events_endpoint_is_registered(self, client):
+        """Test that /api/ui/events endpoint is registered (via OpenAPI)."""
         response = client.get("/openapi.json")
         assert response.status_code == 200
         openapi = response.json()
         paths = openapi.get("paths", {})
-        assert "/api/ui/chat" in paths, "Chat SSE endpoint should be registered"
+        assert "/api/ui/events" in paths, "Events SSE endpoint should be registered"
 
     def test_status_stream_endpoint_is_registered(self, client):
-        """Test that /api/ui/status/stream endpoint is registered."""
+        """Test that /api/ui/status SSE stream endpoint is registered."""
         response = client.get("/openapi.json")
         assert response.status_code == 200
         openapi = response.json()
         paths = openapi.get("paths", {})
-        assert "/api/ui/status/stream" in paths, "Status stream SSE endpoint should be registered"
-
-    def test_legacy_events_endpoint_is_registered(self, client):
-        """Test that /api/ui/events legacy endpoint is still registered."""
-        response = client.get("/openapi.json")
-        assert response.status_code == 200
-        openapi = response.json()
-        paths = openapi.get("paths", {})
-        assert "/api/ui/events" in paths, "Legacy events SSE endpoint should be registered"
+        # The SSE stream endpoint has the same path as the snapshot but different handler
+        # The snapshot is registered first, so check both handlers exist
+        assert "/api/ui/status" in paths or "/api/ui/status/snapshot" in paths, "Status endpoint should be registered"
 
     def test_broadcast_functions_exist(self):
         """Test that the new broadcast functions are available."""

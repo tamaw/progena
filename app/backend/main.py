@@ -92,7 +92,13 @@ from .shutdown import (
     stop_client_safely,
     commit_state_safely,
 )
-from .ui_routes import close_all_sse_connections
+from .ui_routes import close_all_sse_connections, has_active_chat_subscribers
+from .telegram_client import (
+    TelegramClient,
+    init_telegram_client,
+    stop_telegram_client,
+    get_telegram_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +369,28 @@ class ShutdownManager:
 shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
 
+async def _send_telegram_message(
+    telegram: TelegramClient,
+    content: str,
+    event_type: str
+) -> None:
+    """Send a message to Telegram (fire-and-forget helper).
+
+    Args:
+        telegram: The Telegram client instance.
+        content: Message content to send.
+        event_type: Type of event for logging.
+    """
+    try:
+        success = await telegram.send_agent_response(content)
+        if success:
+            logger.info("Sent %s to Telegram (%d chars)", event_type, len(content))
+        else:
+            logger.warning("Failed to send %s to Telegram", event_type)
+    except Exception as e:
+        logger.error("Error sending to Telegram: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager with graceful shutdown (OPS-002).
@@ -412,6 +440,21 @@ async def lifespan(app: FastAPI):
         timeout=2.0,
     )
 
+    # Initialize Telegram client if enabled
+    telegram_client = await init_telegram_client(config)
+    if telegram_client:
+        logger.info(
+            "Telegram integration enabled (chat_id=%s)",
+            config.telegram_chat_id[:8] + "..." if len(config.telegram_chat_id) > 8 else config.telegram_chat_id
+        )
+        # Register Telegram shutdown callback
+        graceful_shutdown.register_callback(
+            "stop_telegram_client",
+            stop_telegram_client,
+            priority=70,
+            timeout=5.0,
+        )
+
     # Choose client based on configuration
     if config.progenitor_ipc_enabled:
         logger.info(
@@ -422,7 +465,37 @@ async def lifespan(app: FastAPI):
         # Import broadcast_chat_event for IPC events (chat, alerts, tasks)
         # These go to the /chat SSE stream (and legacy /events for compatibility)
         from .ui_routes import broadcast_chat_event
-        client = get_ipc_client(config, event_callback=broadcast_chat_event)
+
+        # Create a combined event callback that handles both SSE and Telegram
+        def combined_event_callback(event_type: str, data: dict) -> None:
+            """Route IPC events to SSE and/or Telegram.
+
+            - Always broadcasts to SSE for any connected web clients
+            - If no web clients connected, also sends to Telegram (if enabled)
+            - Only forwards certain event types to Telegram (agent_message, scheduled_response)
+            """
+            # Always broadcast to SSE
+            broadcast_chat_event(event_type, data)
+
+            # Check if we should also send to Telegram
+            telegram = get_telegram_client()
+            if telegram and not has_active_chat_subscribers():
+                # Only send actual message content to Telegram
+                # Skip status updates, heartbeats, etc.
+                telegram_event_types = {
+                    "scheduled_response",  # Scheduled task responses
+                    "agent_message",       # Direct agent messages
+                }
+
+                if event_type in telegram_event_types:
+                    content = data.get("content", "")
+                    if content:
+                        # Fire and forget - don't block SSE broadcast
+                        asyncio.create_task(
+                            _send_telegram_message(telegram, content, event_type)
+                        )
+
+        client = get_ipc_client(config, event_callback=combined_event_callback)
     else:
         logger.info("Using subprocess client (legacy mode)")
         client = get_client(config)
