@@ -249,7 +249,9 @@ def _generate_response(decision, current_item, state: ProgenitorState) -> str | 
     pending_count = _count_pending(backlog)
 
     if pending_count > 0:
-        return f"Working on it... ({pending_count} tasks remaining)"
+        if state.get("current_input"):
+            return "Queued. I’ll send the update soon."
+        return None
 
     user_input = state.get("current_input")
     if user_input:
@@ -276,8 +278,22 @@ def _format_work_item_response(current_item) -> str | None:
         return None
 
     if status == "completed":
-        if result.get("response"):
-            return result["response"]
+        if result.get("user_notified"):
+            return None
+        response_text = result.get("response")
+        if response_text:
+            response_lower = response_text.strip().lower()
+            if response_lower.startswith("say:"):
+                return response_text[4:].strip()
+            if response_lower.startswith("ask:"):
+                return response_text[4:].strip()
+            if response_lower.startswith("notify:"):
+                # Strip directive and level if present: "NOTIFY: level | message"
+                notify_body = response_text[7:].strip()
+                if "|" in notify_body:
+                    notify_body = notify_body.split("|", 1)[1].strip()
+                return notify_body
+            return response_text
         elif result.get("message"):
             return f"✓ {result['message']}"
         else:

@@ -10,6 +10,7 @@ build_state.json that evolves each iteration and is consumed by BUILD.
 
 import logging
 import time
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Coroutine, Any
@@ -316,10 +317,36 @@ Generate ONLY the instruction, nothing else:"""
             # Create a ScheduleEntry from the entry_data
             entry = ScheduleEntry(**entry_data)
 
+            schedule_result_payload = {
+                "description": entry_data.get("description"),
+                "instruction": instruction,
+                "recurring": bool(entry_data.get("repeat_minutes")),
+                "next_run": result.next_run,
+                "schedule_id": result.schedule_id,
+            }
+
+            try:
+                pending_response = await llm_client.complete(
+                    prompt=(
+                        "Create a short, friendly confirmation for a scheduled task. "
+                        "Do not include IDs or exact timestamps. Do not use markdown. "
+                        "Focus on what will happen.\n\n"
+                        f"Task details: {json.dumps(schedule_result_payload, ensure_ascii=False)}"
+                    ),
+                    system_prompt="You write concise confirmations for scheduled tasks.",
+                    temperature=0.2,
+                )
+                pending_response = pending_response.strip() if pending_response else None
+            except Exception:
+                pending_response = None
+
+            if not pending_response:
+                pending_response = f"Got it. I’ll {instruction}."
+
             # Return as "new_schedule_entry" - the commit node will merge it
             return {
                 "new_schedule_entry": entry,
-                "pending_response": f"✅ Scheduled: {result.message}\nNext run: {result.next_run}",
+                "pending_response": pending_response,
             }
         else:
             logger.warning(f"Failed to create schedule: {result.message}")
@@ -355,32 +382,71 @@ async def _plan_from_ideal_state(
     backlog = list(state.get("backlog", []))
     last_verification = state.get("last_verification_report")
 
-    # Get decision to determine work item type
-    decision = state.get("current_decision")
-    decision_action = None
-    if decision:
-        if hasattr(decision, "action"):
-            action = decision.action
-            decision_action = action.value if hasattr(action, 'value') else str(action)
-        elif isinstance(decision, dict):
-            action = decision.get("action", "answer_directly")
-            decision_action = action.value if hasattr(action, 'value') else str(action)
+    # Determine work item type from multiple sources (priority order):
+    # 1. Current work item being processed (most reliable)
+    # 2. Existing backlog items with build types
+    # 3. Current decision action
+    # 4. Default to direct_answer
+    item_type = WorkItemType.DIRECT_ANSWER  # default
 
-    # Determine work item type based on decision action
-    if decision_action == "build_agent":
-        item_type = WorkItemType.BUILD_AGENT
-    elif decision_action == "build_mcp":
-        item_type = WorkItemType.BUILD_MCP
-    elif decision_action == "upgrade":
-        item_type = WorkItemType.UPGRADE
-    elif decision_action in ("call_agent", "delegate"):
-        item_type = WorkItemType.A2A_CALL
-    elif decision_action == "call_tool":
-        item_type = WorkItemType.MCP_CALL
-    elif decision_action == "system_tool":
-        item_type = WorkItemType.SYSTEM_TOOL
-    else:
-        item_type = WorkItemType.DIRECT_ANSWER
+    # Check current work item first (set by pick_next)
+    current_item = state.get("current_work_item")
+    if current_item:
+        if hasattr(current_item, "item_type"):
+            item_type = current_item.item_type
+        elif isinstance(current_item, dict) and "item_type" in current_item:
+            item_type_str = current_item["item_type"]
+            try:
+                item_type = WorkItemType(item_type_str)
+            except ValueError:
+                pass
+        logger.debug(f"PLANNER: Got item_type={item_type} from current_work_item")
+
+    # If not found, check backlog for build items
+    if item_type == WorkItemType.DIRECT_ANSWER and backlog:
+        for item in backlog:
+            if hasattr(item, "item_type"):
+                if item.item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_MCP, WorkItemType.UPGRADE):
+                    item_type = item.item_type
+                    logger.debug(f"PLANNER: Got item_type={item_type} from backlog item")
+                    break
+            elif isinstance(item, dict) and "item_type" in item:
+                item_type_str = item["item_type"]
+                if item_type_str in ("build_agent", "build_mcp", "upgrade"):
+                    try:
+                        item_type = WorkItemType(item_type_str)
+                        logger.debug(f"PLANNER: Got item_type={item_type} from backlog dict")
+                        break
+                    except ValueError:
+                        pass
+
+    # Fall back to decision if still direct_answer
+    if item_type == WorkItemType.DIRECT_ANSWER:
+        decision = state.get("current_decision")
+        decision_action = None
+        if decision:
+            if hasattr(decision, "action"):
+                action = decision.action
+                decision_action = action.value if hasattr(action, 'value') else str(action)
+            elif isinstance(decision, dict):
+                action = decision.get("action", "answer_directly")
+                decision_action = action.value if hasattr(action, 'value') else str(action)
+
+        # Determine work item type based on decision action
+        if decision_action == "build_agent":
+            item_type = WorkItemType.BUILD_AGENT
+        elif decision_action == "build_mcp":
+            item_type = WorkItemType.BUILD_MCP
+        elif decision_action == "upgrade":
+            item_type = WorkItemType.UPGRADE
+        elif decision_action in ("call_agent", "delegate"):
+            item_type = WorkItemType.A2A_CALL
+        elif decision_action == "call_tool":
+            item_type = WorkItemType.MCP_CALL
+        elif decision_action == "system_tool":
+            item_type = WorkItemType.SYSTEM_TOOL
+
+    logger.info(f"PLANNER: Determined item_type={item_type} for inner loop work item")
 
     # Select best approach based on gaps (if any) or use first approach
     chosen_approach = _select_best_approach(approaches, last_verification)
@@ -404,12 +470,52 @@ async def _plan_from_ideal_state(
     else:
         gaps = []
 
-    # Get agent name from context or decision
+    # Get agent name from multiple sources (priority order):
+    # 1. Current work item context
+    # 2. Decision target_capabilities
+    # 3. Extract from task description
+    # 4. Default to unknown_agent
     agent_name = "unknown_agent"
-    if decision:
-        target_caps = _get_target_capabilities(state)
-        if target_caps:
-            agent_name = target_caps[0] if target_caps else "agent"
+
+    # Try current work item context first
+    if current_item:
+        if hasattr(current_item, "context") and current_item.context:
+            ctx = current_item.context
+            if isinstance(ctx, dict):
+                # Check for agent_name or target_capabilities in context
+                agent_name = ctx.get("agent_name") or agent_name
+                if agent_name == "unknown_agent":
+                    caps = ctx.get("target_capabilities", [])
+                    if caps and isinstance(caps, list) and caps[0]:
+                        agent_name = caps[0]
+        elif isinstance(current_item, dict):
+            ctx = current_item.get("context", {})
+            if isinstance(ctx, dict):
+                agent_name = ctx.get("agent_name") or agent_name
+                if agent_name == "unknown_agent":
+                    caps = ctx.get("target_capabilities", [])
+                    if caps and isinstance(caps, list) and caps[0]:
+                        agent_name = caps[0]
+
+    # Try decision target_capabilities
+    if agent_name == "unknown_agent":
+        decision = state.get("current_decision")
+        if decision:
+            target_caps = _get_target_capabilities(state)
+            if target_caps:
+                agent_name = target_caps[0]
+
+    # Try to extract from task description (e.g., "build a weather agent")
+    if agent_name == "unknown_agent" and task_description:
+        import re
+        # Look for patterns like "weather agent", "hello world agent"
+        match = re.search(r'(?:build\s+(?:a\s+|an\s+|me\s+a\s+)?)?(\w+(?:\s+\w+)?)\s+agent', task_description.lower())
+        if match:
+            extracted = match.group(1).strip()
+            if extracted and extracted not in ("a", "an", "the", "new", "build", "me"):
+                agent_name = extracted.replace(" ", "_") + "_agent"
+
+    logger.info(f"PLANNER: Determined agent_name={agent_name} for spec doc")
 
     # Generate work item ID early for spec file naming
     work_item_id = str(uuid.uuid4())
@@ -621,7 +727,11 @@ async def _generate_copilot_prompt(
     1. Tells Copilot where the spec file is
     2. Provides high-level context about the task
     3. On subsequent iterations, mentions what to fix/improve
+    4. Detects if agent already exists and adjusts instructions accordingly
     """
+    # Sanitize agent name for folder path
+    safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
+
     # Calculate relative path for the prompt (from project root)
     if spec_file_path:
         # Convert to relative path from project root for cleaner prompt
@@ -631,7 +741,12 @@ async def _generate_copilot_prompt(
         except ValueError:
             rel_path = spec_file_path
     else:
-        rel_path = f"app/agents/{agent_name}_spec.md"
+        rel_path = f"app/agents/{safe_name}/spec.md"
+
+    # Check if agent already exists
+    project_root = Path(__file__).parent.parent.parent.parent
+    agent_folder = project_root / "app" / "agents" / safe_name
+    existing_agent = (agent_folder / "agent.py").exists()
 
     # Build context about what iteration we're on and what to focus on
     iteration_context = ""
@@ -642,8 +757,21 @@ This is iteration {iteration} of the build. Focus on addressing these gaps:
 {chr(10).join(f'- {gap}' for gap in gaps[:5])}
 """
 
+    # Adjust prompt based on whether agent exists
+    if existing_agent:
+        action_verb = "Update"
+        action_details = f"""- This is an EXISTING agent - modify the existing files
+- Review the current implementation in app/agents/{safe_name}/
+- Update agent.py to match the new/updated spec requirements
+- Preserve existing functionality unless the spec explicitly changes it"""
+    else:
+        action_verb = "Build"
+        action_details = f"""- Create all required files in app/agents/{safe_name}/
+- Follow the directory structure and file organization in the spec
+- Implement all specified behaviors and responses"""
+
     # Base prompt that references the spec file
-    base_prompt = f"""Build an AI agent based on the specification file.
+    base_prompt = f"""{action_verb} an AI agent based on the specification file.
 
 SPEC FILE: {rel_path}
 
@@ -651,9 +779,7 @@ Read the spec file above and implement the agent according to its requirements.
 {iteration_context}
 IMPORTANT:
 - Read the spec file FIRST to understand the full requirements
-- Create all required files in app/agents/{agent_name}/
-- Follow the directory structure and file organization in the spec
-- Implement all specified behaviors and responses"""
+{action_details}"""
 
     # Optionally use LLM to enhance the prompt with task-specific guidance
     if llm_client and iteration == 0:
@@ -691,10 +817,11 @@ TASK FOCUS:
 
 async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work_item_id: str | None = None) -> Path | None:
     """
-    Save the spec content to a file in app/agents/ for copilot CLI to reference.
+    Save the spec content to a file in app/agents/{agent_name}/ for copilot CLI to reference.
 
-    The spec file is placed in the agents directory where copilot will build,
-    making it easy to reference in the prompt: "Read the spec file at app/agents/<name>_spec.md"
+    The spec file is placed inside the agent's directory:
+    - New agent: Creates app/agents/{agent_name}/spec.md
+    - Existing agent: Updates app/agents/{agent_name}/spec.md (amends existing spec)
 
     Returns the path to the saved file.
     """
@@ -704,20 +831,27 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
         agents_dir = project_root / "app" / "agents"
         agents_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create filename based on agent name (preferred) or work_item_id
+        # Create agent folder based on agent name (preferred) or work_item_id
         if agent_name:
-            # Sanitize agent name for filename
+            # Sanitize agent name for folder name
             safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
-            filename = f"{safe_name}_spec.md"
         else:
-            filename = f"build_spec_{work_item_id or 'current'}.md"
+            safe_name = f"agent_{work_item_id or 'unknown'}"
 
-        spec_file_path = agents_dir / filename
+        # Create the agent folder
+        agent_folder = agents_dir / safe_name
+        agent_folder.mkdir(parents=True, exist_ok=True)
 
-        # Write spec content to file
+        # Check if agent already exists (has agent.py)
+        existing_agent = (agent_folder / "agent.py").exists()
+        if existing_agent:
+            logger.info(f"PLANNER: Agent '{safe_name}' already exists, spec will amend existing agent")
+
+        # Save spec.md inside the agent folder
+        spec_file_path = agent_folder / "spec.md"
         spec_file_path.write_text(spec_doc.content, encoding="utf-8")
 
-        logger.info(f"PLANNER: Saved spec file to {spec_file_path}")
+        logger.info(f"PLANNER: Saved spec file to {spec_file_path} (existing_agent={existing_agent})")
         return spec_file_path
     except Exception as e:
         logger.error(f"Failed to save spec file: {e}")
