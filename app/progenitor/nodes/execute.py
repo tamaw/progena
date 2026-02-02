@@ -221,6 +221,17 @@ def create_node(
                         "success": True,
                     })
 
+                    # Track tool call in current_state for session history
+                    if state_manager:
+                        await state_manager.add_tool_call({
+                            "tool": tool_name,
+                            "arguments": tool_args,
+                            "result": str(result)[:500] if result else None,  # Truncate large results
+                            "success": True,
+                            "timestamp": utcnow_isoformat(),
+                            "iteration": iteration,
+                        })
+
                     if metrics:
                         tool_duration = time.perf_counter() - tool_start
                         metrics.record_histogram("tool_execution_duration_seconds", tool_duration, {"tool": tool_name})

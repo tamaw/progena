@@ -42,10 +42,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             if existing:
                 continue
 
-            # Create work item from schedule entry
-            # Include the instruction that will be executed as a user request
-            instruction = entry_dict.get("instruction") or entry_dict.get("action_config", {}).get("instruction")
-
+            # Create work item from schedule entry (simplified model)
             work_item = WorkItem(
                 id=str(uuid.uuid4()),
                 item_type=WorkItemType.SCHEDULED,
@@ -53,10 +50,8 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 description=entry_dict.get("description", "Scheduled task"),
                 context={
                     "schedule_id": entry_dict.get("id"),
-                    "action_type": entry_dict.get("action_type"),
-                    "action_config": entry_dict.get("action_config", {}),
-                    "instruction": instruction,  # Processed instruction to execute
-                    "user_request": entry_dict.get("user_request"),  # Original request
+                    "instruction": entry_dict.get("instruction"),
+                    "repeat_minutes": entry_dict.get("repeat_minutes"),
                 },
             )
 

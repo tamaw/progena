@@ -100,13 +100,14 @@ class TestDecideNode:
         from app.progenitor.nodes import decide
 
         mock_llm = AsyncMock()
-        # Simulate an LLM response that would otherwise cause a non-actionable direct answer.
+        # Simulate an LLM response that identifies this as a build request with high confidence.
         mock_llm.decide.return_value = {
-            "action": "answer_directly",
-            "reasoning": "",
-            "requires_planning": False,
-            "target_capabilities": [],
-            "direct_response": None,
+            "action": "build_agent",
+            "confidence": 0.98,  # Above 0.95 threshold
+            "reasoning": "User explicitly asked to build an agent",
+            "requires_planning": True,
+            "target_capabilities": ["hello_world_a2a_agent"],
+            "user_response": "I'll start building a hello world agent for you.",
         }
 
         mock_registry = MagicMock()
@@ -127,7 +128,44 @@ class TestDecideNode:
         decision = result["current_decision"]
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
         assert decision.requires_planning is False
+        # Without a background runner, we should get the "unavailable" message
         assert "Background Build Unavailable" in (decision.direct_response or "")
+
+    @pytest.mark.asyncio
+    async def test_decide_rejects_low_confidence_build(self):
+        """Test that build actions with low confidence are rejected."""
+        from app.progenitor.nodes import decide
+
+        mock_llm = AsyncMock()
+        # Simulate an LLM response with build action but LOW confidence
+        mock_llm.decide.return_value = {
+            "action": "build_agent",
+            "confidence": 0.6,  # Below 0.95 threshold
+            "reasoning": "Maybe user wants to build?",
+            "requires_planning": True,
+            "target_capabilities": [],
+            "user_response": None,
+        }
+
+        mock_registry = MagicMock()
+        mock_registry.get_all_capabilities.return_value = []
+
+        mock_state_manager = AsyncMock()
+
+        node = decide.create_node(mock_llm, mock_registry, mock_state_manager)
+
+        state: ProgenitorState = {
+            "current_input": "say hello world in 5 minutes",
+            "messages": [],
+        }
+
+        result = await node(state)
+
+        assert result["current_decision"] is not None
+        decision = result["current_decision"]
+        assert decision.action == DecisionAction.ANSWER_DIRECTLY
+        # Should explain that confidence was too low
+        assert "not certain" in (decision.direct_response or "").lower() or "confidence" in (decision.direct_response or "").lower()
 
     @pytest.mark.asyncio
     async def test_decide_no_input(self):
@@ -261,7 +299,11 @@ class TestCommitCoreNode:
 
     @pytest.mark.asyncio
     async def test_commit_saves_backlog(self):
-        """Test that commit saves backlog."""
+        """Test that commit saves backlog and schedule.
+
+        Note: schedule is saved to schedule.json only (system feature),
+        NOT to current_state.json (which is user session state).
+        """
         from app.progenitor.nodes import commit_core
 
         mock_state_manager = AsyncMock()
@@ -284,8 +326,8 @@ class TestCommitCoreNode:
         result = await node(state)
 
         mock_state_manager.save_backlog.assert_called_once()
-        mock_state_manager.save_schedule.assert_called_once()
-        mock_state_manager.save_state.assert_called_once()
+        mock_state_manager.save_schedule.assert_called_once()  # Schedule saved to schedule.json only
+        mock_state_manager.update_current_state.assert_called_once()
 
         assert "last_commit_time" in result
 

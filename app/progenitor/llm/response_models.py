@@ -20,7 +20,7 @@ class DecisionAction(str, Enum):
     BUILD_MCP = "build_mcp"
     UPGRADE = "upgrade"
     MIXED = "mixed"
-    SCHEDULE = "schedule"
+    # Note: SCHEDULE removed - scheduling is handled via system tool fast-path
 
 
 class DecisionResponse(BaseModel):
@@ -29,6 +29,12 @@ class DecisionResponse(BaseModel):
     action: str = Field(
         default="answer_directly",
         description="The action to take for this request"
+    )
+    confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score (0.0-1.0) that this is the correct action. BUILD actions require >= 0.95"
     )
     reasoning: str = Field(
         default="",
@@ -42,10 +48,26 @@ class DecisionResponse(BaseModel):
         default_factory=list,
         description="List of capabilities needed for this task"
     )
+    user_response: Optional[str] = Field(
+        default=None,
+        description="A helpful, specific response to show the user about what action will be taken"
+    )
     direct_response: Optional[str] = Field(
         default=None,
-        description="Direct response content if action is answer_directly"
+        description="Direct response content if action is answer_directly (deprecated, use user_response)"
     )
+
+    @field_validator('confidence', mode='before')
+    @classmethod
+    def validate_confidence(cls, v):
+        """Ensure confidence is a valid float between 0 and 1."""
+        if v is None:
+            return 0.5
+        try:
+            val = float(v)
+            return max(0.0, min(1.0, val))
+        except (ValueError, TypeError):
+            return 0.5
 
     @field_validator('action', mode='before')
     @classmethod

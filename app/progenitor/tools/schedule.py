@@ -59,17 +59,15 @@ async def add_scheduled_task(
     time_expression: str,
     instruction: str,
     description: Optional[str] = None,
-    recurring: bool = False,
 ) -> tuple[ScheduleResult, Optional[dict]]:
     """
     Add a scheduled task that will execute an instruction at the specified time.
 
     Args:
         user_request: The original user request for context
-        time_expression: Natural language time (e.g., "at 9am", "every day at 9am")
+        time_expression: Natural language time (e.g., "at 9am", "in 30 minutes", "every day at 9am")
         instruction: The processed instruction to run at the scheduled time
         description: Human-readable description
-        recurring: Whether this repeats
 
     Returns:
         Tuple of (ScheduleResult with the schedule ID and status, entry_data dict or None on failure)
@@ -79,7 +77,7 @@ async def add_scheduled_task(
     # Parse the time expression
     parsed = scheduler.parse_time_expression(time_expression)
 
-    if not parsed:
+    if not parsed or not parsed.get("run_at"):
         return ScheduleResult(
             success=False,
             message=f"Could not parse time expression: {time_expression}",
@@ -88,48 +86,32 @@ async def add_scheduled_task(
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
     task_description = description or f"Scheduled: {user_request[:100]}"
 
-    # Build the schedule entry data
+    # Build the simplified schedule entry
     entry_data = {
         "id": schedule_id,
         "description": task_description,
-        "instruction": instruction,  # The key field - instruction to execute
-        "user_request": user_request,  # Keep original for reference
+        "instruction": instruction,
+        "run_at": parsed["run_at"],
         "enabled": True,
-        "action_type": DecisionAction.ANSWER_DIRECTLY.value,  # Will be re-decided at runtime
-        "action_config": {
-            "original_request": user_request,
-        },
     }
 
-    # Add timing based on parsed expression
-    if parsed.get("run_at"):
-        entry_data["run_at"] = parsed["run_at"]
-        next_run = parsed["run_at"]
-    elif parsed.get("cron_expression"):
-        entry_data["cron_expression"] = parsed["cron_expression"]
-        # Calculate next run from cron
-        next_run = parsed.get("description", "recurring")
-    elif parsed.get("interval_minutes"):
-        entry_data["interval_minutes"] = parsed["interval_minutes"]
-        next_run = (utcnow() + timedelta(minutes=parsed["interval_minutes"])).isoformat()
-    else:
-        return ScheduleResult(
-            success=False,
-            message=f"No valid timing found in: {time_expression}",
-        ), None
+    # Add repeat_minutes if this is a recurring task
+    if parsed.get("repeat_minutes"):
+        entry_data["repeat_minutes"] = parsed["repeat_minutes"]
 
     logger.info(
-        "Created schedule entry %s: %s -> %s",
+        "Created schedule entry %s: %s -> %s%s",
         schedule_id,
         task_description,
-        next_run,
+        parsed["run_at"],
+        f" (repeat every {parsed.get('repeat_minutes')} min)" if parsed.get("repeat_minutes") else "",
     )
 
     return ScheduleResult(
         success=True,
         schedule_id=schedule_id,
         message=f"Scheduled task created: {task_description}",
-        next_run=str(next_run) if next_run else None,
+        next_run=parsed["run_at"],
     ), entry_data
 
 
@@ -158,33 +140,36 @@ async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str,
         List of schedule entries with status info
     """
     result = []
-    now = utcnow()
 
     for entry in schedule:
         entry_dict = entry if isinstance(entry, dict) else entry.model_dump()
 
-        status = "enabled" if entry_dict.get("enabled", True) else "disabled"
+        # Determine status
+        if not entry_dict.get("enabled", True):
+            status = "disabled"
+        elif entry_dict.get("last_run") and not entry_dict.get("repeat_minutes"):
+            status = "completed"  # One-off that already ran
+        else:
+            status = "scheduled"
 
-        # Calculate next run
-        next_run = None
-        if entry_dict.get("run_at"):
-            next_run = entry_dict["run_at"]
-        elif entry_dict.get("cron_expression"):
-            next_run = f"Recurring: {entry_dict['cron_expression']}"
-        elif entry_dict.get("interval_minutes"):
-            last_run = entry_dict.get("last_run")
-            if last_run:
-                next_run = f"Every {entry_dict['interval_minutes']} minutes"
-            else:
-                next_run = "Next cycle"
+        # Format next run info
+        run_at = entry_dict.get("run_at")
+        repeat = entry_dict.get("repeat_minutes")
+        if repeat:
+            next_run = f"{run_at} (every {repeat} min)"
+        elif run_at:
+            next_run = run_at
+        else:
+            next_run = "Unknown"
 
         result.append({
             "id": entry_dict.get("id"),
             "description": entry_dict.get("description"),
-            "instruction": entry_dict.get("instruction", entry_dict.get("action_config", {}).get("instruction")),
+            "instruction": entry_dict.get("instruction"),
             "status": status,
-            "next_run": str(next_run) if next_run else "Unknown",
+            "next_run": str(next_run),
             "last_run": entry_dict.get("last_run"),
+            "repeat_minutes": repeat,
         })
 
     return result

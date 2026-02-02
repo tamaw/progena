@@ -73,6 +73,16 @@ class Progenitor:
         # Load tool/agent registry
         await self.tool_registry.load()
 
+        # Create a deferred event pusher that will be bound to the loop later
+        # This allows the graph to be created before the loop, but still have
+        # access to the loop's event pushing capability
+        async def deferred_push_event(event_type: str, content: str, metadata=None):
+            """Event pusher that delegates to the loop runner when available."""
+            if self.loop_runner:
+                await self.loop_runner._push_event(event_type, content, metadata)
+            else:
+                logger.warning("Event pusher called before loop_runner available: %s", event_type)
+
         # Create the LangGraph - choose between original and dual-loop
         use_dual_loop = self.config.runtime.__dict__.get("use_dual_loop", True)
 
@@ -84,6 +94,7 @@ class Progenitor:
                 tool_registry=self.tool_registry,
                 config=self.config,
                 worktrees_dir=self.worktrees_dir,
+                event_pusher=deferred_push_event,
             )
         else:
             logger.info("Using original graph")
@@ -93,6 +104,7 @@ class Progenitor:
                 tool_registry=self.tool_registry,
                 config=self.config,
                 worktrees_dir=self.worktrees_dir,
+                event_pusher=deferred_push_event,
             )
 
         # Create loop runner

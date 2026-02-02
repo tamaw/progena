@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useSSE } from '../hooks/useSSE';
+import { useStatusSSE } from '../hooks/useSSE';
 import Header from '../components/layout/Header';
 import {
   Chart as ChartJS,
@@ -65,7 +65,7 @@ function DashboardPage() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const handleSSEEvent = useCallback((event) => {
+  const handleStatusEvent = useCallback((event) => {
     if (!event?.data) return;
 
     if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
@@ -73,7 +73,8 @@ function DashboardPage() {
     }
   }, []);
 
-  useSSE(handleSSEEvent);
+  // Use status-only SSE stream for dashboard
+  useStatusSSE(handleStatusEvent);
 
   const formatUptime = (seconds) => {
     if (!seconds) return '--';

@@ -37,6 +37,13 @@ def mock_state_manager():
     manager.log_iteration_end = AsyncMock()
     manager.save_verification_report = AsyncMock()
     manager.commit_state = AsyncMock()
+    # New methods for dual state files
+    manager.save_messages = AsyncMock()
+    manager.get_messages = AsyncMock(return_value=[])
+    manager.save_current_state = AsyncMock()
+    manager.get_current_state = AsyncMock(return_value={})
+    manager.update_current_state = AsyncMock()
+    manager.save_current_schedule = AsyncMock()
     return manager
 
 

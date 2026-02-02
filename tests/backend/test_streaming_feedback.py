@@ -566,7 +566,7 @@ class TestChatAPIStreaming:
         )
 
         # May return error but endpoint should be reachable
-        assert response.status_code in [200, 500, 503]
+        assert response.status_code in [200, 500, 503, 504]
 
     def test_responses_endpoint_exists(self):
         """Test responses endpoint accepts requests."""

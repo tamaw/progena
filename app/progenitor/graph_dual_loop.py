@@ -216,14 +216,51 @@ def route_after_decide(state: ProgenitorState) -> Literal["observe", "pick_next"
     return "pick_next"
 
 
-def route_after_act_build(state: ProgenitorState) -> Literal["execute"]:
+def route_after_act_build(state: ProgenitorState) -> Literal["execute", "respond"]:
     """
     Route after BUILD phase.
 
-    BUILD always proceeds to EXECUTE to run/test the built artifact.
-    Flow: BUILD → EXECUTE → VALIDATE → VERIFY
+    For build tasks (agents, MCP servers): BUILD → EXECUTE → VALIDATE → VERIFY
+    For simple tasks (scheduled, system tools): BUILD → RESPOND (skip verification)
+
+    Scheduled tasks and system tools that complete successfully don't need
+    the full verification loop since they're not building artifacts.
     """
-    # BUILD always goes to EXECUTE (which runs/tests the built agent)
+    from .state.models import WorkItemType
+    from .state.helpers import normalize_work_item
+
+    current_item = state.get("current_work_item")
+    work_item_completed = state.get("work_item_completed", False)
+
+    if current_item:
+        work_item = normalize_work_item(current_item)
+        if work_item:
+            item_type = work_item.item_type
+
+            # Skip verification for non-build tasks that completed successfully
+            skip_verification_types = {
+                WorkItemType.SCHEDULED,
+                WorkItemType.SYSTEM_TOOL,
+                WorkItemType.DIRECT_ANSWER,
+                WorkItemType.A2A_CALL,
+                WorkItemType.MCP_CALL,
+            }
+
+            # Also check string values for cases where item_type is already a string
+            skip_verification_type_values = {t.value for t in skip_verification_types}
+
+            # Check both enum and string matches
+            should_skip = (
+                item_type in skip_verification_types or
+                (isinstance(item_type, str) and item_type in skip_verification_type_values)
+            )
+
+            if should_skip and work_item_completed:
+                item_type_str = item_type.value if hasattr(item_type, 'value') else item_type
+                logger.info("Skipping verification for completed %s task", item_type_str)
+                return "respond"
+
+    # BUILD tasks proceed to EXECUTE for testing
     return "execute"
 
 
@@ -257,6 +294,7 @@ def create_progenitor_graph(
     tool_registry,
     config,
     worktrees_dir,
+    event_pusher=None,
 ):
     """
     Create the dual-loop LangGraph for Progenitor (loop.spec.md).
@@ -283,6 +321,7 @@ def create_progenitor_graph(
         tool_registry: ToolRegistry instance for agent/tool discovery.
         config: ProgenitorConfig instance with all configuration.
         worktrees_dir: Path to worktrees directory.
+        event_pusher: Optional callback to push events to clients via IPC.
 
     Returns:
         Compiled StateGraph implementing dual-loop architecture.
@@ -301,7 +340,7 @@ def create_progenitor_graph(
         "intake": intake.create_node(state_manager),
         "time_check": time_check.create_node(config.runtime.timezone),
         "enqueue_due": enqueue_due.create_node(state_manager),
-        "decide": decide.create_node(llm_client, tool_registry, state_manager),
+        "decide": decide.create_node(llm_client, tool_registry, state_manager, config),
         "pick_next": pick_next.create_node(),
         "worktree_prep": worktree_prep.create_node(worktrees_dir),
         "validate": validate.create_node(config),
@@ -316,7 +355,7 @@ def create_progenitor_graph(
         "observe": observe.create_node(llm_client, state_manager),
         "think": think.create_node(llm_client, state_manager),
         "plan": planner.create_node(llm_client, state_manager),  # PLAN phase uses planner
-        "build": act.create_node(llm_client, tool_registry, config, worktrees_dir, state_manager),
+        "build": act.create_node(llm_client, tool_registry, config, worktrees_dir, state_manager, event_pusher),
         "execute": execute.create_node(tool_registry, state_manager),  # EXECUTE phase (loop.spec.md)
         "verify": verify_loop.create_node(llm_client, state_manager),
         "learn": learn.create_node(llm_client, state_manager),
@@ -363,8 +402,15 @@ def create_progenitor_graph(
 
     builder.add_edge("worktree_prep", "build")
 
-    # BUILD → EXECUTE (always - execute runs/tests the built artifact)
-    builder.add_edge("build", "execute")
+    # BUILD → EXECUTE or RESPOND (skip verification for non-build tasks)
+    builder.add_conditional_edges(
+        "build",
+        route_after_act_build,
+        {
+            "execute": "execute",
+            "respond": "respond",
+        }
+    )
 
     # EXECUTE → VALIDATE (validate uses execution data to check correctness)
     builder.add_edge("execute", "validate")

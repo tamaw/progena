@@ -374,6 +374,29 @@
     font-size: var(--font-size-sm);
 }
 
+/* Scheduled Message */
+.message.scheduled {
+    border-left: 3px solid var(--color-warning, #f0ad4e);
+    background-color: rgba(240, 173, 78, 0.08);
+}
+
+.scheduled-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 2px 8px;
+    margin-bottom: var(--spacing-sm);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    color: var(--color-warning, #f0ad4e);
+    background-color: rgba(240, 173, 78, 0.15);
+    border-radius: var(--border-radius-sm);
+}
+
+.scheduled-badge svg {
+    stroke: currentColor;
+}
+
 /* System Message */
 .message-system {
     display: flex;

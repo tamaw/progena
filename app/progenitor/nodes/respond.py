@@ -2,6 +2,8 @@
 Respond Node - Generates and sends response to user.
 
 Per loop.spec.md: "Final output must include a compact verification summary."
+
+Messages are stored in current_state.json (progenitor agent state).
 """
 
 from datetime import datetime
@@ -110,6 +112,9 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         # Trim conversation history to prevent unbounded growth (TD-008)
         messages = trim_conversation_history(messages)
+
+        # Persist messages to current_state.json
+        await state_manager.save_messages(messages)
 
         # Clear build state if we were building (inner loop completed)
         build_clear_updates: dict[str, Any] = {}

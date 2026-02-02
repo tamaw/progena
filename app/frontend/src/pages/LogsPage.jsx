@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useSSE } from '../hooks/useSSE';
+import { useChatSSE } from '../hooks/useSSE';
 import Header from '../components/layout/Header';
 
 function LogsPage() {
@@ -12,7 +12,7 @@ function LogsPage() {
   const [selectedLog, setSelectedLog] = useState(null);
   const logsContainerRef = useRef(null);
 
-  const handleSSEEvent = useCallback((event) => {
+  const handleChatEvent = useCallback((event) => {
     if (event.type === 'log' && !isPaused) {
       setLogs(prev => [...prev.slice(-999), {
         id: Date.now(),
@@ -22,7 +22,8 @@ function LogsPage() {
     }
   }, [isPaused]);
 
-  useSSE(handleSSEEvent);
+  // Use chat SSE stream for log events
+  useChatSSE(handleChatEvent);
 
   useEffect(() => {
     if (autoScroll && logsContainerRef.current) {

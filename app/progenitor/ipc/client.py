@@ -221,14 +221,30 @@ class IPCClient:
                     # Send heartbeat
                     await write_message(self._writer, heartbeat())
 
-                    # Wait for ack
-                    msg = await read_message(self._reader, timeout=10)
-                    if msg and msg.type == MessageType.HEARTBEAT_ACK:
-                        self._last_activity = time.time()
-                        self._missed_heartbeats = 0
-                    else:
-                        self._missed_heartbeats += 1
-                        logger.debug("No heartbeat ack received (miss %d/%d)",
+                    # Wait for ack, but also handle any events that arrive
+                    while True:
+                        msg = await read_message(self._reader, timeout=10)
+                        if msg is None:
+                            self._missed_heartbeats += 1
+                            break
+
+                        # Handle events that might arrive during heartbeat
+                        if msg.type == MessageType.AGENT_EVENT:
+                            await self._handle_event(msg)
+                            continue  # Keep waiting for heartbeat ack
+
+                        if msg.type == MessageType.HEARTBEAT_ACK:
+                            self._last_activity = time.time()
+                            self._missed_heartbeats = 0
+                            break
+                        else:
+                            # Unexpected message type during heartbeat
+                            logger.debug("Unexpected message during heartbeat: %s", msg.type)
+                            self._missed_heartbeats += 1
+                            break
+
+                    if self._missed_heartbeats > 0:
+                        logger.debug("Heartbeat issue (miss %d/%d)",
                                     self._missed_heartbeats, HEARTBEAT_MISS_THRESHOLD)
                         if self._missed_heartbeats >= HEARTBEAT_MISS_THRESHOLD:
                             logger.warning("Too many missed heartbeats, connection may be stale")

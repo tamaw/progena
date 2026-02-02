@@ -3,6 +3,8 @@ Intake Node - Handles incoming user messages.
 
 Appends user message to conversation log and updates context.
 Also detects when a message is a response to a clarification request.
+
+Messages are stored in current_state.json (progenitor agent state).
 """
 
 from datetime import datetime
@@ -22,6 +24,8 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         If we're awaiting clarification from the user, this message
         is treated as the clarification response and routed accordingly.
+
+        Messages are persisted to current_state.json.
         """
         user_input = state.get("current_input")
 
@@ -55,7 +59,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             metadata=metadata,
         )
 
-        # Log to conversation history (PRIMARY RULE: Log the human first!)
+        # Log to conversation JSONL (PRIMARY RULE: Log the human first!)
         await state_manager.log_conversation(message)
 
         # Update messages in state
@@ -64,6 +68,9 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         # Trim conversation history to prevent unbounded growth (TD-008)
         messages = trim_conversation_history(messages)
+
+        # Persist messages to current_state.json
+        await state_manager.save_messages(messages)
 
         return {
             "messages": messages,

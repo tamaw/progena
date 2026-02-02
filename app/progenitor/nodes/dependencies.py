@@ -172,6 +172,7 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
             deps.llm_client,
             deps.tool_registry,
             deps.state_manager,
+            deps.config,
         ),
         "planner": planner.create_node(
             deps.llm_client,

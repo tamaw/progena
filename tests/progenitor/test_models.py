@@ -1,7 +1,7 @@
 """Tests for state models."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.progenitor.state.models import (
     WorkItem,
@@ -75,32 +75,34 @@ class TestDecision:
 
 
 class TestScheduleEntry:
-    """Tests for ScheduleEntry model."""
+    """Tests for ScheduleEntry model (simplified)."""
 
     def test_create_recurring_schedule(self):
-        """Test creating a recurring schedule."""
+        """Test creating a recurring schedule with repeat_minutes."""
+        run_at = datetime(2026, 1, 20, 9, 0, 0, tzinfo=timezone.utc)
         entry = ScheduleEntry(
             id="schedule-1",
             description="Daily reminder",
-            cron_expression="0 9 * * *",
-            action_type=DecisionAction.DELEGATE_A2A,
+            instruction="Say good morning",
+            run_at=run_at,
+            repeat_minutes=1440,  # Daily
         )
 
-        assert entry.cron_expression == "0 9 * * *"
+        assert entry.repeat_minutes == 1440
         assert entry.enabled
 
     def test_create_one_off_schedule(self):
         """Test creating a one-off schedule."""
-        run_time = datetime(2026, 1, 20, 10, 0, 0)
+        run_time = datetime(2026, 1, 20, 10, 0, 0, tzinfo=timezone.utc)
         entry = ScheduleEntry(
             id="schedule-2",
             description="One-time reminder",
+            instruction="Send the report",
             run_at=run_time,
-            action_type=DecisionAction.ANSWER_DIRECTLY,
         )
 
         assert entry.run_at == run_time
-        assert entry.cron_expression is None
+        assert entry.repeat_minutes is None
 
 
 class TestAgentRegistryEntry:

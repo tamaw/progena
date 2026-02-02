@@ -415,12 +415,14 @@ async def lifespan(app: FastAPI):
     # Choose client based on configuration
     if config.progenitor_ipc_enabled:
         logger.info(
-            "Using IPC client (host=%s, port=%d, auto_start=%s)",
+            "Using IPC client (host=%s, port=%d)",
             config.progenitor_ipc_host,
             config.progenitor_ipc_port,
-            config.progenitor_ipc_auto_start,
         )
-        client = get_ipc_client(config)
+        # Import broadcast_chat_event for IPC events (chat, alerts, tasks)
+        # These go to the /chat SSE stream (and legacy /events for compatibility)
+        from .ui_routes import broadcast_chat_event
+        client = get_ipc_client(config, event_callback=broadcast_chat_event)
     else:
         logger.info("Using subprocess client (legacy mode)")
         client = get_client(config)

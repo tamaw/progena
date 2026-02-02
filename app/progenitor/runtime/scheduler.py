@@ -2,6 +2,10 @@
 Scheduler for Progenitor.
 
 Handles recurring and one-off scheduled tasks.
+
+Simplified model:
+- One-off: run_at is set, repeat_minutes is None. Runs once, then last_run is set.
+- Recurring: run_at + repeat_minutes. After each run, run_at advances by repeat_minutes.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -22,46 +26,49 @@ class Scheduler:
         schedule: list[dict[str, Any]],
         current_time: datetime,
     ) -> list[dict[str, Any]]:
-        """Get all schedule items that are due."""
+        """Get all schedule items that are due.
+
+        An item is due if:
+        - enabled is True
+        - run_at <= current_time
+        - For one-off (no repeat_minutes): last_run must be None
+        - For recurring: always check run_at (it advances after each execution)
+        """
         due = []
 
         for item in schedule:
             if not item.get("enabled", True):
                 continue
 
-            # One-off task
-            if item.get("run_at"):
-                run_at = self._parse_datetime(item["run_at"])
-                if run_at and run_at <= current_time:
-                    due.append(item)
+            run_at = self._parse_datetime(item.get("run_at"))
+            if not run_at:
+                continue
 
-            # Recurring task
-            elif item.get("cron_expression"):
-                next_run = self._get_next_cron_run(
-                    item["cron_expression"],
-                    item.get("last_run"),
-                )
-                if next_run and next_run <= current_time:
-                    due.append(item)
+            # Check if run_at has passed
+            if run_at > current_time:
+                continue
 
-            # Simple interval
-            elif item.get("interval_minutes"):
-                last_run = self._parse_datetime(item.get("last_run"))
-                if not last_run:
-                    due.append(item)
-                else:
-                    next_run = last_run + timedelta(minutes=item["interval_minutes"])
-                    if next_run <= current_time:
-                        due.append(item)
+            # One-off task: skip if already executed
+            if not item.get("repeat_minutes"):
+                if item.get("last_run"):
+                    continue
+
+            due.append(item)
 
         return due
 
     def parse_time_expression(self, expression: str) -> dict[str, Any]:
-        """Parse a natural language time expression."""
+        """Parse a natural language time expression.
+
+        Returns dict with:
+        - run_at: ISO datetime string for when to first execute
+        - repeat_minutes: Optional int for recurring interval
+        - description: Human-readable description
+        """
         expression = expression.lower().strip()
         result = {}
 
-        # "every day at 9am"
+        # "every day at 9am" -> daily = 1440 minutes
         match = re.search(r"every day at (\d{1,2})(:\d{2})?\s*(am|pm)?", expression)
         if match:
             hour = int(match.group(1))
@@ -73,7 +80,14 @@ class Scheduler:
             elif period == "am" and hour == 12:
                 hour = 0
 
-            result["cron_expression"] = f"{minute} {hour} * * *"
+            # Set run_at to next occurrence of this time
+            now = utcnow()
+            run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if run_at <= now:
+                run_at += timedelta(days=1)
+
+            result["run_at"] = run_at.isoformat()
+            result["repeat_minutes"] = 1440  # 24 hours
             result["description"] = f"Daily at {hour:02d}:{minute:02d}"
             return result
 
@@ -84,18 +98,33 @@ class Scheduler:
             unit = match.group(2)
 
             if unit in ("hour", "hr"):
-                value *= 60
+                repeat_minutes = value * 60
+            else:
+                repeat_minutes = value
 
-            result["interval_minutes"] = value
-            result["description"] = f"Every {value} minutes"
+            result["run_at"] = utcnow().isoformat()  # Start now
+            result["repeat_minutes"] = repeat_minutes
+            result["description"] = f"Every {repeat_minutes} minutes"
             return result
 
-        # "next Tuesday", "tomorrow", etc.
+        # "tomorrow" / "tomorrow at Xam"
         if "tomorrow" in expression:
             run_at = utcnow() + timedelta(days=1)
-            run_at = run_at.replace(hour=9, minute=0, second=0, microsecond=0)
+            # Check for specific time
+            time_match = re.search(r"at (\d{1,2})(:\d{2})?\s*(am|pm)?", expression)
+            if time_match:
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2)[1:]) if time_match.group(2) else 0
+                period = time_match.group(3)
+                if period == "pm" and hour != 12:
+                    hour += 12
+                elif period == "am" and hour == 12:
+                    hour = 0
+                run_at = run_at.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            else:
+                run_at = run_at.replace(hour=9, minute=0, second=0, microsecond=0)
             result["run_at"] = run_at.isoformat()
-            result["description"] = "Tomorrow at 9:00"
+            result["description"] = f"Tomorrow at {run_at.strftime('%H:%M')}"
             return result
 
         # "in X minutes/hours"
@@ -111,7 +140,28 @@ class Scheduler:
 
             run_at = utcnow() + delta
             result["run_at"] = run_at.isoformat()
-            result["description"] = f"In {value} {unit}s"
+            result["description"] = f"In {value} {unit}(s)"
+            return result
+
+        # "at Xam/pm" (today or tomorrow if time passed)
+        match = re.search(r"at (\d{1,2})(:\d{2})?\s*(am|pm)?", expression)
+        if match:
+            hour = int(match.group(1))
+            minute = int(match.group(2)[1:]) if match.group(2) else 0
+            period = match.group(3)
+
+            if period == "pm" and hour != 12:
+                hour += 12
+            elif period == "am" and hour == 12:
+                hour = 0
+
+            now = utcnow()
+            run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if run_at <= now:
+                run_at += timedelta(days=1)
+
+            result["run_at"] = run_at.isoformat()
+            result["description"] = f"At {hour:02d}:{minute:02d}"
             return result
 
         return result
@@ -127,62 +177,31 @@ class Scheduler:
                 return None
         return None
 
-    def _get_next_cron_run(
-        self,
-        cron_expr: str,
-        last_run: Any,
-    ) -> Optional[datetime]:
-        """Get the next run time for a cron expression."""
-        # Simplified cron parsing (minute hour day month weekday)
-        parts = cron_expr.split()
-        if len(parts) != 5:
-            return None
-
-        minute, hour, day, month, weekday = parts
-
-        now = utcnow()
-
-        # For simple daily schedules
-        if all(p == "*" for p in [day, month, weekday]):
-            try:
-                target_hour = int(hour) if hour != "*" else now.hour
-                target_minute = int(minute) if minute != "*" else 0
-
-                next_run = now.replace(
-                    hour=target_hour,
-                    minute=target_minute,
-                    second=0,
-                    microsecond=0
-                )
-
-                if next_run <= now:
-                    next_run += timedelta(days=1)
-
-                # Check against last_run
-                last = self._parse_datetime(last_run)
-                if last and next_run <= last:
-                    next_run += timedelta(days=1)
-
-                return next_run
-            except ValueError:
-                return None
-
-        return None
-
-    def update_last_run(
+    def advance_recurring(
         self,
         schedule: list[dict[str, Any]],
         item_id: str,
         run_time: datetime,
     ) -> list[dict[str, Any]]:
-        """Update the last_run time for a schedule item."""
+        """Update schedule entry after execution.
+
+        For recurring tasks: advances run_at by repeat_minutes.
+        For all tasks: sets last_run.
+        """
         for item in schedule:
             if item.get("id") == item_id:
                 item["last_run"] = run_time.isoformat()
 
-                # Disable one-off tasks after running
-                if item.get("run_at") and not item.get("cron_expression"):
-                    item["enabled"] = False
+                # Advance recurring tasks
+                repeat = item.get("repeat_minutes")
+                if repeat:
+                    current_run_at = self._parse_datetime(item.get("run_at"))
+                    if current_run_at:
+                        next_run = current_run_at + timedelta(minutes=repeat)
+                        # If next_run is still in the past, advance to future
+                        while next_run <= run_time:
+                            next_run += timedelta(minutes=repeat)
+                        item["run_at"] = next_run.isoformat()
 
                 break
 

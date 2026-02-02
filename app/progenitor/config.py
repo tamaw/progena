@@ -113,6 +113,9 @@ class RuntimeConfig:
     min_verification_score: float = 0.8  # Default minimum score to pass verification
     iteration_time_limit_seconds: int = 600  # Max time per iteration
 
+    # Decision routing settings
+    build_confidence_threshold: float = 0.95  # Min confidence for build actions
+
     @classmethod
     def from_env(cls, file_config: dict[str, Any] | None = None) -> "RuntimeConfig":
         """Load runtime config from environment with file fallbacks."""
@@ -175,6 +178,10 @@ class RuntimeConfig:
             ),
             iteration_time_limit_seconds=_env_int(
                 "PROGENITOR_ITERATION_TIME_LIMIT_SECONDS", fc.get("iteration_time_limit_seconds", 600)
+            ),
+            # Decision routing settings
+            build_confidence_threshold=_env_float(
+                "PROGENITOR_BUILD_CONFIDENCE_THRESHOLD", fc.get("build_confidence_threshold", 0.95)
             ),
         )
 

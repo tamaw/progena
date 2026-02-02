@@ -113,18 +113,31 @@ class TestNormalizeScheduleEntry:
         assert normalize_schedule_entry(None) is None
 
     def test_normalize_dict(self):
-        """Test normalizing a dict to ScheduleEntry."""
+        """Test normalizing a dict to ScheduleEntry (simplified model)."""
         data = {
             "id": "sched-1",
             "description": "Daily task",
-            "interval_minutes": 1440,
-            "action_type": "a2a_call",
-            "action_config": {"agent": "daily_agent"},
+            "instruction": "Do something daily",
+            "run_at": "2026-01-20T09:00:00+00:00",
+            "repeat_minutes": 1440,
         }
         result = normalize_schedule_entry(data)
         assert isinstance(result, ScheduleEntry)
         assert result.id == "sched-1"
-        assert result.interval_minutes == 1440
+        assert result.repeat_minutes == 1440
+
+    def test_normalize_dict_legacy_interval(self):
+        """Test normalizing legacy dict with interval_minutes."""
+        data = {
+            "id": "sched-2",
+            "description": "Legacy task",
+            "instruction": "Test",
+            "interval_minutes": 60,  # Old field name
+        }
+        result = normalize_schedule_entry(data)
+        assert isinstance(result, ScheduleEntry)
+        # Should map to repeat_minutes
+        assert result.repeat_minutes == 60
 
 
 class TestToDict:

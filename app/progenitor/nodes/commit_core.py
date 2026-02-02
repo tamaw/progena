@@ -1,5 +1,10 @@
 """
 CommitCore Node - Persists state with locks and appends log events.
+
+State is split across files:
+- build_state.json: Agent builds only (inner loop, backlog of build items)
+- current_state.json: Progenitor agent state (chat, tool calls) - user session
+- schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
 """
 
 import logging
@@ -17,7 +22,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
     async def commit_core_node(state: ProgenitorState) -> ProgenitorState:
         """Persist core state files and log events."""
-        # Save backlog
+        # Save backlog to build_state.json (build items only)
         backlog = state.get("backlog", [])
         backlog_data = []
         for item in backlog:
@@ -68,6 +73,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             except (TypeError, ValueError) as e:
                 logger.debug("Skipping invalid schedule entry: %s", e)
 
+        # Save schedule to schedule.json only (system feature, not user session)
         await state_manager.save_schedule(schedule_entries)
 
         # Log validation result if present
@@ -75,14 +81,14 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         if validation_result:
             await state_manager.log_validation(validation_result)
 
-        # Update current state
-        core_state = {
+        # Update current_state.json (progenitor agent operational state)
+        current_state_update = {
             "cycle_count": state.get("cycle_count", 0),
             "actions_this_cycle": state.get("actions_this_cycle", 0),
             "run_id": state.get("run_id"),
-            "last_commit": utcnow_isoformat(),
+            "last_checkpoint": utcnow_isoformat(),
         }
-        await state_manager.save_state(core_state)
+        await state_manager.update_current_state(current_state_update)
 
         # Return updated schedule so state reflects the new entry
         return {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useSSE } from '../hooks/useSSE';
+import { useChatSSE, useStatusSSE } from '../hooks/useSSE';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import Header from '../components/layout/Header';
@@ -61,7 +61,68 @@ function ChatPage() {
     return () => clearInterval(interval);
   }, [getHealth]);
 
-  const handleSSEEvent = useCallback((event) => {
+  // Track recently added scheduled messages to deduplicate
+  const recentScheduledContent = useRef(new Set());
+
+  // Handle chat events (from /chat SSE stream)
+  const handleChatEvent = useCallback((event) => {
+    if (!event?.data) return;
+
+    // Handle scheduled/background messages from the agent
+    // Prefer agent_message over scheduled_response as it has cleaner content
+    if (event.type === 'agent_message' || event.type === 'scheduled_response') {
+      const content = event.data?.content || '';
+      const metadata = event.data?.metadata || {};
+
+      // Clean up the content (remove "SAY: " prefix if present)
+      let cleanContent = content;
+      if (cleanContent.startsWith('SAY: ')) {
+        cleanContent = cleanContent.slice(5);
+      }
+
+      if (cleanContent) {
+        // Deduplicate: check if we recently added a message with the same content
+        const contentKey = cleanContent.slice(0, 100);
+        if (recentScheduledContent.current.has(contentKey)) {
+          // Already added this message, skip
+          return;
+        }
+
+        // Mark as recently added (auto-expire after 5 seconds)
+        recentScheduledContent.current.add(contentKey);
+        setTimeout(() => {
+          recentScheduledContent.current.delete(contentKey);
+        }, 5000);
+
+        const scheduledMessage = {
+          id: `msg_${Date.now()}_scheduled`,
+          role: 'assistant',
+          content: cleanContent,
+          timestamp: Date.now(),
+          isScheduled: true,
+          scheduleId: metadata?.schedule_id,
+          originalRequest: metadata?.original_request,
+        };
+
+        setMessages(prev => [...prev, scheduledMessage]);
+
+        // Show a notification
+        show('info', 'Scheduled Message',
+          metadata?.schedule_id
+            ? `Reminder: ${cleanContent.slice(0, 50)}...`
+            : cleanContent.slice(0, 100)
+        );
+      }
+    }
+
+    // Handle alerts
+    if (event.type === 'alert') {
+      show(event.data?.type || 'info', event.data?.title || 'Alert', event.data?.message || '');
+    }
+  }, [show]);
+
+  // Handle status events (from /status/stream SSE stream)
+  const handleStatusEvent = useCallback((event) => {
     if (!event?.data) return;
 
     if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
@@ -69,7 +130,9 @@ function ChatPage() {
     }
   }, []);
 
-  useSSE(handleSSEEvent);
+  // Connect to both SSE streams
+  useChatSSE(handleChatEvent);
+  useStatusSSE(handleStatusEvent);
 
   const handleSend = useCallback(async (content) => {
     const userMessage = {

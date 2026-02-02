@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 function Message({ message }) {
-  const { role, content, timestamp, isStreaming, error } = message;
+  const { role, content, timestamp, isStreaming, error, isScheduled, scheduleId } = message;
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -15,8 +15,17 @@ function Message({ message }) {
 
   return (
     <div className={`message-wrapper ${role}`}>
-      <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''}`}>
-        <div 
+      <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
+        {isScheduled && (
+          <div className="scheduled-badge">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            Scheduled
+          </div>
+        )}
+        <div
           className="message-content"
           dangerouslySetInnerHTML={{ __html: formattedContent }}
         />
