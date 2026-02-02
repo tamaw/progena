@@ -77,13 +77,22 @@ def _build_json_schema_format(model_class: type, name: str) -> dict[str, Any]:
         result = dict(obj)
 
         # For object types, add additionalProperties: false and make all required
-        if result.get("type") == "object" and "properties" in result:
+        if result.get("type") == "object":
+            # Always set additionalProperties to false for strict mode
             result["additionalProperties"] = False
-            # Make all properties required
-            result["required"] = list(result["properties"].keys())
-            # Recursively process nested properties
-            for prop_name, prop_schema in result["properties"].items():
-                result["properties"][prop_name] = _enforce_strict_schema(prop_schema)
+
+            if "properties" in result:
+                # Make all properties required
+                result["required"] = list(result["properties"].keys())
+                # Recursively process nested properties
+                for prop_name, prop_schema in result["properties"].items():
+                    result["properties"][prop_name] = _enforce_strict_schema(prop_schema)
+            else:
+                # Free-form dict (dict[str, Any]) - convert to empty object
+                # OpenAI doesn't support additionalProperties: true, so we make it
+                # an empty object with no allowed properties
+                result["properties"] = {}
+                result["required"] = []
 
         # Process array items
         if "items" in result:

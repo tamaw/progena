@@ -18,7 +18,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, Any
 from collections import deque
 
 import aiohttp
@@ -263,7 +263,7 @@ class TelegramClient:
         # No retry on getUpdates - it's expected to timeout sometimes
         result = await self._api_call("getUpdates", params, retry=False)
 
-        if result is None:
+        if not isinstance(result, list):
             return []
 
         # Update the offset to acknowledge received updates
@@ -460,7 +460,7 @@ class TelegramClient:
                 logger.debug("Rate limit: waiting %.1f seconds", wait_time)
                 await asyncio.sleep(wait_time)
 
-            params = {
+            params: dict[str, Any] = {
                 "chat_id": chat_id,
                 "text": chunk,
             }
@@ -480,9 +480,9 @@ class TelegramClient:
     async def _api_call(
         self,
         method: str,
-        params: Optional[dict] = None,
+        params: Optional[dict[str, Any]] = None,
         retry: bool = True,
-    ) -> Optional[dict]:
+    ) -> Optional[Any]:
         """Make a Telegram Bot API call with retry logic.
 
         Args:

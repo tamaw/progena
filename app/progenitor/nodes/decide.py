@@ -802,16 +802,28 @@ Examples:
         return None, f"Error scheduling task: {e}", None
 
 
-def _format_schedule_result(result: dict) -> str:
-    """Format a schedule task result as a human-readable response."""
-    lines = ["**📅 Task Scheduled**\n"]
-    lines.append(f"**{result.get('description', 'Scheduled task')}**")
-    lines.append(f"  • **ID:** `{result.get('schedule_id')}`")
-    lines.append(f"  • **Next run:** {result.get('next_run', 'Unknown')}")
-    if result.get("recurring"):
-        lines.append("  • **Type:** Recurring")
-    lines.append(f"\n*When triggered, I will: {result.get('instruction', 'execute the task')}*")
-    return "\n".join(lines)
+async def _format_schedule_result(result: dict, llm_client) -> str:
+    """Format a schedule task result as a short, plain-English response."""
+    instruction = result.get("instruction", "complete your scheduled request")
+    prompt = (
+        "Create a short, friendly confirmation for a scheduled task. "
+        "Do not include IDs or exact timestamps. Do not use markdown. "
+        "Focus on what will happen.\n\n"
+        f"Task details: {json.dumps(result, ensure_ascii=False)}"
+    )
+
+    try:
+        response = await llm_client.complete(
+            prompt=prompt,
+            system_prompt="You write concise confirmations for scheduled tasks.",
+            temperature=0.2,
+        )
+        if response:
+            return response.strip()
+    except Exception:
+        pass
+
+    return f"Got it. I’ll {instruction}."
 
 
 def _format_tool_result(tool_name: str, result: dict) -> str:
@@ -1190,7 +1202,7 @@ def create_node(
             if error or result is None:
                 response_text = f"⚠️ **Scheduling Failed**\n\n{error or 'No result'}"
             else:
-                response_text = _format_schedule_result(result)
+                response_text = await _format_schedule_result(result, llm_client)
 
             decision = Decision(
                 action=DecisionAction.ANSWER_DIRECTLY,
