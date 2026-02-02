@@ -713,3 +713,31 @@ Generate a detailed specification for building this component.
                 "config": {},
                 "error": f"Validation error: {e}",
             }
+
+    async def complete(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> str:
+        """Complete a prompt and return the response.
+
+        Simple wrapper around chat() for single-prompt completion.
+        Alias for generate() to match mock client interface.
+
+        Args:
+            prompt: The prompt to complete.
+            system_prompt: Optional system prompt for context.
+            temperature: Sampling temperature (0.0-1.0).
+            max_tokens: Maximum tokens in response.
+
+        Returns:
+            Generated text response.
+        """
+        return await self.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )

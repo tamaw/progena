@@ -272,8 +272,9 @@ print(response.choices[0].message.content)
 ### Core Files
 
 * `data/state/build_state.json` (backlog, messages, ideal_state, verification)
+* `data/state/current_state.json` (user session: messages, tool calls, attachments)
 * `data/state/registry.json` (agents + MCP tools)
-* `data/state/schedule.json`
+* `data/state/schedule.json` (system feature: scheduled tasks, persists beyond sessions)
 * `logs/conversation.jsonl`
 * `logs/decisions.jsonl`
 * `logs/copilot_calls.jsonl`

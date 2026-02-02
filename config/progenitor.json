@@ -5,5 +5,8 @@
   "max_actions_per_cycle": 10,
   "checkpoint_interval_seconds": 30,
   "input_timeout_seconds": 300,
-  "log_level": "info"
+  "log_level": "info",
+  "max_inner_iterations": 20,
+  "min_verification_score": 0.8,
+  "build_confidence_threshold": 0.95
 }

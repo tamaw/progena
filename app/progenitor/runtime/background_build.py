@@ -351,8 +351,9 @@ class BackgroundBuildRunner:
                 self._current_build = None
                 self._current_task = None
 
-            # Update state manager
-            await self.state_manager.update_state({
+            # Update build state with completion info
+            build_state = await self.state_manager.get_build_state()
+            build_state.update({
                 "build_in_progress": False,
                 "last_build_result": {
                     "build_id": build_id,
@@ -361,6 +362,12 @@ class BackgroundBuildRunner:
                     "output_summary": result.output_summary,
                     "error_message": result.error_message,
                 },
+            })
+            await self.state_manager.save_build_state(build_state)
+
+            # Also update current_state to clear the build reference
+            await self.state_manager.update_current_state({
+                "current_build_request": None,
             })
 
             # Trigger completion callback if set

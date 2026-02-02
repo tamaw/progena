@@ -1,4 +1,4 @@
-"""Tests for the schedule management tool."""
+"""Tests for the schedule management tool (simplified model)."""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,7 +11,7 @@ from app.progenitor.tools.schedule import (
     ScheduleResult,
     SCHEDULE_TOOL_SPEC,
 )
-from app.progenitor.state.models import ScheduleEntry, DecisionAction
+from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.runtime.time_utils import utcnow
 
 
@@ -34,9 +34,9 @@ class TestAddScheduledTask:
         assert "Greeting task" in result.message
         assert entry_data is not None
         assert entry_data["instruction"] == "Output the message 'Hello, World!' to the user."
-        assert entry_data["user_request"] == "say hello world"
         assert entry_data["description"] == "Greeting task"
-        assert entry_data["cron_expression"] == "0 9 * * *"
+        assert entry_data["repeat_minutes"] == 1440  # Daily
+        assert "run_at" in entry_data
 
     @pytest.mark.asyncio
     async def test_add_task_in_minutes(self):
@@ -51,21 +51,7 @@ class TestAddScheduledTask:
         assert entry_data is not None
         assert "run_at" in entry_data
         assert entry_data["instruction"] == "Remind the user to stretch and take a break."
-
-    @pytest.mark.asyncio
-    async def test_add_recurring_task(self):
-        """Test adding a recurring task like 'every day at 9am'."""
-        result, entry_data = await add_scheduled_task(
-            user_request="check stock prices",
-            time_expression="every day at 9am",
-            instruction="Check the current stock prices and report them to the user.",
-            recurring=True,
-        )
-
-        assert result.success is True
-        assert entry_data is not None
-        assert "cron_expression" in entry_data
-        assert entry_data["cron_expression"] == "0 9 * * *"
+        assert entry_data.get("repeat_minutes") is None  # One-off
 
     @pytest.mark.asyncio
     async def test_add_task_every_n_minutes(self):
@@ -78,7 +64,7 @@ class TestAddScheduledTask:
 
         assert result.success is True
         assert entry_data is not None
-        assert entry_data["interval_minutes"] == 15
+        assert entry_data["repeat_minutes"] == 15
 
     @pytest.mark.asyncio
     async def test_add_task_invalid_time(self):
@@ -107,8 +93,8 @@ class TestAddScheduledTask:
         assert "send daily summary" in entry_data["description"]
 
     @pytest.mark.asyncio
-    async def test_entry_data_has_correct_action_type(self):
-        """Test that entry_data has correct action_type."""
+    async def test_entry_data_simplified_structure(self):
+        """Test that entry_data has simplified structure."""
         result, entry_data = await add_scheduled_task(
             user_request="test task",
             time_expression="in 5 minutes",
@@ -117,7 +103,16 @@ class TestAddScheduledTask:
 
         assert result.success is True
         assert entry_data is not None
-        assert entry_data["action_type"] == DecisionAction.ANSWER_DIRECTLY.value
+        # Check simplified fields exist
+        assert "id" in entry_data
+        assert "description" in entry_data
+        assert "instruction" in entry_data
+        assert "run_at" in entry_data
+        assert "enabled" in entry_data
+        # Old fields should not exist
+        assert "action_type" not in entry_data
+        assert "action_config" not in entry_data
+        assert "cron_expression" not in entry_data
 
     @pytest.mark.asyncio
     async def test_add_task_tomorrow(self):
@@ -264,7 +259,7 @@ class TestScheduleResult:
 
 
 class TestScheduleEntryIntegration:
-    """Integration tests for ScheduleEntry with new fields."""
+    """Integration tests for ScheduleEntry with simplified model."""
 
     def test_schedule_entry_with_instruction(self):
         """Test ScheduleEntry model with instruction field."""
@@ -272,37 +267,42 @@ class TestScheduleEntryIntegration:
             id="test_123",
             description="Test task",
             instruction="Execute this instruction",
-            user_request="Original user request",
             run_at=utcnow(),
         )
 
         assert entry.instruction == "Execute this instruction"
-        assert entry.user_request == "Original user request"
+        assert entry.run_at is not None
 
-    def test_schedule_entry_defaults(self):
-        """Test ScheduleEntry default values."""
+    def test_schedule_entry_recurring(self):
+        """Test ScheduleEntry with repeat_minutes."""
         entry = ScheduleEntry(
             id="test_456",
-            description="Minimal entry",
+            description="Recurring task",
+            instruction="Do something",
+            run_at=utcnow(),
+            repeat_minutes=60,
         )
 
-        assert entry.instruction is None
-        assert entry.user_request is None
+        assert entry.repeat_minutes == 60
         assert entry.enabled is True
-        assert entry.action_type == DecisionAction.ANSWER_DIRECTLY
 
     def test_schedule_entry_model_dump(self):
-        """Test that model_dump includes new fields."""
+        """Test that model_dump includes simplified fields."""
         entry = ScheduleEntry(
             id="test_789",
             description="Dump test",
             instruction="Test instruction",
-            user_request="Test request",
             run_at=utcnow(),
+            repeat_minutes=30,
         )
 
         data = entry.model_dump()
         assert "instruction" in data
-        assert "user_request" in data
+        assert "run_at" in data
+        assert "repeat_minutes" in data
         assert data["instruction"] == "Test instruction"
-        assert data["user_request"] == "Test request"
+        assert data["repeat_minutes"] == 30
+        # Old fields should not be present
+        assert "cron_expression" not in data
+        assert "user_request" not in data
+        assert "action_type" not in data

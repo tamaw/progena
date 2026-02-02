@@ -2,104 +2,98 @@
 
 ## ⚠️ CRITICAL: Python Virtual Environment
 
-**ALWAYS activate the Python virtual environment before running any Python commands!**
-
+**ALWAYS activate venv before running any Python commands:**
 ```powershell
-# Windows PowerShell
-& D:\tmp\agent\progenitor\.venv\Scripts\Activate.ps1
-
-# Or use the activation script
-.\.venv\Scripts\Activate.ps1
+& .\.venv\Scripts\Activate.ps1  # Windows
 ```
-
 ```bash
-# Linux/Mac
-source .venv/bin/activate
+source .venv/bin/activate  # Linux/Mac
 ```
 
-### Running Commands
+## Architecture Overview
 
-After activating venv, you can run:
+Progenitor is a **dual-loop LangGraph AI agent** implementing the "Last Algorithm" pattern:
 
-```powershell
-# Start the backend
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+**Outer Loop (Perpetual):** `Intake → TimeCheck → EnqueueDue → Decide → [InnerLoop] → Respond → Idle → repeat`
 
-# Run tests
-pytest
+**Inner Loop (Iteration):** `Observe → Think → Plan → Build → Execute → Validate → Verify → Learn`
 
-# Run specific tests
-pytest tests/progenitor/ -v
+The agent runs continuously, processing user input and scheduled tasks. When idle, it backs off exponentially.
 
-# Run the main progenitor agent
-python -m app.progenitor.main
+### Key Components
+- **Backend** (`app/backend/`): FastAPI server with OpenAI-compatible API at `:8000`
+- **Frontend** (`app/frontend/`): React/Vite app at `:5173` (dev) - proxies API calls to backend
+- **Agent** (`app/progenitor/`): The LangGraph loop orchestrating everything
+
+### Data Flow
+```
+User → Frontend → Backend (/v1/chat) → IPC → ProgenitorLoop → LangGraph nodes → LLM
+                                    ↑↓ (async queues)
+                        State persistence:
+                        - current_state.json (user session: messages, tool calls)
+                        - build_state.json (build state: backlog, verification)
+                        - schedule.json (system feature: scheduled tasks)
 ```
 
-### Why This Matters
-
-- All dependencies (uvicorn, fastapi, langchain, etc.) are installed in `.venv`
-- Running without venv will cause "command not found" errors
-- The venv isolates project dependencies from system Python
-
----
-
-## Project Overview
-
-Progenitor is a dual-loop LangGraph AI agent with:
-- **Backend**: FastAPI-based API-only server at `http://localhost:8000`
-- **Frontend**: Standalone React app at `http://localhost:5173` (dev) or `http://localhost:4173` (prod)
-- **Progenitor Agent**: Autonomous planning/execution loop
-
-The frontend proxies `/api`, `/v1`, `/health` requests to the backend.
-
-## Project Structure
-
-```
-app/
-├── backend/         # FastAPI API server (no static files)
-├── frontend/        # Web UI (React/Vite - runs standalone)
-├── progenitor/      # Main agent code
-│   ├── nodes/       # LangGraph nodes
-│   ├── state/       # State management
-│   ├── tools/       # Agent tools
-│   └── llm/         # LLM client wrappers
-tests/               # pytest test suite
-config/              # Configuration files
-docs/                # Documentation
-```
-
-## Key Commands
+## Developer Workflow
 
 | Task | Command |
 |------|---------|
-| Activate venv | `.\.venv\Scripts\Activate.ps1` |
-| Start backend | `python -m uvicorn app.backend.main:app --port 8000` |
-| Start frontend (dev) | `cd app/frontend && npm run dev` |
-| Start frontend (prod) | `cd app/frontend && npm run prod` |
-| Run all tests | `pytest` |
-| Run with coverage | `pytest --cov=app` |
-| Type checking | `mypy app/` |
-| Linting | `ruff check app/` |
+| Start all (dev) | VS Code Task: "Start All (dev)" or run each manually |
+| Run tests | `pytest` (auto-discovers, uses `asyncio_mode = auto`) |
+| Run progenitor tests | `pytest tests/progenitor/ -v` |
+| Type check | `mypy app/` |
+| Lint | `ruff check app/` |
 
-## VS Code Tasks
+**Mock mode** (no real LLM): `$env:PROGENITOR_MOCK_LLM = "true"`
 
-Use the "Start All (dev)" task to run everything, or individual tasks:
-- **Start progenitor agent (venv)** - Runs the agent
-- **Start backend (venv)** - Runs the API server
-- **Start frontend (dev)** - Runs Vite dev server
-- **Start frontend (prod)** - Builds and previews production
-- **Start All (dev)** - Runs all three in parallel (default build task)
-- **Start All (prod)** - Runs all in production mode
+## Project-Specific Patterns
 
-## Environment Variables
+### State Models (Pydantic v2)
+All state models live in `app/progenitor/state/models.py`. Key types:
+- `WorkItem`: Backlog items with `WorkItemType` (BUILD_AGENT, A2A_CALL, SYSTEM_TOOL, etc.)
+- `Decision`: Routing decisions with `DecisionAction` (ANSWER_DIRECTLY, DELEGATE_A2A, BUILD_AGENT, etc.)
+- `ProgenitorState`: TypedDict used by all LangGraph nodes
 
-For demo/testing without real LLM:
-```powershell
-$env:PROGENITOR_MOCK_LLM = "true"
+### Node Pattern
+Nodes in `app/progenitor/nodes/` follow a factory pattern:
+```python
+def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], Awaitable[dict]]:
+    async def node(state: ProgenitorState) -> dict:
+        # Node logic - return partial state update
+        return {"key": "value"}
+    return node
 ```
 
-For production with Azure OpenAI:
-```powershell
-$env:AZURE_OPENAI_API_KEY = "your-key"
-$env:AZURE_OPENAI_ENDPOINT = "https://your-endpoint.openai.azure.com"
-```
+### Graph Routing
+Routing functions in `app/progenitor/graph.py` determine flow:
+- `should_continue()`: `pick_next` | `idle` | `end`
+- `route_after_decide()`: `planner` | `pick_next` | `respond`
+- `route_after_validate()`: `register` | `pick_next`
+
+### Configuration Hierarchy
+Environment variables > JSON config files. Key configs:
+- `PROGENITOR_LLM_PROVIDER`: `azure` | `openai`
+- `AZURE_OPENAI_*`: Azure deployment settings
+- `PROGENITOR_MOCK_LLM`: Enable mock mode for testing
+
+See `app/progenitor/config.py` for full dataclass definitions.
+
+### Testing Conventions
+- Tests use `pytest-asyncio` with `asyncio_mode = auto`
+- Mock the LLM client: `mock_llm = AsyncMock(); mock_llm.decide.return_value = {...}`
+- State managers are mocked: `mock_state_manager = AsyncMock()`
+- Example: `tests/progenitor/test_nodes.py`
+
+### Secret Redaction
+`redact_secrets()` in `app/progenitor/state/models.py` auto-redacts API keys in logs. Patterns cover OpenAI, Azure, GitHub, Anthropic, and AWS keys.
+
+## Key Files
+
+- `app/progenitor/graph.py` - LangGraph topology and routing
+- `app/progenitor/runtime/loop.py` - Perpetual loop execution
+- `app/progenitor/state/models.py` - All Pydantic models
+- `app/progenitor/config.py` - Configuration dataclasses
+- `app/backend/main.py` - FastAPI endpoints
+- `docs/loop.spec.md` - The "Last Algorithm" specification
+- `docs/ARCHITECTURE_DIAGRAM.md` - Visual architecture

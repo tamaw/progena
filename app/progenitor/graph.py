@@ -158,6 +158,7 @@ def create_progenitor_graph(
     tool_registry,
     config,
     worktrees_dir,
+    event_pusher=None,
 ):
     """Create the LangGraph for Progenitor.
 
@@ -167,6 +168,7 @@ def create_progenitor_graph(
         tool_registry: ToolRegistry instance for agent/tool discovery.
         config: ProgenitorConfig instance with all configuration.
         worktrees_dir: Path to worktrees directory.
+        event_pusher: Optional callback to push events to clients via IPC.
 
     Returns a compiled StateGraph that implements the perpetual loop:
     Intake → TimeCheck → EnqueueDue → Decide → [Planner] → PickNext →
@@ -178,11 +180,11 @@ def create_progenitor_graph(
         "intake": intake.create_node(state_manager),
         "time_check": time_check.create_node(config.runtime.timezone),
         "enqueue_due": enqueue_due.create_node(state_manager),
-        "decide": decide.create_node(llm_client, tool_registry, state_manager),
+        "decide": decide.create_node(llm_client, tool_registry, state_manager, config),
         "planner": planner.create_node(llm_client, state_manager),
         "pick_next": pick_next.create_node(),
         "worktree_prep": worktree_prep.create_node(worktrees_dir),
-        "act": act.create_node(llm_client, tool_registry, config, worktrees_dir, state_manager),
+        "act": act.create_node(llm_client, tool_registry, config, worktrees_dir, state_manager, event_pusher),
         "validate": validate.create_node(config),
         "register": register.create_node(tool_registry, state_manager, config),
         "commit_core": commit_core.create_node(state_manager),

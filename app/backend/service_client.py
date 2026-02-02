@@ -75,8 +75,11 @@ class ServiceProgenitorClient:
         """
         if not self._service or not self._service.is_initialized:
             await self.start()
+        service = self._service
+        if service is None:
+            raise RuntimeError("Progenitor service failed to start")
 
-        return await self._service.handle_message(message, request_id)
+        return await service.handle_message(message, request_id)
 
     async def send_message_stream(
         self,
@@ -94,8 +97,11 @@ class ServiceProgenitorClient:
         """
         if not self._service or not self._service.is_initialized:
             await self.start()
+        service = self._service
+        if service is None:
+            raise RuntimeError("Progenitor service failed to start")
 
-        async for chunk in self._service.handle_message_stream(message, request_id):
+        async for chunk in service.handle_message_stream(message, request_id):
             yield chunk
 
     @property

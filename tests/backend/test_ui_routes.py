@@ -453,3 +453,47 @@ class TestSSEConnection:
 
         # Memory should be tracked
         assert "memory_mb" in data
+
+
+class TestSplitSSEEndpoints:
+    """Tests for the split SSE endpoints (/chat and /status/stream).
+
+    Note: SSE streaming tests are skipped as they hang waiting for the infinite stream.
+    The endpoints are verified indirectly via route registration checks.
+    """
+
+    def test_chat_endpoint_is_registered(self, client):
+        """Test that /api/ui/chat endpoint is registered (via OpenAPI)."""
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        openapi = response.json()
+        paths = openapi.get("paths", {})
+        assert "/api/ui/chat" in paths, "Chat SSE endpoint should be registered"
+
+    def test_status_stream_endpoint_is_registered(self, client):
+        """Test that /api/ui/status/stream endpoint is registered."""
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        openapi = response.json()
+        paths = openapi.get("paths", {})
+        assert "/api/ui/status/stream" in paths, "Status stream SSE endpoint should be registered"
+
+    def test_legacy_events_endpoint_is_registered(self, client):
+        """Test that /api/ui/events legacy endpoint is still registered."""
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        openapi = response.json()
+        paths = openapi.get("paths", {})
+        assert "/api/ui/events" in paths, "Legacy events SSE endpoint should be registered"
+
+    def test_broadcast_functions_exist(self):
+        """Test that the new broadcast functions are available."""
+        from app.backend.ui_routes import (
+            broadcast_event,
+            broadcast_chat_event,
+            broadcast_status_event,
+        )
+        # Just verify they're callable
+        assert callable(broadcast_event)
+        assert callable(broadcast_chat_event)
+        assert callable(broadcast_status_event)

@@ -110,12 +110,21 @@ Format each approach clearly with numbered sections.""",
                 })
 
             if state_manager:
+                # Log decision for audit trail
                 await state_manager.log_decision({
                     "event": "thinking_phase",
                     "iteration": iteration,
                     "approaches_generated": len(think_output.approaches),
                     "approach_names": [a.name for a in think_output.approaches],
                     "recommended_approach": think_output.recommended_approach_id,
+                    "timestamp": utcnow_isoformat(),
+                })
+                # Track LLM call in build_messages (build_state.json)
+                await state_manager.add_build_message({
+                    "phase": "think",
+                    "iteration": iteration,
+                    "prompt_preview": prompt[:500] + "..." if len(prompt) > 500 else prompt,
+                    "response_preview": response[:500] + "..." if len(response) > 500 else response,
                     "timestamp": utcnow_isoformat(),
                 })
 

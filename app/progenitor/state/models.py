@@ -44,8 +44,7 @@ class DecisionAction(str, Enum):
     BUILD_MCP = "build_mcp"
     UPGRADE = "upgrade"
     MIXED = "mixed"
-    SCHEDULE = "schedule"
-    SYSTEM_TOOL = "system_tool"  # For internal system operations
+    SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)
 
 
 # Patterns for secret redaction - (pattern, replacement_or_handler)
@@ -226,27 +225,23 @@ class Decision(BaseModel):
 class ScheduleEntry(BaseModel):
     """A scheduled task entry.
 
-    Supports both recurring tasks (via cron_expression or interval_minutes)
-    and one-off tasks (via run_at). One-off tasks are automatically disabled
-    after execution.
+    Simplified model:
+    - One-off tasks: Just set `run_at`, leave `repeat_minutes` as None
+    - Recurring tasks: Set `run_at` for first run, `repeat_minutes` for interval
 
-    The `instruction` field contains a processed prompt that will be executed
-    at the scheduled time as if it were a new user request to the agent.
+    After execution, `last_run` is updated. For one-off tasks, having
+    `last_run` set means it's complete (won't re-trigger).
+    For recurring tasks, `run_at` is updated to the next occurrence.
     """
     model_config = {"use_enum_values": True}
 
     id: str
     description: str
-    instruction: Optional[str] = None  # Processed instruction to execute at scheduled time
-    user_request: Optional[str] = None  # Original user request for reference
-    cron_expression: Optional[str] = None  # For recurring (e.g., "0 9 * * *")
-    interval_minutes: Optional[int] = None  # Simple recurring interval
-    run_at: Optional[datetime] = None  # For one-off
+    instruction: str  # What the agent should do at the scheduled time
+    run_at: datetime  # When to execute (updated for recurring tasks)
+    repeat_minutes: Optional[int] = None  # If set, repeat every N minutes
+    last_run: Optional[datetime] = None  # When it last executed
     enabled: bool = True
-    action_type: DecisionAction = DecisionAction.ANSWER_DIRECTLY
-    action_config: dict[str, Any] = Field(default_factory=dict)
-    last_run: Optional[datetime] = None
-    next_run: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -366,6 +361,7 @@ class InnerLoopState(TypedDict, total=False):
     """
     # Build control
     build_in_progress: bool  # True while building, blocks new builds
+    build_id: Optional[str]  # Unique identifier for the current build
     build_started_at: Optional[str]  # ISO timestamp when build started
     build_task_description: Optional[str]  # Human-readable description of build task
     build_messages: list[dict[str, Any]]  # LLM messages specific to build loop only

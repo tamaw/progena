@@ -5,17 +5,19 @@ Handles:
 - A2A calls to existing agents
 - MCP tool calls
 - Copilot builds for new agents/tools
+- User communication tools (say_to_user, ask_user)
 """
 
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Coroutine, Any, TYPE_CHECKING
+from typing import Callable, Coroutine, Any, Optional, TYPE_CHECKING
 
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
 from ..state.helpers import normalize_work_item
 from ..tools.copilot import CopilotCLI
 from ..tools.mcp import MCPClient, A2AClient
+from ..tools.user_communication import UserCommunicationTools, USER_COMMUNICATION_TOOLS
 from ..runtime.time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
@@ -24,12 +26,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Type alias for event pusher callback
+EventPusher = Callable[[str, str, Optional[dict[str, Any]]], Coroutine[Any, Any, None]]
+
+
 def create_node(
     llm_client,
     tool_registry,
     config: "ProgenitorConfig",
     worktrees_dir: Path,
     state_manager=None,
+    event_pusher: Optional[EventPusher] = None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the act node function.
 
@@ -39,6 +46,7 @@ def create_node(
         config: ProgenitorConfig with copilot configuration.
         worktrees_dir: Path to worktrees directory.
         state_manager: Optional state manager for logging.
+        event_pusher: Optional callback to push events to clients via IPC.
     """
     copilot_cli = CopilotCLI(
         config_path=config.copilot.config_path,
@@ -46,6 +54,11 @@ def create_node(
     )
     mcp_client = MCPClient()
     a2a_client = A2AClient()
+
+    # Initialize user communication tools if event_pusher is provided
+    user_comm_tools: Optional[UserCommunicationTools] = None
+    if event_pusher:
+        user_comm_tools = UserCommunicationTools(event_pusher=event_pusher)
 
     async def act_node(state: ProgenitorState) -> ProgenitorState:
         """Execute the current work item."""
@@ -74,6 +87,7 @@ def create_node(
                 copilot_cli=copilot_cli,
                 llm_client=llm_client,
                 worktrees_dir=worktrees_dir,
+                user_comm_tools=user_comm_tools,
             )
         except Exception as e:
             logger.exception(f"Error executing work item {work_item.id}")
@@ -86,6 +100,28 @@ def create_node(
         else:
             work_item.mark_completed(result)
             logger.info(f"Work item {work_item.id} completed successfully")
+
+            # Update schedule entry after execution
+            if work_item.item_type == WorkItemType.SCHEDULED and state_manager:
+                schedule_id = work_item.context.get("schedule_id")
+                repeat_minutes = work_item.context.get("repeat_minutes")
+                if schedule_id:
+                    try:
+                        from ..runtime.time_utils import utcnow
+                        now = utcnow()
+                        updates = {"last_run": utcnow_isoformat()}
+
+                        # For recurring tasks, advance run_at
+                        if repeat_minutes:
+                            from datetime import timedelta
+                            next_run = now + timedelta(minutes=repeat_minutes)
+                            updates["run_at"] = next_run.isoformat()
+                            logger.info(f"Advancing recurring schedule {schedule_id} to {next_run}")
+
+                        await state_manager.update_schedule_entry(schedule_id, updates)
+                        logger.info(f"Updated schedule entry {schedule_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to update schedule entry: {e}")
 
         # Update in backlog
         for i, item in enumerate(backlog):
@@ -124,6 +160,7 @@ async def _execute_work_item(
     copilot_cli: CopilotCLI,
     llm_client,
     worktrees_dir: Path,
+    user_comm_tools: Optional[UserCommunicationTools] = None,
 ) -> tuple[dict | None, str | None]:
     """Execute a work item and return (result, error)."""
     item_type = work_item.item_type
@@ -141,13 +178,13 @@ async def _execute_work_item(
         return await _execute_upgrade(work_item, tool_registry, copilot_cli, worktrees_dir)
 
     elif item_type == WorkItemType.SCHEDULED:
-        return await _execute_scheduled(work_item, tool_registry, a2a_client, mcp_client, llm_client)
+        return await _execute_scheduled(work_item, tool_registry, a2a_client, mcp_client, llm_client, user_comm_tools)
 
     elif item_type == WorkItemType.DIRECT_ANSWER:
         return {"message": "Direct answer provided"}, None
 
     elif item_type == WorkItemType.SYSTEM_TOOL:
-        return await _execute_system_tool(work_item, tool_registry, llm_client)
+        return await _execute_system_tool(work_item, tool_registry, llm_client, user_comm_tools)
 
     return None, f"Unknown item type: {item_type}"
 
@@ -214,6 +251,7 @@ async def _execute_build(
 
     copilot_prompt = work_item.context.get("copilot_prompt")
     spec_file_path = work_item.context.get("spec_file_path")
+    spec: Optional[dict[str, Any]] = None  # Only set in fallback path
 
     if copilot_prompt:
         logger.info(f"BUILD: Using copilot_prompt from PLAN ({len(copilot_prompt)} chars)")
@@ -228,17 +266,22 @@ async def _execute_build(
             capabilities=capabilities,
         )
         logger.info(f"BUILD: spec generated, length={len(str(spec))}")
-        logger.info(f"BUILD: spec name={spec.get('name')}, kind={spec.get('kind')}")
+        if spec:  # Type guard for Pylance
+            logger.info(f"BUILD: spec name={spec.get('name')}, kind={spec.get('kind')}")
 
-        # Include spec_doc content in fallback
-        spec_doc_content = ""
-        spec_doc_data = work_item.context.get("spec_doc")
-        if spec_doc_data:
-            spec_doc_content = spec_doc_data.get("content", "")
-            spec["spec_doc_content"] = spec_doc_content
+            # Include spec_doc content in fallback
+            spec_doc_content = ""
+            spec_doc_data = work_item.context.get("spec_doc")
+            if spec_doc_data:
+                spec_doc_content = spec_doc_data.get("content", "")
+                spec["spec_doc_content"] = spec_doc_content
 
-        prompt = llm_client.prompts.get_copilot_task_prompt(spec)
-        logger.info(f"BUILD: Generated fallback copilot prompt, length={len(prompt)}")
+            prompt = llm_client.prompts.get_copilot_task_prompt(spec)
+            logger.info(f"BUILD: Generated fallback copilot prompt, length={len(prompt)}")
+        else:
+            # If spec generation failed, use a basic prompt
+            prompt = f"Build an agent for: {work_item.description}"
+            logger.warning("BUILD: spec generation returned empty, using basic prompt")
 
     logger.info(f"BUILD: Prompt preview: {prompt[:300]}...")
 
@@ -254,9 +297,9 @@ async def _execute_build(
     )
     logger.info(f"BUILD: Copilot completed, success={build_result.get('success')}")
 
-    result = {"build_result": build_result}
-    # Include spec info if we had a fallback
-    if not copilot_prompt:
+    result: dict[str, Any] = {"build_result": build_result}
+    # Include spec info if we had a fallback (spec is only defined when copilot_prompt is None)
+    if not copilot_prompt and spec is not None:
         result["spec"] = spec
 
     if not build_result.get("success"):
@@ -305,12 +348,16 @@ async def _execute_scheduled(
     a2a_client: A2AClient,
     mcp_client: MCPClient,
     llm_client,
+    user_comm_tools: Optional[UserCommunicationTools] = None,
 ) -> tuple[dict | None, str | None]:
     """Execute a scheduled task.
 
     If the schedule has an instruction, run it through the LLM as if it were
     a new user request. This allows scheduled tasks to invoke other tools,
     A2A agents, or generate responses.
+
+    When user_comm_tools is available, the result can be sent to the user
+    via IPC events.
     """
     action_type = work_item.context.get("action_type")
     action_config = work_item.context.get("action_config", {})
@@ -321,23 +368,91 @@ async def _execute_scheduled(
         logger.info(f"Executing scheduled instruction: {instruction[:100]}...")
 
         try:
-            # Generate a response to the instruction as if it were a user request
-            # This can trigger further actions like A2A calls based on LLM decision
-            response = await llm_client.complete(
-                prompt=instruction,
-                system_prompt="""You are Progenitor, an AI assistant executing a scheduled task.
+            # Build a system prompt that includes tool instructions if available
+            tool_instructions = ""
+            if user_comm_tools:
+                tool_instructions = """
+You have access to user communication tools. When you need to send a message to the user,
+include in your response:
+- To send a message: Start with "SAY:" followed by the message
+- To ask a question: Start with "ASK:" followed by the question
+- To send a notification: Start with "NOTIFY:" followed by level (info/warning/error/success), then "|", then the message
+
+Example: "SAY: Hello! This is your scheduled reminder."
+Example: "ASK: Would you like me to continue with the next task?"
+Example: "NOTIFY: success | Your scheduled task completed successfully."
+"""
+
+            system_prompt = f"""You are Progenitor, an AI assistant executing a scheduled task.
 The following is an instruction that was scheduled to run at this time.
 Execute the instruction and provide the response.
-If the instruction requires calling another agent or tool, indicate that in your response.""",
+If the instruction requires calling another agent or tool, indicate that in your response.
+{tool_instructions}"""
+
+            # Generate a response to the instruction as if it were a user request
+            response = await llm_client.complete(
+                prompt=instruction,
+                system_prompt=system_prompt,
             )
 
             logger.info(f"Scheduled instruction completed: {response[:100] if response else 'empty'}...")
+
+            # Process the response for user communication directives
+            user_message_sent = False
+            if user_comm_tools and response:
+                response_lower = response.strip().lower()
+
+                # Check for SAY directive
+                if response_lower.startswith("say:"):
+                    message = response[4:].strip()
+                    await user_comm_tools.say_to_user(
+                        message=message,
+                        context=f"Scheduled task: {instruction[:50]}...",
+                    )
+                    user_message_sent = True
+                    logger.info("Sent scheduled message to user via say_to_user")
+
+                # Check for ASK directive
+                elif response_lower.startswith("ask:"):
+                    question = response[4:].strip()
+                    await user_comm_tools.ask_user(
+                        question=question,
+                        context=f"Scheduled task: {instruction[:50]}...",
+                    )
+                    user_message_sent = True
+                    logger.info("Sent question to user via ask_user")
+
+                # Check for NOTIFY directive
+                elif response_lower.startswith("notify:"):
+                    parts = response[7:].strip().split("|", 1)
+                    if len(parts) == 2:
+                        level = parts[0].strip().lower()
+                        body = parts[1].strip()
+                        if level not in ("info", "warning", "error", "success"):
+                            level = "info"
+                        await user_comm_tools.notify_user(
+                            title="Scheduled Task",
+                            body=body,
+                            level=level,
+                        )
+                        user_message_sent = True
+                        logger.info("Sent notification to user via notify_user")
+
+                # If no directive but response looks like a message to user, send it
+                elif not user_message_sent and _looks_like_user_message(response, instruction):
+                    await user_comm_tools.say_to_user(
+                        message=response,
+                        context=f"Scheduled task: {instruction[:50]}...",
+                    )
+                    user_message_sent = True
+                    logger.info("Sent implied message to user via say_to_user")
 
             return {
                 "message": "Scheduled instruction executed",
                 "instruction": instruction,
                 "response": response,
                 "schedule_id": work_item.context.get("schedule_id"),
+                "user_notified": user_message_sent,
             }, None
 
         except Exception as e:
@@ -367,18 +482,63 @@ If the instruction requires calling another agent or tool, indicate that in your
     return {"message": "Scheduled task executed"}, None
 
 
+def _looks_like_user_message(response: str, instruction: str) -> bool:
+    """Heuristic to determine if a response should be sent to the user.
+
+    Returns True if the instruction seems to be requesting communication with the user.
+    """
+    instruction_lower = instruction.lower()
+    user_comm_keywords = [
+        "say", "tell", "reply", "respond", "message", "notify",
+        "remind", "alert", "inform", "let the user know",
+        "to user", "to the user", "send message",
+        "hello world",  # Common test phrase
+    ]
+    return any(keyword in instruction_lower for keyword in user_comm_keywords)
+
+
 async def _execute_system_tool(
     work_item: WorkItem,
     tool_registry,
     llm_client,
+    user_comm_tools: Optional[UserCommunicationTools] = None,
 ) -> tuple[dict | None, str | None]:
     """Execute an internal system tool.
 
-    System tools are built-in operations like agent discovery and schedule management.
+    System tools are built-in operations like agent discovery, schedule management,
+    and user communication tools.
     """
     tool_name = work_item.context.get("tool_name", work_item.target_tool)
+    tool_params = work_item.context.get("params", {})
 
-    if tool_name == "rediscover_agents":
+    # User communication tools
+    if tool_name in ("say_to_user", "say", "tell", "to_user"):
+        if not user_comm_tools:
+            return None, "User communication tools not available"
+        message = tool_params.get("message", work_item.description)
+        context = tool_params.get("context")
+        result = await user_comm_tools.say_to_user(message=message, context=context)
+        return result, None
+
+    elif tool_name in ("ask_user", "ask", "question"):
+        if not user_comm_tools:
+            return None, "User communication tools not available"
+        question = tool_params.get("question", work_item.description)
+        context = tool_params.get("context")
+        options = tool_params.get("options")
+        result = await user_comm_tools.ask_user(question=question, context=context, options=options)
+        return result, None
+
+    elif tool_name in ("notify_user", "notify", "alert"):
+        if not user_comm_tools:
+            return None, "User communication tools not available"
+        title = tool_params.get("title", "Notification")
+        body = tool_params.get("body", work_item.description)
+        level = tool_params.get("level", "info")
+        result = await user_comm_tools.notify_user(title=title, body=body, level=level)
+        return result, None
+
+    elif tool_name == "rediscover_agents":
         from ..tools.agent_discovery import discover_agents
         from pathlib import Path
 
@@ -428,7 +588,6 @@ async def _execute_system_tool(
             time_expression=tool_params.get("time_expression", ""),
             instruction=tool_params.get("instruction", ""),
             description=tool_params.get("description"),
-            recurring=tool_params.get("recurring", False),
         )
 
         if result.success and entry_data:
@@ -494,6 +653,24 @@ async def _execute_system_tool(
                 "description": "Return the current UTC time",
                 "type": "system_tool",
                 "capabilities": ["time", "clock"],
+            },
+            {
+                "name": "say_to_user",
+                "description": "Send a message to the user via IPC. Aliases: say, tell, to_user",
+                "type": "system_tool",
+                "capabilities": ["user_communication", "messaging", "say", "tell"],
+            },
+            {
+                "name": "ask_user",
+                "description": "Ask the user a question via IPC. Aliases: ask, question",
+                "type": "system_tool",
+                "capabilities": ["user_communication", "questioning", "ask"],
+            },
+            {
+                "name": "notify_user",
+                "description": "Send a notification to the user with title, body, and level",
+                "type": "system_tool",
+                "capabilities": ["user_communication", "notifications", "alerts"],
             },
         ]
 

@@ -180,8 +180,31 @@ class ProgenitorLoop:
         }
 
         # Load persisted state (recover from previous run)
-        persisted = await self.state_manager.get_state()
-        self._state.update(persisted)
+        # Load from multiple files:
+        # - current_state.json: user session state (messages, tool calls)
+        # - build_state.json: build state (backlog, build progress)
+        # - schedule.json: scheduled tasks (system feature, persists beyond sessions)
+        current_state = await self.state_manager.get_current_state()
+        build_state = await self.state_manager.get_build_state()
+        schedule_entries = await self.state_manager.get_schedule()
+
+        # Merge: progenitor state takes precedence for operational fields
+        self._state.update(current_state)
+
+        # Load schedule from schedule.json (system feature, not user session)
+        self._state["schedule"] = [e.model_dump() if hasattr(e, "model_dump") else e for e in schedule_entries]
+
+        # Merge build-specific fields from build_state
+        for key in ["build_in_progress", "build_phase", "build_started_at",
+                    "build_task_description", "build_messages", "ideal_state",
+                    "current_iteration", "verification_score", "best_artefact_score",
+                    "spec_doc", "verification_reports", "lessons_learned", "artefacts"]:
+            if key in build_state:
+                self._state[key] = build_state[key]
+        # Backlog comes from build_state (build work items)
+        if "backlog" in build_state:
+            self._state["backlog"] = build_state["backlog"]
+
         self._state["run_id"] = run_id  # New run ID for this session
 
         logger.info("Starting perpetual loop (run_id: %s)", run_id)
@@ -711,7 +734,11 @@ class ProgenitorLoop:
             return None
 
     async def _check_pending_work(self, state: dict[str, Any]) -> bool:
-        """Check if there's pending work in backlog or schedule."""
+        """Check if there's pending work in backlog or schedule.
+
+        Reloads schedule from schedule.json to pick up any new scheduled tasks
+        (schedule is a system feature that persists beyond user sessions).
+        """
         backlog = state.get("backlog", [])
         pending = [
             item for item in backlog
@@ -721,14 +748,22 @@ class ProgenitorLoop:
         if pending:
             return True
 
-        # Check schedule for due items
-        schedule = state.get("schedule", [])
-        schedule_dicts: list[dict[str, Any]] = []
-        for item in schedule:
-            if hasattr(item, "model_dump"):
-                schedule_dicts.append(item.model_dump())
-            elif isinstance(item, dict):
-                schedule_dicts.append(item)
+        # Reload schedule from schedule.json (system feature, may have been updated)
+        try:
+            schedule_entries = await self.state_manager.get_schedule()
+            schedule_dicts: list[dict[str, Any]] = [
+                e.model_dump() if hasattr(e, "model_dump") else e for e in schedule_entries
+            ]
+            # Update state with latest schedule
+            state["schedule"] = schedule_dicts
+        except Exception as e:
+            logger.warning("Failed to reload schedule: %s", e)
+            schedule_dicts = []
+            for item in state.get("schedule", []):
+                if hasattr(item, "model_dump"):
+                    schedule_dicts.append(item.model_dump())
+                elif isinstance(item, dict):
+                    schedule_dicts.append(item)
 
         if schedule_dicts:
             due_items = self._scheduler.get_due_items(schedule_dicts, utcnow())
@@ -742,45 +777,85 @@ class ProgenitorLoop:
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
         """Save full recoverable state checkpoint.
 
-        Saves all state needed to recover from a crash, not just metadata.
+        State is split across two files:
+        - build_state.json: Agent builds only
+        - current_state.json: Progenitor agent state
+
         Per SPEC: restart-safe checkpoints (write state every cycle).
         """
-        # Core recoverable state
-        checkpoint = {
-            # Metadata
-            "run_id": state.get("run_id"),
-            "cycle_count": state.get("cycle_count", 0),
-            "last_checkpoint": utcnow_isoformat(),
-
-            # Essential state for recovery
-            "actions_this_cycle": state.get("actions_this_cycle", 0),
-            "shutdown_requested": state.get("shutdown_requested", False),
-
-            # Conversation state
-            "messages": state.get("messages", []),
-
-            # Work items
-            "backlog": self._serialize_backlog(state.get("backlog", [])),
-
-            # Schedule
-            "schedule": state.get("schedule", []),
-
-            # Current iteration state (for inner loop recovery)
+        # Build state checkpoint (agent builds only)
+        build_checkpoint = {
+            "build_in_progress": state.get("build_in_progress", False),
+            "build_id": state.get("build_id"),
+            "build_started_at": state.get("build_started_at"),
+            "build_task_description": state.get("build_task_description"),
+            "build_phase": state.get("build_phase"),
+            "build_messages": state.get("build_messages", []),
+            "ideal_state": None,
             "current_iteration": state.get("current_iteration", 0),
             "verification_score": state.get("verification_score"),
             "best_artefact_score": state.get("best_artefact_score"),
+            "spec_doc": state.get("spec_doc"),
+            "backlog": self._serialize_backlog(state.get("backlog", [])),
+            "verification_reports": state.get("verification_reports", []),
+            "lessons_learned": state.get("lessons_learned", []),
+            "artefacts": state.get("artefacts", []),
+            "clarification_needed": state.get("clarification_needed", False),
+            "clarification_question": state.get("clarification_question"),
+            "clarification_context": state.get("clarification_context"),
+            "awaiting_clarification": state.get("awaiting_clarification", False),
         }
 
         # Only include ideal_state if it exists and is serializable
         ideal_state = state.get("ideal_state")
         if ideal_state:
             if hasattr(ideal_state, "model_dump"):
-                checkpoint["ideal_state"] = ideal_state.model_dump()
+                build_checkpoint["ideal_state"] = ideal_state.model_dump()
             elif isinstance(ideal_state, dict):
-                checkpoint["ideal_state"] = ideal_state
+                build_checkpoint["ideal_state"] = ideal_state
 
-        await self.state_manager.save_state(checkpoint)
-        logger.debug("Checkpointed state at cycle %d", checkpoint["cycle_count"])
+        await self.state_manager.save_build_state(build_checkpoint)
+
+        # Current state checkpoint (progenitor agent state - user session)
+        # NOTE: schedule is NOT included here - it's saved to schedule.json separately
+        current_checkpoint = {
+            "run_id": state.get("run_id"),
+            "cycle_count": state.get("cycle_count", 0),
+            "actions_this_cycle": state.get("actions_this_cycle", 0),
+            "shutdown_requested": state.get("shutdown_requested", False),
+            "last_checkpoint": utcnow_isoformat(),
+            "messages": self._serialize_messages(state.get("messages", [])),
+            # schedule is stored in schedule.json (system feature, not user session)
+            "tool_calls": state.get("tool_calls", []),  # Session tool calls
+            "attachments": state.get("attachments", []),  # Attachment path links
+            "current_input": state.get("current_input"),
+            "pending_response": state.get("pending_response"),
+            "current_decision": self._serialize_decision(state.get("current_decision")),
+            "current_build_request": state.get("build_id") if state.get("build_in_progress") else None,
+        }
+
+        await self.state_manager.save_current_state(current_checkpoint)
+        logger.debug("Checkpointed state at cycle %d", current_checkpoint["cycle_count"])
+
+    def _serialize_messages(self, messages: list) -> list:
+        """Serialize message objects for checkpoint."""
+        serialized = []
+        for msg in messages:
+            if hasattr(msg, "model_dump"):
+                serialized.append(msg.model_dump())
+            elif isinstance(msg, dict):
+                serialized.append(msg)
+        return serialized
+
+    def _serialize_schedule(self, schedule: list) -> list:
+        """Serialize schedule entries for checkpoint."""
+        serialized = []
+        for item in schedule:
+            if hasattr(item, "model_dump"):
+                serialized.append(item.model_dump())
+            elif isinstance(item, dict):
+                serialized.append(item)
+        return serialized
 
     def _serialize_backlog(self, backlog: list) -> list:
         """Serialize backlog items for checkpoint."""
@@ -794,6 +869,16 @@ class ProgenitorLoop:
                 # Skip items that can't be serialized
                 logger.warning("Skipping non-serializable backlog item: %s", type(item))
         return serialized
+
+    def _serialize_decision(self, decision: Any) -> Optional[dict]:
+        """Serialize decision object for checkpoint."""
+        if decision is None:
+            return None
+        if hasattr(decision, "model_dump"):
+            return decision.model_dump()
+        elif isinstance(decision, dict):
+            return decision
+        return None
 
     async def enqueue_input(self, message: str, timeout: Optional[float] = 30.0) -> bool:
         """Add a message to the input queue.

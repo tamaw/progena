@@ -32,7 +32,6 @@ class ChatServerConfig:
     progenitor_ipc_enabled: bool = True  # Use socket IPC instead of subprocess
     progenitor_ipc_host: str = "127.0.0.1"  # IPC server host
     progenitor_ipc_port: int = 9500  # IPC server port
-    progenitor_ipc_auto_start: bool = True  # Auto-start Progenitor subprocess with IPC
 
     # API settings
     api_title: str = "Progenitor Chat API"
@@ -67,7 +66,6 @@ class ChatServerConfig:
             progenitor_ipc_enabled=env_bool("CHAT_SERVER_IPC_ENABLED", True),
             progenitor_ipc_host=os.getenv("CHAT_SERVER_IPC_HOST", "127.0.0.1"),
             progenitor_ipc_port=env_int("CHAT_SERVER_IPC_PORT", 9500),
-            progenitor_ipc_auto_start=env_bool("CHAT_SERVER_IPC_AUTO_START", True),
             # API settings
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),

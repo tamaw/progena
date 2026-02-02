@@ -39,8 +39,9 @@ scripts/
 data/
 ├── state/                  # Runtime state (gitignored)
 │   ├── build_state.json    # Build state (backlog, messages, ideal_state)
+│   ├── current_state.json  # User session state (messages, tool calls)
 │   ├── registry.json       # Registered agents/tools
-│   └── schedule.json       # Scheduled tasks
+│   └── schedule.json       # Scheduled tasks (system feature, persists beyond sessions)
 │
 └── prompts/                # Editable prompts
     ├── genesis.md          # System prompt

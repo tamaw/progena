@@ -271,7 +271,7 @@ USER INPUT
 │                 │
 │  • Messages     │
 │  • Backlog      │
-│  • Schedule     │
+│  • Schedule*    │  ←── *from schedule.json (system feature)
 └────────┬────────┘
          │
          ▼

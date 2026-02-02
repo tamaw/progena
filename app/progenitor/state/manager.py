@@ -61,6 +61,10 @@ from ..runtime.time_utils import utcnow_isoformat
 class StateManager:
     """Manages persistence of Progenitor state with file locking.
 
+    State is split into two files:
+    - build_state.json: Agent build process only (inner loop, LLM messages, verification)
+    - current_state.json: Progenitor agent operational state (chat, schedule, tool calls)
+
     Provides:
     - Atomic writes for crash safety
     - File locking for concurrent access
@@ -76,7 +80,8 @@ class StateManager:
     """
 
     CORE_FILES: dict[str, str] = {
-        "build_state": "build_state.json",
+        "build_state": "build_state.json",      # Agent builds only
+        "current_state": "current_state.json",  # Progenitor agent state
         "registry": "registry.json",
         "schedule": "schedule.json",
     }
@@ -150,20 +155,43 @@ class StateManager:
         self._cleanup_stale_temp_files()
 
         defaults = {
+            # build_state.json - Agent builds ONLY (inner loop)
             "build_state": {
+                "build_in_progress": False,
+                "build_id": None,
+                "build_started_at": None,
+                "build_task_description": None,
+                "build_phase": None,
+                "build_messages": [],              # LLM messages during build (Copilot CLI, etc.)
+                "ideal_state": None,
+                "current_iteration": 0,
+                "verification_score": 0.0,
+                "best_artefact_score": 0.0,
+                "spec_doc": None,
+                "backlog": [],                     # Build work items only
+                "verification_reports": [],
+                "lessons_learned": [],
+                "artefacts": [],
+                "clarification_needed": False,
+                "clarification_question": None,
+                "clarification_context": None,
+                "awaiting_clarification": False,
+            },
+            # current_state.json - Progenitor agent operational state (user session)
+            "current_state": {
+                "run_id": utcnow_isoformat(),
                 "cycle_count": 0,
                 "actions_this_cycle": 0,
                 "shutdown_requested": False,
-                "run_id": utcnow_isoformat(),
-                "backlog": [],
-                "messages": [],
-                "schedule": [],
-                # Build tracking (inner loop)
-                "build_in_progress": False,
-                "build_started_at": None,
-                "build_task_description": None,
-                "build_messages": [],
-                "build_phase": None,
+                "last_checkpoint": None,
+                "messages": [],                    # Chat history (user ↔ progenitor)
+                # NOTE: schedule is stored in schedule.json (system feature, not user session)
+                "attachments": [],                 # Attachment path links
+                "tool_calls": [],                  # Session tool calls
+                "current_input": None,
+                "pending_response": None,
+                "current_decision": None,
+                "current_build_request": None,     # Reference to active build (id only)
             },
             "registry": {"agents": [], "tools": []},
             "schedule": [],
@@ -359,15 +387,23 @@ class StateManager:
                 break
         await self.save_backlog(backlog)
 
-    # Schedule management
+    # Schedule management (stored in schedule.json - system feature, not user session)
     async def get_schedule(self) -> list[ScheduleEntry]:
-        """Get scheduled tasks."""
+        """Get scheduled tasks from schedule.json.
+
+        Schedule is a system feature that persists beyond user sessions.
+        It is stored separately from current_state.json.
+        """
         async with self._file_lock("schedule"):
             data = await self._read_json(self.state_dir / self.CORE_FILES["schedule"])
             return [ScheduleEntry(**item) for item in (data or [])]
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
-        """Save scheduled tasks."""
+        """Save scheduled tasks to schedule.json.
+
+        Schedule is a system feature that persists beyond user sessions.
+        It is stored separately from current_state.json.
+        """
         async with self._file_lock("schedule"):
             data = [item.model_dump() for item in schedule]
             await self._atomic_write_json(
@@ -415,22 +451,213 @@ class StateManager:
             )
             self._state_cache["registry"] = registry
 
-    # Core state management
-    async def get_state(self) -> dict[str, Any]:
-        """Get build state (formerly current_state)."""
+    # ==========================================================================
+    # Build State Management (build_state.json - Agent builds ONLY)
+    # ==========================================================================
+
+    async def get_build_state(self) -> dict[str, Any]:
+        """Get build state (agent builds only)."""
         async with self._file_lock("build_state"):
             return await self._read_json(
                 self.state_dir / self.CORE_FILES["build_state"]
             ) or {}
 
-    async def save_state(self, state: dict[str, Any]) -> None:
-        """Save build state (formerly current_state)."""
+    async def save_build_state(self, state: dict[str, Any]) -> None:
+        """Save build state (agent builds only)."""
         async with self._file_lock("build_state"):
             await self._atomic_write_json(
                 self.state_dir / self.CORE_FILES["build_state"],
                 state
             )
             self._state_cache["build_state"] = state
+
+    async def update_build_state(self, updates: dict[str, Any]) -> None:
+        """Partially update build state with given fields."""
+        state = await self.get_build_state()
+        state.update(updates)
+        await self.save_build_state(state)
+
+    async def add_build_message(self, message: dict[str, Any]) -> None:
+        """Add a message to build_messages in build_state.
+
+        Used during agent builds to track LLM communications.
+        """
+        state = await self.get_build_state()
+        messages = state.get("build_messages", [])
+        messages.append(message)
+        state["build_messages"] = messages
+        await self.save_build_state(state)
+
+    # Backward compatibility aliases
+    async def get_state(self) -> dict[str, Any]:
+        """Get build state. DEPRECATED: Use get_build_state() instead."""
+        return await self.get_build_state()
+
+    async def save_state(self, state: dict[str, Any]) -> None:
+        """Save build state. DEPRECATED: Use save_build_state() instead."""
+        await self.save_build_state(state)
+
+    # ==========================================================================
+    # Current State Management (current_state.json - Progenitor agent state)
+    # ==========================================================================
+
+    async def get_current_state(self) -> dict[str, Any]:
+        """Get current progenitor agent state (chat, schedule, tool calls)."""
+        async with self._file_lock("current_state"):
+            return await self._read_json(
+                self.state_dir / self.CORE_FILES["current_state"]
+            ) or {}
+
+    async def save_current_state(self, state: dict[str, Any]) -> None:
+        """Save current progenitor agent state."""
+        async with self._file_lock("current_state"):
+            await self._atomic_write_json(
+                self.state_dir / self.CORE_FILES["current_state"],
+                state
+            )
+            self._state_cache["current_state"] = state
+
+    async def update_current_state(self, updates: dict[str, Any]) -> None:
+        """Partially update current state with given fields."""
+        state = await self.get_current_state()
+        state.update(updates)
+        await self.save_current_state(state)
+
+    # ==========================================================================
+    # Messages Management (stored in current_state.json)
+    # ==========================================================================
+
+    async def get_messages(self) -> list[ConversationMessage]:
+        """Get chat messages from current_state."""
+        state = await self.get_current_state()
+        messages_data = state.get("messages", [])
+        return [ConversationMessage(**msg) if isinstance(msg, dict) else msg for msg in messages_data]
+
+    async def save_messages(self, messages: list[ConversationMessage]) -> None:
+        """Save chat messages to current_state."""
+        state = await self.get_current_state()
+        state["messages"] = [
+            msg.model_dump() if hasattr(msg, "model_dump") else msg
+            for msg in messages
+        ]
+        await self.save_current_state(state)
+
+    async def add_message(self, message: ConversationMessage) -> None:
+        """Add a message to current_state."""
+        messages = await self.get_messages()
+        messages.append(message)
+        await self.save_messages(messages)
+
+    # ==========================================================================
+    # Schedule Management - Convenience methods using schedule.json
+    # (Schedule is a system feature stored in schedule.json, not current_state)
+    # ==========================================================================
+
+    async def add_schedule_entry(self, entry) -> None:
+        """Add a schedule entry to schedule.json.
+
+        Args:
+            entry: ScheduleEntry object or dict with schedule data.
+        """
+        schedule = await self.get_schedule()
+        if hasattr(entry, "model_dump"):
+            # It's a ScheduleEntry model
+            schedule.append(entry)
+        else:
+            # It's a dict - convert to ScheduleEntry
+            from .models import ScheduleEntry
+            schedule.append(ScheduleEntry(**entry))
+        await self.save_schedule(schedule)
+
+        # Log the schedule event
+        entry_dict = entry.model_dump() if hasattr(entry, "model_dump") else entry
+        await self.log_schedule_event({
+            "event": "entry_added",
+            "schedule_id": entry_dict.get("id"),
+            "description": entry_dict.get("description"),
+        })
+
+    async def remove_schedule_entry(self, schedule_id: str) -> bool:
+        """Remove a schedule entry from schedule.json by ID.
+
+        Args:
+            schedule_id: The ID of the schedule entry to remove.
+
+        Returns:
+            True if entry was found and removed, False otherwise.
+        """
+        schedule = await self.get_schedule()
+        original_len = len(schedule)
+        schedule = [s for s in schedule if s.id != schedule_id]
+
+        if len(schedule) < original_len:
+            await self.save_schedule(schedule)
+            await self.log_schedule_event({
+                "event": "entry_removed",
+                "schedule_id": schedule_id,
+            })
+            return True
+        return False
+
+    async def update_schedule_entry(self, schedule_id: str, updates: dict) -> bool:
+        """Update a schedule entry in schedule.json.
+
+        Args:
+            schedule_id: The ID of the schedule entry to update.
+            updates: Dict of fields to update.
+
+        Returns:
+            True if entry was found and updated, False otherwise.
+        """
+        schedule = await self.get_schedule()
+        for i, entry in enumerate(schedule):
+            if entry.id == schedule_id:
+                entry_dict = entry.model_dump()
+                entry_dict.update(updates)
+                from .models import ScheduleEntry
+                schedule[i] = ScheduleEntry(**entry_dict)
+                await self.save_schedule(schedule)
+                await self.log_schedule_event({
+                    "event": "entry_updated",
+                    "schedule_id": schedule_id,
+                    "updates": list(updates.keys()),
+                })
+                return True
+        return False
+
+    # ==========================================================================
+    # Tool Calls Management (stored in current_state.json)
+    # ==========================================================================
+
+    async def get_tool_calls(self) -> list[dict[str, Any]]:
+        """Get tool calls from current_state."""
+        state = await self.get_current_state()
+        return state.get("tool_calls", [])
+
+    async def add_tool_call(self, tool_call: dict[str, Any]) -> None:
+        """Add a tool call to current_state."""
+        state = await self.get_current_state()
+        tool_calls = state.get("tool_calls", [])
+        tool_calls.append(tool_call)
+        state["tool_calls"] = tool_calls
+        await self.save_current_state(state)
+
+    # ==========================================================================
+    # Attachments Management (stored in current_state.json)
+    # ==========================================================================
+
+    async def get_attachments(self) -> list[dict[str, Any]]:
+        """Get attachments from current_state."""
+        state = await self.get_current_state()
+        return state.get("attachments", [])
+
+    async def add_attachment(self, attachment: dict[str, Any]) -> None:
+        """Add an attachment reference to current_state."""
+        state = await self.get_current_state()
+        attachments = state.get("attachments", [])
+        attachments.append(attachment)
+        state["attachments"] = attachments
+        await self.save_current_state(state)
 
     async def commit_state(self) -> None:
         """Commit all cached state to disk."""

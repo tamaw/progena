@@ -172,25 +172,21 @@ def normalize_schedule_entry(item: Any) -> Optional[ScheduleEntry]:
         return item
 
     if isinstance(item, dict):
-        action_str = item.get("action_type", "answer_directly")
-        try:
-            action_type = DecisionAction(action_str)
-        except ValueError:
-            action_type = DecisionAction.ANSWER_DIRECTLY
+        # Handle run_at - required field
+        run_at = item.get("run_at")
+        if run_at is None:
+            # Fallback for legacy entries
+            from ..runtime.time_utils import utcnow
+            run_at = utcnow()
 
         return ScheduleEntry(
             id=item.get("id", "unknown"),
             description=item.get("description", ""),
-            instruction=item.get("instruction"),  # Processed instruction to execute
-            user_request=item.get("user_request"),  # Original user request
-            cron_expression=item.get("cron_expression"),
-            interval_minutes=item.get("interval_minutes"),
-            run_at=item.get("run_at"),
+            instruction=item.get("instruction", ""),
+            run_at=run_at,
+            repeat_minutes=item.get("repeat_minutes") or item.get("interval_minutes"),  # Support old field
             enabled=item.get("enabled", True),
-            action_type=action_type,
-            action_config=item.get("action_config", {}),
             last_run=item.get("last_run"),
-            next_run=item.get("next_run"),
         )
 
     return None

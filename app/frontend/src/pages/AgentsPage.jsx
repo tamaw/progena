@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useSSE } from '../hooks/useSSE';
+import { useStatusSSE } from '../hooks/useSSE';
 import Header from '../components/layout/Header';
 
 function AgentsPage() {
@@ -25,7 +25,7 @@ function AgentsPage() {
     return () => clearInterval(interval);
   }, [getHealth]);
 
-  const handleSSEEvent = useCallback((event) => {
+  const handleStatusEvent = useCallback((event) => {
     if (!event?.data) return;
 
     if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
@@ -33,7 +33,8 @@ function AgentsPage() {
     }
   }, []);
 
-  useSSE(handleSSEEvent);
+  // Use status-only SSE stream for agents list
+  useStatusSSE(handleStatusEvent);
 
   const filteredAgents = agents.filter(agent => {
     const matchesFilter = filter === 'all' || agent.status === filter;

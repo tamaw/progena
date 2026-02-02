@@ -7,8 +7,9 @@ Watches for changes and notifies subscribers.
 State files:
 - health.json: Agent health status (status, last_active, run_id, cycle_count, pid)
 - registry.json: Registered agents and tools
-- build_state.json: Build state (messages, backlog, schedule, ideal_state, verification)
-- schedule.json: Scheduled tasks
+- build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
+- current_state.json: Progenitor agent state (chat history, tool calls) - user session
+- schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
 """
 
 import asyncio
@@ -297,21 +298,46 @@ class StateReader:
         return [BacklogItem.from_dict(item) for item in backlog]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        """Get scheduled items."""
+        """Get scheduled items from schedule.json.
+
+        Schedule is a system feature that persists beyond user sessions.
+        It is stored in schedule.json, not in current_state.json.
+        """
         data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data]
 
     def get_build_state(self) -> dict:
-        """Get build state (execution state, backlog, messages, ideal_state)."""
+        """Get build state (agent builds only: inner loop, LLM messages, verification)."""
         data = self._read_json("build_state.json")
+        return data or {}
+
+    def get_progenitor_state(self) -> dict:
+        """Get progenitor agent state (chat history, schedule, tool calls, attachments)."""
+        data = self._read_json("current_state.json")
         return data or {}
 
     # Alias for backwards compatibility
     def get_current_state(self) -> dict:
-        """Alias for get_build_state (backwards compatibility)."""
-        return self.get_build_state()
+        """Get combined state for backwards compatibility.
+
+        Returns progenitor state merged with build state metadata.
+        """
+        progenitor = self.get_progenitor_state()
+        build = self.get_build_state()
+
+        # Merge for backward compat - progenitor state takes precedence
+        combined = {
+            **build,
+            **progenitor,
+            # Keep build-specific fields from build_state
+            "build_in_progress": build.get("build_in_progress", False),
+            "build_phase": build.get("build_phase"),
+            "verification_score": build.get("verification_score", 0.0),
+            "current_iteration": build.get("current_iteration", 0),
+        }
+        return combined
 
     def get_loops(self, health: HealthInfo) -> list[LoopInfo]:
         """Get loop status based on health and current state."""
@@ -347,10 +373,13 @@ class StateReader:
         backlog = self.get_backlog()
         schedule = self.get_schedule()
         loops = self.get_loops(health)
-        current = self.get_current_state()
 
-        # Extract build info from current state
-        build = BuildInfo.from_dict(current)
+        # Get both state files
+        progenitor = self.get_progenitor_state()
+        build = self.get_build_state()
+
+        # Extract build info from build state
+        build_info = BuildInfo.from_dict(build)
 
         return StateSnapshot(
             timestamp=time.time(),
@@ -360,10 +389,10 @@ class StateReader:
             backlog=backlog,
             schedule=schedule,
             loops=loops,
-            cycle_count=current.get("cycle_count", 0),
-            run_id=current.get("run_id"),
-            messages_count=len(current.get("messages", [])),
-            build=build,
+            cycle_count=progenitor.get("cycle_count", 0),
+            run_id=progenitor.get("run_id"),
+            messages_count=len(progenitor.get("messages", [])),
+            build=build_info,
         )
 
     def snapshot_to_dict(self, snapshot: StateSnapshot) -> dict:

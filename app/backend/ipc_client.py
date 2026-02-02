@@ -10,18 +10,22 @@ Features:
 - Native streaming support
 - Automatic reconnection
 - Optional auto-start of Progenitor subprocess
+- Event forwarding from agent to frontend via SSE
 """
 
 import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional, Any
 
 from ..progenitor.ipc import IPCClient
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
+
+# Type for event callback (will be ui_routes.broadcast_event)
+EventCallback = Callable[[str, dict], None]
 
 
 class IPCProgenitorClient:
@@ -29,20 +33,24 @@ class IPCProgenitorClient:
 
     This is the recommended client for production use as it provides
     better reliability and streaming support than subprocess stdin/stdout.
+
+    Also forwards agent events (scheduled_response, agent_message) to the
+    frontend via SSE by calling the provided event callback.
     """
 
-    def __init__(self, config: ChatServerConfig):
+    def __init__(self, config: ChatServerConfig, event_callback: Optional[EventCallback] = None):
         """Initialize the IPC-based client.
 
         Args:
             config: Backend configuration.
+            event_callback: Optional callback for forwarding events to SSE.
+                           Signature: (event_type: str, data: dict) -> None
         """
         self.config = config
         self._ipc_client: Optional[IPCClient] = None
-        self._process: Optional[asyncio.subprocess.Process] = None
         self._started = False
         self._lock = asyncio.Lock()
-        self._stderr_log = None
+        self._event_callback = event_callback
 
     async def start(self) -> None:
         """Start the client and optionally the Progenitor subprocess."""
@@ -52,10 +60,6 @@ class IPCProgenitorClient:
         async with self._lock:
             if self._started:
                 return
-
-            # Optionally start Progenitor subprocess with IPC enabled
-            if self.config.progenitor_ipc_auto_start:
-                await self._start_progenitor_subprocess()
 
             # Create IPC client
             self._ipc_client = IPCClient(
@@ -83,71 +87,44 @@ class IPCProgenitorClient:
                     f"{self.config.progenitor_ipc_host}:{self.config.progenitor_ipc_port}"
                 )
 
+            # Set up event callback on the underlying IPC client for immediate forwarding
+            if self._event_callback:
+                # Capture callback in local variable to avoid None check issues
+                callback = self._event_callback
+
+                async def forward_event(event: dict) -> None:
+                    """Forward events from IPC to SSE broadcast."""
+                    event_type = event.get("event_type", "unknown")
+                    content = event.get("content", "")
+                    metadata = event.get("metadata", {})
+                    timestamp = event.get("timestamp")
+
+                    logger.info("Forwarding event to SSE: type=%s, content=%s",
+                               event_type, content[:100] if content else "")
+
+                    try:
+                        callback(event_type, {
+                            "content": content,
+                            "metadata": metadata,
+                            "timestamp": timestamp,
+                        })
+                    except Exception as e:
+                        logger.warning("Error in event callback: %s", e)
+
+                self._ipc_client.set_event_callback(forward_event)
+                logger.info("Event forwarding callback configured")
+
             self._started = True
             logger.info("IPC Progenitor client started")
-
-    async def _start_progenitor_subprocess(self) -> None:
-        """Start the Progenitor subprocess with IPC enabled."""
-        script_path = self.config.progenitor_script
-        if not script_path.exists():
-            raise FileNotFoundError(f"Progenitor script not found: {script_path}")
-
-        logger.info("Starting Progenitor subprocess with IPC mode")
-
-        # Capture subprocess stderr for diagnostics
-        logs_dir = Path(__file__).resolve().parents[2] / "logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        stderr_path = logs_dir / "progenitor.ipc.stderr.log"
-        self._stderr_log = open(stderr_path, "a", encoding="utf-8")
-
-        # Start subprocess with IPC enabled
-        self._process = await asyncio.create_subprocess_exec(
-            self.config.progenitor_python,
-            "-u",
-            "-m",
-            "app.progenitor.main",
-            stdin=asyncio.subprocess.DEVNULL,  # No stdin needed with IPC
-            stdout=asyncio.subprocess.DEVNULL,  # No stdout needed with IPC
-            stderr=asyncio.subprocess.PIPE,
-            cwd=script_path.parent.parent.parent,  # Project root
-            env={
-                **{k: v for k, v in __import__("os").environ.items()},
-                "PROGENITOR_IPC_ENABLED": "true",
-                "PROGENITOR_IPC_HOST": self.config.progenitor_ipc_host,
-                "PROGENITOR_IPC_PORT": str(self.config.progenitor_ipc_port),
-            },
-        )
-
-        logger.info(f"Progenitor started (PID: {self._process.pid})")
-
-        # Start stderr reader task
-        asyncio.create_task(self._read_stderr())
-
-        # Wait for subprocess to be ready
-        await asyncio.sleep(2)
-
-    async def _read_stderr(self) -> None:
-        """Read and log stderr from the subprocess."""
-        if not self._process or not self._process.stderr:
-            return
-
-        while True:
-            try:
-                line = await self._process.stderr.readline()
-                if not line:
-                    break
-                decoded = line.decode().strip()
-                logger.error(f"[Progenitor stderr] {decoded}")
-                if self._stderr_log:
-                    self._stderr_log.write(decoded + "\n")
-                    self._stderr_log.flush()
-            except Exception as e:
-                logger.error(f"Error reading stderr: {e}")
-                break
 
     async def stop(self) -> None:
         """Stop the client and subprocess."""
         async with self._lock:
+            # Clear event callback
+            if self._ipc_client:
+                self._ipc_client.set_event_callback(None)
+                logger.info("Event forwarding callback cleared")
+
             # Disconnect IPC client
             if self._ipc_client:
                 await self._ipc_client.disconnect()
@@ -245,25 +222,54 @@ class IPCProgenitorClient:
             "running": self.is_running,
             "started": self._started,
             "mode": "ipc",
+            "event_forwarding": self._event_callback is not None,
         }
 
         if self._ipc_client:
             status.update(self._ipc_client.get_status())
 
-        if self._process:
-            status["pid"] = self._process.pid
-            status["subprocess_running"] = self._process.returncode is None
-
         return status
 
+    def set_event_callback(self, callback: Optional[EventCallback]) -> None:
+        """Set the event callback for SSE forwarding.
 
-def get_ipc_client(config: ChatServerConfig) -> IPCProgenitorClient:
+        Args:
+            callback: Callback function to forward events.
+                     Signature: (event_type: str, data: dict) -> None
+        """
+        self._event_callback = callback
+        # Also update the underlying IPC client if it exists
+        if self._ipc_client and callback:
+            async def forward_event(event: dict) -> None:
+                """Forward events from IPC to SSE broadcast."""
+                event_type = event.get("event_type", "unknown")
+                content = event.get("content", "")
+                metadata = event.get("metadata", {})
+                timestamp = event.get("timestamp")
+
+                logger.info("Forwarding event to SSE: type=%s, content=%s",
+                           event_type, content[:100] if content else "")
+
+                try:
+                    callback(event_type, {
+                        "content": content,
+                        "metadata": metadata,
+                        "timestamp": timestamp,
+                    })
+                except Exception as e:
+                    logger.warning("Error in event callback: %s", e)
+
+            self._ipc_client.set_event_callback(forward_event)
+
+
+def get_ipc_client(config: ChatServerConfig, event_callback: Optional[EventCallback] = None) -> IPCProgenitorClient:
     """Create an IPC-based Progenitor client.
 
     Args:
         config: Backend configuration.
+        event_callback: Optional callback for forwarding events to SSE.
 
     Returns:
         An IPCProgenitorClient instance.
     """
-    return IPCProgenitorClient(config)
+    return IPCProgenitorClient(config, event_callback=event_callback)

@@ -2,9 +2,10 @@
 Decide Node - Routes user input to appropriate action path.
 """
 
+import json
 import logging
 from datetime import datetime
-from typing import Callable, Coroutine, Any, Optional
+from typing import Callable, Coroutine, Any, Optional, cast
 
 import re
 
@@ -436,7 +437,7 @@ async def _execute_system_tool_inline(
     llm_client,
     state: "ProgenitorState | None" = None,
     state_manager=None,
-) -> tuple[dict | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None]:
     """
     Execute a system tool inline and return (result, error).
 
@@ -724,6 +725,95 @@ async def _execute_system_tool_inline(
     return None, f"Unknown system tool: {tool_name}"
 
 
+async def _execute_schedule_task_inline(
+    user_input: str,
+    schedule_params: dict[str, Any],
+    llm_client,
+    state: "ProgenitorState | None" = None,
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+    """
+    Execute a schedule task inline using the LLM to process the instruction.
+
+    Returns:
+        Tuple of (result_dict, error_string, schedule_entry_data)
+    """
+    from ..tools.schedule import add_scheduled_task
+
+    # Use LLM to extract and process schedule parameters
+    system_prompt = """You are a scheduling assistant. Extract and format a scheduled task from the user's request.
+
+Return JSON with:
+{
+    "time_expression": "<when to run, e.g. 'in 5 minutes', 'at 9am', 'every day at 10am'>",
+    "instruction": "<clear instruction for what to do at that time>",
+    "description": "<brief human-readable description of the task>"
+}
+
+Examples:
+- "remind me to call John in 30 minutes" → time: "in 30 minutes", instruction: "Remind the user to call John", description: "Reminder: Call John"
+- "say hello world at 9am" → time: "at 9am", instruction: "Say 'Hello World!' to the user", description: "Say hello world"
+- "every day at 5pm tell me a joke" → time: "every day at 5pm", instruction: "Tell the user a joke", description: "Daily joke"
+"""
+
+    messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
+
+    try:
+        response = await llm_client.chat(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+
+        parsed = json.loads(response)
+
+        time_expr = parsed.get("time_expression", schedule_params.get("time_expression", ""))
+        instruction = parsed.get("instruction", user_input)
+        description = parsed.get("description", f"Scheduled: {user_input[:50]}")
+
+        if not time_expr:
+            return None, "Could not extract time from your request. Please specify when (e.g., 'in 5 minutes', 'at 9am').", None
+
+        # Add the scheduled task
+        result, entry_data = await add_scheduled_task(
+            user_request=user_input,
+            time_expression=time_expr,
+            instruction=instruction,
+            description=description,
+        )
+
+        if result.success:
+            return {
+                "success": True,
+                "schedule_id": result.schedule_id,
+                "description": description,
+                "instruction": instruction,
+                "next_run": result.next_run,
+                "recurring": "repeat_minutes" in entry_data if entry_data else False,
+            }, None, entry_data
+        else:
+            return None, result.message, None
+
+    except json.JSONDecodeError as e:
+        logger.warning("Failed to parse schedule LLM response: %s", e)
+        return None, f"Failed to process schedule request: {e}", None
+    except Exception as e:
+        logger.error("Error executing schedule task: %s", e, exc_info=True)
+        return None, f"Error scheduling task: {e}", None
+
+
+def _format_schedule_result(result: dict) -> str:
+    """Format a schedule task result as a human-readable response."""
+    lines = ["**📅 Task Scheduled**\n"]
+    lines.append(f"**{result.get('description', 'Scheduled task')}**")
+    lines.append(f"  • **ID:** `{result.get('schedule_id')}`")
+    lines.append(f"  • **Next run:** {result.get('next_run', 'Unknown')}")
+    if result.get("recurring"):
+        lines.append("  • **Type:** Recurring")
+    lines.append(f"\n*When triggered, I will: {result.get('instruction', 'execute the task')}*")
+    return "\n".join(lines)
+
+
 def _format_tool_result(tool_name: str, result: dict) -> str:
     """Format a tool result as a human-readable response."""
     if tool_name == "list_tools":
@@ -910,10 +1000,15 @@ def _format_tool_result(tool_name: str, result: dict) -> str:
     return f"**Result:**\n```json\n{json.dumps(result, indent=2)}\n```"
 
 
+# Default confidence threshold (used when config not provided)
+DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
+
+
 def create_node(
     llm_client,
     tool_registry,
     state_manager=None,
+    config=None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the decide node function.
 
@@ -921,7 +1016,14 @@ def create_node(
         llm_client: The LLM client for making decisions
         tool_registry: Registry of available tools and agents
         state_manager: Optional state manager for logging decisions
+        config: Optional ProgenitorConfig for runtime settings
     """
+    # Get build confidence threshold from config or use default
+    build_confidence_threshold = DEFAULT_BUILD_CONFIDENCE_THRESHOLD
+    if config and hasattr(config, 'runtime'):
+        build_confidence_threshold = getattr(
+            config.runtime, 'build_confidence_threshold', DEFAULT_BUILD_CONFIDENCE_THRESHOLD
+        )
 
     async def decide_node(state: ProgenitorState) -> ProgenitorState:
         """Make a routing decision for the current input."""
@@ -941,6 +1043,215 @@ def create_node(
 
             return {"current_decision": None}
 
+        # ============================================================
+        # FAST-PATH: Handle system tools without LLM call
+        # These heuristics are very specific and avoid false positives
+        # ============================================================
+
+        # Check for list tools request (fast-path - no LLM needed)
+        if _looks_like_list_tools_request(user_input):
+            tool_name = "list_tools"
+            result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client)
+            if error or result is None:
+                response_text = f"Error executing {tool_name}: {error or 'No result'}"
+            else:
+                response_text = _format_tool_result(tool_name, result)
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Fast-path: list_tools system tool (no LLM needed).",
+                requires_planning=False,
+                direct_response=response_text,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "system_tool_executed_fast_path",
+                    "tool_name": tool_name,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            return {"current_decision": decision}
+
+        # Check for list schedule requests (fast-path - no LLM needed)
+        if _looks_like_list_schedule_request(user_input):
+            tool_name = "list_schedule"
+            result, error = await _execute_system_tool_inline(
+                tool_name, tool_registry, llm_client, state, state_manager
+            )
+            if error or result is None:
+                response_text = f"Error executing {tool_name}: {error or 'No result'}"
+            else:
+                response_text = _format_tool_result(tool_name, result)
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Fast-path: list_schedule system tool (no LLM needed).",
+                requires_planning=False,
+                direct_response=response_text,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "system_tool_executed_fast_path",
+                    "tool_name": tool_name,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            return {"current_decision": decision}
+
+        # Check for current time requests (fast-path - no LLM needed)
+        if _looks_like_current_time_request(user_input):
+            tool_name = "current_time"
+            result, error = await _execute_system_tool_inline(
+                tool_name, tool_registry, llm_client, state, state_manager
+            )
+            if error or result is None:
+                response_text = f"Error executing {tool_name}: {error or 'No result'}"
+            else:
+                response_text = _format_tool_result(tool_name, result)
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Fast-path: current_time system tool (no LLM needed).",
+                requires_planning=False,
+                direct_response=response_text,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "system_tool_executed_fast_path",
+                    "tool_name": tool_name,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            return {"current_decision": decision}
+
+        # Check for build status requests (fast-path - no LLM needed)
+        if _looks_like_build_status_request(user_input):
+            tool_name = "build_status"
+            result, error = await _execute_system_tool_inline(
+                tool_name, tool_registry, llm_client, state, state_manager
+            )
+            if error or result is None:
+                response_text = f"Error executing {tool_name}: {error or 'No result'}"
+            else:
+                response_text = _format_tool_result(tool_name, result)
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Fast-path: build_status system tool (no LLM needed).",
+                requires_planning=False,
+                direct_response=response_text,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "system_tool_executed_fast_path",
+                    "tool_name": tool_name,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            return {"current_decision": decision}
+
+        # Check for agent discovery requests (fast-path - no LLM needed)
+        if _looks_like_agent_discovery_request(user_input):
+            tool_name = "rediscover_agents"
+            result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client)
+            if error or result is None:
+                response_text = f"Error executing {tool_name}: {error or 'No result'}"
+            else:
+                response_text = _format_tool_result(tool_name, result)
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Fast-path: rediscover_agents system tool (no LLM needed).",
+                requires_planning=False,
+                direct_response=response_text,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "system_tool_executed_fast_path",
+                    "tool_name": tool_name,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            return {"current_decision": decision}
+
+        # Check for schedule requests (fast-path - uses LLM for parsing but no routing decision)
+        if _looks_like_schedule_request(user_input):
+            schedule_params = _extract_schedule_params(user_input)
+
+            result, error, entry_data = await _execute_schedule_task_inline(
+                user_input, schedule_params, llm_client, state
+            )
+
+            if error or result is None:
+                response_text = f"⚠️ **Scheduling Failed**\n\n{error or 'No result'}"
+            else:
+                response_text = _format_schedule_result(result)
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Fast-path: schedule_task (no routing LLM needed).",
+                requires_planning=False,
+                direct_response=response_text,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "system_tool_executed_fast_path",
+                    "tool_name": "schedule_task",
+                    "schedule_id": result.get("schedule_id") if result else None,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            # Return the decision AND the schedule entry to add to state
+            result_state: dict[str, Any] = {"current_decision": decision}
+            if entry_data:
+                from ..state.models import ScheduleEntry
+                new_entry = ScheduleEntry(**entry_data)
+                current_schedule = state.get("schedule", []) if state else []
+                result_state["schedule"] = list(current_schedule) + [new_entry]
+
+                # Persist the new schedule entry to schedule.json
+                if state_manager:
+                    await state_manager.add_schedule_entry(new_entry)
+
+                logger.info("Added schedule entry %s to state and persisted (fast-path)", entry_data.get("id"))
+
+            return cast(ProgenitorState, result_state)
+
+        # Check for self-reflection requests (fast-path - no LLM needed for routing)
+        if _looks_like_self_reflect_request(user_input):
+            tool_name = "self_reflect"
+            result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
+            if error or result is None:
+                response_text = f"Error executing {tool_name}: {error or 'No result'}"
+            else:
+                response_text = _format_tool_result(tool_name, result)
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Fast-path: self_reflect system tool (no LLM routing needed).",
+                requires_planning=False,
+                direct_response=response_text,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "system_tool_executed_fast_path",
+                    "tool_name": tool_name,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            return {"current_decision": decision}
+
+        # ============================================================
+        # STANDARD PATH: Use LLM for routing decision
+        # ============================================================
+
         # Get available capabilities
         capabilities = tool_registry.get_all_capabilities()
 
@@ -956,188 +1267,55 @@ def create_node(
                 available_capabilities=capabilities,
             )
 
-            # If the LLM returns a non-actionable direct answer (no direct_response)
-            # but the user is explicitly asking to build an agent, force build routing.
             action_str = decision_data.get("action", "answer_directly")
-            direct_response = decision_data.get("direct_response")
 
-            # Check for list tools request first
-            if _looks_like_list_tools_request(user_input):
-                # Execute system tool inline and return direct response
-                tool_name = "list_tools"
-                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client)
-                if error:
-                    response_text = f"Error executing {tool_name}: {error}"
-                else:
-                    response_text = _format_tool_result(tool_name, result)
+            # Get LLM's confidence score (default 0.5 if not provided)
+            confidence = decision_data.get("confidence", 0.5)
+            user_response = decision_data.get("user_response") or decision_data.get("direct_response")
 
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning="Executed list_tools system tool inline.",
-                    requires_planning=False,
-                    direct_response=response_text,
+            # Check if LLM wants a build action
+            llm_action = str(action_str).lower().strip()
+            is_build_action = llm_action in ("build_agent", "build_mcp", "upgrade")
+
+            # For build actions, enforce confidence threshold
+            if is_build_action:
+                logger.info(
+                    "Build action requested: action=%s, confidence=%.2f, threshold=%.2f",
+                    llm_action, confidence, build_confidence_threshold
                 )
 
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "system_tool_executed",
-                        "tool_name": tool_name,
-                        "timestamp": utcnow_isoformat(),
-                    })
+                if confidence < build_confidence_threshold:
+                    # Confidence too low - fall back to answer_directly with explanation
+                    logger.info(
+                        "Build action rejected due to low confidence (%.2f < %.2f)",
+                        confidence, build_confidence_threshold
+                    )
+                    decision = Decision(
+                        action=DecisionAction.ANSWER_DIRECTLY,
+                        reasoning=f"Build action confidence ({confidence:.2f}) below threshold ({build_confidence_threshold})",
+                        requires_planning=False,
+                        direct_response=(
+                            f"I'm not certain you want me to build an agent. "
+                            f"(Confidence: {confidence:.0%})\n\n"
+                            f"If you'd like me to **build a new agent**, please say something like:\n"
+                            f"- \"Build me a hello world agent\"\n"
+                            f"- \"Create a new agent that [does X]\"\n\n"
+                            f"Otherwise, let me know what you'd like me to do and I'll help!"
+                        ),
+                    )
 
-                return {"current_decision": decision}
+                    if state_manager:
+                        await state_manager.log_decision({
+                            "event": "build_rejected_low_confidence",
+                            "confidence": confidence,
+                            "threshold": build_confidence_threshold,
+                            "llm_action": llm_action,
+                            "timestamp": utcnow_isoformat(),
+                        })
 
-            # Check for list schedule requests (before schedule creation check)
-            elif _looks_like_list_schedule_request(user_input):
-                # Execute list_schedule system tool inline
-                tool_name = "list_schedule"
-                result, error = await _execute_system_tool_inline(
-                    tool_name, tool_registry, llm_client, state, state_manager
-                )
-                if error:
-                    response_text = f"Error executing {tool_name}: {error}"
-                else:
-                    response_text = _format_tool_result(tool_name, result)
+                    return {"current_decision": decision}
 
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning="Executed list_schedule system tool inline.",
-                    requires_planning=False,
-                    direct_response=response_text,
-                )
-
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "system_tool_executed",
-                        "tool_name": tool_name,
-                        "timestamp": utcnow_isoformat(),
-                    })
-
-                return {"current_decision": decision}
-
-            # Check for current time requests
-            elif _looks_like_current_time_request(user_input):
-                # Execute current_time system tool inline
-                tool_name = "current_time"
-                result, error = await _execute_system_tool_inline(
-                    tool_name, tool_registry, llm_client, state, state_manager
-                )
-                if error:
-                    response_text = f"Error executing {tool_name}: {error}"
-                else:
-                    response_text = _format_tool_result(tool_name, result)
-
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning="Executed current_time system tool inline.",
-                    requires_planning=False,
-                    direct_response=response_text,
-                )
-
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "system_tool_executed",
-                        "tool_name": tool_name,
-                        "timestamp": utcnow_isoformat(),
-                    })
-
-                return {"current_decision": decision}
-
-            # Check for build status requests
-            elif _looks_like_build_status_request(user_input):
-                # Execute build_status system tool inline
-                tool_name = "build_status"
-                result, error = await _execute_system_tool_inline(
-                    tool_name, tool_registry, llm_client, state, state_manager
-                )
-                if error:
-                    response_text = f"Error executing {tool_name}: {error}"
-                else:
-                    response_text = _format_tool_result(tool_name, result)
-
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning="Executed build_status system tool inline.",
-                    requires_planning=False,
-                    direct_response=response_text,
-                )
-
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "system_tool_executed",
-                        "tool_name": tool_name,
-                        "timestamp": utcnow_isoformat(),
-                    })
-
-                return {"current_decision": decision}
-
-            # Check for system tool requests (rediscover agents, etc.)
-            elif _looks_like_agent_discovery_request(user_input):
-                # Execute system tool inline and return direct response
-                tool_name = "rediscover_agents"
-                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client)
-                if error:
-                    response_text = f"Error executing {tool_name}: {error}"
-                else:
-                    response_text = _format_tool_result(tool_name, result)
-
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning="Executed rediscover_agents system tool inline.",
-                    requires_planning=False,
-                    direct_response=response_text,
-                )
-
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "system_tool_executed",
-                        "tool_name": tool_name,
-                        "timestamp": utcnow_isoformat(),
-                    })
-
-                return {"current_decision": decision}
-            # Check for schedule requests (e.g., "remind me at 9am", "say hello every day")
-            elif _looks_like_schedule_request(user_input):
-                schedule_params = _extract_schedule_params(user_input)
-                decision_data = {
-                    "action": "schedule",
-                    "reasoning": "User requested a scheduled/timed task.",
-                    "requires_planning": True,  # Needs planner to process the instruction
-                    "target_capabilities": ["schedule_task"],
-                    "direct_response": None,
-                    "schedule_params": schedule_params,  # Pass extracted params
-                }
-            # Check for self-reflection requests
-            elif _looks_like_self_reflect_request(user_input):
-                # Execute self_reflect system tool inline
-                tool_name = "self_reflect"
-                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
-                if error:
-                    response_text = f"Error executing {tool_name}: {error}"
-                else:
-                    response_text = _format_tool_result(tool_name, result)
-
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning="Executed self_reflect system tool inline for introspection request.",
-                    requires_planning=False,
-                    direct_response=response_text,
-                )
-
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "system_tool_executed",
-                        "tool_name": tool_name,
-                        "timestamp": utcnow_isoformat(),
-                    })
-
-                return {"current_decision": decision}
-            elif (
-                str(action_str).lower().strip() in ("answer", "answer_directly")
-                and not direct_response
-                and _looks_like_agent_build_request(user_input)
-            ):
-                # Check if a build is already in progress - reject new builds
+                # Check if a build is already in progress
                 if state.get("build_in_progress", False):
                     current_task = state.get("build_task_description", "unknown task")
                     phase = state.get("build_phase", "unknown")
@@ -1163,7 +1341,7 @@ def create_node(
 
                     return {"current_decision": decision}
 
-                # Start async build in the background
+                # Confidence is high enough - start async build
                 from ..runtime.background_build import get_background_runner
 
                 runner = get_background_runner()
@@ -1180,14 +1358,16 @@ def create_node(
                             initial_state=dict(state),
                         )
 
-                        logger.info("Started async build %s for: %s", build_id, task_description)
+                        logger.info("Started async build %s for: %s (confidence=%.2f)", build_id, task_description, confidence)
 
-                        # Return acknowledgment to user immediately
+                        # Use user_response if provided, otherwise use default ack
+                        response_msg = user_response or ack_message
+
                         decision = Decision(
                             action=DecisionAction.ANSWER_DIRECTLY,
-                            reasoning=f"Started async build {build_id}",
+                            reasoning=f"Started async build {build_id} (confidence={confidence:.2f})",
                             requires_planning=False,
-                            direct_response=ack_message,
+                            direct_response=response_msg,
                         )
 
                         if state_manager:
@@ -1195,10 +1375,10 @@ def create_node(
                                 "event": "async_build_started",
                                 "build_id": build_id,
                                 "task_description": task_description,
+                                "confidence": confidence,
                                 "timestamp": utcnow_isoformat(),
                             })
 
-                        # Update state to mark build in progress
                         return {
                             "current_decision": decision,
                             "build_in_progress": True,
@@ -1208,7 +1388,6 @@ def create_node(
                         }
 
                     except RuntimeError as e:
-                        # Build already in progress (race condition)
                         logger.warning("Failed to start async build: %s", e)
                         decision = Decision(
                             action=DecisionAction.ANSWER_DIRECTLY,
@@ -1222,7 +1401,6 @@ def create_node(
                         )
                         return {"current_decision": decision}
                 else:
-                    # No background runner available - do not fall back to sync build
                     logger.error("No background runner available; build requests must run in background")
                     decision = Decision(
                         action=DecisionAction.ANSWER_DIRECTLY,
@@ -1252,8 +1430,8 @@ def create_node(
             from ..runtime.loop import get_current_loop
             loop = get_current_loop()
 
-            logger.info("Streaming check: action=%s, loop=%s, streaming_enabled=%s",
-                        action, loop is not None, loop._streaming_enabled if loop else "N/A")
+            logger.info("Streaming check: action=%s, confidence=%.2f, loop=%s, streaming_enabled=%s",
+                        action, confidence, loop is not None, loop._streaming_enabled if loop else "N/A")
 
             if action == DecisionAction.ANSWER_DIRECTLY and loop and loop._streaming_enabled:
                 # Generate a streaming conversational response
@@ -1283,8 +1461,8 @@ def create_node(
                 loop._response_was_streamed = True
                 logger.info("STREAMING: Set _response_was_streamed=True (loop id=%s)", id(loop))
             elif action == DecisionAction.ANSWER_DIRECTLY:
-                # Fallback to LLM's direct_response when streaming not enabled
-                direct_resp = decision_data.get("direct_response")
+                # Use user_response first, fall back to direct_response
+                direct_resp = user_response or decision_data.get("direct_response")
 
             decision = Decision(
                 action=action,
@@ -1294,20 +1472,21 @@ def create_node(
                 direct_response=direct_resp,
             )
 
-            result = {"current_decision": decision}
+            decision_result: dict[str, Any] = {"current_decision": decision}
 
-            # Log decision
+            # Log decision with confidence
             if state_manager:
                 await state_manager.log_decision({
                     "event": "routing_decision",
                     "action": action.value,
+                    "confidence": confidence,
                     "reasoning": decision_data.get("reasoning", ""),
                     "requires_planning": decision_data.get("requires_planning", False),
                     "target_capabilities": decision_data.get("target_capabilities", []),
                     "timestamp": utcnow_isoformat(),
                 })
 
-            return result
+            return cast(ProgenitorState, decision_result)
 
         except (RateLimitError, APIConnectionError) as e:
             # Recoverable errors - show to user with helpful message

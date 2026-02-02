@@ -111,18 +111,19 @@ class TestStateManager:
 
     @pytest.mark.asyncio
     async def test_schedule_management(self, temp_dirs):
-        """Test schedule save and retrieval."""
+        """Test schedule save and retrieval (simplified model)."""
         state_dir, logs_dir = temp_dirs
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
 
-        from app.progenitor.state.models import DecisionAction
+        from app.progenitor.runtime.time_utils import utcnow
 
         entry = ScheduleEntry(
             id="schedule-1",
             description="Daily task",
-            cron_expression="0 9 * * *",
-            action_type=DecisionAction.DELEGATE_A2A,
+            instruction="Do the daily task",
+            run_at=utcnow(),
+            repeat_minutes=1440,
         )
 
         await manager.save_schedule([entry])
