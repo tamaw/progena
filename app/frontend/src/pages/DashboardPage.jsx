@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useStatusSSE } from '../hooks/useSSE';
+import { useHealth } from '../context/HealthContext';
 import Header from '../components/layout/Header';
 import {
   Chart as ChartJS,
@@ -31,21 +32,18 @@ ChartJS.register(
 );
 
 function DashboardPage() {
-  const { connectionState, getHealth, getMetrics } = useApi();
+  const { isHealthy } = useHealth();
+  const { connectionState, getMetrics } = useApi();
   const [status, setStatus] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [tokenHistory, setTokenHistory] = useState([]);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [healthData, metricsData] = await Promise.all([
-        getHealth().catch(() => null),
-        getMetrics().catch(() => null)
-      ]);
+  // Only fetch metrics (health comes from shared HealthContext)
+  const fetchMetrics = useCallback(async () => {
+    if (!isHealthy) return; // Don't fetch if server is unhealthy
 
-      if (healthData) {
-        // healthData is intentionally minimal; status comes from SSE
-      }
+    try {
+      const metricsData = await getMetrics().catch(() => null);
       if (metricsData) {
         setMetrics(metricsData);
         setTokenHistory(prev => [...prev.slice(-29), {
@@ -55,15 +53,15 @@ function DashboardPage() {
         }]);
       }
     } catch (e) {
-      console.warn('Failed to fetch data:', e);
+      console.warn('Failed to fetch metrics:', e);
     }
-  }, [getHealth, getMetrics]);
+  }, [isHealthy, getMetrics]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
+    fetchMetrics();
+    const interval = setInterval(fetchMetrics, 30000); // 30s for metrics
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [fetchMetrics]);
 
   const handleStatusEvent = useCallback((event) => {
     if (!event?.data) return;

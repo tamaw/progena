@@ -124,7 +124,7 @@ class TestConcurrentRequestHandling:
         """Test concurrent status checks don't interfere."""
 
         def get_status():
-            return client.get("/api/ui/status")
+            return client.get("/api/ui/status/snapshot")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(get_status) for _ in range(20)]
@@ -140,7 +140,7 @@ class TestConcurrentRequestHandling:
 
         def make_requests():
             responses = []
-            responses.append(client.get("/api/ui/status"))
+            responses.append(client.get("/api/ui/status/snapshot"))
             responses.append(client.get("/api/ui/agents"))
             responses.append(client.get("/api/ui/backlog"))
             responses.append(client.get("/api/ui/schedule"))
@@ -417,11 +417,11 @@ class TestSessionManagement:
     def test_session_cookie_handling(self, client):
         """Test session cookie is handled in requests."""
         # First request
-        response1 = client.get("/api/ui/status")
+        response1 = client.get("/api/ui/status/snapshot")
         assert response1.status_code == 200
 
         # Second request with same session
-        response2 = client.get("/api/ui/status")
+        response2 = client.get("/api/ui/status/snapshot")
         assert response2.status_code == 200
 
     def test_concurrent_sessions(self, client):
@@ -429,7 +429,7 @@ class TestSessionManagement:
 
         def session_request(session_id):
             return client.get(
-                "/api/ui/status",
+                "/api/ui/status/snapshot",
                 headers={"X-Session-ID": f"session-{session_id}"},
             )
 
@@ -447,7 +447,7 @@ class TestRequestTracking:
     def test_request_id_header(self, client):
         """Test request ID is returned in response headers."""
         response = client.get(
-            "/api/ui/status", headers={"X-Request-ID": "test-request-123"}
+            "/api/ui/status/snapshot", headers={"X-Request-ID": "test-request-123"}
         )
 
         assert response.status_code == 200
@@ -456,7 +456,7 @@ class TestRequestTracking:
 
     def test_auto_generated_request_id(self, client):
         """Test request ID is auto-generated if not provided."""
-        response = client.get("/api/ui/status")
+        response = client.get("/api/ui/status/snapshot")
 
         assert response.status_code == 200
         assert "X-Request-ID" in response.headers
@@ -467,7 +467,7 @@ class TestRequestTracking:
         request_id = "tracking-test-456"
 
         endpoints = [
-            "/api/ui/status",
+            "/api/ui/status/snapshot",
             "/api/ui/agents",
             "/api/ui/backlog",
             "/health",
@@ -531,7 +531,7 @@ class TestRateLimitingAsync:
         """Test UI endpoints bypass rate limiting."""
         # UI endpoints should never be rate limited
         for _ in range(100):
-            response = client.get("/api/ui/status")
+            response = client.get("/api/ui/status/snapshot")
             assert response.status_code == 200
 
 
@@ -692,7 +692,7 @@ class TestConnectionPooling:
     def test_many_sequential_requests(self, client):
         """Test many sequential requests are handled."""
         for i in range(20):
-            response = client.get("/api/ui/status")
+            response = client.get("/api/ui/status/snapshot")
             assert response.status_code == 200
 
     def test_rapid_sequential_requests(self, client):

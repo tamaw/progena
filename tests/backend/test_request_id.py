@@ -10,23 +10,26 @@ from fastapi.testclient import TestClient
 import json
 
 
+@pytest.fixture
+def app():
+    """Get the FastAPI app instance."""
+    from app.backend.main import app
+    return app
+
+
 class TestRequestIdMiddleware:
     """Test request ID middleware behavior."""
 
-    def test_request_id_generated_when_not_provided(self):
+    def test_request_id_generated_when_not_provided(self, app):
         """Test that a request ID is generated when not provided."""
-        from app.backend.main import app
-
         with TestClient(app) as client:
             response = client.get("/health")
 
         assert "X-Request-ID" in response.headers
         assert response.headers["X-Request-ID"].startswith("req-")
 
-    def test_request_id_preserved_when_provided(self):
+    def test_request_id_preserved_when_provided(self, app):
         """Test that provided request ID is preserved."""
-        from app.backend.main import app
-
         custom_id = "custom-request-12345"
 
         with TestClient(app) as client:
@@ -34,10 +37,8 @@ class TestRequestIdMiddleware:
 
         assert response.headers["X-Request-ID"] == custom_id
 
-    def test_request_id_format(self):
+    def test_request_id_format(self, app):
         """Test that generated request ID has expected format."""
-        from app.backend.main import app
-
         with TestClient(app) as client:
             response = client.get("/health")
 

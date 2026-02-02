@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useChatSSE } from '../hooks/useSSE';
+import { useEventsSSE } from '../hooks/useSSE';
 import Header from '../components/layout/Header';
 
 function LogsPage() {
@@ -23,7 +23,7 @@ function LogsPage() {
   }, [isPaused]);
 
   // Use chat SSE stream for log events
-  useChatSSE(handleChatEvent);
+  useEventsSSE(handleChatEvent);
 
   useEffect(() => {
     if (autoScroll && logsContainerRef.current) {

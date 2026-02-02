@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useChatSSE, useStatusSSE } from '../hooks/useSSE';
+import { useEventsSSE, useStatusSSE } from '../hooks/useSSE';
 import { useConfig } from '../context/ConfigContext';
+import { useHealth } from '../context/HealthContext';
 import { useNotifications } from '../context/NotificationContext';
 import Header from '../components/layout/Header';
 import Sidebar from '../components/layout/Sidebar';
@@ -12,7 +13,8 @@ import QuickActions from '../components/chat/QuickActions';
 
 function ChatPage() {
   const { config } = useConfig();
-  const { connectionState, sendMessageStream, cancelStream, getHealth } = useApi();
+  const { isHealthy } = useHealth();
+  const { connectionState, sendMessageStream, cancelStream } = useApi();
   const { show } = useNotifications();
 
   const [messages, setMessages] = useState([]);
@@ -45,21 +47,6 @@ function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isGenerating]);
-
-  // Keep connection state updated via lightweight health checks
-  useEffect(() => {
-    const fetchHealth = async () => {
-      try {
-        await getHealth();
-      } catch (e) {
-        // Silently fail
-      }
-    };
-
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 5000);
-    return () => clearInterval(interval);
-  }, [getHealth]);
 
   // Track recently added scheduled messages to deduplicate
   const recentScheduledContent = useRef(new Set());
@@ -131,7 +118,7 @@ function ChatPage() {
   }, []);
 
   // Connect to both SSE streams
-  useChatSSE(handleChatEvent);
+  useEventsSSE(handleChatEvent);
   useStatusSSE(handleStatusEvent);
 
   const handleSend = useCallback(async (content) => {

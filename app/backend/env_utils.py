@@ -36,3 +36,18 @@ def env_int(key: str, default: int) -> int:
         except ValueError:
             logger.warning("Invalid integer for %s: %s, using default %d", key, val, default)
     return default
+
+
+def env_float(key: str, default: float) -> float:
+    """Parse float environment variable.
+
+    Returns default if unset or invalid.
+    Logs warning on invalid values.
+    """
+    val = os.getenv(key)
+    if val is not None:
+        try:
+            return float(val)
+        except ValueError:
+            logger.warning("Invalid float for %s: %s, using default %f", key, val, default)
+    return default

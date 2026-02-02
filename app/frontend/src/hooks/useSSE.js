@@ -1,100 +1,53 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useConfig } from '../context/ConfigContext';
+import { useHealth } from '../context/HealthContext';
 
 /**
- * Hook for connecting to the /chat SSE stream.
- * Receives IPC events: scheduled_response, agent_message, alert, task, agent.
+ * Build full URL for an API path.
+ * Ensures proper slash handling between baseUrl and path.
  */
-export function useChatSSE(onEvent) {
-  const { getApiUrl, config } = useConfig();
-  const eventSourceRef = useRef(null);
-  const reconnectAttemptRef = useRef(0);
-  const [isConnected, setIsConnected] = useState(false);
-
-  const connect = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
-
-    const url = getApiUrl('chat');
-    eventSourceRef.current = new EventSource(url);
-
-    eventSourceRef.current.onopen = () => {
-      setIsConnected(true);
-      reconnectAttemptRef.current = 0;
-    };
-
-    const handleEvent = (type) => (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        onEvent?.({ type, data });
-      } catch (e) {
-        // Ignore parse errors
-      }
-    };
-
-    eventSourceRef.current.addEventListener('connected', handleEvent('connected'));
-    eventSourceRef.current.addEventListener('heartbeat', handleEvent('heartbeat'));
-    eventSourceRef.current.addEventListener('alert', handleEvent('alert'));
-    eventSourceRef.current.addEventListener('task', handleEvent('task'));
-    eventSourceRef.current.addEventListener('agent', handleEvent('agent'));
-    eventSourceRef.current.addEventListener('shutdown', handleEvent('shutdown'));
-    // Events for scheduled/background messages from the agent
-    eventSourceRef.current.addEventListener('scheduled_response', handleEvent('scheduled_response'));
-    eventSourceRef.current.addEventListener('agent_message', handleEvent('agent_message'));
-
-    eventSourceRef.current.onmessage = handleEvent('message');
-
-    eventSourceRef.current.onerror = () => {
-      setIsConnected(false);
-      eventSourceRef.current?.close();
-
-      if (reconnectAttemptRef.current < config.sse.maxReconnectAttempts) {
-        const delay = config.sse.reconnectDelay * Math.pow(2, reconnectAttemptRef.current);
-        reconnectAttemptRef.current++;
-        setTimeout(connect, delay);
-      }
-    };
-  }, [getApiUrl, onEvent, config.sse]);
-
-  useEffect(() => {
-    connect();
-
-    return () => {
-      eventSourceRef.current?.close();
-    };
-  }, [connect]);
-
-  const disconnect = useCallback(() => {
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
-    setIsConnected(false);
-  }, []);
-
-  return { isConnected, connect, disconnect };
+function buildUrl(baseUrl, path) {
+  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${p}`;
 }
 
 /**
- * Hook for connecting to the /status/stream SSE stream.
- * Receives status/health events: status, heartbeat.
+ * Hook for connecting to the /events SSE stream.
+ * Receives IPC events: scheduled_response, agent_message, alert, task, agent.
+ *
+ * Uses shared HealthContext for health status - no duplicate health checks.
  */
-export function useStatusSSE(onEvent) {
-  const { getApiUrl, config } = useConfig();
+export function useEventsSSE(onEvent) {
+  const { config } = useConfig();
+  const { isHealthy } = useHealth();
   const eventSourceRef = useRef(null);
-  const reconnectAttemptRef = useRef(0);
+  const isConnectingRef = useRef(false);
   const [isConnected, setIsConnected] = useState(false);
 
-  const connect = useCallback(() => {
+  const baseUrl = config.api.baseUrl;
+
+  const cleanup = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
+    isConnectingRef.current = false;
+  }, []);
 
-    const url = getApiUrl('status/stream');
-    eventSourceRef.current = new EventSource(url);
+  const connect = useCallback(() => {
+    if (eventSourceRef.current || isConnectingRef.current) {
+      return;
+    }
+    isConnectingRef.current = true;
 
-    eventSourceRef.current.onopen = () => {
+    const url = buildUrl(baseUrl, '/api/ui/events');
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
       setIsConnected(true);
-      reconnectAttemptRef.current = 0;
+      isConnectingRef.current = false;
     };
 
     const handleEvent = (type) => (event) => {
@@ -106,63 +59,173 @@ export function useStatusSSE(onEvent) {
       }
     };
 
-    eventSourceRef.current.addEventListener('connected', handleEvent('connected'));
-    eventSourceRef.current.addEventListener('status', handleEvent('status'));
-    eventSourceRef.current.addEventListener('heartbeat', handleEvent('heartbeat'));
-    eventSourceRef.current.addEventListener('shutdown', handleEvent('shutdown'));
+    es.addEventListener('connected', handleEvent('connected'));
+    es.addEventListener('heartbeat', handleEvent('heartbeat'));
+    es.addEventListener('alert', handleEvent('alert'));
+    es.addEventListener('task', handleEvent('task'));
+    es.addEventListener('agent', handleEvent('agent'));
+    es.addEventListener('shutdown', handleEvent('shutdown'));
+    es.addEventListener('scheduled_response', handleEvent('scheduled_response'));
+    es.addEventListener('agent_message', handleEvent('agent_message'));
 
-    eventSourceRef.current.onmessage = handleEvent('message');
+    es.onmessage = handleEvent('message');
 
-    eventSourceRef.current.onerror = () => {
+    es.onerror = (err) => {
+      console.error('[useEventsSSE] Connection error:', err);
       setIsConnected(false);
-      eventSourceRef.current?.close();
-
-      if (reconnectAttemptRef.current < config.sse.maxReconnectAttempts) {
-        const delay = config.sse.reconnectDelay * Math.pow(2, reconnectAttemptRef.current);
-        reconnectAttemptRef.current++;
-        setTimeout(connect, delay);
-      }
+      isConnectingRef.current = false;
+      es.close();
+      eventSourceRef.current = null;
     };
-  }, [getApiUrl, onEvent, config.sse]);
+  }, [baseUrl, onEvent]);
 
+  // Connect when healthy, disconnect when not
   useEffect(() => {
-    connect();
+    console.log('[useEventsSSE] isHealthy:', isHealthy, 'hasES:', !!eventSourceRef.current);
+    if (isHealthy && !eventSourceRef.current && !isConnectingRef.current) {
+      console.log('[useEventsSSE] Connecting to /events...');
+      connect();
+    } else if (!isHealthy && eventSourceRef.current) {
+      console.log('[useEventsSSE] Disconnecting (unhealthy)');
+      cleanup();
+      setIsConnected(false);
+    }
+  }, [isHealthy, connect, cleanup]);
 
-    return () => {
-      eventSourceRef.current?.close();
-    };
-  }, [connect]);
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => cleanup();
+  }, [cleanup]);
 
   const disconnect = useCallback(() => {
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
+    cleanup();
     setIsConnected(false);
+  }, [cleanup]);
+
+  return { isConnected, isHealthy, connect, disconnect };
+}
+
+/**
+ * Hook for connecting to the /status SSE stream.
+ * Receives status/health events: status, heartbeat.
+ *
+ * Uses shared HealthContext for health status - no duplicate health checks.
+ */
+export function useStatusSSE(onEvent) {
+  const { config } = useConfig();
+  const { isHealthy } = useHealth();
+  const eventSourceRef = useRef(null);
+  const isConnectingRef = useRef(false);
+  const [isConnected, setIsConnected] = useState(false);
+
+  const baseUrl = config.api.baseUrl;
+
+  const cleanup = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    isConnectingRef.current = false;
   }, []);
 
-  return { isConnected, connect, disconnect };
+  const connect = useCallback(() => {
+    if (eventSourceRef.current || isConnectingRef.current) {
+      return;
+    }
+    isConnectingRef.current = true;
+
+    const url = buildUrl(baseUrl, '/api/ui/status');
+    console.log('[useStatusSSE] Connecting to', url);
+    const es = new EventSource(url);
+
+    es.onopen = () => {
+      setIsConnected(true);
+      isConnectingRef.current = false;
+    };
+
+    const handleEvent = (type) => (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        onEvent?.({ type, data });
+      } catch (e) {
+        // Ignore parse errors
+      }
+    };
+
+    es.addEventListener('connected', handleEvent('connected'));
+    es.addEventListener('status', handleEvent('status'));
+    es.addEventListener('heartbeat', handleEvent('heartbeat'));
+    es.addEventListener('shutdown', handleEvent('shutdown'));
+
+    es.onmessage = handleEvent('message');
+
+    es.onerror = () => {
+      setIsConnected(false);
+      isConnectingRef.current = false;
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, [baseUrl, onEvent]);
+
+  // Connect when healthy, disconnect when not
+  useEffect(() => {
+    if (isHealthy && !eventSourceRef.current && !isConnectingRef.current) {
+      connect();
+    } else if (!isHealthy && eventSourceRef.current) {
+      cleanup();
+      setIsConnected(false);
+    }
+  }, [isHealthy, connect, cleanup]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => cleanup();
+  }, [cleanup]);
+
+  const disconnect = useCallback(() => {
+    cleanup();
+    setIsConnected(false);
+  }, [cleanup]);
+
+  return { isConnected, isHealthy, connect, disconnect };
 }
 
 /**
  * Legacy hook for combined /events SSE stream.
- * @deprecated Use useChatSSE and useStatusSSE instead.
+ * @deprecated Use useEventsSSE and useStatusSSE instead.
+ *
+ * Uses shared HealthContext for health status - no duplicate health checks.
  */
 export function useSSE(onEvent) {
-  const { getApiUrl, config } = useConfig();
+  const { config } = useConfig();
+  const { isHealthy } = useHealth();
   const eventSourceRef = useRef(null);
-  const reconnectAttemptRef = useRef(0);
+  const isConnectingRef = useRef(false);
   const [isConnected, setIsConnected] = useState(false);
 
-  const connect = useCallback(() => {
+  const baseUrl = config.api.baseUrl;
+
+  const cleanup = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
+    isConnectingRef.current = false;
+  }, []);
 
-    const url = getApiUrl('events');
-    eventSourceRef.current = new EventSource(url);
+  const connect = useCallback(() => {
+    if (eventSourceRef.current || isConnectingRef.current) {
+      return;
+    }
+    isConnectingRef.current = true;
 
-    eventSourceRef.current.onopen = () => {
+    const url = buildUrl(baseUrl, '/api/ui/events');
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
       setIsConnected(true);
-      reconnectAttemptRef.current = 0;
+      isConnectingRef.current = false;
     };
 
     const handleEvent = (type) => (event) => {
@@ -174,45 +237,46 @@ export function useSSE(onEvent) {
       }
     };
 
-    eventSourceRef.current.addEventListener('connected', handleEvent('connected'));
-    eventSourceRef.current.addEventListener('status', handleEvent('status'));
-    eventSourceRef.current.addEventListener('heartbeat', handleEvent('heartbeat'));
-    eventSourceRef.current.addEventListener('alert', handleEvent('alert'));
-    eventSourceRef.current.addEventListener('task', handleEvent('task'));
-    eventSourceRef.current.addEventListener('log', handleEvent('log'));
-    eventSourceRef.current.addEventListener('agent', handleEvent('agent'));
-    eventSourceRef.current.addEventListener('shutdown', handleEvent('shutdown'));
-    // Events for scheduled/background messages from the agent
-    eventSourceRef.current.addEventListener('scheduled_response', handleEvent('scheduled_response'));
-    eventSourceRef.current.addEventListener('agent_message', handleEvent('agent_message'));
+    es.addEventListener('connected', handleEvent('connected'));
+    es.addEventListener('status', handleEvent('status'));
+    es.addEventListener('heartbeat', handleEvent('heartbeat'));
+    es.addEventListener('alert', handleEvent('alert'));
+    es.addEventListener('task', handleEvent('task'));
+    es.addEventListener('log', handleEvent('log'));
+    es.addEventListener('agent', handleEvent('agent'));
+    es.addEventListener('shutdown', handleEvent('shutdown'));
+    es.addEventListener('scheduled_response', handleEvent('scheduled_response'));
+    es.addEventListener('agent_message', handleEvent('agent_message'));
 
-    eventSourceRef.current.onmessage = handleEvent('message');
+    es.onmessage = handleEvent('message');
 
-    eventSourceRef.current.onerror = () => {
+    es.onerror = () => {
       setIsConnected(false);
-      eventSourceRef.current?.close();
-
-      if (reconnectAttemptRef.current < config.sse.maxReconnectAttempts) {
-        const delay = config.sse.reconnectDelay * Math.pow(2, reconnectAttemptRef.current);
-        reconnectAttemptRef.current++;
-        setTimeout(connect, delay);
-      }
+      isConnectingRef.current = false;
+      es.close();
+      eventSourceRef.current = null;
     };
-  }, [getApiUrl, onEvent, config.sse]);
+  }, [baseUrl, onEvent]);
 
+  // Connect when healthy, disconnect when not
   useEffect(() => {
-    connect();
+    if (isHealthy && !eventSourceRef.current && !isConnectingRef.current) {
+      connect();
+    } else if (!isHealthy && eventSourceRef.current) {
+      cleanup();
+      setIsConnected(false);
+    }
+  }, [isHealthy, connect, cleanup]);
 
-    return () => {
-      eventSourceRef.current?.close();
-    };
-  }, [connect]);
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => cleanup();
+  }, [cleanup]);
 
   const disconnect = useCallback(() => {
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
+    cleanup();
     setIsConnected(false);
-  }, []);
+  }, [cleanup]);
 
-  return { isConnected, connect, disconnect };
+  return { isConnected, isHealthy, connect, disconnect };
 }

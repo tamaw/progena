@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .env_utils import env_int, env_bool
+from .env_utils import env_int, env_bool, env_float
 
 
 @dataclass
@@ -52,6 +52,16 @@ class ChatServerConfig:
     stream_enabled: bool = True  # Enable real-time token streaming
     stream_chunk_delay_ms: int = 0  # Optional delay between chunks (0 = no delay)
 
+    # Telegram integration settings
+    telegram_enabled: bool = False  # Enable Telegram notifications when no web client connected
+    telegram_bot_token: str = ""  # Bot token from @BotFather
+    telegram_chat_id: str = ""  # Your personal chat ID (get from @userinfobot)
+    telegram_api_timeout: int = 30  # API request timeout in seconds
+    telegram_max_retries: int = 3  # Max retry attempts for failed API calls
+    telegram_retry_delay: float = 1.0  # Base delay between retries (exponential backoff)
+    telegram_max_message_length: int = 4096  # Telegram max message length
+    telegram_rate_limit_per_minute: int = 30  # Rate limit for outgoing messages
+
     @classmethod
     def from_env(cls) -> "ChatServerConfig":
         """Load config from environment variables."""
@@ -74,4 +84,13 @@ class ChatServerConfig:
             rate_limit_per_hour=env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 100000),
             stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
             stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
+            # Telegram settings
+            telegram_enabled=env_bool("TELEGRAM_ENABLED", False),
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+            telegram_api_timeout=env_int("TELEGRAM_API_TIMEOUT", 30),
+            telegram_max_retries=env_int("TELEGRAM_MAX_RETRIES", 3),
+            telegram_retry_delay=env_float("TELEGRAM_RETRY_DELAY", 1.0),
+            telegram_max_message_length=env_int("TELEGRAM_MAX_MESSAGE_LENGTH", 4096),
+            telegram_rate_limit_per_minute=env_int("TELEGRAM_RATE_LIMIT_PER_MINUTE", 30),
         )

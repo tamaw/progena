@@ -1,29 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useApi } from '../hooks/useApi';
 import { useStatusSSE } from '../hooks/useSSE';
+import { useHealth } from '../context/HealthContext';
 import Header from '../components/layout/Header';
 
 function AgentsPage() {
-  const { connectionState, getHealth } = useApi();
+  const { isHealthy } = useHealth();
   const [agents, setAgents] = useState([]);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [view, setView] = useState('grid');
   const [selectedAgent, setSelectedAgent] = useState(null);
-
-  useEffect(() => {
-    const fetchHealth = async () => {
-      try {
-        await getHealth();
-      } catch (e) {
-        // Silently fail
-      }
-    };
-
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 5000);
-    return () => clearInterval(interval);
-  }, [getHealth]);
 
   const handleStatusEvent = useCallback((event) => {
     if (!event?.data) return;
