@@ -100,6 +100,7 @@ class Progenitor:
             graph=self.graph,
             state_manager=self.state_manager,
             config=self.config,
+            llm_client=self.llm_client,
         )
 
     async def _log_startup_config(self) -> None:
@@ -147,6 +148,7 @@ class Progenitor:
             )
             from .ipc import IPCServer
 
+            assert self.loop_runner is not None, "loop_runner must be initialized before IPC server"
             self._ipc_server = IPCServer(
                 loop_runner=self.loop_runner,
                 host=self.config.runtime.ipc_host,

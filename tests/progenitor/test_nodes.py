@@ -96,7 +96,7 @@ class TestDecideNode:
 
     @pytest.mark.asyncio
     async def test_decide_forces_build_agent_for_explicit_agent_request(self):
-        """Explicit build-agent requests should not fall through to a generic ack."""
+        """Explicit build-agent requests should trigger background build flow."""
         from app.progenitor.nodes import decide
 
         mock_llm = AsyncMock()
@@ -125,8 +125,9 @@ class TestDecideNode:
 
         assert result["current_decision"] is not None
         decision = result["current_decision"]
-        assert decision.action == DecisionAction.BUILD_AGENT
-        assert decision.requires_planning is True
+        assert decision.action == DecisionAction.ANSWER_DIRECTLY
+        assert decision.requires_planning is False
+        assert "Background Build Unavailable" in (decision.direct_response or "")
 
     @pytest.mark.asyncio
     async def test_decide_no_input(self):

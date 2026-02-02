@@ -74,6 +74,7 @@ _current_loop: Optional["ProgenitorLoop"] = None
 
 def get_current_loop() -> Optional["ProgenitorLoop"]:
     """Get the current loop instance for streaming access."""
+    return _current_loop
 
 
 class ProgenitorLoop:
@@ -84,10 +85,12 @@ class ProgenitorLoop:
         graph,
         state_manager,
         config: "ProgenitorConfig",
+        llm_client=None,
     ):
         self.graph = graph
         self.state_manager = state_manager
         self.config = config
+        self.llm_client = llm_client
         self.running = False
 
         # Bounded queues to prevent memory exhaustion
@@ -100,6 +103,11 @@ class ProgenitorLoop:
         )
         self._stream_queue: asyncio.Queue = asyncio.Queue(
             maxsize=runtime.max_stream_queue_size
+        )
+        # Event queue for pushing background events to clients
+        # Events include: backlog updates, scheduled task triggers, work progress
+        self._event_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=runtime.max_output_queue_size  # Same size as output queue
         )
         # Event to signal when a graph cycle completes (for IPC synchronization)
         self._cycle_complete_event: asyncio.Event = asyncio.Event()
@@ -115,30 +123,50 @@ class ProgenitorLoop:
         self._response_was_streamed = False
         self._stream_final_sent = False
 
+        # Background build runner (initialized in run_forever)
+        self._background_runner = None
+
+        # Lock to prevent concurrent graph cycles
+        self._graph_lock = asyncio.Lock()
+
+        # Shared state for the loop (protected by _graph_lock)
+        self._state: dict[str, Any] = {}
+
     async def run_forever(self) -> None:
         """Run the perpetual loop.
 
         The loop processes user input and scheduled tasks continuously.
-        When idle, it backs off exponentially to avoid busy-waiting.
+        This runs TWO concurrent tasks:
+        1. Input handler: Waits for user input and processes it immediately
+        2. Background worker: Continuously checks for backlog/scheduled work
+
+        This ensures background work happens even without user interaction.
         State is checkpointed after each cycle for crash recovery.
         """
         global _current_loop
         _current_loop = self
         self.running = True
 
+        # Initialize background build runner
+        if self.llm_client:
+            from .background_build import BackgroundBuildRunner, set_background_runner
+            self._background_runner = BackgroundBuildRunner(
+                graph=self.graph,
+                state_manager=self.state_manager,
+                config=self.config,
+                llm_client=self.llm_client,
+            )
+            set_background_runner(self._background_runner)
+            self._background_runner.set_completion_callback(self._handle_build_completion)
+            logger.info("Background build runner initialized")
+
         # Initialize telemetry
         _init_telemetry(self.config)
 
-        # Get runtime config values
-        runtime = self.config.runtime
-        backoff = runtime.idle_backoff_seconds
-        max_backoff = runtime.max_backoff_seconds
-        backoff_multiplier = runtime.backoff_multiplier
-
         run_id = str(uuid.uuid4())
 
-        # Initialize state
-        state = {
+        # Initialize shared state
+        self._state = {
             "run_id": run_id,
             "cycle_count": 0,
             "actions_this_cycle": 0,
@@ -148,148 +176,372 @@ class ProgenitorLoop:
             "schedule": [],
             "agents": [],
             "idle_cycles": 0,
-            "current_backoff_seconds": backoff,
+            "current_backoff_seconds": self.config.runtime.idle_backoff_seconds,
         }
 
         # Load persisted state (recover from previous run)
         persisted = await self.state_manager.get_state()
-        state.update(persisted)
-        state["run_id"] = run_id  # New run ID for this session
+        self._state.update(persisted)
+        self._state["run_id"] = run_id  # New run ID for this session
 
         logger.info("Starting perpetual loop (run_id: %s)", run_id)
 
         # Update health immediately on startup
-        await self._update_health_file(state)
+        await self._update_health_file(self._state)
+
+        # Push startup event
+        await self._push_event("loop_started", f"Perpetual loop started (run_id: {run_id})")
+
+        # Run both tasks concurrently
+        input_task = asyncio.create_task(self._input_handler_loop(run_id))
+        background_task = asyncio.create_task(self._background_worker_loop(run_id))
+
+        try:
+            # Wait for either task to complete (usually due to shutdown)
+            done, pending = await asyncio.wait(
+                [input_task, background_task],
+                return_when=asyncio.FIRST_EXCEPTION,
+            )
+
+            # Check for exceptions
+            for task in done:
+                if task.exception():
+                    logger.error("Task failed: %s", task.exception())
+
+            # Cancel remaining tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        except asyncio.CancelledError:
+            logger.info("Loop cancelled by signal")
+            input_task.cancel()
+            background_task.cancel()
+            try:
+                await asyncio.gather(input_task, background_task, return_exceptions=True)
+            except asyncio.CancelledError:
+                pass
+
+        # Final checkpoint and telemetry shutdown
+        await self._checkpoint_state(self._state)
+        await self._update_health_file(self._state, status="stopped")
+        await self._push_event("loop_stopped", "Perpetual loop stopped")
+        self._shutdown_telemetry()
+        logger.info("Loop terminated")
+
+    async def _input_handler_loop(self, run_id: str) -> None:
+        """Handle user input messages.
+
+        This task waits for user input and processes it through the graph.
+        It runs concurrently with the background worker.
+        """
+        runtime = self.config.runtime
 
         while self.running:
             try:
-                # Check for user input
-                user_input = await self._get_input(timeout=backoff)
+                # Wait for user input (with short timeout to check running flag)
+                user_input = await self._get_input(timeout=1.0)
 
-                if user_input:
-                    logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
+                if not user_input:
+                    continue
+
+                logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
+
+                # Acquire lock to run graph cycle
+                async with self._graph_lock:
                     # Reset backoff on input
-                    backoff = runtime.idle_backoff_seconds
-                    state["current_backoff_seconds"] = backoff
-                    state["idle_cycles"] = 0
+                    self._state["current_backoff_seconds"] = runtime.idle_backoff_seconds
+                    self._state["idle_cycles"] = 0
 
-                    state["current_input"] = user_input
-                    state["cycle_count"] = state.get("cycle_count", 0) + 1
-                    state["actions_this_cycle"] = 0
+                    self._state["current_input"] = user_input
+                    self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
+                    self._state["actions_this_cycle"] = 0
 
-                    # Enable streaming mode - set flag that nodes can check
-                    # The actual callback is accessed via self.stream_token
+                    # Enable streaming mode
                     self._streaming_enabled = True
                     self._response_was_streamed = False
                     self._stream_final_sent = False
 
                     # Run graph cycle
-                    thread_id = f"cycle_{state['cycle_count']}"
+                    await self._run_graph_cycle(run_id, source="user_input")
 
-                    # Start cycle telemetry
-                    cycle_telem = self._start_cycle_telemetry(state["cycle_count"], run_id)
-
-                    async for event in self.graph.astream(
-                        state,
-                        config={"configurable": {"thread_id": thread_id}},
-                    ):
-                        # Process graph events
-                        for node_name, node_output in event.items():
-                            output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
-                            logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
-                            if isinstance(node_output, dict):
-                                state.update(node_output)
-
-                            # Record node event in telemetry
-                            if cycle_telem:
-                                cycle_telem.add_event(f"node.{node_name}", {"output_keys": str(output_info)})
-
-                        # Check for response to send - stream it if not already streamed
-                        pending = state.get("pending_response")
-                        if self._response_was_streamed and not self._stream_final_sent:
-                            # Response was already streamed by a node, just send final marker ONCE
-                            await self.stream_final()
-                            self._stream_final_sent = True
-                            state["pending_response"] = None
-                        elif pending:
-                            # Send complete response as a single chunk
-                            await self._stream_response(str(pending))
-                            state["pending_response"] = None
-
-                    # End cycle telemetry
-                    if cycle_telem:
-                        cycle_telem.complete(success=True)
-
-                    # Signal that the cycle is complete (for IPC synchronization)
-                    # This allows the IPC server to know when it's safe to process the next request
-                    logger.info("Graph cycle complete, signaling")
-                    await self._signal_cycle_complete()
-
-                    # Disable streaming mode and reset streaming state
+                    # Disable streaming mode
                     self._streaming_enabled = False
                     self._response_was_streamed = False
                     self._stream_final_sent = False
 
-                    # Checkpoint state after each cycle
-                    await self._checkpoint_state(state)
-                    await self._update_health_file(state)
-
-                else:
-                    # No input - check for scheduled tasks or backlog
-                    has_work = await self._check_pending_work(state)
-
-                    if has_work:
-                        # Reset backoff when work is available
-                        backoff = runtime.idle_backoff_seconds
-                        state["current_backoff_seconds"] = backoff
-                        state["idle_cycles"] = 0
-                        # Run a cycle to process pending work
-                        state["current_input"] = None
-                        state["cycle_count"] = state.get("cycle_count", 0) + 1
-
-                        # Start cycle telemetry
-                        cycle_telem = self._start_cycle_telemetry(state["cycle_count"], run_id)
-
-                        async for event in self.graph.astream(
-                            state,
-                            config={"configurable": {"thread_id": f"cycle_{state['cycle_count']}"}},
-                        ):
-                            for node_name, node_output in event.items():
-                                if isinstance(node_output, dict):
-                                    state.update(node_output)
-                                if cycle_telem:
-                                    cycle_telem.add_event(f"node.{node_name}")
-
-                        if cycle_telem:
-                            cycle_telem.complete(success=True)
-
-                        await self._checkpoint_state(state)
-                        await self._update_health_file(state)
-                    else:
-                        # Increase backoff exponentially when truly idle
-                        # Still update health to show we're alive
-                        await self._update_health_file(state)
-                        state["idle_cycles"] = state.get("idle_cycles", 0) + 1
-                        backoff = min(backoff * backoff_multiplier, max_backoff)
-                        state["current_backoff_seconds"] = backoff
-                        logger.debug("Idle, backoff now %.1f s", backoff)
+                    # Signal cycle complete for IPC synchronization
+                    logger.info("Graph cycle complete, signaling")
+                    await self._signal_cycle_complete()
 
             except asyncio.CancelledError:
-                logger.info("Loop cancelled by signal")
-                await self._update_health_file(state, status="suspended")
+                logger.info("Input handler cancelled")
                 break
             except Exception as e:
-                logger.error("Loop error: %s", e, exc_info=True)
+                logger.error("Input handler error: %s", e, exc_info=True)
+                await self._push_event("error", f"Input handler error: {e}")
+                await asyncio.sleep(1.0)
+
+    async def _background_worker_loop(self, run_id: str) -> None:
+        """Process backlog and scheduled tasks in the background.
+
+        This task runs independently of user input, continuously checking
+        for pending work and processing it. This is the TRUE perpetual loop.
+        """
+        runtime = self.config.runtime
+        backoff = runtime.idle_backoff_seconds
+        max_backoff = runtime.max_backoff_seconds
+        backoff_multiplier = runtime.backoff_multiplier
+        last_idle_log_backoff: Optional[float] = None
+
+        logger.info("Background worker started")
+        await self._push_event("background_worker_started", "Background worker is now running")
+
+        while self.running:
+            try:
+                # Check if there's pending work (without holding the lock)
+                has_work = await self._check_pending_work(self._state)
+
+                if has_work:
+                    # Try to acquire lock (non-blocking check first)
+                    if self._graph_lock.locked():
+                        # User input is being processed, wait a bit
+                        logger.debug("Graph lock held, waiting for user input to complete")
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    async with self._graph_lock:
+                        # Re-check work is still available (may have been processed)
+                        has_work = await self._check_pending_work(self._state)
+                        if not has_work:
+                            continue
+
+                        # Reset backoff when work is available
+                        backoff = runtime.idle_backoff_seconds
+                        self._state["current_backoff_seconds"] = backoff
+                        self._state["idle_cycles"] = 0
+
+                        # Notify clients that background work is starting
+                        work_type = "scheduled" if self._state.get("due_items") else "backlog"
+                        await self._push_event(
+                            "work_started",
+                            f"Processing {work_type} work",
+                            {"work_type": work_type}
+                        )
+
+                        # Run a cycle to process pending work
+                        self._state["current_input"] = None
+                        self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
+
+                        await self._run_graph_cycle(run_id, source=f"background_{work_type}")
+
+                        # Notify clients that work completed
+                        await self._push_event(
+                            "work_completed",
+                            f"Completed {work_type} work",
+                            {"work_type": work_type}
+                        )
+                else:
+                    # No work - increase backoff exponentially
+                    self._state["idle_cycles"] = self._state.get("idle_cycles", 0) + 1
+                    backoff = min(backoff * backoff_multiplier, max_backoff)
+                    self._state["current_backoff_seconds"] = backoff
+
+                    # Update health periodically even when idle
+                    await self._update_health_file(self._state)
+
+                    if backoff >= 60 and backoff != last_idle_log_backoff:
+                        logger.info(
+                            "Background worker idle; next check in %.1f s (idle_cycles=%d)",
+                            backoff,
+                            self._state.get("idle_cycles", 0),
+                        )
+                        last_idle_log_backoff = backoff
+                    else:
+                        logger.debug("Background worker idle, sleeping %.1f s", backoff)
+                    await asyncio.sleep(backoff)
+
+            except asyncio.CancelledError:
+                logger.info("Background worker cancelled")
+                break
+            except Exception as e:
+                logger.error("Background worker error: %s", e, exc_info=True)
+                await self._push_event("error", f"Background worker error: {e}")
                 if self._cycle_telemetry:
                     self._cycle_telemetry.complete(success=False, error=str(e))
-                await self._update_health_file(state, status="error", error=str(e))
+                await self._update_health_file(self._state, status="error", error=str(e))
                 await asyncio.sleep(backoff)
 
-        # Final checkpoint and telemetry shutdown
-        await self._checkpoint_state(state)
-        await self._update_health_file(state, status="stopped")
-        self._shutdown_telemetry()
-        logger.info("Loop terminated")
+        logger.info("Background worker stopped")
+
+    async def _run_graph_cycle(self, run_id: str, source: str = "unknown") -> None:
+        """Run a single graph cycle.
+
+        Args:
+            run_id: The run ID for this session.
+            source: Source of the cycle (e.g., 'user_input', 'background_backlog').
+        """
+        cycle_num = self._state["cycle_count"]
+        thread_id = f"cycle_{cycle_num}"
+        is_background = source.startswith("background_")
+
+        logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
+
+        # Start cycle telemetry
+        cycle_telem = self._start_cycle_telemetry(cycle_num, run_id)
+        if cycle_telem:
+            cycle_telem.add_event("cycle_start", {"source": source})
+
+        try:
+            async for event in self.graph.astream(
+                self._state,
+                config={"configurable": {"thread_id": thread_id}},
+            ):
+                # Process graph events
+                for node_name, node_output in event.items():
+                    output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
+                    logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
+                    if isinstance(node_output, dict):
+                        self._state.update(node_output)
+
+                    # Record node event in telemetry
+                    if cycle_telem:
+                        cycle_telem.add_event(f"node.{node_name}", {"output_keys": str(output_info)})
+
+                # Check for response to send - stream it if not already streamed
+                pending = self._state.get("pending_response")
+                if self._response_was_streamed and not self._stream_final_sent:
+                    # Response was already streamed by a node, just send final marker ONCE
+                    await self.stream_final()
+                    self._stream_final_sent = True
+                    self._state["pending_response"] = None
+                elif pending:
+                    if is_background:
+                        # Background task completed - push response as event for clients
+                        current_item = self._state.get("current_work_item", {})
+                        item_context = {}
+                        if hasattr(current_item, "context"):
+                            item_context = current_item.context
+                        elif isinstance(current_item, dict):
+                            item_context = current_item.get("context", {})
+
+                        await self._push_event(
+                            "scheduled_response",
+                            str(pending),
+                            {
+                                "source": source,
+                                "cycle": cycle_num,
+                                "schedule_id": item_context.get("schedule_id"),
+                                "original_request": item_context.get("user_request"),
+                            }
+                        )
+                        logger.info("Pushed scheduled response event: %s", str(pending)[:100])
+                    else:
+                        # User input - stream response as usual
+                        await self._stream_response(str(pending))
+                    self._state["pending_response"] = None
+
+            # End cycle telemetry
+            if cycle_telem:
+                cycle_telem.complete(success=True)
+
+            # Checkpoint state after cycle
+            await self._checkpoint_state(self._state)
+            await self._update_health_file(self._state)
+
+        except Exception as e:
+            logger.error("Graph cycle %d failed: %s", cycle_num, e, exc_info=True)
+            if cycle_telem:
+                cycle_telem.complete(success=False, error=str(e))
+            raise
+
+    async def _push_event(
+        self,
+        event_type: str,
+        content: str = "",
+        metadata: Optional[dict[str, Any]] = None
+    ) -> None:
+        """Push an event to clients via the event queue.
+
+        Args:
+            event_type: Type of event (e.g., 'backlog_update', 'work_started').
+            content: Human-readable description.
+            metadata: Additional event data.
+        """
+        event = {
+            "event_type": event_type,
+            "content": content,
+            "metadata": metadata or {},
+            "timestamp": utcnow_isoformat(),
+        }
+        try:
+            self._event_queue.put_nowait(event)
+            logger.debug("Pushed event: %s", event_type)
+        except asyncio.QueueFull:
+            logger.warning(
+                "Event queue full (%d/%d), dropping event: %s",
+                self._event_queue.qsize(),
+                self._event_queue.maxsize,
+                event_type
+            )
+
+    def _handle_build_completion(self, result) -> None:
+        """Handle background build completion by pushing an event to clients."""
+        status = getattr(result.status, "value", str(result.status))
+        output_summary = result.output_summary or ""
+        error_message = result.error_message or ""
+
+        if status == "completed":
+            content = f"✅ Build completed. {output_summary}".strip()
+        elif status == "failed":
+            content = f"❌ Build failed. {error_message}".strip()
+        elif status == "cancelled":
+            content = "⏹️ Build cancelled."
+        else:
+            content = f"ℹ️ Build finished with status: {status}".strip()
+
+        metadata = {
+            "build_id": result.build_id,
+            "status": status,
+            "task_description": result.task_description,
+            "output_summary": result.output_summary,
+            "error_message": result.error_message,
+            "agent_name": result.agent_name,
+            "iterations": result.iterations,
+            "verification_score": result.verification_score,
+            "success_criteria_met": result.success_criteria_met,
+            "success_criteria_unmet": result.success_criteria_unmet,
+        }
+
+        asyncio.create_task(
+            self._push_event(
+                event_type="build_completed",
+                content=content,
+                metadata=metadata,
+            )
+        )
+
+    async def get_event(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
+        """Get an event from the event queue.
+
+        Args:
+            timeout: Max seconds to wait. None = wait forever.
+
+        Returns:
+            Event dict or None on timeout.
+        """
+        try:
+            if timeout:
+                return await asyncio.wait_for(
+                    self._event_queue.get(),
+                    timeout=timeout
+                )
+            return await self._event_queue.get()
+        except asyncio.TimeoutError:
+            return None
 
     def _start_cycle_telemetry(self, cycle_number: int, run_id: str):
         """Start telemetry tracking for a cycle."""
@@ -620,6 +872,11 @@ class ProgenitorLoop:
                 "size": self._stream_queue.qsize(),
                 "maxsize": self._stream_queue.maxsize,
                 "full": self._stream_queue.full(),
+            },
+            "event_queue": {
+                "size": self._event_queue.qsize(),
+                "maxsize": self._event_queue.maxsize,
+                "full": self._event_queue.full(),
             },
         }
 

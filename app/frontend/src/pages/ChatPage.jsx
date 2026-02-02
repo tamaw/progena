@@ -14,7 +14,7 @@ function ChatPage() {
   const { config } = useConfig();
   const { connectionState, sendMessageStream, cancelStream, getHealth } = useApi();
   const { show } = useNotifications();
-  
+
   const [messages, setMessages] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [typingState, setTypingState] = useState('thinking');
@@ -110,8 +110,8 @@ function ChatPage() {
           setTypingState('generating');
           assistantContent += chunk;
           setTokenCount(prev => prev + 1);
-          setMessages(prev => prev.map(m => 
-            m.id === assistantId 
+          setMessages(prev => prev.map(m =>
+            m.id === assistantId
               ? { ...m, content: assistantContent }
               : m
           ));

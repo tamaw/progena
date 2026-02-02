@@ -19,6 +19,7 @@ from .protocol import (
     decode_message,
     read_message,
     write_message,
+    agent_event,
 )
 from .server import IPCServer
 from .client import IPCClient
@@ -30,6 +31,7 @@ __all__ = [
     "decode_message",
     "read_message",
     "write_message",
+    "agent_event",
     "IPCServer",
     "IPCClient",
 ]
