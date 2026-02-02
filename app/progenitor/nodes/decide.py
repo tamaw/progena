@@ -208,6 +208,26 @@ def _looks_like_build_status_request(user_input: str) -> bool:
     return any(pattern in text for pattern in direct_patterns)
 
 
+def _looks_like_current_time_request(user_input: str) -> bool:
+    """Heuristic: detect requests for the current time (UTC)."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    direct_patterns = [
+        "current time",
+        "utc time",
+        "time now",
+        "what time is it",
+        "tell me the time",
+        "tell me the current time",
+        "what is the time",
+        "whats the time",
+        "what's the time",
+    ]
+
+    return any(pattern in text for pattern in direct_patterns)
+
 def _looks_like_schedule_request(user_input: str) -> bool:
     """Heuristic: detect requests to schedule/remind/do something at a time."""
     text = (user_input or "").lower()
@@ -415,9 +435,17 @@ async def _execute_system_tool_inline(
     tool_registry,
     llm_client,
     state: "ProgenitorState | None" = None,
+    state_manager=None,
 ) -> tuple[dict | None, str | None]:
     """
     Execute a system tool inline and return (result, error).
+
+    Args:
+        tool_name: Name of the system tool to execute.
+        tool_registry: Registry of available tools and agents.
+        llm_client: LLM client for tools that need AI capabilities.
+        state: Current graph state (in-memory).
+        state_manager: StateManager for reading persisted state files.
 
     System tools are simple operations that should execute immediately
     in the chat flow, not through the backlog system.
@@ -453,6 +481,11 @@ async def _execute_system_tool_inline(
             {
                 "name": "list_schedule",
                 "description": "List all scheduled tasks and reminders",
+                "type": "system_tool",
+            },
+            {
+                "name": "current_time",
+                "description": "Return the current UTC time",
                 "type": "system_tool",
             },
             {
@@ -521,27 +554,86 @@ async def _execute_system_tool_inline(
         }, None
 
     elif tool_name == "build_status":
-        # Return current build status from state
-        if state is None:
+        # Return current build status - check background runner first
+        from ..runtime.background_build import get_background_runner
+
+        runner = get_background_runner()
+
+        if runner:
+            # Get status from background runner
+            build_result = runner.get_build_status()
+
+            if build_result:
+                result = {
+                    "build_in_progress": build_result.status.value in ("pending", "running"),
+                    "build_id": build_result.build_id,
+                    "status": build_result.status.value,
+                    "task_description": build_result.task_description,
+                    "started_at": build_result.started_at.isoformat() if build_result.started_at else None,
+                    "completed_at": build_result.completed_at.isoformat() if build_result.completed_at else None,
+                    "iterations": build_result.iterations,
+                    "verification_score": build_result.verification_score,
+                    "output_summary": build_result.output_summary,
+                    "error_message": build_result.error_message,
+                    "agent_name": build_result.agent_name,
+                    "success_criteria_met": build_result.success_criteria_met,
+                    "success_criteria_unmet": build_result.success_criteria_unmet,
+                }
+
+                # Get recent builds
+                recent_builds = runner.get_recent_builds(limit=3)
+                if len(recent_builds) > 1:
+                    result["recent_builds"] = [
+                        {
+                            "build_id": b.build_id,
+                            "status": b.status.value,
+                            "task_description": b.task_description[:50] + "..." if len(b.task_description) > 50 else b.task_description,
+                        }
+                        for b in recent_builds[:-1]  # Exclude current
+                    ]
+
+                return result, None
+
+        # Read from persisted state files via state_manager
+        persisted_state = None
+        if state_manager:
+            try:
+                persisted_state = await state_manager.get_state()
+            except Exception as e:
+                logger.warning("Failed to read persisted state: %s", e)
+
+        # Merge in-memory state with persisted state (in-memory takes priority)
+        effective_state = {}
+        if persisted_state:
+            effective_state.update(persisted_state)
+        if state:
+            effective_state.update(state)
+
+        if not effective_state:
             return {
                 "build_in_progress": False,
-                "message": "No state available - likely no build in progress",
+                "message": "No build in progress and no recent builds found.",
             }, None
 
-        build_in_progress = state.get("build_in_progress", False)
-        build_phase = state.get("build_phase")
-        build_task = state.get("build_task_description")
-        build_started = state.get("build_started_at")
-        current_iteration = state.get("current_iteration", 0)
-        verification_score = state.get("verification_score", 0)
-        build_messages = state.get("build_messages", [])
-        ideal_state = state.get("ideal_state")
+        build_in_progress = effective_state.get("build_in_progress", False)
+        build_phase = effective_state.get("build_phase")
+        build_task = effective_state.get("build_task_description")
+        build_started = effective_state.get("build_started_at")
+        build_id = effective_state.get("build_id")
+        current_iteration = effective_state.get("current_iteration", 0)
+        verification_score = effective_state.get("verification_score", 0)
+        build_messages = effective_state.get("build_messages", [])
+        ideal_state = effective_state.get("ideal_state")
+
+        # Check for last build result (completed async builds store this)
+        last_result = effective_state.get("last_build_result")
 
         # Get the last few build messages
         recent_messages = build_messages[-5:] if build_messages else []
 
         result = {
             "build_in_progress": build_in_progress,
+            "build_id": build_id,
             "phase": build_phase,
             "task_description": build_task,
             "started_at": build_started,
@@ -585,6 +677,13 @@ async def _execute_system_tool_inline(
             "module_count": len([m for m in modules if m.is_directory]),
             "file_count": len([m for m in modules if not m.is_directory]),
             "tip": "Use follow-up questions to explore specific modules or search for code patterns.",
+        }, None
+
+    elif tool_name == "current_time":
+        # Return current UTC time
+        return {
+            "utc_time": utcnow_isoformat(),
+            "timezone": "UTC",
         }, None
 
     elif tool_name == "list_schedule":
@@ -677,17 +776,62 @@ def _format_tool_result(tool_name: str, result: dict) -> str:
 
     elif tool_name == "build_status":
         build_in_progress = result.get("build_in_progress", False)
+        status = result.get("status", "unknown")
+
+        # Handle completed/failed builds
+        if status in ("completed", "failed", "cancelled"):
+            status_emoji = "✓" if status == "completed" else "✗" if status == "failed" else "○"
+            lines = [f"**{status_emoji} Build {status.title()}**"]
+            lines.append(f"  • **Task:** {result.get('task_description', 'No description')}")
+            lines.append(f"  • **Build ID:** `{result.get('build_id', 'unknown')}`")
+            lines.append(f"  • **Started:** {result.get('started_at', 'unknown')}")
+            lines.append(f"  • **Completed:** {result.get('completed_at', 'unknown')}")
+            lines.append(f"  • **Iterations:** {result.get('iterations', 0)}")
+            lines.append(f"  • **Final Score:** {result.get('verification_score', 0):.2f}")
+
+            if result.get("agent_name"):
+                lines.append(f"  • **Agent Built:** `{result['agent_name']}`")
+
+            if result.get("output_summary"):
+                lines.append(f"\n**Summary:** {result['output_summary']}")
+
+            if result.get("error_message"):
+                lines.append(f"\n**Error:** {result['error_message']}")
+
+            # Show criteria results
+            met = result.get("success_criteria_met", [])
+            unmet = result.get("success_criteria_unmet", [])
+            if met:
+                lines.append(f"\n**✓ Criteria Met ({len(met)}):**")
+                for c in met[:5]:
+                    lines.append(f"  • {c}")
+            if unmet:
+                lines.append(f"\n**○ Criteria Unmet ({len(unmet)}):**")
+                for c in unmet[:5]:
+                    lines.append(f"  • {c}")
+
+            return "\n".join(lines)
 
         if not build_in_progress:
+            # Check for message indicating no builds
+            message = result.get("message")
+            if message:
+                return f"**📋 Build Status**\n\n{message}"
             return "**No build in progress.** The system is idle and ready for new build requests."
 
-        lines = ["**Build Status:**"]
-        lines.append(f"  • **Status:** In Progress")
-        lines.append(f"  • **Phase:** {result.get('phase', 'unknown')}")
+        # Running build
+        lines = ["**🔨 Build In Progress**"]
         lines.append(f"  • **Task:** {result.get('task_description', 'No description')}")
+        lines.append(f"  • **Build ID:** `{result.get('build_id', 'unknown')}`")
+        lines.append(f"  • **Status:** {status}")
         lines.append(f"  • **Started:** {result.get('started_at', 'unknown')}")
-        lines.append(f"  • **Iteration:** {result.get('current_iteration', 0)}")
-        lines.append(f"  • **Score:** {result.get('verification_score', 0):.2f} / {result.get('target_score', 0.8):.2f}")
+        lines.append(f"  • **Iterations:** {result.get('iterations', 0)}")
+        lines.append(f"  • **Current Score:** {result.get('verification_score', 0):.2f}")
+
+        # Show phase if available (sync builds)
+        phase = result.get("phase")
+        if phase:
+            lines.append(f"  • **Phase:** {phase}")
 
         criteria = result.get("success_criteria", [])
         if criteria:
@@ -733,6 +877,12 @@ def _format_tool_result(tool_name: str, result: dict) -> str:
             lines.append(f"\n💡 *{tip}*")
 
         return "\n".join(lines)
+
+    elif tool_name == "current_time":
+        utc_time = result.get("utc_time")
+        if not utc_time:
+            return "Unable to determine current UTC time."
+        return f"Current UTC time: {utc_time}"
 
     elif tool_name == "list_schedule":
         tasks = result.get("scheduled_tasks", [])
@@ -841,7 +991,9 @@ def create_node(
             elif _looks_like_list_schedule_request(user_input):
                 # Execute list_schedule system tool inline
                 tool_name = "list_schedule"
-                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
+                result, error = await _execute_system_tool_inline(
+                    tool_name, tool_registry, llm_client, state, state_manager
+                )
                 if error:
                     response_text = f"Error executing {tool_name}: {error}"
                 else:
@@ -863,11 +1015,41 @@ def create_node(
 
                 return {"current_decision": decision}
 
+            # Check for current time requests
+            elif _looks_like_current_time_request(user_input):
+                # Execute current_time system tool inline
+                tool_name = "current_time"
+                result, error = await _execute_system_tool_inline(
+                    tool_name, tool_registry, llm_client, state, state_manager
+                )
+                if error:
+                    response_text = f"Error executing {tool_name}: {error}"
+                else:
+                    response_text = _format_tool_result(tool_name, result)
+
+                decision = Decision(
+                    action=DecisionAction.ANSWER_DIRECTLY,
+                    reasoning="Executed current_time system tool inline.",
+                    requires_planning=False,
+                    direct_response=response_text,
+                )
+
+                if state_manager:
+                    await state_manager.log_decision({
+                        "event": "system_tool_executed",
+                        "tool_name": tool_name,
+                        "timestamp": utcnow_isoformat(),
+                    })
+
+                return {"current_decision": decision}
+
             # Check for build status requests
             elif _looks_like_build_status_request(user_input):
                 # Execute build_status system tool inline
                 tool_name = "build_status"
-                result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
+                result, error = await _execute_system_tool_inline(
+                    tool_name, tool_registry, llm_client, state, state_manager
+                )
                 if error:
                     response_text = f"Error executing {tool_name}: {error}"
                 else:
@@ -981,13 +1163,78 @@ def create_node(
 
                     return {"current_decision": decision}
 
-                decision_data = {
-                    "action": "build_agent",
-                    "reasoning": "User explicitly requested creation of a new agent.",
-                    "requires_planning": True,
-                    "target_capabilities": _infer_target_capabilities(user_input),
-                    "direct_response": None,
-                }
+                # Start async build in the background
+                from ..runtime.background_build import get_background_runner
+
+                runner = get_background_runner()
+                task_description = f"Build agent: {user_input[:100]}"
+                target_capabilities = _infer_target_capabilities(user_input)
+
+                if runner:
+                    try:
+                        # Start the build asynchronously
+                        build_id, ack_message = await runner.start_build(
+                            user_input=user_input,
+                            task_description=task_description,
+                            target_capabilities=target_capabilities,
+                            initial_state=dict(state),
+                        )
+
+                        logger.info("Started async build %s for: %s", build_id, task_description)
+
+                        # Return acknowledgment to user immediately
+                        decision = Decision(
+                            action=DecisionAction.ANSWER_DIRECTLY,
+                            reasoning=f"Started async build {build_id}",
+                            requires_planning=False,
+                            direct_response=ack_message,
+                        )
+
+                        if state_manager:
+                            await state_manager.log_decision({
+                                "event": "async_build_started",
+                                "build_id": build_id,
+                                "task_description": task_description,
+                                "timestamp": utcnow_isoformat(),
+                            })
+
+                        # Update state to mark build in progress
+                        return {
+                            "current_decision": decision,
+                            "build_in_progress": True,
+                            "build_id": build_id,
+                            "build_task_description": task_description,
+                            "build_started_at": utcnow_isoformat(),
+                        }
+
+                    except RuntimeError as e:
+                        # Build already in progress (race condition)
+                        logger.warning("Failed to start async build: %s", e)
+                        decision = Decision(
+                            action=DecisionAction.ANSWER_DIRECTLY,
+                            reasoning="Build already in progress",
+                            requires_planning=False,
+                            direct_response=(
+                                f"⚠️ **Build Already In Progress**\n\n"
+                                f"{str(e)}\n\n"
+                                f"Ask for `build status` to check progress."
+                            ),
+                        )
+                        return {"current_decision": decision}
+                else:
+                    # No background runner available - do not fall back to sync build
+                    logger.error("No background runner available; build requests must run in background")
+                    decision = Decision(
+                        action=DecisionAction.ANSWER_DIRECTLY,
+                        reasoning="Background build runner unavailable",
+                        requires_planning=False,
+                        direct_response=(
+                            "⚠️ **Background Build Unavailable**\n\n"
+                            "I couldn't start the build because the background runner isn't available. "
+                            "Please try again in a moment."
+                        ),
+                    )
+                    return {"current_decision": decision}
 
             # Parse decision
             action_str = decision_data.get("action", "answer_directly")

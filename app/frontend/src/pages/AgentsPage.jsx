@@ -37,7 +37,7 @@ function AgentsPage() {
 
   const filteredAgents = agents.filter(agent => {
     const matchesFilter = filter === 'all' || agent.status === filter;
-    const matchesSearch = !search || 
+    const matchesSearch = !search ||
       agent.name?.toLowerCase().includes(search.toLowerCase()) ||
       agent.description?.toLowerCase().includes(search.toLowerCase());
     return matchesFilter && matchesSearch;
@@ -136,8 +136,8 @@ function AgentsPage() {
         <section className={`agents-${view}`} id="agents-container">
           {filteredAgents.length > 0 ? (
             filteredAgents.map((agent, i) => (
-              <div 
-                key={i} 
+              <div
+                key={i}
                 className="agent-card"
                 onClick={() => setSelectedAgent(agent)}
               >

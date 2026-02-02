@@ -50,6 +50,9 @@ class MessageType(str, Enum):
     ERROR = "error"
     READY = "ready"
 
+    # Background event messages (server -> client, pushed asynchronously)
+    AGENT_EVENT = "agent_event"
+
 
 @dataclass
 class IPCMessage:
@@ -63,6 +66,7 @@ class IPCMessage:
     metadata: Optional[dict[str, Any]] = None
     error_code: Optional[str] = None
     timestamp: Optional[str] = None
+    event_type: Optional[str] = None  # For AGENT_EVENT: 'backlog_update', 'schedule_triggered', etc.
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -82,6 +86,8 @@ class IPCMessage:
             d["error_code"] = self.error_code
         if self.timestamp:
             d["timestamp"] = self.timestamp
+        if self.event_type:
+            d["event_type"] = self.event_type
         return d
 
     @classmethod
@@ -103,6 +109,7 @@ class IPCMessage:
             metadata=data.get("metadata"),
             error_code=data.get("error_code"),
             timestamp=data.get("timestamp"),
+            event_type=data.get("event_type"),
         )
 
 
@@ -299,3 +306,29 @@ def ready_message() -> IPCMessage:
 def shutdown_message() -> IPCMessage:
     """Create a shutdown request message."""
     return IPCMessage(type=MessageType.SHUTDOWN)
+
+
+def agent_event(
+    event_type: str,
+    content: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+) -> IPCMessage:
+    """Create an agent event message for background notifications.
+
+    Args:
+        event_type: Type of event (e.g., 'backlog_update', 'schedule_triggered',
+                   'task_completed', 'work_started').
+        content: Human-readable description of the event.
+        metadata: Additional event data (e.g., task details, progress info).
+
+    Returns:
+        IPCMessage with type AGENT_EVENT.
+    """
+    from ..runtime.time_utils import utcnow_isoformat
+    return IPCMessage(
+        type=MessageType.AGENT_EVENT,
+        event_type=event_type,
+        content=content,
+        metadata=metadata,
+        timestamp=utcnow_isoformat(),
+    )

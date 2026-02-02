@@ -44,6 +44,9 @@ class IPCClient:
 
     Provides a reliable connection to the Progenitor IPC server with
     automatic reconnection and streaming support.
+
+    Also receives push events from the server about background work
+    (backlog processing, scheduled tasks, etc.).
     """
 
     def __init__(
@@ -80,6 +83,10 @@ class IPCClient:
         self._streaming = False  # Flag to pause heartbeats during streaming
         self._request_in_progress = False  # Flag to pause heartbeats during requests
         self._missed_heartbeats = 0  # Track consecutive missed heartbeats
+
+        # Event handling - queue for received events and optional callback
+        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self._event_callback: Optional[Any] = None  # Callable[[dict], Awaitable[None]]
 
     async def connect(self) -> bool:
         """Connect to the Progenitor IPC server.
@@ -275,24 +282,30 @@ class IPCClient:
                     user_message(message, request_id, stream=False),
                 )
 
-                # Read response
-                msg = await read_message(self._reader, timeout=self.timeout)
+                # Read response (may receive events while waiting)
+                while True:
+                    msg = await read_message(self._reader, timeout=self.timeout)
 
-                if msg is None:
-                    self._connected = False
-                    raise ConnectionError("Connection closed by server")
+                    if msg is None:
+                        self._connected = False
+                        raise ConnectionError("Connection closed by server")
 
-                self._last_activity = time.time()
+                    self._last_activity = time.time()
 
-                if msg.type == MessageType.ERROR:
-                    raise RuntimeError(f"Progenitor error: {msg.content}")
+                    # Handle events that arrive during message exchange
+                    if msg.type == MessageType.AGENT_EVENT:
+                        await self._handle_event(msg)
+                        continue  # Keep waiting for actual response
 
-                if msg.type == MessageType.ASSISTANT_MESSAGE:
-                    return msg.content
+                    if msg.type == MessageType.ERROR:
+                        raise RuntimeError(f"Progenitor error: {msg.content}")
 
-                # Unexpected message type
-                logger.warning("Unexpected message type: %s", msg.type)
-                return msg.content or ""
+                    if msg.type == MessageType.ASSISTANT_MESSAGE:
+                        return msg.content
+
+                    # Unexpected message type - log and use content
+                    logger.warning("Unexpected message type: %s", msg.type)
+                    return msg.content or ""
 
             except asyncio.TimeoutError:
                 raise TimeoutError(f"Request timed out after {self.timeout}s")
@@ -344,7 +357,7 @@ class IPCClient:
                     user_message(message, request_id, stream=True),
                 )
 
-                # Read stream chunks
+                # Read stream chunks (may receive events while streaming)
                 while True:
                     msg = await read_message(self._reader, timeout=self.timeout)
 
@@ -353,6 +366,11 @@ class IPCClient:
                         raise ConnectionError("Connection closed during streaming")
 
                     self._last_activity = time.time()
+
+                    # Handle events that arrive during streaming
+                    if msg.type == MessageType.AGENT_EVENT:
+                        await self._handle_event(msg)
+                        continue  # Keep reading stream
 
                     if msg.type == MessageType.ERROR:
                         raise RuntimeError(f"Progenitor error: {msg.content}")
@@ -413,7 +431,66 @@ class IPCClient:
             ),
             "reconnect_count": self._reconnect_count,
             "max_reconnect_attempts": self.max_reconnect_attempts,
+            "pending_events": self._event_queue.qsize(),
         }
+
+    def set_event_callback(self, callback: Optional[Any]) -> None:
+        """Set a callback to be called when events are received.
+
+        Args:
+            callback: Async callable that takes an event dict.
+                     Set to None to disable callback.
+        """
+        self._event_callback = callback
+
+    async def get_event(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
+        """Get an event from the event queue.
+
+        Events are pushed by the server and represent background work updates
+        (e.g., backlog processing, scheduled task execution).
+
+        Args:
+            timeout: Max seconds to wait. None = wait forever.
+
+        Returns:
+            Event dict with 'event_type', 'content', 'metadata', and 'timestamp',
+            or None if timed out.
+        """
+        try:
+            if timeout:
+                return await asyncio.wait_for(
+                    self._event_queue.get(),
+                    timeout=timeout
+                )
+            return await self._event_queue.get()
+        except asyncio.TimeoutError:
+            return None
+
+    async def _handle_event(self, msg: IPCMessage) -> None:
+        """Handle an incoming AGENT_EVENT message.
+
+        Args:
+            msg: The event message from the server.
+        """
+        event = {
+            "event_type": msg.event_type or "unknown",
+            "content": msg.content,
+            "metadata": msg.metadata or {},
+            "timestamp": msg.timestamp,
+        }
+
+        # Call callback if set
+        if self._event_callback:
+            try:
+                await self._event_callback(event)
+            except Exception as e:
+                logger.warning("Event callback error: %s", e)
+
+        # Also queue the event for polling
+        try:
+            self._event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning("Event queue full, dropping event: %s", event.get("event_type"))
 
 
 # Convenience function for creating clients

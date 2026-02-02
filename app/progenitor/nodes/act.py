@@ -16,6 +16,7 @@ from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemTy
 from ..state.helpers import normalize_work_item
 from ..tools.copilot import CopilotCLI
 from ..tools.mcp import MCPClient, A2AClient
+from ..runtime.time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -449,6 +450,12 @@ async def _execute_system_tool(
             "tool": "list_schedule",
         }, None
 
+    elif tool_name == "current_time":
+        return {
+            "utc_time": utcnow_isoformat(),
+            "timezone": "UTC",
+        }, None
+
     elif tool_name == "list_tools":
         # List all available tools including system tools, agents, and MCP tools
         system_tools = [
@@ -481,6 +488,12 @@ async def _execute_system_tool(
                 "description": "List all scheduled tasks",
                 "type": "system_tool",
                 "capabilities": ["scheduling"],
+            },
+            {
+                "name": "current_time",
+                "description": "Return the current UTC time",
+                "type": "system_tool",
+                "capabilities": ["time", "clock"],
             },
         ]
 

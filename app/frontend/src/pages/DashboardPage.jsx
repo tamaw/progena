@@ -42,7 +42,7 @@ function DashboardPage() {
         getHealth().catch(() => null),
         getMetrics().catch(() => null)
       ]);
-      
+
       if (healthData) {
         // healthData is intentionally minimal; status comes from SSE
       }

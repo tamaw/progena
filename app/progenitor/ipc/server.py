@@ -28,6 +28,7 @@ from .protocol import (
     error_message,
     heartbeat_ack,
     ready_message,
+    agent_event,
 )
 
 if TYPE_CHECKING:
@@ -46,6 +47,9 @@ class IPCServer:
 
     Accepts connections from backend clients and routes messages
     to the Progenitor loop for processing.
+
+    Also broadcasts background events from the Progenitor loop to all
+    connected clients, enabling real-time updates about backlog/schedule work.
     """
 
     def __init__(
@@ -77,6 +81,8 @@ class IPCServer:
         # Only one request can be processed at a time since the loop
         # doesn't track request IDs through the output queue
         self._request_lock = asyncio.Lock()
+        # Background task for broadcasting events
+        self._event_broadcast_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         """Start the IPC server."""
@@ -92,6 +98,10 @@ class IPCServer:
 
         self._running = True
         self._shutdown_event.clear()
+
+        # Start event broadcast task
+        self._event_broadcast_task = asyncio.create_task(self._event_broadcast_loop())
+        logger.info("Event broadcast task started")
 
         addrs = ", ".join(str(sock.getsockname()) for sock in self._server.sockets)
         logger.info("IPC server listening on %s", addrs)
@@ -112,6 +122,15 @@ class IPCServer:
         logger.info("Stopping IPC server...")
         self._running = False
         self._shutdown_event.set()
+
+        # Stop event broadcast task
+        if self._event_broadcast_task and not self._event_broadcast_task.done():
+            self._event_broadcast_task.cancel()
+            try:
+                await self._event_broadcast_task
+            except asyncio.CancelledError:
+                pass
+            self._event_broadcast_task = None
 
         # Close all client connections
         for client_id, writer in list(self._clients.items()):
@@ -432,3 +451,57 @@ class IPCServer:
             "client_count": self._client_count,
             "max_clients": self.max_clients,
         }
+
+    async def _event_broadcast_loop(self) -> None:
+        """Background task that broadcasts events from the loop to all connected clients.
+
+        This enables real-time updates about background work (backlog, scheduled tasks)
+        to be pushed to clients without requiring them to poll.
+        """
+        logger.info("Event broadcast loop started")
+
+        while self._running:
+            try:
+                # Wait for an event from the loop runner
+                event = await self.loop_runner.get_event(timeout=1.0)
+
+                if event is None:
+                    continue
+
+                # Broadcast to all connected clients
+                if not self._clients:
+                    logger.debug("No clients connected, dropping event: %s", event.get("event_type"))
+                    continue
+
+                # Create the IPC message
+                msg = agent_event(
+                    event_type=event.get("event_type", "unknown"),
+                    content=event.get("content", ""),
+                    metadata=event.get("metadata"),
+                )
+
+                # Send to all clients (non-blocking, best effort)
+                disconnected = []
+                for client_id, writer in list(self._clients.items()):
+                    try:
+                        await write_message(writer, msg)
+                        logger.debug("Sent event %s to client %s",
+                                    event.get("event_type"), client_id)
+                    except Exception as e:
+                        logger.warning("Failed to send event to client %s: %s",
+                                      client_id, e)
+                        disconnected.append(client_id)
+
+                # Clean up disconnected clients
+                for client_id in disconnected:
+                    self._clients.pop(client_id, None)
+                    self._client_count = max(0, self._client_count - 1)
+
+            except asyncio.CancelledError:
+                logger.info("Event broadcast loop cancelled")
+                break
+            except Exception as e:
+                logger.error("Event broadcast error: %s", e, exc_info=True)
+                await asyncio.sleep(1.0)
+
+        logger.info("Event broadcast loop stopped")
