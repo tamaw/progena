@@ -934,12 +934,13 @@ class SpecDoc(BaseModel):
         think_outputs: list[dict],
         iteration: int,
         verification_gaps: list[str] | None = None,
+        lessons: list[dict] | None = None,  # BL-BUG-002: Add lessons_learned
     ) -> "SpecDoc":
         """
         Update spec content based on THINK phase outputs.
 
         Appends relevant insights from approaches/tradeoffs/risks to the spec,
-        and notes any gaps that verification identified.
+        notes any gaps that verification identified, and includes lessons learned.
         """
         additions = []
 
@@ -964,6 +965,25 @@ class SpecDoc(BaseModel):
             additions.append("\n### Gaps to Address")
             for gap in verification_gaps[:5]:
                 additions.append(f"- {gap}")
+
+        # BL-BUG-002: Include lessons learned if provided
+        if lessons:
+            recent_lessons = lessons[-2:] if len(lessons) > 2 else lessons
+            additions.append("\n### Lessons Learned")
+            for lesson in recent_lessons:
+                iter_num = lesson.get("iteration", "?")
+                what_worked = lesson.get("what_worked", [])
+                what_failed = lesson.get("what_failed", [])
+                adjustments = lesson.get("adjustments", [])
+
+                if what_worked or what_failed or adjustments:
+                    additions.append(f"#### Iteration {iter_num}")
+                    if what_worked:
+                        additions.append("- **What worked:** " + "; ".join(what_worked[:3]))
+                    if what_failed:
+                        additions.append("- **What failed:** " + "; ".join(what_failed[:3]))
+                    if adjustments:
+                        additions.append("- **Adjustments:** " + "; ".join(adjustments[:3]))
 
         if additions:
             # Append to content

@@ -387,3 +387,26 @@ The Weather Agent is considered complete when:
 
 ### Gaps to Address
 - Criterion 'Task completed successfully' not met (score: 0.20)
+
+## Iteration 4 Updates
+
+### Gaps to Address
+- Criterion 'Task completed successfully' not met (score: 0.20)
+
+## Iteration 6 Updates
+- **primary**: Below are **3 distinct, structured approaches** to reach the ideal Weather Agent state, each explicitly targeting why **Iteration #6 failed (low task completion)** and how to raise success toward ≥0.8
+- **alternative_2**: Alternative approach with different trade-offs
+
+### Gaps to Address
+- Criterion 'Task completed successfully' not met (score: 0.20)
+
+## Iteration 8 Updates
+- **primary**: Below are **three distinct, structured approaches** to reach the ideal Weather Agent state, each targeting the gaps from the failed iteration and optimizing for the success criteria.
+
+---
+
+## APPROACH
+- **alternative_2**: Alternative approach with different trade-offs
+
+### Gaps to Address
+- Criterion 'Task completed successfully' not met (score: 0.20)

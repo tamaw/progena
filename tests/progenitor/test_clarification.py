@@ -351,26 +351,37 @@ NEW_ANTI_CRITERIA:
         assert result.get("ideal_state") is not None
 
     def test_graph_routes_clarification_response(self):
-        """Test that graph correctly routes clarification responses."""
-        from app.progenitor.graph_dual_loop import route_after_decide
-        from app.progenitor.state.ideal_state import IdealState
+        """Test that graph correctly routes clarification responses.
 
-        # State with clarification response
+        Build decisions return ANSWER_DIRECTLY (not BUILD_AGENT) because
+        decide starts the build via BackgroundBuildRunner. So the route
+        should be 'respond', not 'planner' (outer loop has no planner).
+        """
+        from app.progenitor.graph_outer_loop import route_after_decide
+        from app.progenitor.state.ideal_state import IdealState
+        from app.progenitor.state.models import Decision, DecisionAction
+
+        # State with clarification response - decide returns ANSWER_DIRECTLY
+        # after starting a build, so this tests that case
         state = cast(ProgenitorState, {
             "awaiting_clarification": True,
             "clarification_response": "Use REST API",
             "ideal_state": IdealState(task_description="test").model_dump(),
-            "current_decision": None,
+            "current_decision": Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,  # Builds return this
+                reasoning="Started async build based on clarification",
+                requires_planning=False,
+            ),
         })
 
         route = route_after_decide(state)
 
-        # Should route to observe to incorporate clarification
-        assert route == "observe"
+        # Should route to respond (outer loop has no planner)
+        assert route == "respond"
 
     def test_should_iterate_pauses_for_clarification(self):
         """Test that iteration pauses when clarification needed."""
-        from app.progenitor.graph_dual_loop import should_iterate
+        from app.progenitor.graph_inner_loop import should_iterate
 
         # State where clarification is needed
         state = cast(ProgenitorState, {

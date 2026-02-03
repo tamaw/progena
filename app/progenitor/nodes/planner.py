@@ -305,7 +305,6 @@ Generate ONLY the instruction, nothing else:"""
             time_expression=time_expression,
             instruction=instruction,
             description=f"Scheduled: {user_input[:50]}...",
-            recurring="every" in time_expression.lower(),
         )
 
         if result.success and entry_data:
@@ -541,6 +540,9 @@ async def _plan_from_ideal_state(
     # Generate work item ID early for spec file naming
     work_item_id = str(uuid.uuid4())
 
+    # BL-BUG-002: Get lessons_learned from state for spec_doc update
+    lessons_learned = state.get("lessons_learned", [])
+
     # =========================================================================
     # SpecDoc Management: Seed or Update the persistent spec artifact
     # BL-007: Pass project_directory from build_settings for consistent spec location
@@ -555,10 +557,16 @@ async def _plan_from_ideal_state(
         llm_client=llm_client,
         work_item_id=work_item_id,
         project_directory=project_directory,  # BL-007
+        lessons_learned=lessons_learned,  # BL-BUG-002
     )
 
     # Store spec_doc in state for BUILD to consume
-    spec_doc_dict = spec_doc.model_dump() if hasattr(spec_doc, "model_dump") else spec_doc
+    if hasattr(spec_doc, "model_dump"):
+        spec_doc_dict = spec_doc.model_dump()
+    elif isinstance(spec_doc, dict):
+        spec_doc_dict = spec_doc
+    else:
+        spec_doc_dict = {"content": str(spec_doc)}
 
     try:
         # BL-002: Generate structured ExperimentPlan
@@ -676,11 +684,13 @@ async def _ensure_spec_doc(
     llm_client=None,
     work_item_id: str | None = None,
     project_directory: str | None = None,  # BL-007: From build_settings
+    lessons_learned: list[dict] | None = None,  # BL-BUG-002: From LEARN phase
 ) -> SpecDoc:
     """
     Ensure a SpecDoc exists for the current build task.
 
     BL-007: Now supports project_directory from build_settings for consistent spec file location.
+    BL-BUG-002: Now includes lessons_learned from LEARN phase.
 
     - Spec file is dropped into project_directory/spec.md (or fallback to app/agents/<agent_name>/spec.md)
     - Copilot prompt references the spec file (not embedding content)
@@ -696,11 +706,12 @@ async def _ensure_spec_doc(
         # Load existing spec and update it
         spec_doc = SpecDoc(**existing_spec_doc_data)
 
-        # Update from current THINK outputs
+        # Update from current THINK outputs and lessons
         spec_doc.update_from_think(
             think_outputs=approaches,
             iteration=iteration,
             verification_gaps=gaps,
+            lessons=lessons_learned,  # BL-BUG-002
         )
 
         logger.info(f"PLANNER: Updated SpecDoc to revision {spec_doc.revision}")

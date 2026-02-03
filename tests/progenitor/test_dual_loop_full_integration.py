@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.progenitor.graph_dual_loop import create_progenitor_graph, should_iterate
+from app.progenitor.graph_outer_loop import create_progenitor_graph
+from app.progenitor.graph_inner_loop import should_iterate
 from app.progenitor.state.models import (
     ProgenitorState,
     WorkItem,
@@ -162,20 +163,27 @@ class TestDualLoopGraphCreation:
         nodes = graph.get_graph().nodes
         node_names = {n for n in nodes.keys() if n != "__start__"}
 
-        # Outer loop nodes
+        # Outer loop nodes (no planner - only in inner loop)
         assert "intake" in node_names
+        assert "time_check" in node_names
         assert "decide" in node_names
+        assert "pick_next" in node_names
+        assert "act" in node_names
+        assert "validate" in node_names
+        assert "commit_core" in node_names
         assert "respond" in node_names
+        assert "cycle_limit" in node_names
+        assert "idle" in node_names
 
-        # Inner loop nodes
-        assert "observe" in node_names
-        assert "think" in node_names
-        assert "plan" in node_names
-        assert "build" in node_names
-        assert "verify" in node_names
-        assert "learn" in node_names
+        # Planner is NOT in outer loop - only in inner loop
+        assert "planner" not in node_names
 
-    def test_inner_loop_edges_exist(
+        # Inner loop nodes are NOT in outer loop graph
+        assert "observe" not in node_names
+        assert "think" not in node_names
+        assert "learn" not in node_names
+
+    def test_outer_loop_edges_exist(
         self,
         mock_state_manager,
         mock_llm_client,
@@ -183,7 +191,7 @@ class TestDualLoopGraphCreation:
         config,
         worktrees_dir,
     ):
-        """Test that inner loop has correct edges."""
+        """Test that outer loop has correct edges."""
         graph = create_progenitor_graph(
             state_manager=mock_state_manager,
             llm_client=mock_llm_client,
@@ -194,12 +202,12 @@ class TestDualLoopGraphCreation:
 
         edges = graph.get_graph().edges
 
-        # Check key transitions
+        # Check key outer loop transitions
         edge_sources = [e[0] for e in edges]
-        assert "observe" in edge_sources
-        assert "think" in edge_sources
-        assert "verify" in edge_sources
-        assert "learn" in edge_sources
+        assert "intake" in edge_sources
+        assert "decide" in edge_sources
+        assert "respond" in edge_sources
+        assert "cycle_limit" in edge_sources
 
 
 class TestShouldIterateLogic:

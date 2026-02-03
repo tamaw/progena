@@ -76,8 +76,8 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Save schedule to schedule.json only (system feature, not user session)
         await state_manager.save_schedule(schedule_entries)
 
-        # Log validation result if present
-        validation_result = state.get("last_validation_result")
+        # Log validation result if present (V2 only)
+        validation_result = state.get("validation_result_v2")
         if validation_result:
             await state_manager.log_validation(validation_result)
 

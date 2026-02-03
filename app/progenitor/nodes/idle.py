@@ -2,10 +2,11 @@
 Idle Node - Handles idle state when no work is pending.
 
 Per spec: when no backlog is available and nothing is due soon,
-idle with backoff and prompt: "Anything to do?"
+prompt: "Anything to do?"
+
+Note: Backoff sleep is handled by the background worker loop, not here.
 """
 
-import asyncio
 import logging
 from typing import Callable, Coroutine, Any, TYPE_CHECKING
 
@@ -24,18 +25,18 @@ def create_node(config: "ProgenitorConfig", state_manager=None) -> Callable[[Pro
         config: ProgenitorConfig with runtime settings.
         state_manager: Optional state manager.
     """
-    # Extract config values once at node creation time
-    backoff = config.runtime.idle_backoff_seconds
     # Default prompt interval: prompt every 10 cycles
     prompt_interval = 10
 
     async def idle_node(state: ProgenitorState) -> ProgenitorState:
-        """Handle idle state - prompt user and backoff.
+        """Handle idle state - prompt user periodically.
 
         This node:
         1. Checks if we should prompt the user
-        2. Applies backoff sleep to avoid busy-waiting
-        3. Resets cycle counters for next iteration
+        2. Resets cycle counters for next iteration
+
+        Note: Backoff sleep is handled by the background worker loop,
+        not here, to avoid redundant delays after user responses.
         """
         # Check if we should prompt the user
         cycle_count = state.get("cycle_count", 0)
@@ -45,10 +46,7 @@ def create_node(config: "ProgenitorConfig", state_manager=None) -> Callable[[Pro
             response_text = "Anything to do?"
             logger.debug(f"Idle at cycle {cycle_count}, prompting user")
         else:
-            logger.debug(f"Idle at cycle {cycle_count}, backing off for {backoff}s")
-
-        # Backoff sleep to avoid busy-waiting
-        await asyncio.sleep(backoff)
+            logger.debug(f"Idle at cycle {cycle_count}")
 
         return {
             "pending_response": response_text,

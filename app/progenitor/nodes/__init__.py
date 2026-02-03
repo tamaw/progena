@@ -22,14 +22,12 @@ NodeFactory = Callable[..., NodeFunction]
 from . import (
     intake,
     time_check,
-    enqueue_due,
     decide,
     planner,
     pick_next,
     worktree_prep,
     act,
     validate,
-    register,
     commit_core,
     respond,
     idle,
@@ -40,7 +38,12 @@ from . import (
     execute,
     verify_loop,
     learn,
+    build,  # Extracted from graph_inner_loop.py
 )
+
+# Submodules
+from . import heuristics
+from . import system_tools
 
 # Error types for consistent error handling across nodes
 from .errors import (
@@ -81,14 +84,12 @@ __all__ = [
     # Node modules
     "intake",
     "time_check",
-    "enqueue_due",
     "decide",
     "planner",
     "pick_next",
     "worktree_prep",
     "act",
     "validate",
-    "register",
     "commit_core",
     "respond",
     "idle",
@@ -99,6 +100,10 @@ __all__ = [
     "execute",
     "verify_loop",
     "learn",
+    "build",  # Extracted from graph_inner_loop.py
+    # Submodules
+    "heuristics",
+    "system_tools",
     # Error types
     "NodeError",
     "RecoverableError",

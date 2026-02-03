@@ -46,13 +46,13 @@ def create_node(
     async def register_node(state: ProgenitorState) -> ProgenitorState:
         """Register new/updated agents and tools."""
         current_item = state.get("current_work_item")
-        validation_result = state.get("last_validation_result") or {}
+        validation_result = state.get("validation_result_v2") or {}
 
         if not current_item:
             return {}
 
         # Only register if validation passed
-        if not validation_result.get("success", False):
+        if validation_result.get("has_blocking_issues", True):
             return {}
 
         # Get item details

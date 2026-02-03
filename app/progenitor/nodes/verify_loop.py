@@ -86,7 +86,7 @@ def create_node(
 
         # Gather context for verification
         context = {
-            "validation_result": state.get("last_validation_result"),
+            "validation_result": state.get("validation_result_v2"),
             "errors": state.get("errors", []),
             "completed": state.get("work_item_completed", False),
             "tool_calls": state.get("actions_this_cycle", 0),
@@ -166,7 +166,8 @@ def create_node(
 
             # BL-006: Prefer structured data verification when available
             execution_result = state.get("execution_result")
-            validation_result = state.get("validation_result")
+            # BL-006 FIX: validate node stores as validation_result_v2, not validation_result
+            validation_result = state.get("validation_result_v2") or state.get("validation_result")
 
             if execution_result or validation_result:
                 # Use new structured verification method

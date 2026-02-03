@@ -345,6 +345,7 @@ class LoopControlState(TypedDict, total=False):
     last_commit_time: Optional[datetime]
     run_id: str
     last_validation_result: Optional[dict[str, Any]]
+    validation_result_v2: Optional[dict[str, Any]]  # ValidationResultV2 as dict
 
 
 class InnerLoopState(TypedDict, total=False):
@@ -379,6 +380,7 @@ class InnerLoopState(TypedDict, total=False):
     thinking_output: Optional[str]  # THINK phase output
     current_approaches: list[dict[str, Any]]  # From THINK phase
     last_iteration_output: Optional[Any]  # Output from BUILD phase
+    experiment_plan: Optional[dict[str, Any]]  # ExperimentPlan from PLAN phase
 
     # SpecDoc: Persistent spec artifact (PLAN-owned, BUILD-consumed)
     spec_doc: Optional[dict[str, Any]]  # SpecDoc containing content, revision, history

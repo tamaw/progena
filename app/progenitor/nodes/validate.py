@@ -13,10 +13,9 @@ to maintain purity of the validation phase.
 """
 
 import logging
-from datetime import datetime
 from typing import Any, Callable, Coroutine, TYPE_CHECKING
 
-from ..state.models import ProgenitorState, ValidationResult
+from ..state.models import ProgenitorState
 from ..state.execution_schemas import (
     ExecutionResult,
     ExecutionStatus,
@@ -88,18 +87,8 @@ def create_node(config: "ProgenitorConfig") -> Callable[[ProgenitorState], Corou
             f"{validation_result.info_count} info"
         )
 
-        # Also produce legacy ValidationResult for backward compatibility
-        legacy_result = ValidationResult(
-            success=not validation_result.has_blocking_issues,
-            work_item_id=item_id,
-            checks_run=["data_analysis"],  # BL-005: Only data analysis, no external checks
-            errors=[f.message for f in validation_result.findings if f.category == "error"],
-            warnings=[f.message for f in validation_result.findings if f.category == "warning"],
-        )
-
         return {
-            "last_validation_result": legacy_result.model_dump(),
-            "validation_result_v2": validation_result.model_dump(),  # BL-005: New structured result
+            "validation_result_v2": validation_result.model_dump(),  # BL-005: Structured result
         }
 
     return validate_node
