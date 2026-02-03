@@ -19,8 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import ProgenitorConfig, get_config, setup_logging
-from .graph import create_progenitor_graph
-from .graph_dual_loop import create_progenitor_graph as create_dual_loop_graph
+from .graph_outer_loop import create_progenitor_graph
 from .runtime.loop import ProgenitorLoop
 from .state.manager import StateManager
 from .llm.client import LLMClient
@@ -83,29 +82,16 @@ class Progenitor:
             else:
                 logger.warning("Event pusher called before loop_runner available: %s", event_type)
 
-        # Create the LangGraph - choose between original and dual-loop
-        use_dual_loop = self.config.runtime.__dict__.get("use_dual_loop", True)
-
-        if use_dual_loop:
-            logger.info("Using dual-loop graph (loop.spec.md)")
-            self.graph = create_dual_loop_graph(
-                state_manager=self.state_manager,
-                llm_client=self.llm_client,
-                tool_registry=self.tool_registry,
-                config=self.config,
-                worktrees_dir=self.worktrees_dir,
-                event_pusher=deferred_push_event,
-            )
-        else:
-            logger.info("Using original graph")
-            self.graph = create_progenitor_graph(
-                state_manager=self.state_manager,
-                llm_client=self.llm_client,
-                tool_registry=self.tool_registry,
-                config=self.config,
-                worktrees_dir=self.worktrees_dir,
-                event_pusher=deferred_push_event,
-            )
+        # Create the outer loop graph
+        logger.info("Creating outer loop graph")
+        self.graph = create_progenitor_graph(
+            state_manager=self.state_manager,
+            llm_client=self.llm_client,
+            tool_registry=self.tool_registry,
+            config=self.config,
+            worktrees_dir=self.worktrees_dir,
+            event_pusher=deferred_push_event,
+        )
 
         # Create loop runner
         self.loop_runner = ProgenitorLoop(

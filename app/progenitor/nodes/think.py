@@ -240,6 +240,43 @@ def _build_thinking_prompt(ideal_state, iteration: int, last_verification, state
         ])
         prompt_parts.extend(gap_lines)
 
+    # BL-BUG-002: Add lessons_learned to the prompt so THINK can learn from past iterations
+    lessons_learned = state.get("lessons_learned", [])
+    if lessons_learned and iteration > 0:
+        # Get most recent lessons (last 2 iterations)
+        recent_lessons = lessons_learned[-2:] if len(lessons_learned) > 2 else lessons_learned
+        prompt_parts.extend([
+            "",
+            "LESSONS FROM PREVIOUS ITERATIONS:",
+        ])
+        for lesson in recent_lessons:
+            iter_num = lesson.get("iteration", "?")
+            prompt_parts.append(f"  Iteration {iter_num}:")
+            # What worked
+            what_worked = lesson.get("what_worked", [])
+            if what_worked:
+                prompt_parts.append("    What worked:")
+                for item in what_worked[:3]:
+                    prompt_parts.append(f"      - {item}")
+            # What failed
+            what_failed = lesson.get("what_failed", [])
+            if what_failed:
+                prompt_parts.append("    What failed:")
+                for item in what_failed[:3]:
+                    prompt_parts.append(f"      - {item}")
+            # Adjustments
+            adjustments = lesson.get("adjustments", [])
+            if adjustments:
+                prompt_parts.append("    Recommended adjustments:")
+                for item in adjustments[:3]:
+                    prompt_parts.append(f"      - {item}")
+            # Insights
+            insights = lesson.get("insights", [])
+            if insights:
+                prompt_parts.append("    Key insights:")
+                for item in insights[:2]:
+                    prompt_parts.append(f"      - {item}")
+
     prompt_parts.extend([
         "",
         "Generate 2-3 DISTINCT approaches. For each approach provide:",
@@ -259,6 +296,7 @@ def _build_thinking_prompt(ideal_state, iteration: int, last_verification, state
         "",
         "Focus on:",
         "- Addressing the identified gaps" if gaps else "- Meeting success criteria",
+        "- Learning from previous iteration lessons" if lessons_learned else "",
         "- Avoiding anti-criteria",
         "- Providing measurable outcomes",
     ])

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from .config import ProgenitorConfig, get_config
-from .graph_dual_loop import create_progenitor_graph
+from .graph_outer_loop import create_progenitor_graph
 from .state.manager import StateManager
 from .llm.client import LLMClient
 from .tools.registry import ToolRegistry

@@ -109,21 +109,46 @@ def _looks_like_agent_discovery_request(user_input: str) -> bool:
     if not text.strip():
         return False
 
-    has_discovery_intent = any(
-        phrase in text
-        for phrase in (
+    # Direct compound phrases that clearly indicate discovery intent
+    direct_discovery_phrases = (
+        "rewire agents",
+        "rewire the agents",
+        "rediscover agents",
+        "rescan agents",
+        "refresh agents",
+        "reload agents",
+        "scan agents",
+        "discover agents",
+        "update registry",
+        "refresh registry",
+        "sync agents",
+        "re-scan agents",
+        "re-discover agents",
+        # Key pattern: "agent discovery" as a compound noun
+        "agent discovery",
+        "run agent discovery",
+        "run discovery",
+        "do agent discovery",
+        "start agent discovery",
+        "perform agent discovery",
+        "trigger agent discovery",
+        "execute agent discovery",
+    )
+
+    if any(phrase in text for phrase in direct_discovery_phrases):
+        return True
+
+    # Single-word discovery verbs that imply agents when "agent" is present
+    has_discovery_verb = any(
+        verb in text
+        for verb in (
             "rewire",
             "rediscover",
             "rescan",
-            "refresh",
-            "reload",
             "re-scan",
             "re-discover",
-            "scan agents",
-            "discover agents",
-            "update registry",
-            "refresh registry",
-            "sync agents",
+            "refresh",
+            "reload",
         )
     )
 
@@ -135,7 +160,7 @@ def _looks_like_agent_discovery_request(user_input: str) -> bool:
         )
     )
 
-    return has_discovery_intent or (has_agent_context and "refresh" in text)
+    return has_discovery_verb and has_agent_context
 
 
 def _looks_like_list_tools_request(user_input: str) -> bool:

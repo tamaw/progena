@@ -27,6 +27,15 @@ class TestAgentDiscoveryDetection:
         "can you rediscover agents?",
         "REWIRE AGENTS",  # Case insensitive
         "Refresh the agent registry",
+        # New patterns for "agent discovery" as compound noun
+        "run agent discovery",
+        "can you run agent discovery",
+        "agent discovery",
+        "do agent discovery",
+        "start agent discovery",
+        "perform agent discovery",
+        "please run agent discovery",
+        "run discovery",
     ])
     def test_detects_discovery_requests(self, input_text):
         """Test that discovery requests are detected."""

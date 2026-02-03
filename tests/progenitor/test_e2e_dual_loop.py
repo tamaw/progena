@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from pathlib import Path
 import json
 
-from app.progenitor.graph_dual_loop import create_progenitor_graph
+from app.progenitor.graph_outer_loop import create_progenitor_graph
 from app.progenitor.state.models import (
     ProgenitorState,
     WorkItem,
@@ -125,16 +125,25 @@ class TestDualLoopEndToEnd:
 
         assert graph is not None
 
-        # Verify all expected nodes exist
+        # Verify all expected outer loop nodes exist (no planner - only in inner loop)
         nodes = set(graph.get_graph().nodes.keys()) - {"__start__"}
 
-        expected_nodes = {
-            "intake", "decide", "respond", "idle",
-            "observe", "think", "plan", "build", "execute", "verify", "learn",
+        expected_outer_nodes = {
+            "intake", "time_check", "decide", "pick_next",
+            "worktree_prep", "act", "validate", "commit_core",
+            "respond", "cycle_limit", "idle",
         }
 
-        for node in expected_nodes:
-            assert node in nodes, f"Missing node: {node}"
+        for node in expected_outer_nodes:
+            assert node in nodes, f"Missing outer loop node: {node}"
+
+        # Planner is NOT in outer loop - only in inner loop
+        assert "planner" not in nodes, "planner should only be in inner loop"
+
+        # Inner loop nodes should NOT be in outer loop
+        inner_loop_nodes = {"observe", "think", "learn", "verify"}
+        for node in inner_loop_nodes:
+            assert node not in nodes, f"Inner loop node {node} should not be in outer loop"
 
     def test_state_initialization(self, test_work_item):
         """Test that state can be initialized with a work item."""

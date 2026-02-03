@@ -432,6 +432,10 @@ class GitWorktreeManager:
             logger.error("SUBMODULE: %s", error_msg)
             return False, error_msg
 
+        # Configure user for the submodule (required for commits)
+        await self._run_git(["config", "user.email", "progenitor@local"], cwd=submodule_path)
+        await self._run_git(["config", "user.name", "Progenitor"], cwd=submodule_path)
+
         # Create initial commit (empty)
         result = await self._run_git(
             ["commit", "--allow-empty", "-m", f"Initial commit for {submodule_name}"],

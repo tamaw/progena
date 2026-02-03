@@ -510,8 +510,8 @@ class TestLoopSpecConformance:
         assert hasattr(learn, "create_node")
 
     def test_graph_has_execute_node(self):
-        """Test that dual loop graph includes EXECUTE node."""
-        from app.progenitor.graph_dual_loop import create_progenitor_graph
+        """Test that outer loop graph imports correctly."""
+        from app.progenitor.graph_outer_loop import create_progenitor_graph
         # Just verify the import works - full graph creation needs mocks
         assert callable(create_progenitor_graph)
 

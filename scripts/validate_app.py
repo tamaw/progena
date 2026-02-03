@@ -20,8 +20,8 @@ def test_imports():
         ("State models", "from app.progenitor.state.models import WorkItem, ProgenitorState"),
         ("State manager", "from app.progenitor.state.manager import StateManager"),
         ("LLM client", "from app.progenitor.llm.client import LLMClient"),
-        ("Original graph", "from app.progenitor.graph import create_progenitor_graph"),
-        ("Dual-loop graph", "from app.progenitor.graph_dual_loop import create_progenitor_graph as create_dual_loop_graph"),
+        ("Outer loop graph", "from app.progenitor.graph_outer_loop import create_progenitor_graph"),
+        ("Inner loop graph", "from app.progenitor.graph_inner_loop import create_inner_loop_graph"),
         ("Progenitor main", "from app.progenitor.main import Progenitor"),
         ("Backend", "from app.backend.main import app"),
         ("Backend client", "from app.backend.client import ProgenitorClient"),
@@ -50,8 +50,8 @@ def test_file_compilation():
 
     files = [
         "app/progenitor/main.py",
-        "app/progenitor/graph.py",
-        "app/progenitor/graph_dual_loop.py",
+        "app/progenitor/graph_outer_loop.py",
+        "app/progenitor/graph_inner_loop.py",
         "app/progenitor/config.py",
         "app/backend/main.py",
         "app/backend/client.py",
