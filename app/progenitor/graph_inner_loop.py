@@ -66,6 +66,9 @@ def create_inner_loop_graph(
     registry_path = config.storage.state_dir / "registry.json"
     tool_registry = ToolRegistry(registry_path)
 
+    # Get project root (parent of app directory) for agent discovery
+    project_root = Path(__file__).parent.parent.parent
+
     # Create node functions for inner loop
     # Use the new build.create_node from nodes/build.py
     nodes = {
@@ -73,7 +76,7 @@ def create_inner_loop_graph(
         "think": think.create_node(llm_client, state_manager),
         "plan": planner.create_node(llm_client, state_manager),
         "build": build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager),
-        "execute": execute.create_node(tool_registry, state_manager, worktrees_dir),
+        "execute": execute.create_node(tool_registry, state_manager, project_root),
         "verify": verify_loop.create_node(llm_client, state_manager),
         "learn": learn.create_node(llm_client, state_manager),
     }

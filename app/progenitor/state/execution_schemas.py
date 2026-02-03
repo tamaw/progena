@@ -979,11 +979,26 @@ class SpecDoc(BaseModel):
                 if what_worked or what_failed or adjustments:
                     additions.append(f"#### Iteration {iter_num}")
                     if what_worked:
-                        additions.append("- **What worked:** " + "; ".join(what_worked[:3]))
+                        # Handle both string and dict items
+                        worked_strs = [
+                            item if isinstance(item, str) else item.get("criterion", str(item))
+                            for item in what_worked[:3]
+                        ]
+                        additions.append("- **What worked:** " + "; ".join(worked_strs))
                     if what_failed:
-                        additions.append("- **What failed:** " + "; ".join(what_failed[:3]))
+                        # Handle both string and dict items
+                        failed_strs = [
+                            item if isinstance(item, str) else (item.get("criterion") or item.get("description") or str(item))
+                            for item in what_failed[:3]
+                        ]
+                        additions.append("- **What failed:** " + "; ".join(failed_strs))
                     if adjustments:
-                        additions.append("- **Adjustments:** " + "; ".join(adjustments[:3]))
+                        # Handle both string and dict items
+                        adj_strs = [
+                            item if isinstance(item, str) else str(item)
+                            for item in adjustments[:3]
+                        ]
+                        additions.append("- **Adjustments:** " + "; ".join(adj_strs))
 
         if additions:
             # Append to content

@@ -346,44 +346,141 @@ class Verifier:
     ) -> tuple[float, str, str]:
         """
         BL-006: Mechanically score functional criteria using structured data.
+
+        Scoring breakdown:
+        - Smoke test passed: +0.35
+        - All prompts passed: +0.35
+        - Execution status success/partial: +0.15/+0.10
+        - No execution errors: +0.15
+        - Runs actually executed: bonus for coverage
+        - Skipped/no data: penalized appropriately
+        - Test script results (when available): factored into scoring
         """
         exec_evidence = ""
         valid_evidence = ""
         score = 0.0
 
-        if exec_data:
-            # Check smoke test passed
-            if exec_data.get("smoke_test_passed"):
-                score += 0.4
-                exec_evidence += "Smoke test passed. "
+        if not exec_data:
+            # No execution data at all - can't verify
+            return 0.1, "No execution data available.", ""
 
-            # Check all prompts passed
-            if exec_data.get("all_prompts_passed"):
-                score += 0.4
-                exec_evidence += "All prompts passed. "
-            elif exec_data.get("status") == "success":
-                score += 0.3
-                exec_evidence += "Execution succeeded. "
-            elif exec_data.get("status") == "partial":
-                score += 0.2
-                exec_evidence += "Execution partially succeeded. "
+        status = exec_data.get("status", "unknown")
+        runs = exec_data.get("runs", [])
+        errors = exec_data.get("all_errors", [])
+        build_output = exec_data.get("build_output", {})
 
-            # Check for errors
-            errors = exec_data.get("all_errors", [])
+        # Check for test script results (from execute_with_test_script)
+        tests_passed = build_output.get("tests_passed") if build_output else None
+        tests_total = build_output.get("tests_total") if build_output else None
+        test_stdout = build_output.get("test_stdout", "") if build_output else ""
+
+        # Handle skipped execution - this is a problem!
+        if status == "skipped":
+            exec_evidence = "Execution was skipped (no prompts ran). "
+            # Give minimal score - we can't really verify without running
             if not errors:
-                score += 0.2
+                exec_evidence += "No errors in build output. "
+                score = 0.15  # Slightly better than nothing
+            else:
+                exec_evidence += f"{len(errors)} errors in build. "
+                score = 0.05
+            return score, exec_evidence.strip(), ""
+
+        # If we have test script results, use those for more accurate scoring
+        if tests_total is not None and tests_total > 0:
+            test_pass_rate = tests_passed / tests_total if tests_passed else 0
+            exec_evidence += f"Test script: {tests_passed}/{tests_total} tests passed ({test_pass_rate:.0%}). "
+
+            # Score based on test results - this is primary evidence
+            score += 0.7 * test_pass_rate  # Up to 0.7 from tests
+
+            # Check for actual responses in stdout
+            if "TEST_RESULT: PASS:" in test_stdout:
+                exec_evidence += "Got successful responses from agent. "
+                score += 0.15
+
+            # Check for failures
+            if "TEST_RESULT: FAIL:" in test_stdout:
+                # Count failures in output
+                fail_count = test_stdout.count("TEST_RESULT: FAIL:")
+                exec_evidence += f"Had {fail_count} test failures. "
+                # Already penalized by test_pass_rate, so just note it
+
+            # No errors bonus
+            if not errors:
+                score += 0.15
                 exec_evidence += "No errors. "
             else:
                 exec_evidence += f"{len(errors)} errors found. "
 
+            return min(max(score, 0.0), 1.0), exec_evidence.strip(), valid_evidence.strip()
+
+        # Fallback to original scoring logic if no test script results
+        # Check smoke test passed
+        if exec_data.get("smoke_test_passed"):
+            score += 0.35
+            exec_evidence += "Smoke test passed. "
+        elif runs:
+            # Smoke test failed but we have runs
+            exec_evidence += "Smoke test failed. "
+
+        # Check all prompts passed
+        if exec_data.get("all_prompts_passed"):
+            score += 0.35
+            exec_evidence += "All prompts passed. "
+        elif runs:
+            # Calculate partial credit based on prompt pass rate
+            total_prompts = sum(r.get("prompts_total", 0) for r in runs)
+            passed_prompts = sum(r.get("prompts_passed", 0) for r in runs)
+            if total_prompts > 0:
+                pass_rate = passed_prompts / total_prompts
+                partial_score = 0.35 * pass_rate
+                score += partial_score
+                exec_evidence += f"Prompts: {passed_prompts}/{total_prompts} passed ({pass_rate:.0%}). "
+
+        # Execution status bonus
+        if status == "success":
+            score += 0.15
+            exec_evidence += "Execution succeeded. "
+        elif status == "partial":
+            score += 0.10
+            exec_evidence += "Execution partially succeeded. "
+        elif status == "failed":
+            exec_evidence += "Execution failed. "
+        elif status == "timeout":
+            exec_evidence += "Execution timed out. "
+
+        # Check for errors
+        if not errors:
+            score += 0.15
+            exec_evidence += "No errors. "
+        else:
+            # Penalize based on error count
+            error_penalty = min(len(errors) * 0.05, 0.15)
+            score -= error_penalty
+            exec_evidence += f"{len(errors)} errors found. "
+
+        # Bonus for actual coverage (runs executed)
+        if runs:
+            run_count = len(runs)
+            if run_count >= 3:
+                score += 0.05
+                exec_evidence += f"Good coverage ({run_count} runs). "
+            elif run_count == 0:
+                exec_evidence += "No test runs executed. "
+
+        # Validation data
         if valid_data:
-            # Check validation findings
             error_count = valid_data.get("error_count", 0)
+            warning_count = valid_data.get("warning_count", 0)
             if error_count == 0:
                 valid_evidence += "No validation errors. "
+                score += 0.05
             else:
                 valid_evidence += f"{error_count} validation errors. "
-                score -= 0.1 * min(error_count, 3)  # Penalty for errors
+                score -= 0.1 * min(error_count, 3)
+            if warning_count > 0:
+                valid_evidence += f"{warning_count} warnings. "
 
         return min(max(score, 0.0), 1.0), exec_evidence.strip(), valid_evidence.strip()
 
@@ -433,20 +530,52 @@ class Verifier:
         exec_data: dict | None,
         valid_data: dict | None,
     ) -> float:
-        """Heuristic fallback for subjective criteria."""
-        score = 0.5
+        """Heuristic fallback for subjective criteria.
 
-        if exec_data:
-            if exec_data.get("smoke_test_passed"):
-                score += 0.2
-            if exec_data.get("status") == "success":
-                score += 0.2
+        Provides more nuanced scoring based on available evidence.
+        """
+        score = 0.3  # Lower base score since this is a fallback
 
+        if not exec_data:
+            return 0.2  # Can't evaluate without data
+
+        status = exec_data.get("status", "unknown")
+
+        # Handle skipped case
+        if status == "skipped":
+            return 0.15  # Very low - we didn't actually test
+
+        # Smoke test is a strong signal
+        if exec_data.get("smoke_test_passed"):
+            score += 0.25
+        elif exec_data.get("smoke_test_passed") is False:
+            score -= 0.1  # Explicit failure is bad
+
+        # Execution status
+        if status == "success":
+            score += 0.25
+        elif status == "partial":
+            score += 0.15
+        elif status == "failed":
+            score -= 0.1
+
+        # Prompt pass rate (if available)
+        runs = exec_data.get("runs", [])
+        if runs:
+            total_prompts = sum(r.get("prompts_total", 0) for r in runs)
+            passed_prompts = sum(r.get("prompts_passed", 0) for r in runs)
+            if total_prompts > 0:
+                pass_rate = passed_prompts / total_prompts
+                score += 0.2 * pass_rate
+
+        # Validation
         if valid_data:
             if valid_data.get("error_count", 0) == 0:
                 score += 0.1
+            else:
+                score -= 0.05 * min(valid_data.get("error_count", 0), 2)
 
-        return min(score, 1.0)
+        return max(min(score, 1.0), 0.0)
 
     async def _llm_score_criterion(
         self,
@@ -454,7 +583,10 @@ class Verifier:
         exec_data: dict | None,
         valid_data: dict | None,
     ) -> tuple[float, str]:
-        """Use LLM to score subjective criterion."""
+        """Use LLM to score subjective criterion.
+
+        Enhanced to include test script output for better evaluation.
+        """
         if not self.llm_client:
             return 0.5, "LLM not available"
 
@@ -468,6 +600,19 @@ class Verifier:
             if errors:
                 context_parts.append(f"Errors: {'; '.join(errors[:3])}")
 
+            # Include test script output if available (from execute_with_test_script)
+            build_output = exec_data.get('build_output', {})
+            if build_output:
+                test_stdout = build_output.get('test_stdout', '')
+                if test_stdout:
+                    # Include relevant portion of test output
+                    context_parts.append(f"Test Output:\n{test_stdout[:1500]}")
+
+                tests_passed = build_output.get('tests_passed')
+                tests_total = build_output.get('tests_total')
+                if tests_passed is not None and tests_total is not None:
+                    context_parts.append(f"Test Results: {tests_passed}/{tests_total} tests passed")
+
         if valid_data:
             findings = valid_data.get('findings', [])
             if findings:
@@ -479,12 +624,18 @@ class Verifier:
 {chr(10).join(context_parts)}
 
 Provide a score (0.0-1.0) and brief explanation.
+Consider:
+- Did tests actually run and pass?
+- Are there real responses from the agent?
+- Do the responses demonstrate the criterion is met?
+
 Format: SCORE: X.X | EXPLANATION: <text>"""
 
         try:
             response = await self.llm_client.generate(
                 prompt=prompt,
-                system_prompt="You are evaluating software quality criteria. Be objective.",
+                system_prompt="You are evaluating software quality criteria. Be objective. "
+                            "Pay attention to actual test results and agent responses.",
             )
 
             # Parse response

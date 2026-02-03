@@ -109,12 +109,11 @@ def create_node(
 
             logger.info(f"BUILD: Copilot completed, success={build_result.get('success')}")
 
-            # Track iteration
-            current_iteration = state.get("current_iteration", 0) + 1
+            # Track iteration (do not increment here; increment happens in learn)
+            current_iteration = state.get("current_iteration", 0)
 
             # Update build state
             result: dict[str, Any] = {
-                "current_iteration": current_iteration,
                 "build_phase": "build",
                 "last_build_result": build_result,
                 "build_messages": state.get("build_messages", []) + [

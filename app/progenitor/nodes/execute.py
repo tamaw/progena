@@ -103,7 +103,53 @@ def create_node(
             )
 
         if not current_item:
-            logger.debug("No work item to execute")
+            # Check if this is an agent build that needs exercising even without work item
+            build_settings = state.get("build_settings")
+            is_agent_build = False
+            if build_settings:
+                build_type = build_settings.get("build_type") if isinstance(build_settings, dict) else getattr(build_settings, "build_type", None)
+                if build_type == "agent":
+                    is_agent_build = True
+                    logger.info("Detected agent build from build_settings, proceeding with exercise")
+
+            # Also check experiment_plan
+            if experiment_plan_data and not is_agent_build:
+                exp_agent_name = experiment_plan_data.get("agent_name")
+                if exp_agent_name and exp_agent_name != "unknown_agent":
+                    is_agent_build = True
+                    logger.info("Detected agent build from experiment_plan.agent_name, proceeding with exercise")
+
+            if is_agent_build and experiment_plan_data and harness:
+                logger.info("Executing agent exercise harness for build without work item")
+                exec_result = await _exercise_agent(
+                    harness=harness,
+                    experiment_plan_data=experiment_plan_data,
+                    current_item=None,  # No work item for builds
+                    build_output=build_output,
+                    iteration=iteration,
+                    state=state,
+                )
+
+                duration = time.perf_counter() - start_time
+                if metrics:
+                    metrics.record_histogram("node_duration_seconds", duration, {"node": "execute"})
+                    metrics.increment("node_invocations_total", {"node": "execute", "success": str(exec_result.smoke_test_passed).lower()})
+
+                if span:
+                    span.set_attribute("exercise_harness", True)
+                    span.set_attribute("prompts_total", exec_result.runs[0].prompts_total if exec_result.runs else 0)
+                    span.set_attribute("smoke_test_passed", exec_result.smoke_test_passed)
+                    span.end()
+
+                return {
+                    "execution_result": exec_result.model_dump(),
+                    "last_iteration_output": exec_result.model_dump(),
+                    "execution_completed": True,
+                    "build_phase": "execute",
+                }
+
+            # No work item and not an agent build
+            logger.debug("No work item to execute and not an agent build")
             if span:
                 span.set_attribute("skipped", True)
                 span.end()
@@ -135,6 +181,22 @@ def create_node(
         # Check if this is an agent-type work item that needs exercising
         item_type = _get_item_type(current_item)
         is_agent_item = item_type in ("build_agent", "a2a_call")
+
+        # Also check if we have build_settings indicating an agent build
+        # (fixes issue where item_type defaults to direct_answer)
+        build_settings = state.get("build_settings")
+        if build_settings and not is_agent_item:
+            build_type = build_settings.get("build_type") if isinstance(build_settings, dict) else getattr(build_settings, "build_type", None)
+            if build_type == "agent":
+                is_agent_item = True
+                logger.info("Detected agent build from build_settings despite item_type=%s", item_type)
+
+        # Also check if experiment_plan has an agent_name (indicates agent build)
+        if experiment_plan_data and not is_agent_item:
+            exp_agent_name = experiment_plan_data.get("agent_name")
+            if exp_agent_name and exp_agent_name != "unknown_agent":
+                is_agent_item = True
+                logger.info("Detected agent build from experiment_plan.agent_name=%s", exp_agent_name)
 
         # BL-004: If we have an experiment plan and harness, exercise the agent
         if experiment_plan_data and harness and is_agent_item:
@@ -202,7 +264,7 @@ def create_node(
         for tool_call in pending_tools:
             tool_start = time.perf_counter()
             try:
-                tool_name = tool_call.get("tool")
+                tool_name: str = tool_call.get("tool", "unknown")
                 tool_args = tool_call.get("arguments", {})
 
                 # Look up tool in registry
@@ -234,8 +296,8 @@ def create_node(
 
                     if metrics:
                         tool_duration = time.perf_counter() - tool_start
-                        metrics.record_histogram("tool_execution_duration_seconds", tool_duration, {"tool": tool_name})
-                        metrics.increment("tool_executions_total", {"tool": tool_name, "success": "true"})
+                        metrics.record_histogram("tool_execution_duration_seconds", tool_duration, {"tool": str(tool_name)})
+                        metrics.increment("tool_executions_total", {"tool": str(tool_name), "success": "true"})
                 else:
                     errors.append(f"Tool not found: {tool_name}")
                     tool_results.append({
@@ -245,19 +307,20 @@ def create_node(
                         "error": f"Tool not found: {tool_name}",
                     })
                     if metrics:
-                        metrics.increment("tool_executions_total", {"tool": tool_name, "success": "false"})
+                        metrics.increment("tool_executions_total", {"tool": str(tool_name), "success": "false"})
 
             except Exception as e:
                 logger.error(f"Tool execution error: {e}")
                 errors.append(str(e))
+                failed_tool_name = str(tool_call.get("tool", "unknown"))
                 tool_results.append({
-                    "tool": tool_call.get("tool", "unknown"),
+                    "tool": failed_tool_name,
                     "result": None,
                     "success": False,
                     "error": str(e),
                 })
                 if metrics:
-                    metrics.increment("tool_executions_total", {"tool": tool_call.get("tool", "unknown"), "success": "false"})
+                    metrics.increment("tool_executions_total", {"tool": failed_tool_name, "success": "false"})
 
         # Log execution
         if state_manager:
@@ -336,6 +399,11 @@ async def _exercise_agent(
     Exercise an agent using the experiment harness.
 
     BL-004: Runs the prompt suite from experiment_plan.
+
+    Enhanced flow:
+    1. If agent_endpoint is available -> use traditional HTTP exercise
+    2. If agent_entrypoint is available -> spawn agent, run test script
+    3. Otherwise -> try to discover entrypoint from build output
     """
     # Parse experiment plan
     experiment_plan = ExperimentPlan(**experiment_plan_data)
@@ -343,11 +411,42 @@ async def _exercise_agent(
     # Get agent endpoint/entrypoint from context or registry
     agent_endpoint = None
     agent_entrypoint = None
+    agent_port = 8080  # Default port
+
+    # Get project root from harness for path resolution
+    project_root = harness.project_root if harness else None
 
     # Check build output for agent info
     if isinstance(build_output, dict):
         agent_endpoint = build_output.get("agent_endpoint")
         agent_entrypoint = build_output.get("agent_entrypoint")
+        agent_port = build_output.get("agent_port", 8080)
+
+    # Try to discover entrypoint from build settings or experiment plan
+    if not agent_entrypoint:
+        # Look for common agent entrypoint patterns
+        agent_name = experiment_plan.agent_name
+        if not agent_name and isinstance(build_output, dict):
+            agent_name = build_output.get("agent_name")
+
+        # Also check build_settings for agent name
+        build_settings = state.get("build_settings")
+        if not agent_name and build_settings:
+            agent_name = build_settings.get("project_name") if isinstance(build_settings, dict) else getattr(build_settings, "project_name", None)
+
+        if agent_name and project_root:
+            from pathlib import Path
+            # Check for standard agent locations relative to project root
+            potential_paths = [
+                project_root / f"app/agents/{agent_name}/agent.py",
+                project_root / f"app/agents/{agent_name}/main.py",
+                project_root / f"app/agents/{agent_name}/__main__.py",
+            ]
+            for path in potential_paths:
+                if path.exists():
+                    agent_entrypoint = str(path)
+                    logger.info(f"Discovered agent entrypoint: {agent_entrypoint}")
+                    break
 
     # Check work item context
     if hasattr(current_item, "context"):
@@ -361,25 +460,62 @@ async def _exercise_agent(
         agent_endpoint = context.get("agent_endpoint")
     if not agent_entrypoint:
         agent_entrypoint = context.get("agent_entrypoint")
+    if agent_port == 8080:
+        agent_port = context.get("agent_port", 8080)
 
     # Check registry for agent info
     agents = state.get("agents", [])
     for agent in agents:
         if hasattr(agent, "name") and agent.name == experiment_plan.agent_name:
             agent_endpoint = agent_endpoint or getattr(agent, "endpoint", None)
+            agent_entrypoint = agent_entrypoint or getattr(agent, "entrypoint", None)
         elif isinstance(agent, dict) and agent.get("name") == experiment_plan.agent_name:
             agent_endpoint = agent_endpoint or agent.get("endpoint")
+            agent_entrypoint = agent_entrypoint or agent.get("entrypoint")
 
-    # Run the experiment
-    result = await harness.execute_experiment(
-        experiment_plan=experiment_plan,
-        agent_endpoint=agent_endpoint,
-        agent_entrypoint=agent_entrypoint,
-        iteration=iteration,
-        task_id=state.get("task_id"),
-    )
+    # Determine execution strategy
+    if agent_entrypoint and not agent_endpoint:
+        # NEW: Use test script execution flow
+        # Spawn the agent, run generated tests, capture output
+        logger.info(f"Using test script execution for entrypoint: {agent_entrypoint}")
+        result = await harness.execute_with_test_script(
+            experiment_plan=experiment_plan,
+            agent_entrypoint=agent_entrypoint,
+            port=agent_port,
+            iteration=iteration,
+            task_id=state.get("task_id"),
+        )
+        return result
 
-    return result
+    elif agent_endpoint:
+        # Traditional HTTP exercise against running agent
+        logger.info(f"Using HTTP exercise against endpoint: {agent_endpoint}")
+        result = await harness.execute_experiment(
+            experiment_plan=experiment_plan,
+            agent_endpoint=agent_endpoint,
+            agent_entrypoint=agent_entrypoint,
+            iteration=iteration,
+            task_id=state.get("task_id"),
+        )
+        return result
+
+    else:
+        # No endpoint or entrypoint - create failed result
+        logger.warning("No agent endpoint or entrypoint available for exercise")
+        from ..state.execution_schemas import ExecutionResult, ExecutionStatus
+        from ..runtime.time_utils import utcnow
+
+        result = ExecutionResult(
+            iteration=iteration,
+            task_id=state.get("task_id"),
+            status=ExecutionStatus.FAILED,
+            started_at=utcnow(),
+            build_output=build_output,
+            all_errors=["No agent endpoint or entrypoint available for exercise"],
+        )
+        # Don't call finalize() here - it would clear all_errors since there are no runs
+        result.completed_at = utcnow()
+        return result
 
 
 async def _execute_tool(tool_name: str, tool_args: dict, tool_registry) -> Any:

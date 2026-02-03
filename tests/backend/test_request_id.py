@@ -184,7 +184,7 @@ class TestRequestIdHandlerIntegration:
         """Verify /v1/responses handler accesses request.state.request_id."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, 'r') as f:
+        with open(main_module.__file__, 'r', encoding='utf-8') as f:
             content = f.read()
 
         # Check that the handler gets request_id from state
@@ -195,7 +195,7 @@ class TestRequestIdHandlerIntegration:
         """Verify /v1/chat/completions handler accesses request.state.request_id."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, 'r') as f:
+        with open(main_module.__file__, 'r', encoding='utf-8') as f:
             content = f.read()
 
         # Check that the handler gets request_id from state
@@ -205,7 +205,7 @@ class TestRequestIdHandlerIntegration:
         """Verify stream_response function accepts request_id parameter."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, 'r') as f:
+        with open(main_module.__file__, 'r', encoding='utf-8') as f:
             content = f.read()
 
         # Check function signature
@@ -216,7 +216,7 @@ class TestRequestIdHandlerIntegration:
         """Verify stream_response_unified function accepts request_id parameter."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, 'r') as f:
+        with open(main_module.__file__, 'r', encoding='utf-8') as f:
             content = f.read()
 
         # Check function signature

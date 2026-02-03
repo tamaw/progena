@@ -216,12 +216,52 @@ class TelegramClient:
         """Main polling loop that fetches updates from Telegram."""
         logger.info("Starting Telegram polling loop")
         consecutive_errors = 0
+        consecutive_timeouts = 0
+        consecutive_conflicts = 0
         max_consecutive_errors = 10
+        max_consecutive_conflicts = 3  # Stop faster on conflicts
 
         while True:
             try:
-                updates = await self._get_updates()
-                consecutive_errors = 0  # Reset on success
+                updates, error_type = await self._get_updates()
+
+                # Handle different error types
+                if error_type == "conflict":
+                    consecutive_conflicts += 1
+                    consecutive_errors += 1
+                    if consecutive_conflicts >= max_consecutive_conflicts:
+                        logger.error(
+                            "Detected %d consecutive 409 Conflict errors - another bot instance "
+                            "is likely running. Stopping polling to avoid conflicts.",
+                            consecutive_conflicts
+                        )
+                        break
+                    # Longer backoff for conflicts
+                    await asyncio.sleep(min(60, 5 * (2 ** consecutive_conflicts)))
+                    continue
+                elif error_type == "timeout":
+                    consecutive_timeouts += 1
+                    # Timeouts during long polling are normal, only log periodically
+                    if consecutive_timeouts == 1 or consecutive_timeouts % 10 == 0:
+                        logger.debug(
+                            "Long polling timeout (count: %d) - this is normal behavior",
+                            consecutive_timeouts
+                        )
+                    # Don't count timeouts as errors for the consecutive_errors limit
+                    # since they're expected with long polling
+                elif error_type == "error":
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error("Too many consecutive polling errors (%d), stopping", consecutive_errors)
+                        break
+                    # Exponential backoff on errors
+                    await asyncio.sleep(min(30, 2 ** consecutive_errors))
+                    continue
+                else:
+                    # Success - reset counters
+                    consecutive_errors = 0
+                    consecutive_timeouts = 0
+                    consecutive_conflicts = 0
 
                 if updates:
                     for update in updates:
@@ -235,7 +275,7 @@ class TelegramClient:
                 break
             except Exception as e:
                 consecutive_errors += 1
-                logger.error("Error in polling loop (attempt %d/%d): %s",
+                logger.error("Unexpected error in polling loop (attempt %d/%d): %s",
                            consecutive_errors, max_consecutive_errors, e)
 
                 if consecutive_errors >= max_consecutive_errors:
@@ -245,11 +285,12 @@ class TelegramClient:
                 # Exponential backoff on errors
                 await asyncio.sleep(min(30, 2 ** consecutive_errors))
 
-    async def _get_updates(self) -> list[dict]:
+    async def _get_updates(self) -> tuple[list[dict], str | None]:
         """Fetch updates from Telegram using long polling.
 
         Returns:
-            List of update objects.
+            Tuple of (list of update objects, error_type).
+            error_type is None on success, or one of: 'timeout', 'conflict', 'error'
         """
         params = {
             "timeout": self.config.polling_timeout,
@@ -261,10 +302,15 @@ class TelegramClient:
 
         # Use longer timeout for the HTTP request during long polling
         # No retry on getUpdates - it's expected to timeout sometimes
-        result = await self._api_call("getUpdates", params, retry=False)
+        result, error_type = await self._api_call_with_error_type(
+            "getUpdates", params, retry=False
+        )
+
+        if error_type:
+            return [], error_type
 
         if not isinstance(result, list):
-            return []
+            return [], None
 
         # Update the offset to acknowledge received updates
         if result:
@@ -273,7 +319,7 @@ class TelegramClient:
                 if update_id > self._last_update_id:
                     self._last_update_id = update_id
 
-        return result
+        return result, None
 
     async def _process_update(self, update: dict) -> None:
         """Process a single Telegram update.
@@ -508,6 +554,128 @@ class TelegramClient:
 
         return success
 
+    async def _api_call_with_error_type(
+        self,
+        method: str,
+        params: Optional[dict[str, Any]] = None,
+        retry: bool = True,
+    ) -> tuple[Optional[Any], str | None]:
+        """Make a Telegram Bot API call with retry logic and error type reporting.
+
+        Args:
+            method: API method name (e.g., 'sendMessage', 'getMe').
+            params: Optional parameters for the API call.
+            retry: Whether to retry on failure.
+
+        Returns:
+            Tuple of (API response result, error_type).
+            error_type is None on success, or one of: 'timeout', 'conflict', 'error'
+        """
+        if not self._session:
+            logger.warning("Telegram session not initialized for %s call", method)
+            return None, "error"
+
+        if params is None:
+            params = {}
+
+        url = self.BASE_URL.format(token=self.config.bot_token, method=method)
+
+        last_error = None
+        last_error_type: str | None = "error"
+        attempts = self.config.max_retries if retry else 1
+
+        for attempt in range(attempts):
+            try:
+                # Use longer timeout for getUpdates (long polling)
+                timeout = None
+                if method == "getUpdates":
+                    # HTTP timeout should be longer than the Telegram polling timeout
+                    polling_timeout = params.get("timeout", 30)
+                    timeout = aiohttp.ClientTimeout(total=polling_timeout + 10)
+
+                async with self._session.post(url, json=params, timeout=timeout) as response:
+                    data = await response.json()
+
+                    if data.get("ok"):
+                        return data.get("result"), None
+
+                    # Handle Telegram API errors
+                    error_code = data.get("error_code", 0)
+                    description = data.get("description", "Unknown error")
+
+                    # 409 Conflict - another bot instance is running
+                    if error_code == 409:
+                        logger.warning(
+                            "Telegram API conflict (409) on %s: %s - "
+                            "ensure only one bot instance is running",
+                            method, description
+                        )
+                        return None, "conflict"
+
+                    # Rate limit error (429) - wait and retry
+                    if error_code == 429:
+                        retry_after = data.get("parameters", {}).get("retry_after", 60)
+                        logger.warning(
+                            "Telegram rate limited on %s, waiting %d seconds",
+                            method, retry_after
+                        )
+                        await asyncio.sleep(retry_after)
+                        last_error_type = "error"
+                        continue
+
+                    # Bad request (400) - usually invalid parameters, don't retry
+                    if error_code == 400:
+                        logger.error("Telegram API bad request on %s: %s", method, description)
+                        return None, "error"
+
+                    # Unauthorized (401) - invalid token, don't retry
+                    if error_code == 401:
+                        logger.error("Telegram API unauthorized on %s - check bot token", method)
+                        return None, "error"
+
+                    # Forbidden (403) - bot blocked or chat not found, don't retry
+                    if error_code == 403:
+                        logger.error("Telegram API forbidden on %s: %s", method, description)
+                        return None, "error"
+
+                    # Other errors - may retry
+                    last_error = f"API error {error_code}: {description}"
+                    last_error_type = "error"
+
+            except asyncio.TimeoutError:
+                last_error = "Request timeout"
+                last_error_type = "timeout"
+                # Don't log timeout as error for getUpdates (it's expected)
+                if method != "getUpdates":
+                    logger.debug("Telegram API timeout on %s", method)
+            except aiohttp.ClientError as e:
+                last_error = f"HTTP error: {e}"
+                last_error_type = "error"
+                logger.debug("Telegram API HTTP error on %s: %s", method, e)
+            except Exception as e:
+                last_error = f"Unexpected error: {e}"
+                last_error_type = "error"
+                logger.warning("Telegram API unexpected error on %s: %s", method, e)
+
+            # Exponential backoff before retry
+            if attempt < attempts - 1:
+                delay = self.config.retry_delay * (2 ** attempt)
+                logger.debug(
+                    "Telegram %s call failed (attempt %d/%d): %s, retrying in %.1fs",
+                    method, attempt + 1, attempts, last_error, delay
+                )
+                await asyncio.sleep(delay)
+
+        # Only log as error if it's not a timeout on getUpdates
+        if method == "getUpdates" and last_error_type == "timeout":
+            logger.debug("Telegram %s timed out after %d attempts (normal for long polling)", method, attempts)
+        else:
+            logger.error(
+                "Telegram %s call failed after %d attempts: %s",
+                method, attempts, last_error
+            )
+        return None, last_error_type
+
     async def _api_call(
         self,
         method: str,
@@ -524,76 +692,10 @@ class TelegramClient:
         Returns:
             API response result on success, None on failure.
         """
-        if not self._session:
-            logger.warning("Telegram session not initialized")
-            return None
+        result, _ = await self._api_call_with_error_type(method, params, retry)
+        return result
 
-        url = self.BASE_URL.format(token=self.config.bot_token, method=method)
 
-        last_error = None
-        attempts = self.config.max_retries if retry else 1
-
-        for attempt in range(attempts):
-            try:
-                async with self._session.post(url, json=params) as response:
-                    data = await response.json()
-
-                    if data.get("ok"):
-                        return data.get("result")
-
-                    # Handle Telegram API errors
-                    error_code = data.get("error_code", 0)
-                    description = data.get("description", "Unknown error")
-
-                    # Rate limit error (429) - wait and retry
-                    if error_code == 429:
-                        retry_after = data.get("parameters", {}).get("retry_after", 60)
-                        logger.warning(
-                            "Telegram rate limited, waiting %d seconds",
-                            retry_after
-                        )
-                        await asyncio.sleep(retry_after)
-                        continue
-
-                    # Bad request (400) - usually invalid parameters, don't retry
-                    if error_code == 400:
-                        logger.error("Telegram API bad request: %s", description)
-                        return None
-
-                    # Unauthorized (401) - invalid token, don't retry
-                    if error_code == 401:
-                        logger.error("Telegram API unauthorized - check bot token")
-                        return None
-
-                    # Forbidden (403) - bot blocked or chat not found, don't retry
-                    if error_code == 403:
-                        logger.error("Telegram API forbidden: %s", description)
-                        return None
-
-                    # Other errors - may retry
-                    last_error = f"API error {error_code}: {description}"
-
-            except asyncio.TimeoutError:
-                last_error = "Request timeout"
-            except aiohttp.ClientError as e:
-                last_error = f"HTTP error: {e}"
-            except Exception as e:
-                last_error = f"Unexpected error: {e}"
-
-            # Exponential backoff before retry
-            if attempt < attempts - 1:
-                delay = self.config.retry_delay * (2 ** attempt)
-                logger.debug(
-                    "Telegram API call failed (attempt %d/%d): %s, retrying in %.1fs",
-                    attempt + 1, attempts, last_error, delay
-                )
-                await asyncio.sleep(delay)
-
-        logger.error(
-            "Telegram API call failed after %d attempts: %s",
-            attempts, last_error
-        )
-        return None
 
     def _split_message(self, text: str) -> list[str]:
         """Split a long message into chunks that fit Telegram's limit.

@@ -40,7 +40,10 @@ Examples that should NOT trigger build (answer_directly instead):
     "reasoning": "<brief explanation of your decision>",
     "requires_planning": true/false,
     "target_capabilities": ["<capability_name>"],
-    "user_response": "<helpful response to show user about what you're doing>"
+    "user_response": "<helpful response to show user about what you're doing>",
+    "project_name": "<for build actions only: snake_case name like 'weather_agent'>",
+    "build_type": "<for build actions only: 'agent' or 'mcp'>",
+    "build_description": "<for build actions only: clear description of what to build>"
 }
 ```
 
@@ -56,5 +59,22 @@ Examples that should NOT trigger build (answer_directly instead):
   - For answer: "Here's what I found..."
   - For build: "I'll start building a weather agent for you. This may take a few minutes."
   - For delegate: "I'll use the hello_world agent to handle this."
+
+### Build-Specific Fields (REQUIRED when action is build_agent, build_mcp, or upgrade)
+
+- **project_name**: The agent/project name in snake_case format
+  - Extract the CORE PURPOSE from the user's request
+  - Examples: "weather_agent", "stock_tracker", "email_assistant"
+  - NEVER include filler words: "for_me", "please", "a", "the", "new", "build", "create"
+  - "Build for me a weather agent" → "weather_agent"
+  - "Create an agent that tracks stocks" → "stock_tracker"
+  - "Make a simple todo list agent" → "todo_list"
+
+- **build_type**: Either "agent" (for A2A agents) or "mcp" (for MCP servers/tools)
+
+- **build_description**: A clear, refined description of what to build
+  - Capture the user's intent and any requirements they mentioned
+  - Remove filler and extract the core functionality
+  - "Build for me a weather agent that can tell me the forecast" → "An A2A agent that retrieves and reports weather forecast information"
 
 Choose the most efficient path. Prefer existing capabilities over building new ones.
