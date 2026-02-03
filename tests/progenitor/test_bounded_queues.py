@@ -33,16 +33,29 @@ class MockTelemetryConfig:
 
 
 @dataclass
+class MockStorageConfig:
+    """Mock storage config for testing."""
+    worktree_dir: Path = None
+
+    def __post_init__(self):
+        if self.worktree_dir is None:
+            self.worktree_dir = Path(tempfile.mkdtemp()) / "worktrees"
+
+
+@dataclass
 class MockConfig:
     """Mock config for testing."""
     runtime: MockRuntimeConfig = None
     telemetry: MockTelemetryConfig = None
+    storage: MockStorageConfig = None
 
     def __post_init__(self):
         if self.runtime is None:
             self.runtime = MockRuntimeConfig()
         if self.telemetry is None:
             self.telemetry = MockTelemetryConfig()
+        if self.storage is None:
+            self.storage = MockStorageConfig()
 
 
 class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):

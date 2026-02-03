@@ -201,7 +201,13 @@ class StateManager:
             filepath = self.state_dir / filename
             if not filepath.exists():
                 await self._atomic_write_json(filepath, defaults[name])
-            self._state_cache[name] = await self._read_json(filepath)
+            cached = await self._read_json(filepath)
+            # If file was empty/invalid, use default and rewrite
+            if cached is None:
+                logger.info("State file %s was empty/invalid, initializing with defaults", filename)
+                await self._atomic_write_json(filepath, defaults[name])
+                cached = defaults[name]
+            self._state_cache[name] = cached
 
     def _cleanup_stale_temp_files(self) -> None:
         """Remove leftover .tmp files from failed atomic writes."""
@@ -310,7 +316,14 @@ class StateManager:
 
         async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
             content = await f.read()
-            return json.loads(content)
+            # Handle empty files gracefully
+            if not content or not content.strip():
+                return None
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                logger.warning("Invalid JSON in %s: %s - treating as empty", filepath.name, e)
+                return None
 
     async def append_jsonl(self, log_name: str, entry: dict[str, Any]) -> None:
         """Append a single entry to a JSONL log file with secret redaction."""

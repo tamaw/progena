@@ -1,5 +1,8 @@
 """
-WorktreePrep Node - Creates/checks out git worktree for build items.
+WorktreePrep Node - Creates/checks out git submodule for build items.
+
+BL-007: Updated to use git submodules instead of worktrees for build isolation.
+Each agent gets its own git submodule for isolated commits.
 """
 
 import logging
@@ -17,7 +20,11 @@ def create_node(worktrees_dir: Path) -> Callable[[ProgenitorState], Coroutine[An
     git_manager = GitWorktreeManager(worktrees_dir)
 
     async def worktree_prep_node(state: ProgenitorState) -> ProgenitorState:
-        """Prepare worktree for build items."""
+        """Prepare git submodule for build items.
+
+        BL-007: Initialize git submodule for each build based on build_settings.
+        Uses project_directory from build_settings for consistent isolation.
+        """
         logger.info("WORKTREE_PREP: Starting worktree_prep_node")
         current_item = state.get("current_work_item")
 
@@ -25,7 +32,7 @@ def create_node(worktrees_dir: Path) -> Callable[[ProgenitorState], Coroutine[An
             logger.info("WORKTREE_PREP: No current_work_item, returning")
             return {}
 
-        # Check if this is a build item that needs a worktree
+        # Check if this is a build item that needs a git repo
         if isinstance(current_item, dict):
             item_type = current_item.get("item_type", "")
             item_id = current_item.get("id", "unknown")
@@ -38,35 +45,72 @@ def create_node(worktrees_dir: Path) -> Callable[[ProgenitorState], Coroutine[An
         logger.info(f"WORKTREE_PREP: item_type={item_type}, item_id={item_id}")
 
         if item_type not in build_types:
-            # Not a build item - no worktree needed
-            logger.info(f"WORKTREE_PREP: {item_type} not in build_types, skipping worktree")
+            # Not a build item - no git repo needed
+            logger.info(f"WORKTREE_PREP: {item_type} not in build_types, skipping git setup")
             return {}
 
         try:
-            # For now, skip worktree creation and just use the main repo
-            # Worktrees add complexity and require clean git state
-            # We'll use app/agents or app/mcp as the working directory
-            logger.info(f"WORKTREE_PREP: Using main repo for builds (worktree creation skipped)")
+            # BL-007: Get project_directory from build_settings
+            build_settings = state.get("build_settings")
+            project_directory = None
 
-            # Update work item to indicate no worktree
-            if isinstance(current_item, dict):
-                current_item["worktree_path"] = None
-                current_item["context"] = current_item.get("context", {})
-                current_item["context"]["worktree_skipped"] = True
+            if build_settings:
+                if isinstance(build_settings, dict):
+                    project_directory = build_settings.get("project_directory")
+                    project_name = build_settings.get("project_name", "unknown")
+                elif hasattr(build_settings, "project_directory"):
+                    project_directory = build_settings.project_directory
+                    project_name = getattr(build_settings, "project_name", "unknown")
+                else:
+                    project_name = "unknown"
             else:
-                current_item.worktree_path = None
-                current_item.context["worktree_skipped"] = True
+                project_name = "unknown"
+
+            if project_directory:
+                # BL-007: Initialize git submodule for the agent
+                logger.info(f"WORKTREE_PREP: Initializing git submodule at {project_directory}")
+
+                submodule_path = Path(project_directory)
+                success, message = await git_manager.init_submodule(
+                    submodule_path=submodule_path,
+                    submodule_name=project_name,
+                )
+
+                # Update work item with submodule info
+                if isinstance(current_item, dict):
+                    current_item["submodule_path"] = str(submodule_path)
+                    current_item["context"] = current_item.get("context", {})
+                    current_item["context"]["submodule_initialized"] = success
+                    current_item["context"]["submodule_message"] = message
+                else:
+                    current_item.submodule_path = str(submodule_path)
+                    current_item.context["submodule_initialized"] = success
+                    current_item.context["submodule_message"] = message
+
+                logger.info(f"WORKTREE_PREP: Submodule init result: success={success}, message={message}")
+
+            else:
+                # No build_settings - fall back to main repo
+                logger.info("WORKTREE_PREP: No project_directory in build_settings, using main repo")
+
+                if isinstance(current_item, dict):
+                    current_item["submodule_path"] = None
+                    current_item["context"] = current_item.get("context", {})
+                    current_item["context"]["submodule_skipped"] = True
+                else:
+                    current_item.submodule_path = None
+                    current_item.context["submodule_skipped"] = True
 
             return {"current_work_item": current_item}
 
         except Exception as e:
             # Log error but continue - might not be in a git repo
-            logger.error(f"WORKTREE_PREP: Failed to create worktree: {e}")
+            logger.error(f"WORKTREE_PREP: Failed to initialize submodule: {e}")
             if isinstance(current_item, dict):
                 current_item["context"] = current_item.get("context", {})
-                current_item["context"]["worktree_error"] = str(e)
+                current_item["context"]["submodule_error"] = str(e)
             else:
-                current_item.context["worktree_error"] = str(e)
+                current_item.context["submodule_error"] = str(e)
 
             return {"current_work_item": current_item}
 

@@ -370,6 +370,162 @@ class GitWorktreeManager:
         # Also prune git worktree list
         await self._run_git(["worktree", "prune"], cwd=self.repo_path)
 
+    # =========================================================================
+    # Git Submodule Management for Agent/MCP Isolation
+    # =========================================================================
+
+    async def init_submodule(
+        self,
+        submodule_path: Path,
+        submodule_name: str,
+        remote_url: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """Initialize a git submodule for an agent/MCP project.
+
+        Creates a new git repository in the submodule path that can commit
+        independently from the main progenitor repo.
+
+        Supports modifications - if submodule already exists, returns success
+        without recreating.
+
+        Args:
+            submodule_path: Path where submodule should be created
+            submodule_name: Name for the submodule
+            remote_url: Optional remote URL (if None, creates local-only repo)
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        submodule_path = Path(submodule_path)
+        git_path = submodule_path / ".git"
+
+        # Check if submodule already exists
+        # Note: .git can be a folder (regular repo) or a file (submodule pointer)
+        if git_path.exists():
+            if git_path.is_file():
+                logger.info("SUBMODULE: Git pointer file exists at %s, repo is already a submodule", git_path)
+            else:
+                logger.info("SUBMODULE: Git directory exists at %s, repo already initialized", git_path)
+            return True, f"Submodule already exists at {submodule_path}"
+
+        # Log current state for debugging
+        logger.info("SUBMODULE: .git does NOT exist at %s, will initialize", git_path)
+        if submodule_path.exists():
+            contents = list(submodule_path.iterdir()) if submodule_path.is_dir() else []
+            logger.info("SUBMODULE: Directory exists with %d items: %s", len(contents), [c.name for c in contents[:10]])
+
+        # Check if it's already a submodule in .gitmodules
+        gitmodules_path = self.repo_path / ".gitmodules"
+        if gitmodules_path.exists():
+            content = gitmodules_path.read_text()
+            if f'path = {submodule_path.relative_to(self.repo_path)}' in content:
+                logger.info("SUBMODULE: Already registered in .gitmodules, skipping")
+                return True, f"Submodule already registered for {submodule_name}"
+
+        # Create the directory if it doesn't exist
+        submodule_path.mkdir(parents=True, exist_ok=True)
+
+        # Initialize a new git repository in the submodule path
+        result = await self._run_git(["init"], cwd=submodule_path)
+        if result["returncode"] != 0:
+            error_msg = f"Failed to init git repo: {result['stderr']}"
+            logger.error("SUBMODULE: %s", error_msg)
+            return False, error_msg
+
+        # Create initial commit (empty)
+        result = await self._run_git(
+            ["commit", "--allow-empty", "-m", f"Initial commit for {submodule_name}"],
+            cwd=submodule_path
+        )
+        if result["returncode"] != 0:
+            logger.warning("SUBMODULE: Initial commit failed: %s", result['stderr'])
+
+        # If remote URL provided, add it as origin
+        if remote_url:
+            result = await self._run_git(
+                ["remote", "add", "origin", remote_url],
+                cwd=submodule_path
+            )
+            if result["returncode"] != 0:
+                logger.warning("SUBMODULE: Failed to add remote: %s", result['stderr'])
+
+        # Add to parent repo's .gitmodules (track it as submodule)
+        try:
+            rel_path = submodule_path.relative_to(self.repo_path)
+            result = await self._run_git(
+                ["submodule", "add", "--force", str(submodule_path), str(rel_path)],
+                cwd=self.repo_path
+            )
+            if result["returncode"] != 0:
+                # Submodule add can fail if already tracked - that's ok
+                logger.debug("SUBMODULE: submodule add returned %s: %s",
+                           result['returncode'], result['stderr'])
+        except ValueError:
+            # Path not relative to repo - skip submodule registration
+            logger.warning("SUBMODULE: Path %s not relative to repo, skipping submodule registration",
+                          submodule_path)
+
+        logger.info("SUBMODULE: Initialized at %s", submodule_path)
+        return True, f"Submodule initialized at {submodule_path}"
+
+    async def submodule_commit(
+        self,
+        submodule_path: Path,
+        message: str,
+    ) -> Optional[str]:
+        """Commit changes in a submodule.
+
+        Args:
+            submodule_path: Path to the submodule
+            message: Commit message
+
+        Returns:
+            Commit hash if successful, None otherwise
+        """
+        submodule_path = Path(submodule_path)
+
+        if not (submodule_path / ".git").exists():
+            logger.warning("SUBMODULE: Not a git repo: %s", submodule_path)
+            return None
+
+        # Stage all changes
+        await self._run_git(["add", "-A"], cwd=submodule_path)
+
+        # Check if there are changes
+        result = await self._run_git(["status", "--porcelain"], cwd=submodule_path)
+        if not result["stdout"].strip():
+            logger.debug("SUBMODULE: No changes to commit in %s", submodule_path)
+            return None
+
+        # Commit
+        result = await self._run_git(["commit", "-m", message], cwd=submodule_path)
+        if result["returncode"] != 0:
+            logger.warning("SUBMODULE: Commit failed: %s", result['stderr'])
+            return None
+
+        # Get commit hash
+        result = await self._run_git(["rev-parse", "HEAD"], cwd=submodule_path)
+        commit_hash = result["stdout"].strip() if result["returncode"] == 0 else None
+
+        logger.info("SUBMODULE: Committed %s in %s", commit_hash[:8] if commit_hash else "?",
+                   submodule_path.name)
+        return commit_hash
+
+    async def check_submodule_exists(self, submodule_path: Path) -> bool:
+        """Check if a path is already a git repository (submodule).
+
+        Checks for .git which can be either:
+        - A directory (regular git repo)
+        - A file (submodule pointer to .git/modules/)
+        """
+        submodule_path = Path(submodule_path)
+        git_path = submodule_path / ".git"
+        exists = git_path.exists()
+        if exists:
+            logger.debug("SUBMODULE: check_submodule_exists(%s) = True (.git is %s)",
+                        submodule_path, "file" if git_path.is_file() else "dir")
+        return exists
+
     async def _run_git(
         self,
         args: list[str],

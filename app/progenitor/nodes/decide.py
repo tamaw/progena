@@ -5,7 +5,7 @@ Decide Node - Routes user input to appropriate action path.
 import json
 import logging
 from datetime import datetime
-from typing import Callable, Coroutine, Any, Optional, cast
+from typing import Callable, Coroutine, Any, Optional, cast, TYPE_CHECKING
 
 import re
 
@@ -15,6 +15,9 @@ from ..state.models import ProgenitorState, Decision, DecisionAction, WorkItem
 from ..state.helpers import is_work_item_actionable
 from ..runtime.time_utils import utcnow_isoformat
 from .errors import RecoverableError, LLMError, ValidationError
+
+if TYPE_CHECKING:
+    from ..state.execution_schemas import BuildSettings
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +432,102 @@ def _infer_target_capabilities(user_input: str) -> list[str]:
         return []
 
     return [f"{slug}_a2a_agent"]
+
+
+async def _generate_build_settings(
+    user_input: str,
+    llm_client,
+    llm_action: str,
+) -> "BuildSettings":
+    """Generate structured BuildSettings using LLM.
+
+    BL-007: Uses structured output to determine:
+    - build_type: agent or mcp
+    - project_name: derived from user request for repeatability
+    - directories: automatically derived from type + name
+
+    Args:
+        user_input: Original user request
+        llm_client: LLM client for structured generation
+        llm_action: The action from initial LLM decision
+
+    Returns:
+        BuildSettings with all derived fields populated
+    """
+    from ..state.execution_schemas import BuildSettings, BuildType
+    import uuid
+
+    build_id = f"build_{uuid.uuid4().hex[:12]}"
+
+    # Try to extract project name and type from user input
+    text = user_input.lower()
+
+    # Determine build type
+    if "mcp" in text or "mcp server" in text or "mcp tool" in text:
+        build_type = BuildType.MCP
+    else:
+        build_type = BuildType.AGENT
+
+    # Try to extract project name using patterns
+    project_name = None
+
+    # Pattern: "build/create [a] <name> agent/mcp"
+    name_patterns = [
+        r'\b(?:build|create|scaffold|generate|make|implement)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:new\s+)?([a-z0-9 _\-]+?)\s+(?:a2a\s+)?(?:agent|mcp)',
+        r'\b(?:named?|called?)\s+([a-z0-9 _\-]+)',
+        r'\bagent\s+(?:named?|called?)\s+([a-z0-9 _\-]+)',
+    ]
+
+    for pattern in name_patterns:
+        match = re.search(pattern, text)
+        if match:
+            raw_name = match.group(1).strip()
+            # Filter out common words that aren't names
+            if raw_name and raw_name not in ("a", "an", "the", "new", "simple", "basic"):
+                project_name = raw_name
+                break
+
+    # Fallback: use LLM to extract name if we couldn't parse it
+    if not project_name and llm_client:
+        try:
+            prompt = f"""Extract the project/agent name from this request. Return ONLY the name, nothing else.
+If the user wants to build an agent or MCP server, extract what they want to name it.
+
+User request: "{user_input}"
+
+Project name (snake_case, no spaces):"""
+
+            name_response = await llm_client.complete(
+                prompt=prompt,
+                system_prompt="You extract project names from user requests. Return only the name in snake_case.",
+                temperature=0.1,
+            )
+            if name_response:
+                extracted = name_response.strip().lower()
+                # Clean up the extracted name
+                extracted = re.sub(r'[^a-z0-9_]', '_', extracted).strip('_')
+                if extracted and len(extracted) > 1:
+                    project_name = extracted
+        except Exception as e:
+            logger.warning("Failed to extract project name via LLM: %s", e)
+
+    # Final fallback: generate from user input hash
+    if not project_name:
+        # Use first meaningful words from request
+        words = [w for w in re.findall(r'[a-z]+', text) if w not in ('build', 'create', 'make', 'an', 'a', 'the', 'me', 'agent', 'mcp')]
+        if words:
+            project_name = '_'.join(words[:2])
+        else:
+            project_name = f"project_{uuid.uuid4().hex[:6]}"
+
+    # Create BuildSettings with all derived fields
+    return BuildSettings.create_from_llm_output(
+        build_id=build_id,
+        project_name=project_name,
+        build_type=build_type,
+        user_request=user_input,
+        description=f"Build {build_type.value}: {project_name}",
+    )
 
 
 async def _execute_system_tool_inline(
@@ -1353,11 +1452,24 @@ def create_node(
 
                     return {"current_decision": decision}
 
+                # BL-007: Generate structured BuildSettings from LLM
+                build_settings = await _generate_build_settings(
+                    user_input=user_input,
+                    llm_client=llm_client,
+                    llm_action=llm_action,
+                )
+                logger.info(
+                    "BUILD_SETTINGS: project=%s, type=%s, dir=%s",
+                    build_settings.project_name,
+                    build_settings.build_type,
+                    build_settings.project_directory
+                )
+
                 # Confidence is high enough - start async build
                 from ..runtime.background_build import get_background_runner
 
                 runner = get_background_runner()
-                task_description = f"Build agent: {user_input[:100]}"
+                task_description = f"Build {build_settings.build_type}: {build_settings.project_name}"
                 target_capabilities = _infer_target_capabilities(user_input)
 
                 if runner:
@@ -1368,6 +1480,7 @@ def create_node(
                             task_description=task_description,
                             target_capabilities=target_capabilities,
                             initial_state=dict(state),
+                            build_settings=build_settings,  # BL-007: Pass build settings
                         )
 
                         logger.info("Started async build %s for: %s (confidence=%.2f)", build_id, task_description, confidence)
@@ -1387,9 +1500,13 @@ def create_node(
                                 "event": "async_build_started",
                                 "build_id": build_id,
                                 "task_description": task_description,
+                                "build_settings": build_settings.model_dump(),
                                 "confidence": confidence,
                                 "timestamp": utcnow_isoformat(),
                             })
+
+                        # Mark build settings as in progress
+                        build_settings.mark_in_progress()
 
                         return {
                             "current_decision": decision,
@@ -1397,6 +1514,7 @@ def create_node(
                             "build_id": build_id,
                             "build_task_description": task_description,
                             "build_started_at": utcnow_isoformat(),
+                            "build_settings": build_settings.model_dump(),  # BL-007: Serialize to dict
                         }
 
                     except RuntimeError as e:
@@ -1465,6 +1583,9 @@ def create_node(
                 except Exception as e:
                     logger.error("STREAMING: Error after %d tokens: %s", token_count, e)
                     raise
+
+                # Store streamed content in loop for respond node to save to messages
+                loop._streamed_response_content = streamed_text
 
                 # DON'T set direct_resp here - it was already streamed
                 # Setting direct_resp = None prevents respond node from duplicating

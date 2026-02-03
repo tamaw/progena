@@ -11,6 +11,8 @@ Controls:
 - restart-safe checkpoints (write state every cycle)
 - health file updated each cycle for Docker health checks
 - telemetry for observability (traces and metrics)
+- error handling with user notification
+- graceful cancellation/suspend with state persistence
 """
 
 import asyncio
@@ -86,11 +88,13 @@ class ProgenitorLoop:
         state_manager,
         config: "ProgenitorConfig",
         llm_client=None,
+        worktrees_dir: Optional[Path] = None,
     ):
         self.graph = graph
         self.state_manager = state_manager
         self.config = config
         self.llm_client = llm_client
+        self.worktrees_dir = worktrees_dir or config.storage.worktree_dir
         self.running = False
 
         # Bounded queues to prevent memory exhaustion
@@ -122,6 +126,7 @@ class ProgenitorLoop:
         self._streaming_enabled = False
         self._response_was_streamed = False
         self._stream_final_sent = False
+        self._streamed_response_content: str = ""  # Accumulated streamed text for saving to messages
 
         # Background build runner (initialized in run_forever)
         self._background_runner = None
@@ -155,10 +160,11 @@ class ProgenitorLoop:
                 state_manager=self.state_manager,
                 config=self.config,
                 llm_client=self.llm_client,
+                worktrees_dir=self.worktrees_dir,
             )
             set_background_runner(self._background_runner)
             self._background_runner.set_completion_callback(self._handle_build_completion)
-            logger.info("Background build runner initialized")
+            logger.info("Background build runner initialized with inner loop graph")
 
         # Initialize telemetry
         _init_telemetry(self.config)
@@ -241,6 +247,8 @@ class ProgenitorLoop:
 
         except asyncio.CancelledError:
             logger.info("Loop cancelled by signal")
+            # Graceful shutdown - suspend any active build
+            await self._suspend_active_build("Cancelled by signal")
             input_task.cancel()
             background_task.cancel()
             try:
@@ -287,6 +295,7 @@ class ProgenitorLoop:
                     self._streaming_enabled = True
                     self._response_was_streamed = False
                     self._stream_final_sent = False
+                    self._streamed_response_content = ""
 
                     # Run graph cycle
                     await self._run_graph_cycle(run_id, source="user_input")
@@ -295,6 +304,7 @@ class ProgenitorLoop:
                     self._streaming_enabled = False
                     self._response_was_streamed = False
                     self._stream_final_sent = False
+                    self._streamed_response_content = ""
 
                     # Signal cycle complete for IPC synchronization
                     logger.info("Graph cycle complete, signaling")
@@ -806,6 +816,14 @@ class ProgenitorLoop:
             "awaiting_clarification": state.get("awaiting_clarification", False),
         }
 
+        # BL-007: Include build_settings for structured build configuration
+        build_settings = state.get("build_settings")
+        if build_settings:
+            if hasattr(build_settings, "model_dump"):
+                build_checkpoint["build_settings"] = build_settings.model_dump()
+            elif isinstance(build_settings, dict):
+                build_checkpoint["build_settings"] = build_settings
+
         # Only include ideal_state if it exists and is serializable
         ideal_state = state.get("ideal_state")
         if ideal_state:
@@ -1002,3 +1020,127 @@ class ProgenitorLoop:
             health_path.write_text(json.dumps(health_data))
         except Exception as e:
             logger.warning("Failed to update health file: %s", e)
+
+    # =========================================================================
+    # Build Error Handling and User Notification
+    # =========================================================================
+
+    async def handle_build_error(
+        self,
+        error_message: str,
+        build_id: Optional[str] = None,
+        notify_user: bool = True,
+    ) -> None:
+        """Handle a build error by updating state and notifying user.
+
+        BL-007: When an error occurs:
+        1. Add error to backlog for user notification
+        2. Update build_settings status to ERROR
+        3. Write error status to state file
+        4. Cancel the build loop (inner/outer)
+
+        Args:
+            error_message: Description of the error
+            build_id: Optional build ID (uses current if not provided)
+            notify_user: Whether to push notification to user
+        """
+        logger.error("BUILD ERROR: %s (build_id=%s)", error_message, build_id or "current")
+
+        # Update build settings in state
+        build_settings = self._state.get("build_settings")
+        if build_settings:
+            if isinstance(build_settings, dict):
+                build_settings["status"] = "error"
+                build_settings["error_message"] = error_message
+                build_settings["updated_at"] = utcnow_isoformat()
+            elif hasattr(build_settings, "mark_error"):
+                build_settings.mark_error(error_message)
+                self._state["build_settings"] = build_settings.model_dump()
+
+        # Mark build as not in progress
+        self._state["build_in_progress"] = False
+        self._state["build_phase"] = "error"
+
+        # Create error work item for user notification
+        if notify_user:
+            from ..state.models import WorkItem, WorkItemType, WorkItemStatus
+
+            error_item = WorkItem(
+                id=f"error_{uuid.uuid4().hex[:8]}",
+                item_type=WorkItemType.DIRECT_ANSWER,
+                status=WorkItemStatus.COMPLETED,
+                description=f"Build Error: {error_message}",
+                context={
+                    "error_type": "build_error",
+                    "build_id": build_id or self._state.get("build_id"),
+                    "notify_user": True,
+                },
+                result={"error": error_message, "notify": True},
+            )
+
+            # Add to backlog for respond node to pick up
+            backlog = list(self._state.get("backlog", []))
+            backlog.append(error_item)
+            self._state["backlog"] = backlog
+
+            # Push event to notify user immediately
+            await self._push_event(
+                "build_error",
+                f"❌ Build error: {error_message}",
+                {
+                    "build_id": build_id or self._state.get("build_id"),
+                    "error": error_message,
+                }
+            )
+
+        # Checkpoint state with error
+        await self._checkpoint_state(self._state)
+        await self._update_health_file(self._state, status="error", error=error_message)
+
+        logger.info("BUILD ERROR: State persisted with error status")
+
+    async def _suspend_active_build(self, reason: str = "Cancelled by signal") -> None:
+        """Suspend any active build gracefully on cancellation.
+
+        BL-007: When receiving a cancellation signal:
+        1. Mark build as "suspended" (not error/failed)
+        2. Write last state with status
+        3. Allow graceful shutdown to continue
+
+        Args:
+            reason: Reason for suspension
+        """
+        if not self._state.get("build_in_progress"):
+            return
+
+        logger.info("SUSPEND: Suspending active build: %s", reason)
+
+        # Update build settings status to suspended
+        build_settings = self._state.get("build_settings")
+        if build_settings:
+            if isinstance(build_settings, dict):
+                build_settings["status"] = "suspended"
+                build_settings["error_message"] = reason
+                build_settings["updated_at"] = utcnow_isoformat()
+            elif hasattr(build_settings, "mark_suspended"):
+                build_settings.mark_suspended(reason)
+                self._state["build_settings"] = build_settings.model_dump()
+
+        # Mark build as suspended (not completely cancelled)
+        self._state["build_in_progress"] = False
+        self._state["build_phase"] = "suspended"
+
+        # Push event for any connected clients
+        await self._push_event(
+            "build_suspended",
+            f"⏸️ Build suspended: {reason}",
+            {
+                "build_id": self._state.get("build_id"),
+                "reason": reason,
+            }
+        )
+
+        # Update health file with suspended status
+        await self._update_health_file(self._state, status="suspended", error=reason)
+
+        logger.info("SUSPEND: Build state saved as suspended")
