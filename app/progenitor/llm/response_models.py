@@ -56,6 +56,22 @@ class DecisionResponse(BaseModel):
         default=None,
         description="Direct response content if action is answer_directly (deprecated, use user_response)"
     )
+    # Build-specific fields (populated when action is build_agent, build_mcp, or upgrade)
+    project_name: Optional[str] = Field(
+        default=None,
+        description="For build actions: the agent/project name in snake_case (e.g., 'weather_agent'). "
+        "Should be a concise, descriptive name based on what the user wants to build. "
+        "Do NOT include filler words like 'for_me', 'please', 'a', 'the'."
+    )
+    build_type: Optional[str] = Field(
+        default=None,
+        description="For build actions: 'agent' for A2A agents, 'mcp' for MCP servers/tools"
+    )
+    build_description: Optional[str] = Field(
+        default=None,
+        description="For build actions: a clear, refined description of what the user wants to build. "
+        "This should capture the core intent and requirements from the user's request."
+    )
 
     @field_validator('confidence', mode='before')
     @classmethod

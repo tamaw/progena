@@ -5,6 +5,7 @@ Shared fixtures for backend tests.
 import pytest
 import asyncio
 import sys
+from unittest.mock import AsyncMock, patch
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +27,27 @@ def cleanup_event_loop():
         task.cancel()
     if pending and not loop.is_running():
         loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+
+@pytest.fixture(autouse=True)
+def mock_progenitor_client():
+    """Mock the get_client and get_ipc_client to avoid connection issues in tests."""
+    mock_client = AsyncMock()
+    mock_client.chat_completion.return_value = {
+        "choices": [{"message": {"content": "mocked response"}}],
+        "usage": {"total_tokens": 10}
+    }
+    mock_client.respond.return_value = {"response": "mocked"}
+    mock_client.list_models.return_value = {"models": []}
+    mock_client.is_running = False
+    mock_client.start = AsyncMock()
+    mock_client.stop = AsyncMock()
+
+    with patch('app.backend.main.get_client', return_value=mock_client), \
+         patch('app.backend.main.get_ipc_client', return_value=mock_client), \
+         patch('app.backend.main.config.progenitor_ipc_enabled', False), \
+         patch('app.backend.main.config.telegram_enabled', False):
+        yield
 
 
 @pytest.fixture

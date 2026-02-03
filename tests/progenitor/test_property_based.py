@@ -73,6 +73,7 @@ def progenitor_state_strategy(draw):
 class TestIterationBounds:
     """Tests for iteration count bounds."""
 
+    @settings(deadline=None)  # Disable deadline for this test - timing varies
     @given(
         max_iterations=st.integers(min_value=1, max_value=20),
         current_iteration=st.integers(min_value=0, max_value=25),

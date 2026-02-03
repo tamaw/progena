@@ -99,16 +99,20 @@ class TestDecideNode:
         """Explicit build-agent requests should trigger background build flow."""
         from app.progenitor.nodes import decide
 
-        mock_llm = AsyncMock()
+        # Use MagicMock as base so sync methods like _get_json_response_format don't return coroutines
+        mock_llm = MagicMock()
         # Simulate an LLM response that identifies this as a build request with high confidence.
-        mock_llm.decide.return_value = {
+        mock_llm.decide = AsyncMock(return_value={
             "action": "build_agent",
             "confidence": 0.98,  # Above 0.95 threshold
             "reasoning": "User explicitly asked to build an agent",
             "requires_planning": True,
             "target_capabilities": ["hello_world_a2a_agent"],
             "user_response": "I'll start building a hello world agent for you.",
-        }
+        })
+        # Mock sync method and async method needed by _generate_build_settings
+        mock_llm._get_json_response_format = MagicMock(return_value={"type": "json_object"})
+        mock_llm.complete = AsyncMock(return_value='{"project_name": "hello_world", "build_type": "agent", "reasoning": "test"}')
 
         mock_registry = MagicMock()
         mock_registry.get_all_capabilities.return_value = []

@@ -154,13 +154,9 @@ def create_node(
             f"{len(lessons['what_failed'])} failures"
         )
 
-        # Increment iteration for next cycle
-        next_iteration = iteration + 1
-
         return {
             "lessons_learned": all_lessons,
             "current_lesson": lessons,
-            "current_iteration": next_iteration,  # Ready for next iteration
         }
 
     return learn_node

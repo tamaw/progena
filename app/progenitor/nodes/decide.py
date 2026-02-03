@@ -10,6 +10,7 @@ from typing import Callable, Coroutine, Any, Optional, cast, TYPE_CHECKING
 import re
 
 from openai import APIConnectionError, RateLimitError
+from pydantic import BaseModel, Field
 
 from ..state.models import ProgenitorState, Decision, DecisionAction, WorkItem
 from ..state.helpers import is_work_item_actionable
@@ -20,6 +21,23 @@ if TYPE_CHECKING:
     from ..state.execution_schemas import BuildSettings
 
 logger = logging.getLogger(__name__)
+
+
+class BuildNameExtraction(BaseModel):
+    """Structured output for extracting build/agent name from user request."""
+
+    project_name: str = Field(
+        description="The extracted project/agent name in snake_case format. "
+        "Should be a concise, descriptive name based on what the user wants to build. "
+        "Examples: 'weather_agent', 'stock_tracker', 'email_assistant'. "
+        "Do NOT include filler words like 'for_me', 'please', 'a', 'the'."
+    )
+    build_type: str = Field(
+        description="The type of build: 'agent' for A2A agents, 'mcp' for MCP servers/tools."
+    )
+    reasoning: str = Field(
+        description="Brief explanation of how the name was derived from the user request."
+    )
 
 
 def _looks_like_agent_build_request(user_input: str) -> bool:
@@ -459,12 +477,43 @@ def _infer_target_capabilities(user_input: str) -> list[str]:
     return [f"{slug}_a2a_agent"]
 
 
+def _clean_project_name(name: str) -> str:
+    """Clean and normalize a project name to snake_case."""
+    if not name:
+        return ""
+
+    # Lowercase and replace non-alphanumeric with underscores
+    cleaned = re.sub(r'[^a-z0-9_]', '_', name.lower()).strip('_')
+
+    # Remove common filler words that might have slipped through
+    filler_patterns = [
+        r'^for_me_',
+        r'^please_',
+        r'^a_',
+        r'^an_',
+        r'^the_',
+        r'^new_',
+        r'^build_',
+        r'^create_',
+        r'_for_me$',
+        r'_please$',
+    ]
+    for pattern in filler_patterns:
+        cleaned = re.sub(pattern, '', cleaned)
+
+    # Remove double underscores
+    cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+
+    return cleaned
+
+
 async def _generate_build_settings(
     user_input: str,
     llm_client,
     llm_action: str,
+    decision_data: dict | None = None,
 ) -> "BuildSettings":
-    """Generate structured BuildSettings using LLM.
+    """Generate structured BuildSettings, using decision data if available.
 
     BL-007: Uses structured output to determine:
     - build_type: agent or mcp
@@ -473,8 +522,9 @@ async def _generate_build_settings(
 
     Args:
         user_input: Original user request
-        llm_client: LLM client for structured generation
+        llm_client: LLM client for structured generation (fallback)
         llm_action: The action from initial LLM decision
+        decision_data: The full decision response from the LLM (may contain project_name, build_type, build_description)
 
     Returns:
         BuildSettings with all derived fields populated
@@ -484,66 +534,151 @@ async def _generate_build_settings(
 
     build_id = f"build_{uuid.uuid4().hex[:12]}"
 
-    # Try to extract project name and type from user input
-    text = user_input.lower()
-
-    # Determine build type
-    if "mcp" in text or "mcp server" in text or "mcp tool" in text:
-        build_type = BuildType.MCP
-    else:
-        build_type = BuildType.AGENT
-
-    # Try to extract project name using patterns
     project_name = None
+    build_type = BuildType.AGENT
+    build_description = None
 
-    # Pattern: "build/create [a] <name> agent/mcp"
-    name_patterns = [
-        r'\b(?:build|create|scaffold|generate|make|implement)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:new\s+)?([a-z0-9 _\-]+?)\s+(?:a2a\s+)?(?:agent|mcp)',
-        r'\b(?:named?|called?)\s+([a-z0-9 _\-]+)',
-        r'\bagent\s+(?:named?|called?)\s+([a-z0-9 _\-]+)',
-    ]
+    # Primary: Use values from the decision response if available
+    # This avoids an extra LLM call since decide() already extracted these
+    if decision_data:
+        decision_project_name = decision_data.get("project_name")
+        decision_build_type = decision_data.get("build_type")
+        decision_build_description = decision_data.get("build_description")
 
-    for pattern in name_patterns:
-        match = re.search(pattern, text)
-        if match:
-            raw_name = match.group(1).strip()
-            # Filter out common words that aren't names
-            if raw_name and raw_name not in ("a", "an", "the", "new", "simple", "basic"):
-                project_name = raw_name
-                break
+        if decision_project_name:
+            project_name = _clean_project_name(decision_project_name)
+            if project_name:
+                logger.info("Using project_name from decision response: %s", project_name)
 
-    # Fallback: use LLM to extract name if we couldn't parse it
+        if decision_build_type:
+            if decision_build_type.lower() == "mcp":
+                build_type = BuildType.MCP
+            logger.info("Using build_type from decision response: %s", build_type)
+
+        if decision_build_description:
+            build_description = decision_build_description
+            logger.info("Using build_description from decision response: %s", build_description[:100] if build_description else "None")
+
+    # Fallback: Use LLM structured output if decision didn't provide project_name
     if not project_name and llm_client:
         try:
-            prompt = f"""Extract the project/agent name from this request. Return ONLY the name, nothing else.
-If the user wants to build an agent or MCP server, extract what they want to name it.
+            from ..llm.client import _build_json_schema_format
 
-User request: "{user_input}"
+            system_prompt = """You are an expert at extracting project names from user requests.
 
-Project name (snake_case, no spaces):"""
+When a user asks to build an agent or MCP server, extract a clean, descriptive name.
 
-            name_response = await llm_client.complete(
-                prompt=prompt,
-                system_prompt="You extract project names from user requests. Return only the name in snake_case.",
-                temperature=0.1,
+RULES:
+1. Extract the CORE PURPOSE/TOPIC, not filler words
+2. Use snake_case format (lowercase with underscores)
+3. Keep names concise but descriptive (2-4 words max)
+4. NEVER include: 'for_me', 'please', 'a', 'an', 'the', 'new', 'build', 'create'
+
+EXAMPLES:
+- "Build for me a weather agent" → weather_agent
+- "Create an agent that tracks stocks" → stock_tracker
+- "Build me a new email assistant agent please" → email_assistant
+- "I want an agent to help with calendar scheduling" → calendar_scheduler
+- "Make a simple todo list agent" → todo_list
+- "Build an MCP server for GitHub integration" → github_integration"""
+
+            prompt = f"""Extract the project name from this user request:
+
+"{user_input}"
+
+Return the extracted name and build type."""
+
+            # Try structured output first
+            response_format = llm_client._get_json_response_format(
+                BuildNameExtraction, "build_name_extraction"
             )
-            if name_response:
-                extracted = name_response.strip().lower()
-                # Clean up the extracted name
-                extracted = re.sub(r'[^a-z0-9_]', '_', extracted).strip('_')
-                if extracted and len(extracted) > 1:
-                    project_name = extracted
-        except Exception as e:
-            logger.warning("Failed to extract project name via LLM: %s", e)
 
-    # Final fallback: generate from user input hash
+            # Add JSON instruction if using json_object format (Azure older API versions)
+            actual_prompt = prompt
+            if response_format.get("type") == "json_object":
+                actual_prompt = prompt + "\n\nRespond with valid JSON matching this schema: {project_name: string, build_type: 'agent'|'mcp', reasoning: string}"
+
+            response = await llm_client.complete(
+                prompt=actual_prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,
+                response_format=response_format,
+            )
+
+            if response:
+                try:
+                    # Parse the structured response
+                    parsed = json.loads(response.strip())
+                    extracted_name = _clean_project_name(parsed.get("project_name", ""))
+                    extracted_type = parsed.get("build_type", "agent").strip().lower()
+                    reasoning = parsed.get("reasoning", "")
+
+                    if extracted_name and len(extracted_name) > 1:
+                        project_name = extracted_name
+                        logger.info(
+                            "LLM extracted project name: %s (reasoning: %s)",
+                            project_name, reasoning
+                        )
+
+                    if extracted_type == "mcp":
+                        build_type = BuildType.MCP
+
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse LLM structured response: %s", response[:100])
+
+        except Exception as e:
+            logger.warning("Failed to extract project name via LLM structured output: %s", e)
+
+    # Fallback: Try regex patterns if LLM failed
     if not project_name:
-        # Use first meaningful words from request
-        words = [w for w in re.findall(r'[a-z]+', text) if w not in ('build', 'create', 'make', 'an', 'a', 'the', 'me', 'agent', 'mcp')]
+        text = user_input.lower()
+
+        # Improved patterns that skip filler words
+        name_patterns = [
+            # "build/create a <adjective>? <name> agent" - skip "for me", "please" etc.
+            r'\b(?:build|create|scaffold|generate|make|implement)\s+(?:for\s+me\s+)?(?:me\s+)?(?:please\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:simple\s+|basic\s+)?([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*)?)\s+(?:a2a\s+)?(?:agent|mcp)',
+            # "agent named/called <name>"
+            r'\bagent\s+(?:named?|called?)\s+([a-z0-9_\-]+)',
+            # "named/called <name>"
+            r'\b(?:named?|called?)\s+([a-z0-9_\-]+)',
+        ]
+
+        for pattern in name_patterns:
+            match = re.search(pattern, text)
+            if match:
+                raw_name = match.group(1).strip()
+                # Filter out common words that aren't names
+                skip_words = {"a", "an", "the", "new", "simple", "basic", "for", "me", "please"}
+                if raw_name and raw_name not in skip_words:
+                    # Convert to snake_case
+                    project_name = re.sub(r'\s+', '_', raw_name)
+                    logger.info("Regex extracted project name: %s", project_name)
+                    break
+
+    # Determine build type from text if not already set
+    text = user_input.lower()
+    if build_type == BuildType.AGENT and ("mcp" in text or "mcp server" in text or "mcp tool" in text):
+        build_type = BuildType.MCP
+
+    # Final fallback: extract meaningful words
+    if not project_name:
+        # Use meaningful words from request, excluding common filler
+        exclude_words = {
+            'build', 'create', 'make', 'scaffold', 'generate', 'implement',
+            'an', 'a', 'the', 'me', 'for', 'please', 'new', 'simple', 'basic',
+            'agent', 'mcp', 'server', 'tool', 'want', 'need', 'would', 'like',
+            'can', 'you', 'i', 'that', 'which', 'to', 'with'
+        }
+        words = [w for w in re.findall(r'[a-z]+', text) if w not in exclude_words and len(w) > 2]
         if words:
             project_name = '_'.join(words[:2])
+            logger.info("Fallback extracted project name from words: %s", project_name)
         else:
             project_name = f"project_{uuid.uuid4().hex[:6]}"
+            logger.info("Using random project name: %s", project_name)
+
+    # Use build_description if available, otherwise generate one
+    description = build_description or f"Build {build_type.value}: {project_name}"
 
     # Create BuildSettings with all derived fields
     return BuildSettings.create_from_llm_output(
@@ -551,7 +686,7 @@ Project name (snake_case, no spaces):"""
         project_name=project_name,
         build_type=build_type,
         user_request=user_input,
-        description=f"Build {build_type.value}: {project_name}",
+        description=description,
     )
 
 
@@ -1477,17 +1612,20 @@ def create_node(
 
                     return {"current_decision": decision}
 
-                # BL-007: Generate structured BuildSettings from LLM
+                # BL-007: Generate structured BuildSettings from LLM decision
+                # Pass decision_data so we can use project_name/build_type/build_description if already extracted
                 build_settings = await _generate_build_settings(
                     user_input=user_input,
                     llm_client=llm_client,
                     llm_action=llm_action,
+                    decision_data=decision_data,
                 )
                 logger.info(
-                    "BUILD_SETTINGS: project=%s, type=%s, dir=%s",
+                    "BUILD_SETTINGS: project=%s, type=%s, dir=%s, description=%s",
                     build_settings.project_name,
                     build_settings.build_type,
-                    build_settings.project_directory
+                    build_settings.project_directory,
+                    build_settings.description[:80] if build_settings.description else "None",
                 )
 
                 # Confidence is high enough - start async build

@@ -352,6 +352,27 @@ class StateManager:
             metrics.increment("log_append_total", {"log": log_name})
             metrics.record_histogram("log_entry_size_bytes", len(line))
 
+    async def _append_jsonl(self, filepath: Path, entry: dict[str, Any]) -> None:
+        """Append a single entry to an arbitrary JSONL file with secret redaction."""
+        tracer, metrics = _get_telemetry()
+
+        # Add timestamp if not present
+        if "timestamp" not in entry:
+            entry["timestamp"] = utcnow_isoformat()
+
+        # Redact secrets before writing
+        line = json.dumps(entry, default=str)
+        line = redact_secrets(line) + "\n"
+
+        async with aiofiles.open(filepath, 'a', encoding='utf-8') as f:
+            await f.write(line)
+            await f.flush()
+            os.fsync(f.fileno())
+
+        if metrics:
+            metrics.increment("log_append_total", {"log": filepath.name})
+            metrics.record_histogram("log_entry_size_bytes", len(line))
+
     async def log_conversation(self, message: ConversationMessage) -> None:
         """Log a conversation message."""
         await self.append_jsonl("conversation", message.model_dump())

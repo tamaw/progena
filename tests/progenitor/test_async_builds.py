@@ -132,6 +132,9 @@ class TestBackgroundBuildRunner:
         manager = AsyncMock()
         manager.get_state = AsyncMock(return_value={})
         manager.save_state = AsyncMock()
+        manager.get_build_state = AsyncMock(return_value={})
+        manager.save_build_state = AsyncMock()
+        manager.update_current_state = AsyncMock()
         return manager
 
     @pytest.fixture
@@ -520,6 +523,9 @@ class TestAsyncBuildIntegration:
         manager = AsyncMock()
         manager.get_state = AsyncMock(return_value={})
         manager.save_state = AsyncMock()
+        manager.get_build_state = AsyncMock(return_value={})
+        manager.save_build_state = AsyncMock()
+        manager.update_current_state = AsyncMock()
         return manager
 
     @pytest.fixture

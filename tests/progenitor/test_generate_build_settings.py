@@ -17,9 +17,14 @@ from app.progenitor.nodes.decide import _generate_build_settings
 
 @pytest.fixture
 def mock_llm_client():
-    """Create a mock LLM client for testing."""
-    client = AsyncMock()
-    client.complete = AsyncMock(return_value="extracted_name")
+    """Create a mock LLM client for testing.
+
+    Note: Use MagicMock as base so synchronous methods like _get_json_response_format
+    don't return coroutines. Only explicitly make async methods use AsyncMock.
+    """
+    client = MagicMock()
+    client.complete = AsyncMock(return_value='{"project_name": "extracted_name", "build_type": "agent", "reasoning": "test"}')
+    client._get_json_response_format = MagicMock(return_value={"type": "json_object"})
     return client
 
 
@@ -66,22 +71,30 @@ class TestProjectNameExtraction:
     """Test project name extraction from user input."""
 
     @pytest.mark.asyncio
-    async def test_extracts_name_from_build_pattern(self, mock_llm_client):
+    async def test_extracts_name_from_build_pattern(self):
         """Test extracting name from 'build a X agent' pattern."""
+        mock_llm = MagicMock()
+        mock_llm.complete = AsyncMock(return_value='{"project_name": "weather_agent", "build_type": "agent", "reasoning": "extracted from weather agent request"}')
+        mock_llm._get_json_response_format = MagicMock(return_value={"type": "json_object"})
+
         settings = await _generate_build_settings(
             user_input="build a weather agent",
-            llm_client=mock_llm_client,
+            llm_client=mock_llm,
             llm_action="build_agent",
         )
 
         assert "weather" in settings.project_name
 
     @pytest.mark.asyncio
-    async def test_extracts_name_from_create_pattern(self, mock_llm_client):
+    async def test_extracts_name_from_create_pattern(self):
         """Test extracting name from 'create a X agent' pattern."""
+        mock_llm = MagicMock()
+        mock_llm.complete = AsyncMock(return_value='{"project_name": "hello_world", "build_type": "agent", "reasoning": "extracted from hello world agent request"}')
+        mock_llm._get_json_response_format = MagicMock(return_value={"type": "json_object"})
+
         settings = await _generate_build_settings(
             user_input="create a hello world agent",
-            llm_client=mock_llm_client,
+            llm_client=mock_llm,
             llm_action="build_agent",
         )
 
@@ -89,11 +102,15 @@ class TestProjectNameExtraction:
         assert "hello" in settings.project_name or "world" in settings.project_name
 
     @pytest.mark.asyncio
-    async def test_extracts_name_with_a2a_keyword(self, mock_llm_client):
+    async def test_extracts_name_with_a2a_keyword(self):
         """Test extracting name when 'a2a' is in the request."""
+        mock_llm = MagicMock()
+        mock_llm.complete = AsyncMock(return_value='{"project_name": "weather_agent", "build_type": "agent", "reasoning": "extracted from weather a2a agent request"}')
+        mock_llm._get_json_response_format = MagicMock(return_value={"type": "json_object"})
+
         settings = await _generate_build_settings(
             user_input="build a weather a2a agent",
-            llm_client=mock_llm_client,
+            llm_client=mock_llm,
             llm_action="build_agent",
         )
 
@@ -182,8 +199,9 @@ class TestLLMFallback:
     @pytest.mark.asyncio
     async def test_uses_llm_when_pattern_fails(self):
         """Test that LLM is used when regex patterns don't match."""
-        mock_llm = AsyncMock()
-        mock_llm.complete = AsyncMock(return_value="extracted_agent_name")
+        mock_llm = MagicMock()
+        mock_llm.complete = AsyncMock(return_value='{"project_name": "weather_stuff", "build_type": "agent", "reasoning": "test"}')
+        mock_llm._get_json_response_format = MagicMock(return_value={"type": "json_object"})
 
         settings = await _generate_build_settings(
             user_input="make something that does weather stuff",  # No clear pattern
@@ -198,8 +216,9 @@ class TestLLMFallback:
     @pytest.mark.asyncio
     async def test_fallback_when_llm_fails(self):
         """Test fallback when LLM extraction fails."""
-        mock_llm = AsyncMock()
+        mock_llm = MagicMock()
         mock_llm.complete = AsyncMock(side_effect=Exception("LLM error"))
+        mock_llm._get_json_response_format = MagicMock(return_value={"type": "json_object"})
 
         settings = await _generate_build_settings(
             user_input="make something",

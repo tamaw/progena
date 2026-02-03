@@ -14,6 +14,7 @@ from typing import Any
 
 from ..state.models import ProgenitorState
 from ..state.ideal_state import IdealStateBuilder, IdealState
+from ..constants import DEFAULT_VERIFICATION_TARGET_SCORE
 from ..state.clarification import create_clarification_history_entry
 from ..runtime.time_utils import utcnow_isoformat
 from . import NodeFunction, NodeStateUpdate
@@ -98,6 +99,18 @@ def create_node(
                 "build_phase": "observe",
             }
             logger.info("Initialized inner loop state for task %s (build_in_progress=True)", state_updates["task_id"])
+        else:
+            # Increment iteration at the start of a new cycle when verification did not meet target
+            if not state.get("clarification_needed", False) and not awaiting_clarification:
+                verification_score = state.get("verification_score", 0.0)
+                target_score = state.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+                if verification_score < target_score and not state.get("verification_passed", False):
+                    next_iteration = iteration + 1
+                    state_updates = {
+                        "current_iteration": next_iteration,
+                        "iteration_start_time": time.time(),
+                    }
+                    iteration = next_iteration
 
         if tracer:
             span = tracer.start_span(
@@ -157,10 +170,28 @@ def create_node(
             elif iteration == 0 or ideal_state is None:
                 # First iteration - build initial ideal state
                 task = state.get("current_input") or state.get("task_description", "")
+
+                # Enrich task context with build_settings if available
+                # This provides the LLM-refined description from the decide step
+                build_settings = state.get("build_settings")
+                if build_settings:
+                    bs_description = build_settings.get("description") if isinstance(build_settings, dict) else getattr(build_settings, "description", None)
+                    bs_project_name = build_settings.get("project_name") if isinstance(build_settings, dict) else getattr(build_settings, "project_name", None)
+                    bs_user_request = build_settings.get("user_request") if isinstance(build_settings, dict) else getattr(build_settings, "user_request", None)
+
+                    # If we have a refined description, use it to enhance the task
+                    if bs_description and bs_description != task:
+                        task = f"{task}\n\n**Build Description:** {bs_description}"
+                    if bs_project_name:
+                        task = f"{task}\n\n**Project Name:** {bs_project_name}"
+
+                    logger.info("Enriched task with build_settings: project=%s", bs_project_name)
+
                 context = {
                     "messages": state.get("messages", []),
                     "backlog": state.get("backlog", []),
                     "capabilities": state.get("available_capabilities", []),
+                    "build_settings": build_settings,  # Include for additional context
                 }
 
                 logger.info("Building initial ideal state")

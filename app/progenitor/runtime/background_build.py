@@ -410,6 +410,24 @@ class BackgroundBuildRunner:
             result.error_message = "Build was cancelled"
             logger.info("Build %s was cancelled", build_id)
 
+            # Add suspension event to build state without overwriting it
+            try:
+                build_state = await self.state_manager.get_build_state()
+                suspension_event = {
+                    "event": "suspended",
+                    "timestamp": utcnow_isoformat(),
+                    "reason": "shutdown_requested",
+                    "iteration": build_state.get("current_iteration", 0),
+                }
+                build_messages = build_state.get("build_messages", [])
+                build_messages.append(suspension_event)
+                await self.state_manager.update_build_state({
+                    "build_messages": build_messages,
+                    "build_in_progress": False,
+                })
+            except Exception as e:
+                logger.warning("Failed to record suspension event: %s", e)
+
         except Exception as e:
             result.status = BuildStatus.FAILED
             result.completed_at = utcnow()
@@ -424,9 +442,8 @@ class BackgroundBuildRunner:
                 self._current_build = None
                 self._current_task = None
 
-            # Update build state with completion info
-            build_state = await self.state_manager.get_build_state()
-            build_state.update({
+            # Update build state with completion info (partial update, not overwrite)
+            await self.state_manager.update_build_state({
                 "build_in_progress": False,
                 "last_build_result": {
                     "build_id": build_id,
@@ -436,7 +453,6 @@ class BackgroundBuildRunner:
                     "error_message": result.error_message,
                 },
             })
-            await self.state_manager.save_build_state(build_state)
 
             # Also update current_state to clear the build reference
             await self.state_manager.update_current_state({
