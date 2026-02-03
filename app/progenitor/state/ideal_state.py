@@ -375,12 +375,12 @@ Return only the refinements as structured data."""
             "task_description": task_description,
             "success_criteria": [
                 SuccessCriterion(
-                    id="criterion_1",
+                    id="task_completed_successfully",
                     description="Task completed successfully",
                     criterion_type=CriterionType.FUNCTIONAL,
                     rank=1,
-                    measurement="Check output exists and is valid",
-                    target_score=0.8,
+                    measurement="Response contains calm, human-friendly advice (1 short paragraph, 2-4 sentences) and returns success=True",
+                    target_score=1.0,
                 )
             ],
             "anti_criteria": [
@@ -480,12 +480,12 @@ Return only the refinements as structured data."""
             task_description=task_description,
             success_criteria=[
                 SuccessCriterion(
-                    id="default_success",
-                    description="Task completed",
+                    id="task_completed_successfully_default",
+                    description="Task completed successfully",
                     criterion_type=CriterionType.FUNCTIONAL,
                     rank=1,
-                    measurement="Output exists",
-                    target_score=0.8,
+                    measurement="Output exists and is human-readable advice (short paragraph)",
+                    target_score=1.0,
                 )
             ],
             stop_conditions=[

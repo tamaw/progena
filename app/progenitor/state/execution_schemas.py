@@ -4,6 +4,7 @@ Execution Schemas - Structured output types for the inner loop.
 BL-001: ExecutionRun/ExecutionResult schema
 BL-002: ExperimentPlan schema
 BL-003: StructuredApproach schema
+BL-007: BuildSettings schema - Structured LLM output for build configuration
 
 These schemas ensure consistent data flow between nodes and enable
 deterministic processing without guessing what data is available.
@@ -15,6 +16,151 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from ..runtime.time_utils import utcnow
+
+
+# =============================================================================
+# BL-007: BuildSettings Schema - Structured output from LLM for build config
+# =============================================================================
+
+class BuildType(str, Enum):
+    """Type of build - determines directory structure."""
+    AGENT = "agent"  # app/agents/{project_name}/
+    MCP = "mcp"      # app/mcp/{project_name}/
+
+
+class BuildStatus(str, Enum):
+    """Status of a build operation."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SUSPENDED = "suspended"  # Graceful halt on cancellation
+    ERROR = "error"          # Unrecoverable error
+
+
+class BuildSettings(BaseModel):
+    """Structured build configuration from LLM decision.
+
+    BL-007: Structured output LLM call defines build settings including:
+    - Type (agent/mcp) determines base directory
+    - Project name for repeatability and directory derivation
+    - Allowable directory derived from type + project_name
+
+    Stored in build_state.json for reference throughout build lifecycle.
+    """
+    model_config = {"use_enum_values": True}
+
+    # Core identification
+    build_id: str = Field(description="Unique build identifier")
+    project_name: str = Field(description="Name of the project (used for directory and repeatability)")
+    build_type: BuildType = Field(description="Type of build: agent or mcp")
+
+    # Derived paths (computed from type + project_name)
+    # Note: base_directory removed - focus only on project_directory
+    project_directory: str = Field(description="Full project directory: app/agents/{project_name}/ or app/mcp/{project_name}/")
+    allowable_directories: list[str] = Field(
+        default_factory=list,
+        description="Directories Copilot is allowed to modify (defaults to project_directory)"
+    )
+
+    # Build metadata
+    description: str = Field(default="", description="Human-readable description of what's being built")
+    user_request: str = Field(default="", description="Original user request that triggered the build")
+
+    # Status tracking
+    status: BuildStatus = Field(default=BuildStatus.PENDING, description="Current build status")
+    error_message: Optional[str] = Field(default=None, description="Error message if status is ERROR/FAILED")
+
+    # Git submodule info (for isolated commits)
+    submodule_path: Optional[str] = Field(default=None, description="Path to git submodule if initialized")
+    submodule_initialized: bool = Field(default=False, description="Whether submodule was created")
+
+    # Timestamps
+    created_at: datetime = Field(default_factory=utcnow, description="When build was initiated")
+    updated_at: datetime = Field(default_factory=utcnow, description="Last update time")
+    completed_at: Optional[datetime] = Field(default=None, description="When build completed/failed")
+
+    @classmethod
+    def create_from_llm_output(
+        cls,
+        build_id: str,
+        project_name: str,
+        build_type: str | BuildType,
+        user_request: str,
+        description: str = "",
+    ) -> "BuildSettings":
+        """Factory method to create BuildSettings from LLM structured output.
+
+        Derives directories from type and project_name automatically.
+        """
+        # Normalize build type
+        if isinstance(build_type, str):
+            build_type = BuildType(build_type.lower())
+
+        # Sanitize project name for filesystem
+        safe_name = project_name.replace(" ", "_").replace("-", "_").lower()
+
+        # Derive directories based on type
+        if build_type == BuildType.AGENT:
+            base_dir = "app/agents"
+        else:
+            base_dir = "app/mcp"
+
+        project_dir = f"{base_dir}/{safe_name}"
+
+        return cls(
+            build_id=build_id,
+            project_name=safe_name,
+            build_type=build_type,
+            project_directory=project_dir,
+            allowable_directories=[project_dir],  # Restrict Copilot to this directory
+            description=description,
+            user_request=user_request,
+            status=BuildStatus.PENDING,
+        )
+
+    def mark_in_progress(self) -> "BuildSettings":
+        """Mark build as in progress."""
+        self.status = BuildStatus.IN_PROGRESS
+        self.updated_at = utcnow()
+        return self
+
+    def mark_completed(self) -> "BuildSettings":
+        """Mark build as completed."""
+        self.status = BuildStatus.COMPLETED
+        self.updated_at = utcnow()
+        self.completed_at = utcnow()
+        return self
+
+    def mark_failed(self, error: str) -> "BuildSettings":
+        """Mark build as failed with error message."""
+        self.status = BuildStatus.FAILED
+        self.error_message = error
+        self.updated_at = utcnow()
+        self.completed_at = utcnow()
+        return self
+
+    def mark_error(self, error: str) -> "BuildSettings":
+        """Mark build as error (unrecoverable) with error message."""
+        self.status = BuildStatus.ERROR
+        self.error_message = error
+        self.updated_at = utcnow()
+        self.completed_at = utcnow()
+        return self
+
+    def mark_suspended(self, reason: str = "Cancelled by signal") -> "BuildSettings":
+        """Mark build as suspended (graceful halt)."""
+        self.status = BuildStatus.SUSPENDED
+        self.error_message = reason
+        self.updated_at = utcnow()
+        return self
+
+    def set_submodule(self, submodule_path: str) -> "BuildSettings":
+        """Set submodule path after initialization."""
+        self.submodule_path = submodule_path
+        self.submodule_initialized = True
+        self.updated_at = utcnow()
+        return self
 
 
 # =============================================================================

@@ -72,8 +72,45 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         from ..runtime.loop import get_current_loop
         loop = get_current_loop()
         if loop and loop._response_was_streamed:
-            # Response was already streamed, don't generate another one
-            # Just clear the input - loop will handle stream_final
+            # Response was already streamed, but we still need to save it to messages
+            streamed_content = getattr(loop, '_streamed_response_content', '')
+
+            if streamed_content:
+                # Log and save the streamed assistant response
+                message = ConversationMessage(
+                    id=str(uuid.uuid4()),
+                    role="assistant",
+                    content=streamed_content,
+                    timestamp=utcnow(),
+                    metadata={
+                        "decision_action": _get_decision_action(decision),
+                        "work_item_id": None,
+                        "verification_score": 0.0,
+                        "iteration_count": 0,
+                        "stop_reason": None,
+                        "streamed": True,
+                    }
+                )
+
+                await state_manager.log_conversation(message)
+
+                # Add to messages
+                messages = list(state.get("messages", []))
+                messages.append(message)
+
+                # Trim conversation history to prevent unbounded growth
+                messages = trim_conversation_history(messages)
+
+                # Persist messages to current_state.json
+                await state_manager.save_messages(messages)
+
+                return cast(ProgenitorState, {
+                    "pending_response": streamed_content,
+                    "messages": messages,
+                    "current_input": None,
+                })
+
+            # No content to save, just clear the input
             return cast(ProgenitorState, {
                 "current_input": None,
             })

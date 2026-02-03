@@ -117,6 +117,7 @@ class WorkItem(BaseModel):
     target_agent: Optional[str] = None
     target_tool: Optional[str] = None
     worktree_path: Optional[str] = None
+    submodule_path: Optional[str] = None  # BL-007: Path to git submodule for build isolation
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     retry_count: int = 0
@@ -324,6 +325,7 @@ class WorkState(TypedDict, total=False):
     backlog: list[WorkItem]
     current_work_item: Optional[WorkItem]
     current_decision: Optional[Decision]
+    build_settings: Optional[dict[str, Any]]  # BL-007: BuildSettings from structured LLM output
 
 
 class SchedulingState(TypedDict, total=False):

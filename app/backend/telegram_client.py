@@ -328,9 +328,12 @@ class TelegramClient:
         # Process regular message with handler
         if self._message_handler:
             self._processing_messages.add(message_id)
+            typing_task: Optional[asyncio.Task] = None
             try:
-                # Send typing indicator
-                await self._send_chat_action(chat_id, "typing")
+                # Start a background task to keep typing indicator active
+                typing_task = asyncio.create_task(
+                    self._keep_typing(chat_id)
+                )
 
                 metadata = {
                     "chat_id": chat_id,
@@ -353,6 +356,13 @@ class TelegramClient:
                     "❌ Sorry, an error occurred while processing your message."
                 )
             finally:
+                # Stop the typing indicator task
+                if typing_task:
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
                 self._processing_messages.discard(message_id)
         else:
             logger.warning("No message handler configured, ignoring message")
@@ -423,6 +433,27 @@ class TelegramClient:
             "chat_id": chat_id,
             "action": action,
         }, retry=False)
+
+    async def _keep_typing(self, chat_id: str, interval: float = 4.0) -> None:
+        """Keep sending typing indicator while processing.
+
+        Telegram's typing indicator expires after ~5 seconds, so we refresh
+        it periodically until the task is cancelled.
+
+        Args:
+            chat_id: The chat ID to show typing in.
+            interval: Seconds between typing indicator refreshes (default 4s).
+        """
+        try:
+            while True:
+                await self._send_chat_action(chat_id, "typing")
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            # Normal cancellation when processing completes
+            pass
+        except Exception as e:
+            # Don't let typing indicator errors affect message processing
+            logger.debug("Error in typing indicator: %s", e)
 
     async def send_message_to_chat(
         self,

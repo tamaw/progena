@@ -154,6 +154,10 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
                 span.end()
             return {}
 
+        # NOTE: Build actions (build_agent, build_mcp, upgrade) are handled by
+        # the inner loop graph via BackgroundBuildRunner, not by this planner.
+        # The decide node starts builds directly and returns ANSWER_DIRECTLY.
+
         # Get current backlog for context
         backlog = list(state.get("backlog", []))
         backlog_dicts = []
@@ -361,6 +365,10 @@ Generate ONLY the instruction, nothing else:"""
         }
 
 
+# NOTE: _plan_build_task removed - builds now go through inner loop graph
+# via BackgroundBuildRunner, not via backlog work items.
+
+
 async def _plan_from_ideal_state(
     state: ProgenitorState,
     ideal_state,
@@ -471,14 +479,27 @@ async def _plan_from_ideal_state(
         gaps = []
 
     # Get agent name from multiple sources (priority order):
-    # 1. Current work item context
-    # 2. Decision target_capabilities
-    # 3. Extract from task description
-    # 4. Default to unknown_agent
+    # 1. build_settings (BL-007: Most authoritative source)
+    # 2. Current work item context
+    # 3. Decision target_capabilities
+    # 4. Extract from task description
+    # 5. Default to unknown_agent
     agent_name = "unknown_agent"
+    project_directory = None  # BL-007: Will be set from build_settings if available
 
-    # Try current work item context first
-    if current_item:
+    # BL-007: Check build_settings first (most reliable source)
+    build_settings = state.get("build_settings")
+    if build_settings:
+        if isinstance(build_settings, dict):
+            agent_name = build_settings.get("project_name") or agent_name
+            project_directory = build_settings.get("project_directory")
+        elif hasattr(build_settings, "project_name"):
+            agent_name = build_settings.project_name or agent_name
+            project_directory = getattr(build_settings, "project_directory", None)
+        logger.debug(f"PLANNER: Got agent_name={agent_name}, project_directory={project_directory} from build_settings")
+
+    # Try current work item context if not found
+    if agent_name == "unknown_agent" and current_item:
         if hasattr(current_item, "context") and current_item.context:
             ctx = current_item.context
             if isinstance(ctx, dict):
@@ -522,6 +543,7 @@ async def _plan_from_ideal_state(
 
     # =========================================================================
     # SpecDoc Management: Seed or Update the persistent spec artifact
+    # BL-007: Pass project_directory from build_settings for consistent spec location
     # =========================================================================
     spec_doc = await _ensure_spec_doc(
         state_manager=state_manager,
@@ -532,6 +554,7 @@ async def _plan_from_ideal_state(
         iteration=iteration,
         llm_client=llm_client,
         work_item_id=work_item_id,
+        project_directory=project_directory,  # BL-007
     )
 
     # Store spec_doc in state for BUILD to consume
@@ -652,17 +675,19 @@ async def _ensure_spec_doc(
     iteration: int,
     llm_client=None,
     work_item_id: str | None = None,
+    project_directory: str | None = None,  # BL-007: From build_settings
 ) -> SpecDoc:
     """
     Ensure a SpecDoc exists for the current build task.
 
-    NEW APPROACH:
-    - Spec file is dropped into app/agents/<agent_name>_spec.md
+    BL-007: Now supports project_directory from build_settings for consistent spec file location.
+
+    - Spec file is dropped into project_directory/spec.md (or fallback to app/agents/<agent_name>/spec.md)
     - Copilot prompt references the spec file (not embedding content)
     - On first run: LLM generates BOTH spec content AND copilot prompt
     - Subsequent iterations: Updates spec and regenerates prompt
 
-    Persists updates back to build_state.json and saves spec file to app/agents/.
+    Persists updates back to build_state.json and saves spec file.
     """
     # Try to load existing spec_doc from build_state
     existing_spec_doc_data = await state_manager.get_spec_doc()
@@ -688,8 +713,9 @@ async def _ensure_spec_doc(
         )
         logger.info(f"PLANNER: Seeded new SpecDoc from template with LLM customization, revision {spec_doc.revision}")
 
-    # Save spec file to app/agents/ for copilot to reference
-    spec_file_path = await _save_spec_file(spec_doc, agent_name=agent_name, work_item_id=work_item_id)
+    # Save spec file to appropriate directory for copilot to reference
+    # BL-007: Use project_directory from build_settings if provided
+    spec_file_path = await _save_spec_file(spec_doc, agent_name=agent_name, work_item_id=work_item_id, project_directory=project_directory)
     if spec_file_path:
         spec_doc.spec_file_path = str(spec_file_path)
         logger.info(f"PLANNER: Saved spec file to {spec_file_path}")
@@ -815,32 +841,41 @@ TASK FOCUS:
     return base_prompt
 
 
-async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work_item_id: str | None = None) -> Path | None:
+async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work_item_id: str | None = None, project_directory: str | None = None) -> Path | None:
     """
-    Save the spec content to a file in app/agents/{agent_name}/ for copilot CLI to reference.
+    Save the spec content to a file in the appropriate project directory for copilot CLI to reference.
+
+    BL-007: Uses project_directory from build_settings if provided.
 
     The spec file is placed inside the agent's directory:
-    - New agent: Creates app/agents/{agent_name}/spec.md
-    - Existing agent: Updates app/agents/{agent_name}/spec.md (amends existing spec)
+    - If project_directory provided: Creates {project_directory}/spec.md
+    - Otherwise fallback: Creates app/agents/{agent_name}/spec.md
 
     Returns the path to the saved file.
     """
     try:
-        # Determine project root and agents directory
-        project_root = Path(__file__).parent.parent.parent.parent
-        agents_dir = project_root / "app" / "agents"
-        agents_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create agent folder based on agent name (preferred) or work_item_id
-        if agent_name:
-            # Sanitize agent name for folder name
-            safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
+        # BL-007: Use project_directory from build_settings if available
+        if project_directory:
+            agent_folder = Path(project_directory)
+            agent_folder.mkdir(parents=True, exist_ok=True)
+            safe_name = agent_folder.name
+            logger.info(f"PLANNER: Using project_directory from build_settings: {project_directory}")
         else:
-            safe_name = f"agent_{work_item_id or 'unknown'}"
+            # Fallback: Determine project root and agents directory
+            project_root = Path(__file__).parent.parent.parent.parent
+            agents_dir = project_root / "app" / "agents"
+            agents_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create the agent folder
-        agent_folder = agents_dir / safe_name
-        agent_folder.mkdir(parents=True, exist_ok=True)
+            # Create agent folder based on agent name (preferred) or work_item_id
+            if agent_name:
+                # Sanitize agent name for folder name
+                safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
+            else:
+                safe_name = f"agent_{work_item_id or 'unknown'}"
+
+            # Create the agent folder
+            agent_folder = agents_dir / safe_name
+            agent_folder.mkdir(parents=True, exist_ok=True)
 
         # Check if agent already exists (has agent.py)
         existing_agent = (agent_folder / "agent.py").exists()

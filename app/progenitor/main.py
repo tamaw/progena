@@ -113,6 +113,7 @@ class Progenitor:
             state_manager=self.state_manager,
             config=self.config,
             llm_client=self.llm_client,
+            worktrees_dir=self.worktrees_dir,
         )
 
     async def _log_startup_config(self) -> None:
