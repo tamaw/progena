@@ -27,7 +27,7 @@ from ..state.execution_schemas import (
     ExecutionStatus,
     ExperimentPlan,
 )
-from ..runtime.time_utils import utcnow_isoformat
+from ..runtime.time_utils import utcnow_isoformat, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -221,11 +221,20 @@ def create_node(
                 span.set_attribute("smoke_test_passed", exec_result.smoke_test_passed)
                 span.end()
 
+            # Mark current work item as completed (run finished, regardless of test outcome)
+            updated_backlog = _mark_work_item_completed(
+                state.get("backlog", []),
+                current_item,
+                exec_result.model_dump(),
+            )
+
             return {
                 "execution_result": exec_result.model_dump(),
                 "last_iteration_output": exec_result.model_dump(),
                 "execution_completed": True,
                 "build_phase": "execute",
+                "backlog": updated_backlog,
+                "current_work_item": None,  # Clear for next pick_next
             }
 
         # Get pending tools from BUILD phase
@@ -385,6 +394,67 @@ def _get_item_type(work_item: Any) -> str:
         item_type = work_item.get("item_type", "direct_answer")
         return item_type.value if hasattr(item_type, "value") else str(item_type)
     return "direct_answer"
+
+
+def _mark_work_item_completed(
+    backlog: list,
+    current_item: Any,
+    result: dict,
+) -> list:
+    """Mark a work item as completed in the backlog.
+    
+    Marks the item as completed regardless of test success/failure.
+    This indicates the copilot run finished, not that tests passed.
+    
+    Args:
+        backlog: Current backlog list
+        current_item: The work item that was executed
+        result: Execution result to store
+        
+    Returns:
+        Updated backlog with item marked as completed
+    """
+    if not current_item:
+        return backlog
+    
+    # Get the item ID
+    if hasattr(current_item, "id"):
+        item_id = current_item.id
+    elif isinstance(current_item, dict):
+        item_id = current_item.get("id")
+    else:
+        return backlog
+    
+    updated_backlog = []
+    for item in backlog:
+        # Get this item's ID
+        if hasattr(item, "id"):
+            b_id = item.id
+        elif isinstance(item, dict):
+            b_id = item.get("id")
+        else:
+            updated_backlog.append(item)
+            continue
+        
+        if b_id == item_id:
+            # Mark as completed
+            if isinstance(item, WorkItem):
+                item.status = WorkItemStatus.COMPLETED
+                item.result = result
+                item.updated_at = utcnow()
+                updated_backlog.append(item)
+            elif isinstance(item, dict):
+                item["status"] = "completed"
+                item["result"] = result
+                item["updated_at"] = utcnow().isoformat()
+                updated_backlog.append(item)
+            else:
+                updated_backlog.append(item)
+            logger.info(f"EXECUTE: Marked work item {item_id} as completed")
+        else:
+            updated_backlog.append(item)
+    
+    return updated_backlog
 
 
 async def _exercise_agent(

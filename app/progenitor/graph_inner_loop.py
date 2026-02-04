@@ -19,6 +19,7 @@ from .routing import (
     should_iterate,
     should_continue_inner_loop,
     route_after_verify,
+    route_after_pick_next_inner,
 )
 from .constants import DEFAULT_MAX_INNER_ITERATIONS
 
@@ -47,6 +48,7 @@ def create_inner_loop_graph(
         observe,
         think,
         planner,
+        pick_next,
         execute,
         learn,
         verify_loop,
@@ -75,6 +77,7 @@ def create_inner_loop_graph(
         "observe": observe.create_node(llm_client, state_manager),
         "think": think.create_node(llm_client, state_manager),
         "plan": planner.create_node(llm_client, state_manager),
+        "pick_next": pick_next.create_node(),
         "build": build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager),
         "execute": execute.create_node(tool_registry, state_manager, project_root),
         "verify": verify_loop.create_node(llm_client, state_manager),
@@ -92,10 +95,30 @@ def create_inner_loop_graph(
     builder.set_entry_point("observe")
 
     # Define edges for the inner loop
-    # OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → [LEARN or DONE]
+    # OBSERVE → THINK → PLAN → PICK_NEXT → BUILD → EXECUTE → VERIFY → [LEARN or DONE]
     builder.add_edge("observe", "think")
     builder.add_edge("think", "plan")
-    builder.add_edge("plan", "build")
+    
+    # After plan, pick next work item from backlog
+    builder.add_conditional_edges(
+        "plan",
+        route_after_pick_next_inner,
+        {
+            "pick_next": "pick_next",
+            "build": "build",  # Direct to build if no backlog management needed
+        }
+    )
+    
+    # After pick_next, go to build (or skip if no items)
+    builder.add_conditional_edges(
+        "pick_next",
+        lambda state: "build" if state.get("current_work_item") else "verify",
+        {
+            "build": "build",
+            "verify": "verify",  # No items to process, go to verify
+        }
+    )
+    
     builder.add_edge("build", "execute")
     builder.add_edge("execute", "verify")
 
