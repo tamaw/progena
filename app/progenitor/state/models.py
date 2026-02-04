@@ -350,8 +350,8 @@ class LoopControlState(TypedDict, total=False):
 
 class TaskInfo(TypedDict, total=False):
     """Build task information."""
-    description: str  # Human-readable build description
-    user_request: str  # Original user request
+    description: str  # Human-readable build description (summary)
+    # NOTE: user_request is now at top-level state, not duplicated here
     target_capabilities: list[str]  # Capabilities being built
 
 
@@ -436,7 +436,8 @@ class InnerLoopState(TypedDict, total=False):
 
     Structure:
     - build_*: Top-level build control
-    - task: What we're building
+    - user_request: Original user request (single source of truth)
+    - task: What we're building (summary only)
     - iteration: Iteration tracking
     - spec: Spec document reference (content read from file)
     - phases: Phase-grouped outputs (single source of truth)
@@ -450,9 +451,10 @@ class InnerLoopState(TypedDict, total=False):
     build_started_at: Optional[str]  # ISO timestamp when build started
     build_phase: Optional[str]  # Current phase: observe, think, plan, build, execute, verify, learn
     task_id: Optional[str]  # Unique task identifier
+    user_request: Optional[str]  # Original user request (single source of truth, not duplicated in task)
 
     # Nested objects for organization
-    task: TaskInfo  # What we're building
+    task: TaskInfo  # What we're building (summary description, not full user_request)
     iteration: IterationInfo  # Iteration tracking
     spec: SpecInfo  # Spec document reference
     phases: BuildPhases  # Phase-grouped outputs
@@ -463,6 +465,12 @@ class InnerLoopState(TypedDict, total=False):
     # Ideal state (complex object, kept at top level)
     ideal_state: Optional[Any]  # IdealState object
 
+    # Verification state (synced at top level for routing and learn phase)
+    verification_score: Optional[float]  # Last verification score for routing
+    verification_passed: Optional[bool]  # Whether last verification passed
+    last_verification_report: Optional[Any]  # Full VerificationReport for learn phase
+    current_iteration: Optional[int]  # Current iteration number (synced for routing)
+
     # Stop conditions
     should_iterate: bool  # Whether to continue iterating
     iteration_stop_reason: Optional[str]  # Why iteration stopped
@@ -472,6 +480,7 @@ class ExecutionState(TypedDict, total=False):
     """Execution phase state."""
     pending_tool_calls: list[dict[str, Any]]  # Tools pending execution
     work_item_completed: bool  # Whether work item is complete
+    execution_result: Optional[dict[str, Any]]  # BL-006: Structured execution result for verify
 
 
 # TypedDict for LangGraph state (allows partial updates)

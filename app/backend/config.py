@@ -50,7 +50,7 @@ class ChatServerConfig:
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 10000
     rate_limit_per_hour: int = 100000
-    rate_limit_cleanup_interval: int = 300  # Cleanup stale clients every 5 minutes
+    rate_limit_cleanup_interval_seconds: int = 300  # Cleanup stale clients every 5 minutes
     rate_limit_stale_client_timeout_seconds: int = 3600  # Seconds before removing inactive clients
 
     # Streaming settings
@@ -93,6 +93,8 @@ class ChatServerConfig:
             rate_limit_enabled=env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),
             rate_limit_per_minute=env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 10000),
             rate_limit_per_hour=env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 100000),
+            rate_limit_cleanup_interval_seconds=env_int("CHAT_SERVER_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS", 300),
+            rate_limit_stale_client_timeout_seconds=env_int("CHAT_SERVER_RATE_LIMIT_STALE_CLIENT_TIMEOUT_SECONDS", 3600),
             stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
             stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
             # Telegram settings

@@ -167,12 +167,12 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             # Note: The spec file remains in app/agents/ as it's part of the built agent
             await state_manager.clear_spec_doc()
 
-        return {
+        return cast(ProgenitorState, {
             "pending_response": response_text,
             "messages": messages,
             "current_input": None,  # Clear input after responding
             **build_clear_updates,
-        }
+        })
 
     return respond_node
 

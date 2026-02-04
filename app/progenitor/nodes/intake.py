@@ -8,7 +8,7 @@ Messages are stored in current_state.json (progenitor agent state).
 """
 
 from datetime import datetime
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, cast
 import uuid
 
 from ..state.models import ConversationMessage, ProgenitorState
@@ -72,10 +72,10 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Persist messages to current_state.json
         await state_manager.save_messages(messages)
 
-        return {
+        return cast(ProgenitorState, {
             "messages": messages,
             "current_input": user_input,
             **clarification_updates,
-        }
+        })
 
     return intake_node

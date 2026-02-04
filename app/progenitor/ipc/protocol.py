@@ -70,7 +70,7 @@ class IPCMessage:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        d = {
+        d: dict[str, Any] = {
             "type": self.type.value if isinstance(self.type, MessageType) else self.type,
             "content": self.content,
         }

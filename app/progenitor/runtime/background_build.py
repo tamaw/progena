@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING, cast
 
 from .time_utils import utcnow, utcnow_isoformat
 
@@ -205,8 +205,9 @@ class BackgroundBuildRunner:
         """
         async with self._lock:
             if self.is_building:
+                task_desc = self._current_build.task_description if self._current_build else "unknown"
                 raise RuntimeError(
-                    f"Build already in progress: {self._current_build.task_description}"
+                    f"Build already in progress: {task_desc}"
                 )
 
             # Use build_id from settings if provided, otherwise generate
@@ -313,41 +314,61 @@ class BackgroundBuildRunner:
         No backlog is used - the inner loop runs directly.
         """
         started_at = utcnow()
+        current_build = self._current_build  # Capture for type narrowing
+        if current_build is None:
+            raise RuntimeError("No current build set")
         result = BuildResult(
             build_id=build_id,
             status=BuildStatus.RUNNING,
-            task_description=self._current_build.task_description,
+            task_description=current_build.task_description,
             started_at=started_at,
         )
+
+        # Initialize build_state before try block so it's available in except/finally
+        build_state: dict[str, Any] = {}
 
         try:
             # Prepare state for inner loop - NO BACKLOG
             # The inner loop runs directly, not via work items
-            build_state = {
+
+            # Ensure build_settings has status set to in_progress
+            build_settings = initial_state.get("build_settings", {})
+            if isinstance(build_settings, dict):
+                build_settings = dict(build_settings)  # Copy to avoid mutation
+                build_settings["status"] = "in_progress"
+                build_settings["updated_at"] = utcnow_isoformat()
+
+            build_state: dict[str, Any] = {
                 # Build identification
                 "build_id": build_id,
                 "build_in_progress": True,
                 "build_started_at": utcnow_isoformat(),
 
                 # User input for context
-                "current_input": self._current_build.user_input,
-                "user_request": self._current_build.user_input,
-                "target_capabilities": self._current_build.target_capabilities,
+                "current_input": current_build.user_input,
+                "user_request": current_build.user_input,
+                "target_capabilities": current_build.target_capabilities,
 
-                # Build settings (from decide phase)
-                "build_settings": initial_state.get("build_settings"),
+                # Build settings (from decide phase) with status set to in_progress
+                "build_settings": build_settings,
 
                 # Nested structure
                 "task": {
-                    "description": self._current_build.task_description,
-                    "user_request": self._current_build.user_input,
-                    "target_capabilities": self._current_build.target_capabilities,
+                    "description": current_build.task_description,
+                    "user_request": current_build.user_input,
+                    "target_capabilities": current_build.target_capabilities,
                 },
                 "iteration": {
                     "current": 0,
                     "max": self.config.runtime.max_inner_iterations,
                     "start_time": None,
                 },
+                # Flat iteration keys for routing compatibility
+                "current_iteration": 0,
+                "max_iterations": self.config.runtime.max_inner_iterations,
+                "verification_score": 0.0,
+                "target_score": 0.8,
+
                 "spec": initial_state.get("spec", {}),
                 "phases": {"think": {}, "plan": {}, "execute": {}, "verify": {"target_score": 0.8}},
                 "history": {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []},
@@ -370,7 +391,7 @@ class BackgroundBuildRunner:
             thread_id = f"inner_loop_{build_id}"
 
             async for event in inner_graph.astream(
-                build_state,
+                cast(Any, build_state),  # build_state conforms to ProgenitorState
                 config={"configurable": {"thread_id": thread_id}},
             ):
                 for node_name, node_output in event.items():
@@ -439,21 +460,30 @@ class BackgroundBuildRunner:
             result.error_message = "Build was cancelled"
             logger.info("Build %s was cancelled", build_id)
 
-            # Add suspension event to build state without overwriting it
+            # Minimal update for suspension - only set flags, don't overwrite state
             try:
-                build_state = await self.state_manager.get_build_state()
+                current_iteration = build_state.get("current_iteration") or build_state.get("iteration", {}).get("current", 0)
                 suspension_event = {
                     "event": "suspended",
                     "timestamp": utcnow_isoformat(),
                     "reason": "shutdown_requested",
-                    "iteration": build_state.get("current_iteration", 0),
+                    "iteration": current_iteration,
                 }
-                build_messages = build_state.get("build_messages", [])
-                build_messages.append(suspension_event)
+
+                # Update build_settings status to suspended
+                existing_build_settings = build_state.get("build_settings", {})
+                if isinstance(existing_build_settings, dict):
+                    existing_build_settings["status"] = "suspended"
+                    existing_build_settings["error_message"] = "Cancelled by signal"
+                    existing_build_settings["updated_at"] = utcnow_isoformat()
+
                 await self.state_manager.update_build_state({
-                    "build_messages": build_messages,
                     "build_in_progress": False,
+                    "build_phase": "suspended",
+                    "build_settings": existing_build_settings,
+                    "build_messages": build_state.get("build_messages", []) + [suspension_event],
                 })
+                logger.info("Build %s suspended at iteration %d", build_id, current_iteration)
             except Exception as e:
                 logger.warning("Failed to record suspension event: %s", e)
 
@@ -463,6 +493,20 @@ class BackgroundBuildRunner:
             result.error_message = str(e)
             logger.error("Build %s failed: %s", build_id, e, exc_info=True)
 
+            # Update build_settings status to failed
+            try:
+                existing_build_settings = build_state.get("build_settings", {})
+                if isinstance(existing_build_settings, dict):
+                    existing_build_settings["status"] = "failed"
+                    existing_build_settings["error_message"] = str(e)
+                    existing_build_settings["updated_at"] = utcnow_isoformat()
+                await self.state_manager.update_build_state({
+                    "build_phase": "failed",
+                    "build_settings": existing_build_settings,
+                })
+            except Exception as update_err:
+                logger.warning("Failed to update build_settings status: %s", update_err)
+
         finally:
             # Store result and clean up
             self._build_results[build_id] = result
@@ -471,17 +515,56 @@ class BackgroundBuildRunner:
                 self._current_build = None
                 self._current_task = None
 
-            # Update build state with completion info (partial update, not overwrite)
-            await self.state_manager.update_build_state({
-                "build_in_progress": False,
-                "last_build_result": {
-                    "build_id": build_id,
-                    "status": result.status.value,
-                    "completed_at": utcnow_isoformat(),
-                    "output_summary": result.output_summary,
-                    "error_message": result.error_message,
-                },
-            })
+            # Only update last_build_result in finally - don't overwrite build_phase/build_settings
+            # The CancelledError/Exception handlers already set those appropriately
+            # For completed builds (not cancelled/failed), update build_settings here
+            if result.status == BuildStatus.COMPLETED:
+                # Update build_settings status to completed
+                try:
+                    existing_build_settings = build_state.get("build_settings", {})
+                    if isinstance(existing_build_settings, dict):
+                        existing_build_settings["status"] = "completed"
+                        existing_build_settings["updated_at"] = utcnow_isoformat()
+                        existing_build_settings["completed_at"] = utcnow_isoformat()
+                except Exception:
+                    existing_build_settings = {}
+
+                await self.state_manager.update_build_state({
+                    "build_in_progress": False,
+                    "build_phase": "completed",
+                    "build_settings": existing_build_settings,
+                    "last_build_result": {
+                        "build_id": build_id,
+                        "status": result.status.value,
+                        "completed_at": utcnow_isoformat(),
+                        "output_summary": result.output_summary,
+                        "error_message": result.error_message,
+                    },
+                })
+            elif result.status == BuildStatus.FAILED:
+                # Already updated in the except block, just set last_build_result
+                await self.state_manager.update_build_state({
+                    "build_in_progress": False,
+                    "last_build_result": {
+                        "build_id": build_id,
+                        "status": result.status.value,
+                        "completed_at": utcnow_isoformat(),
+                        "output_summary": result.output_summary,
+                        "error_message": result.error_message,
+                    },
+                })
+            else:
+                # For cancelled/suspended builds, just update the last_build_result
+                # Don't touch build_in_progress or build_phase (already set in CancelledError handler)
+                await self.state_manager.update_build_state({
+                    "last_build_result": {
+                        "build_id": build_id,
+                        "status": "cancelled",
+                        "completed_at": utcnow_isoformat(),
+                        "output_summary": result.output_summary,
+                        "error_message": "Build was cancelled",
+                    },
+                })
 
             # Also update current_state to clear the build reference
             await self.state_manager.update_current_state({
@@ -508,7 +591,7 @@ class BackgroundBuildRunner:
             if not self._current_task:
                 return False
 
-            if build_id and self._current_build.build_id != build_id:
+            if build_id and self._current_build and self._current_build.build_id != build_id:
                 return False
 
             self._current_task.cancel()

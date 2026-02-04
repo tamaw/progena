@@ -220,7 +220,7 @@ class CopilotConfig:
 
     bin_path: str = "copilot"
     config_path: Path = field(default_factory=lambda: Path("/config/copilot.json"))
-    timeout_seconds: int = 300
+    timeout_seconds: int = 720  # 12 minutes - complex builds need more time
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
     model: str = "claude-haiku-4.5"
     max_tokens: int = 8192
@@ -234,7 +234,7 @@ class CopilotConfig:
         return cls(
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", fc.get("command", "copilot")),
             config_path=Path(os.getenv("PROGENITOR_COPILOT_CONFIG", default_config_path)),
-            timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", fc.get("timeout", 300)),
+            timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", fc.get("timeout", 720)),
             default_flags=fc.get("default_flags", ["--yolo"]),
             model=fc.get("model", "claude-haiku-4.5"),
             max_tokens=fc.get("max_tokens", 8192),
@@ -242,25 +242,6 @@ class CopilotConfig:
 
 
 @dataclass
-class TransportConfig:
-    """Transport/messaging configuration."""
-
-    transport: str = "whatsapp"  # "whatsapp" | "cli" | "webhook"
-    inbox_endpoint: Optional[str] = None
-    outbox_endpoint: Optional[str] = None
-    allowed_senders: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_env(cls) -> "TransportConfig":
-        """Load transport config from environment."""
-        return cls(
-            transport=os.getenv("PROGENITOR_TRANSPORT", "whatsapp"),
-            inbox_endpoint=os.getenv("PROGENITOR_INBOX_ENDPOINT"),
-            outbox_endpoint=os.getenv("PROGENITOR_OUTBOX_ENDPOINT"),
-            allowed_senders=_env_list("PROGENITOR_ALLOWED_SENDERS"),
-        )
-
-
 @dataclass
 class TelemetryConfig:
     """Telemetry and observability configuration."""
@@ -319,7 +300,6 @@ class ProgenitorConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     copilot: CopilotConfig = field(default_factory=CopilotConfig)
-    transport: TransportConfig = field(default_factory=TransportConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
@@ -357,7 +337,6 @@ class ProgenitorConfig:
             runtime=RuntimeConfig.from_env(progenitor_config),
             storage=storage_config,
             copilot=CopilotConfig.from_env(copilot_config, project_root),
-            transport=TransportConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             telemetry=TelemetryConfig.from_env(storage_config),
         )
@@ -446,12 +425,6 @@ class ProgenitorConfig:
                 "default_flags": self.copilot.default_flags,
                 "model": self.copilot.model,
                 "max_tokens": self.copilot.max_tokens,
-            },
-            "transport": {
-                "transport": self.transport.transport,
-                "inbox_endpoint": self.transport.inbox_endpoint,
-                "outbox_endpoint": self.transport.outbox_endpoint,
-                "allowed_senders": self.transport.allowed_senders,
             },
             "scheduler": {
                 "enabled": self.scheduler.enabled,

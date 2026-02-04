@@ -1,493 +1,414 @@
-import asyncio
-import json
+import os
+import re
 import time
-import math
-import hashlib
-from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, List
+import asyncio
+from typing import Optional, Tuple, Dict, Any
 
+import aiohttp
 from aiohttp import web
-
-# Module-level start time for uptime calculations
-START_TIME = time.time()
-
-# Simple in-memory cache
-_CACHE: Dict[str, Tuple[float, Any]] = {}
-_CACHE_TTL = 300  # seconds
-_CACHE_MAX = 200
-
-
-def _cache_get(key: str):
-    entry = _CACHE.get(key)
-    if not entry:
-        return None
-    ts, val = entry
-    if time.time() - ts > _CACHE_TTL:
-        del _CACHE[key]
-        return None
-    return val
-
-
-def _cache_set(key: str, val: Any):
-    if len(_CACHE) >= _CACHE_MAX:
-        # remove oldest
-        oldest = min(_CACHE.items(), key=lambda kv: kv[1][0])[0]
-        del _CACHE[oldest]
-    _CACHE[key] = (time.time(), val)
 
 
 class WeatherAgent:
     AGENT_ID = "weather_agent"
     AGENT_NAME = "Weather Agent"
-    DESCRIPTION = "Provides current weather conditions and forecasts for any location"
+    DESCRIPTION = (
+        "Provides real-time weather conditions and short-term forecasts "
+        "with clear, user-friendly explanations."
+    )
     CAPABILITIES = [
         "current_weather",
-        "hourly_forecast",
-        "daily_forecast",
-        "location_weather_lookup",
-        "weather_summary"
+        "short_term_forecast",
+        "weather_explanation",
+        "location_based_weather",
     ]
 
-    VERSION = "0.1.0"
+    def __init__(self, api_key: Optional[str] = None, session: Optional[aiohttp.ClientSession] = None):
+        self.api_key = api_key or os.getenv("WEATHER_API_KEY")
+        self.session = session
 
-    def __init__(self):
-        pass
+    async def _ensure_session(self):
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
 
-    @staticmethod
-    def _intent_from_text(text: str) -> Tuple[str, int]:
-        t = (text or "").lower()
-        days = 1
-        if "hour" in t or "hourly" in t:
-            return "hourly_forecast", 0
-        if "summary" in t:
-            return "weather_summary", 1
-        # multi-day like "5 day" or "5-day"
-        import re
+    async def process(self, request: str, context: dict) -> str:
+        """
+        Parse the request and context, call the weather API, and return a user-facing string.
+        """
+        # Basic intent check
+        if not self._is_weather_request(request):
+            raise UnsupportedRequestError("I can help with weather information only. Please ask about current conditions or forecasts.")
 
-        m = re.search(r"(\d+)\s*-?\s*day", t)
-        if m:
-            try:
-                days = int(m.group(1))
-                days = max(1, min(days, 7))
-            except Exception:
-                days = 1
-            return "daily_forecast", days
-        if "forecast" in t:
-            # today or default
-            if "today" in t:
-                return "daily_forecast", 1
-            if "tomorrow" in t:
-                return "daily_forecast", 2
-            return "daily_forecast", 1
-        if "weather" in t or "temperature" in t or "rain" in t or "snow" in t:
-            return "current_weather", 1
-        return "unsupported", 0
+        # Determine units and language
+        units = (context or {}).get("units", "metric")
+        if units not in ("metric", "imperial"):
+            units = "metric"
+        language = (context or {}).get("language", "en")
 
-    @staticmethod
-    def _extract_location(request_text: str, context: Dict[str, Any]) -> str:
-        # Priority: context.location
-        if context and isinstance(context, dict):
-            loc = context.get("location")
-            if loc:
-                return loc
-        # Try simple extraction: look for " in <location>"
-        if not request_text:
-            return ""
-        low = request_text.lower()
-        if " in " in low:
-            # naive extraction
-            parts = request_text.split(" in ", 1)[1]
-            # stop at keywords
-            for stop in [" today", " tomorrow", " forecast", " hourly", " summary"]:
-                if stop in parts.lower():
-                    parts = parts.lower().split(stop, 1)[0]
-                    break
-            return parts.strip().strip(".?")
-        return ""
+        # Determine location
+        location = (context or {}).get("location")
+        if not location:
+            location = self._extract_location_from_text(request)
+        if not location:
+            raise MissingLocationError("Please specify a location (for example: city or coordinates).")
 
-    @staticmethod
-    def _unit_labels(units: str) -> Tuple[str, str]:
-        if units == "imperial":
-            return "°F", "mph"
-        return "°C", "km/h"
+        await self._ensure_session()
 
-    @staticmethod
-    def _convert_temp_c_to_f(c: float) -> float:
-        return c * 9.0 / 5.0 + 32.0
-
-    @staticmethod
-    def _convert_speed_kph_to_mph(kph: float) -> float:
-        return kph * 0.621371
-
-    @staticmethod
-    def _deterministic_randints(seed_str: str, count: int, bounds: Tuple[int, int]) -> List[int]:
-        # Use SHA256 to generate deterministic bytes
-        h = hashlib.sha256(seed_str.encode("utf-8")).digest()
-        vals = []
-        i = 0
-        while len(vals) < count:
-            b = h[i % len(h)]
-            # expand using new hash
-            h = hashlib.sha256(h + bytes([b])).digest()
-            vals.append(bounds[0] + (b % (bounds[1] - bounds[0] + 1)))
-            i += 1
-        return vals
-
-    @classmethod
-    def _simulate_current(cls, location: str, units: str) -> Dict[str, Any]:
-        # deterministic values based on location and current day
-        key_seed = f"current:{location}:{datetime.utcnow().date().isoformat()}"
-        r = cls._deterministic_randints(key_seed, 6, (0, 100))
-        # map to realistic ranges
-        temp_c =  -5 + (r[0] / 100.0) * 45.0  # -5 to 40
-        feels = temp_c - 2 + (r[1] / 100.0) * 4.0
-        cond_idx = r[2] % 6
-        cond_map = ["Clear", "Partly Cloudy", "Cloudy", "Light Rain", "Rain", "Snow"]
-        condition = cond_map[cond_idx]
-        precip = int(r[3])  # 0-100
-        wind_kph = 5 + int(r[4] / 100.0 * 60)  # 5-65
-        humidity = int(20 + r[5] / 100.0 * 80)  # 20-100
-
-        if units == "imperial":
-            temp = round(cls._convert_temp_c_to_f(temp_c))
-            feels_like = round(cls._convert_temp_c_to_f(feels))
-            wind = round(cls._convert_speed_kph_to_mph(wind_kph))
-        else:
-            temp = round(temp_c)
-            feels_like = round(feels)
-            wind = round(wind_kph)
-
-        return {
-            "temperature": temp,
-            "feels_like": feels_like,
-            "condition": condition,
-            "precipitation_chance": precip,
-            "wind": wind,
-            "humidity": humidity,
-        }
-
-    @classmethod
-    def _simulate_daily_forecast(cls, location: str, days: int, units: str) -> List[Dict[str, Any]]:
-        forecasts = []
-        for d in range(days):
-            date = datetime.utcnow().date() + timedelta(days=d)
-            seed = f"daily:{location}:{date.isoformat()}"
-            r = cls._deterministic_randints(seed, 4, (0, 100))
-            high_c = 5 + (r[0] / 100.0) * 30  # 5-35
-            low_c = max(-5, high_c - (5 + (r[1] / 100.0) * 10))
-            cond_map = ["Sunny", "Partly Cloudy", "Cloudy", "Light Rain", "Rain", "Snow"]
-            condition = cond_map[r[2] % len(cond_map)]
-            precip = int(r[3])
-            if units == "imperial":
-                high = round(cls._convert_temp_c_to_f(high_c))
-                low = round(cls._convert_temp_c_to_f(low_c))
-            else:
-                high = round(high_c)
-                low = round(low_c)
-            forecasts.append({
-                "date": date.isoformat(),
-                "high": high,
-                "low": low,
-                "condition": condition,
-                "precipitation_chance": precip,
-            })
-        return forecasts
-
-    @classmethod
-    def _simulate_hourly_forecast(cls, location: str, hours: int, units: str) -> List[Dict[str, Any]]:
-        forecasts = []
-        now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
-        for h in range(hours):
-            ts = now + timedelta(hours=h + 1)
-            seed = f"hourly:{location}:{ts.isoformat()}"
-            r = cls._deterministic_randints(seed, 3, (0, 100))
-            temp_c = -5 + (r[0] / 100.0) * 45
-            cond_map = ["Sunny", "Partly Cloudy", "Cloudy", "Light Rain", "Rain", "Snow"]
-            condition = cond_map[r[1] % len(cond_map)]
-            precip = int(r[2])
-            if units == "imperial":
-                temp = round(cls._convert_temp_c_to_f(temp_c))
-            else:
-                temp = round(temp_c)
-            forecasts.append({
-                "time": ts.strftime("%H:%M"),
-                "temp": temp,
-                "condition": condition,
-                "precipitation_chance": precip,
-            })
-        return forecasts
-
-    @classmethod
-    def process(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # Call external API
         try:
-            text = payload.get("request", "") if isinstance(payload, dict) else ""
-            context = payload.get("context", {}) if isinstance(payload, dict) else {}
-            units = context.get("units", "metric") if isinstance(context, dict) else "metric"
-            if units not in ("metric", "imperial"):
-                units = "metric"
-            forecast_days = int(context.get("forecast_days", 1)) if isinstance(context, dict) else 1
-            forecast_days = max(1, min(7, forecast_days))
+            current, forecast = await self._fetch_weather(location, units=units, lang=language)
+        except ExternalAPIError as e:
+            raise
 
-            intent, days_from_text = cls._intent_from_text(text)
-            if intent == "unsupported":
-                # If context explicitly requests weather but text is unsupported, still treat as unsupported
-                return {
-                    "success": False,
-                    "response": None,
-                    "error": "Unsupported request. This agent only handles weather-related queries.",
-                    "metadata": {},
-                }
+        # Build response based on whether user asked for forecast or current
+        timeframe = self._detect_timeframe(request)
 
-            # allow explicit days in text to override
-            if intent == "daily_forecast" and days_from_text:
-                forecast_days = days_from_text
+        if timeframe == "forecast":
+            text = self._format_forecast(location, forecast, units)
+        else:
+            text = self._format_current(location, current, units)
 
-            location = cls._extract_location(text, context)
-            if not location:
-                return {
-                    "success": False,
-                    "response": None,
-                    "error": "Location not specified. Please provide a city, region, or coordinates.",
-                    "metadata": {},
-                }
+        return text
 
-            # caching key
-            cache_key = f"{intent}|{location}|{units}|{forecast_days}"
-            cached = _cache_get(cache_key)
-            if cached:
-                return cached
+    def _is_weather_request(self, text: str) -> bool:
+        keywords = [
+            "weather",
+            "rain",
+            "snow",
+            "forecast",
+            "temperature",
+            "wind",
+            "feels like",
+            "humidity",
+            "sunny",
+            "cloud",
+            "storm",
+            "drizzle",
+            "will it",
+            "chance of",
+        ]
+        t = text.lower()
+        return any(k in t for k in keywords)
 
-            # Generate data
-            if intent == "current_weather":
-                data = cls._simulate_current(location, units)
-                unit_temp, unit_wind = cls._unit_labels(units)
-                response_text = (
-                    f"🌤️ Current Weather for {location}\n\n"
-                    f"Temperature: {data['temperature']}{unit_temp} (feels like {data['feels_like']}{unit_temp})\n"
-                    f"Condition: {data['condition']}\n"
-                    f"Humidity: {data['humidity']}%\n"
-                    f"Wind: {data['wind']} {unit_wind}\n"
-                    f"Precipitation Chance: {data['precipitation_chance']}%"
-                )
-                envelope = {
-                    "success": True,
-                    "response": response_text,
-                    "error": None,
-                    "metadata": {
-                        "location": location,
-                        "units": units,
-                        "forecast_days": 1,
-                        "data_source": "simulated",
-                    },
-                }
-                _cache_set(cache_key, envelope)
-                return envelope
+    def _detect_timeframe(self, text: str) -> str:
+        t = text.lower()
+        if "forecast" in t or "tomorrow" in t or "day" in t or "3-day" in t or "3 day" in t:
+            return "forecast"
+        return "current"
 
-            if intent == "daily_forecast":
-                days = forecast_days
-                data = cls._simulate_daily_forecast(location, days, units)
-                unit_temp, _ = cls._unit_labels(units)
-                header = f"📅 {days}-Day Forecast for {location}\n\n"
-                body_lines = []
-                for idx, day in enumerate(data):
-                    if idx == 0:
-                        day_label = "Today"
-                    elif idx == 1:
-                        day_label = "Tomorrow"
-                    else:
-                        day_label = f"Day {idx + 1}"
-                    lines = (
-                        f"{day_label}:\n"
-                        f"  High: {day['high']}{unit_temp} • Low: {day['low']}{unit_temp}\n"
-                        f"  Condition: {day['condition']}\n"
-                        f"  Precipitation Chance: {day['precipitation_chance']}%\n"
-                    )
-                    body_lines.append(lines)
-                response_text = header + "\n".join(body_lines).strip()
-                envelope = {
-                    "success": True,
-                    "response": response_text,
-                    "error": None,
-                    "metadata": {
-                        "location": location,
-                        "units": units,
-                        "forecast_days": days,
-                        "data_source": "simulated",
-                    },
-                }
-                _cache_set(cache_key, envelope)
-                return envelope
+    def _extract_location_from_text(self, text: str) -> Optional[str]:
+        # look for "in <Location>" pattern
+        m = re.search(r" in ([A-Za-z\s,.'-]+?)(?:\?|$| for | tomorrow| today| right now)", text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        # look for coordinates like "48.85,2.35"
+        m2 = re.search(r"(-?\d{1,3}\.\d+),\s*(-?\d{1,3}\.\d+)", text)
+        if m2:
+            return f"{m2.group(1)},{m2.group(2)}"
+        return None
 
-            if intent == "hourly_forecast":
-                hours = 6
-                data = cls._simulate_hourly_forecast(location, hours, units)
-                header = f"🕒 Hourly Forecast for {location}\n\n"
-                lines = []
-                for h in data:
-                    lines.append(f"{h['time']} — {h['temp']}{cls._unit_labels(units)[0]}, {h['condition']}")
-                response_text = header + "\n".join(lines)
-                envelope = {
-                    "success": True,
-                    "response": response_text,
-                    "error": None,
-                    "metadata": {
-                        "location": location,
-                        "units": units,
-                        "forecast_days": 1,
-                        "data_source": "simulated",
-                    },
-                }
-                _cache_set(cache_key, envelope)
-                return envelope
+    async def _fetch_weather(self, location: str, units: str = "metric", lang: str = "en") -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Uses OpenWeatherMap API (current + 5 day forecast). Expects WEATHER_API_KEY in env if not provided.
+        Returns (current_data, forecast_data)
+        """
+        if not self.api_key:
+            raise ExternalAPIError("Missing WEATHER_API_KEY environment variable")
 
-            if intent == "weather_summary":
-                # Provide a short summary using daily forecast for 2 days
-                data = cls._simulate_daily_forecast(location, 2, units)
-                summary_lines = []
-                for idx, day in enumerate(data):
-                    if idx == 0:
-                        label = "Today"
-                    else:
-                        label = "Tomorrow"
-                    summary_lines.append(f"{label}: {day['condition']} with highs around {day['high']}{cls._unit_labels(units)[0]}")
-                response_text = "\n".join(summary_lines)
-                envelope = {
-                    "success": True,
-                    "response": response_text,
-                    "error": None,
-                    "metadata": {
-                        "location": location,
-                        "units": units,
-                        "forecast_days": 2,
-                        "data_source": "simulated",
-                    },
-                }
-                _cache_set(cache_key, envelope)
-                return envelope
+        # Resolve location: if coordinates provided, use them directly, otherwise geocode via OWM
+        lat = lon = None
+        if re.match(r"^-?\d{1,3}\.\d+,-?\d{1,3}\.\d+$", location.strip()):
+            lat, lon = [s.strip() for s in location.split(",")]
+        else:
+            # call OWM geocoding API
+            geocode_url = "http://api.openweathermap.org/geo/1.0/direct"
+            params = {"q": location, "limit": 1, "appid": self.api_key}
+            async with self.session.get(geocode_url, params=params, raise_for_status=False) as resp:
+                if resp.status != 200:
+                    raise ExternalAPIError("Geocoding failed")
+                data = await resp.json()
+                if not data:
+                    raise ExternalAPIError("Location not found by geocoding")
+                lat = data[0].get("lat")
+                lon = data[0].get("lon")
+                # normalize location name
+                display_name = ", ".join(filter(None, [data[0].get("name"), data[0].get("country")]))
+                location = display_name
 
-            # fallback
-            return {
-                "success": False,
-                "response": None,
-                "error": "Unsupported request. This agent only handles weather-related queries.",
-                "metadata": {},
-            }
+        # current weather
+        curr_url = "https://api.openweathermap.org/data/2.5/weather"
+        params_curr = {"lat": lat, "lon": lon, "appid": self.api_key, "units": units, "lang": lang}
+        async with self.session.get(curr_url, params=params_curr, raise_for_status=False) as resp:
+            if resp.status != 200:
+                raise ExternalAPIError("Current weather API failed")
+            current = await resp.json()
 
-        except Exception as e:
-            print(f"STATUS:failed:{str(e)}")
-            return {
-                "success": False,
-                "response": None,
-                "error": "Internal weather service error",
-                "metadata": {},
-            }
+        # forecast (5 day / 3 hour)
+        forecast_url = "https://api.openweathermap.org/data/2.5/forecast"
+        params_f = {"lat": lat, "lon": lon, "appid": self.api_key, "units": units, "lang": lang}
+        async with self.session.get(forecast_url, params=params_f, raise_for_status=False) as resp:
+            if resp.status != 200:
+                raise ExternalAPIError("Forecast API failed")
+            forecast = await resp.json()
+
+        # attach normalized location name if available
+        if current.get("name"):
+            location = f"{current.get('name')}, {current.get('sys', {}).get('country', '')}".strip(', ')
+
+        return current, forecast
+
+    def _format_current(self, location: str, current: Dict[str, Any], units: str) -> str:
+        try:
+            temp = current["main"]["temp"]
+            feels = current["main"].get("feels_like")
+            condition = current["weather"][0]["description"].capitalize()
+            wind_speed = current.get("wind", {}).get("speed")
+            humidity = current["main"].get("humidity")
+        except Exception:
+            raise ExternalAPIError("Unexpected current weather response format")
+
+        # units display
+        temp_unit = "°C" if units == "metric" else "°F"
+        wind_unit = "km/h" if units == "metric" else "mph"
+        # convert wind m/s to km/h if metric
+        if units == "metric":
+            if wind_speed is not None:
+                wind_speed = round(float(wind_speed) * 3.6)
+        else:
+            if wind_speed is not None:
+                wind_speed = round(float(wind_speed))
+
+        # Build friendly sentence
+        parts = []
+        parts.append(f"Right now in {location}, it\u2019s {round(temp)}{temp_unit} and {condition}.")
+        if wind_speed is not None:
+            parts.append(f"There\u2019s a wind at about {wind_speed} {wind_unit}.")
+        if feels is not None:
+            parts.append(f"It feels like {round(feels)}{temp_unit}.")
+        if humidity is not None:
+            parts.append(f"Humidity is around {humidity}%.")
+
+        return " ".join(parts)
+
+    def _format_forecast(self, location: str, forecast: Dict[str, Any], units: str) -> str:
+        # Build up to 3-day forecast from 3-hourly data
+        try:
+            items = forecast.get("list", [])
+        except Exception:
+            raise ExternalAPIError("Unexpected forecast response format")
+
+        if not items:
+            raise ExternalAPIError("No forecast data returned")
+
+        # group by date
+        days = {}
+        for entry in items:
+            dt_txt = entry.get("dt_txt")  # '2026-02-04 12:00:00'
+            if not dt_txt:
+                continue
+            day = dt_txt.split(" ")[0]
+            temp = entry.get("main", {}).get("temp")
+            cond = entry.get("weather", [{}])[0].get("description", "")
+            if day not in days:
+                days[day] = {"temps": [], "conds": []}
+            if temp is not None:
+                days[day]["temps"].append(temp)
+            if cond:
+                days[day]["conds"].append(cond)
+
+        # pick up to 3 days starting from tomorrow
+        sorted_days = sorted(days.keys())
+        from datetime import datetime, timedelta
+        today = datetime.utcnow().date().isoformat()
+        upcoming = [d for d in sorted_days if d >= today]
+        # include up to 3 days
+        upcoming = upcoming[:3]
+
+        temp_unit = "°C" if units == "metric" else "°F"
+
+        paragraphs = []
+        for d in upcoming:
+            temps = days[d]["temps"]
+            conds = days[d]["conds"]
+            if temps:
+                lo = round(min(temps))
+                hi = round(max(temps))
+                main_cond = max(set(conds), key=conds.count) if conds else "" 
+                # make date human-friendly
+                dt_obj = datetime.fromisoformat(d)
+                label = dt_obj.strftime("%A")
+                paragraphs.append(f"{label} in {location} will be between {lo}{temp_unit} and {hi}{temp_unit} with {main_cond}.")
+
+        if not paragraphs:
+            raise ExternalAPIError("Insufficient forecast data")
+
+        return "\n\n".join(paragraphs)
 
 
-# HTTP server
+# Custom exceptions
+class ExternalAPIError(Exception):
+    pass
 
-def create_app(port: int = 8080) -> web.Application:
+
+class MissingLocationError(Exception):
+    pass
+
+
+class UnsupportedRequestError(Exception):
+    pass
+
+
+# HTTP server (A2A-compliant)
+async def create_app(agent: WeatherAgent, host: str = "0.0.0.0", port: int = 8080) -> web.Application:
     app = web.Application()
-    agent = WeatherAgent()
+    start_time = time.time()
 
-    async def agent_card(request: web.Request):
-        endpoint = f"http://localhost:{port}"
+    async def agent_card(request_http):
         card = {
-            "name": WeatherAgent.AGENT_NAME,
-            "description": WeatherAgent.DESCRIPTION,
-            "version": WeatherAgent.VERSION,
+            "name": agent.AGENT_NAME,
+            "description": agent.DESCRIPTION,
+            "version": "0.1.0",
             "protocol": "a2a",
-            "capabilities": [
-                "current_weather",
-                "hourly_forecast",
-                "daily_forecast",
-                "location_weather_lookup",
-                "weather_summary"
-            ],
-            "endpoint": endpoint,
+            "capabilities": agent.CAPABILITIES,
+            "endpoint": f"http://{host}:{port}",
         }
         return web.json_response(card)
 
-    async def health(request: web.Request):
-        uptime = time.time() - START_TIME
-        ts = datetime.utcnow().isoformat() + "Z"
-        data = {
+    async def health(request_http):
+        uptime = time.time() - start_time
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        payload = {
             "status": "healthy",
-            "name": WeatherAgent.AGENT_NAME,
-            "version": WeatherAgent.VERSION,
+            "name": agent.AGENT_NAME,
+            "version": "0.1.0",
             "uptime_seconds": round(uptime, 2),
-            "timestamp": ts,
+            "timestamp": now,
         }
-        return web.json_response(data)
+        return web.json_response(payload)
 
-    async def handle_post(request: web.Request):
+    async def handle(request_http):
         print("STATUS:executing:Processing request")
         try:
-            try:
-                payload = await request.json()
-            except json.JSONDecodeError:
-                return web.json_response({
-                    "success": False,
-                    "response": None,
-                    "error": "Malformed JSON in request",
-                    "metadata": {},
-                }, status=400)
-            except Exception:
-                # aiohttp raises ContentTypeError if not json
-                text = await request.text()
-                try:
-                    payload = json.loads(text)
-                except Exception:
-                    return web.json_response({
-                        "success": False,
-                        "response": None,
-                        "error": "Malformed JSON in request",
-                        "metadata": {},
-                    }, status=400)
-
-            resp = WeatherAgent.process(payload)
-            status_code = 200
-            if not resp.get("success") and resp.get("error") == "Location not specified. Please provide a city, region, or coordinates.":
-                status_code = 400
-            if not resp.get("success") and resp.get("error") == "Unsupported request. This agent only handles weather-related queries.":
-                status_code = 400
-            if not resp.get("success") and resp.get("error") == "Internal weather service error":
-                status_code = 500
-            return web.json_response(resp, status=status_code)
-        except Exception as e:
-            print(f"STATUS:failed:{str(e)}")
+            body = await request_http.json()
+        except Exception:
+            print("STATUS:failed:Invalid JSON in request")
+            print("STATUS:waiting:Idle, waiting for requests")
             return web.json_response({
                 "success": False,
                 "response": None,
-                "error": "Internal weather service error",
+                "error": "Invalid JSON request",
+                "metadata": {},
+            }, status=400)
+
+        req_text = body.get("request")
+        context = body.get("context", {}) or {}
+        req_id = body.get("id")
+
+        if not req_text:
+            print("STATUS:failed:Missing request field")
+            print("STATUS:waiting:Idle, waiting for requests")
+            return web.json_response({
+                "success": False,
+                "response": None,
+                "error": "Missing 'request' field",
+                "metadata": {},
+            }, status=400)
+
+        # units default
+        units = context.get("units", "metric")
+        if units not in ("metric", "imperial"):
+            units = "metric"
+
+        # early check for weather intent
+        try:
+            response_text = await agent.process(req_text, context)
+        except MissingLocationError as e:
+            print("STATUS:waiting:Idle, waiting for requests")
+            return web.json_response({
+                "success": False,
+                "response": None,
+                "error": str(e),
+                "metadata": {},
+            }, status=400)
+        except UnsupportedRequestError as e:
+            print("STATUS:waiting:Idle, waiting for requests")
+            return web.json_response({
+                "success": False,
+                "response": None,
+                "error": str(e),
+                "metadata": {},
+            }, status=400)
+        except ExternalAPIError as e:
+            print(f"STATUS:failed:{str(e)}")
+            print("STATUS:waiting:Idle, waiting for requests")
+            return web.json_response({
+                "success": False,
+                "response": None,
+                "error": "I couldn\'t retrieve weather data right now. Please try again later.",
+                "metadata": {"data_source": "external_weather_api"},
+            }, status=502)
+        except Exception as e:
+            print(f"STATUS:failed:{str(e)}")
+            print("STATUS:waiting:Idle, waiting for requests")
+            return web.json_response({
+                "success": False,
+                "response": None,
+                "error": "Internal error",
                 "metadata": {},
             }, status=500)
 
+        # success
+        metadata = {
+            "location": context.get("location") or "(resolved via query)",
+            "units": units,
+            "data_source": "external_weather_api",
+        }
+
+        print("STATUS:waiting:Idle, waiting for requests")
+        return web.json_response({
+            "success": True,
+            "response": response_text,
+            "error": None,
+            "metadata": metadata,
+        })
+
     app.router.add_get("/.well-known/agent.json", agent_card)
     app.router.add_get("/health", health)
-    app.router.add_post("/", handle_post)
+    app.router.add_post("/", handle)
+
     return app
 
 
-async def run_app(port: int = 8080):
+def main():
+    port = int(os.getenv("AGENT_PORT", "8080"))
+    host = os.getenv("AGENT_HOST", "127.0.0.1")
+
     print("STATUS:starting:Initializing Weather Agent")
-    app = create_app(port)
+    agent = WeatherAgent()
+
+    loop = asyncio.get_event_loop()
+    app = loop.run_until_complete(create_app(agent, host=host, port=port))
+
     runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"STATUS:running:Server started on port {port}")
-    print("STATUS:waiting:Idle, waiting for requests")
-    # run forever
-    while True:
-        await asyncio.sleep(3600)
+
+    async def _run():
+        await runner.setup()
+        site = web.TCPSite(runner, host=host, port=port)
+        await site.start()
+        print(f"STATUS:running:Server started on port {port}")
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+
+    try:
+        loop.run_until_complete(_run())
+    except KeyboardInterrupt:
+        print("STATUS:stopping:Shutting down")
+    finally:
+        loop.run_until_complete(runner.cleanup())
+        print("STATUS:stopped:Agent terminated")
 
 
 if __name__ == "__main__":
-    import os
-
-    port = int(os.environ.get("AGENT_PORT", "8080"))
-    try:
-        asyncio.run(run_app(port))
-    except KeyboardInterrupt:
-        print("STATUS:stopping:Shutting down")
-        print("STATUS:stopped:Agent terminated")
+    main()

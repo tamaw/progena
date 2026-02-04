@@ -111,8 +111,9 @@ class IPCServer:
         if not self._server:
             await self.start()
 
-        async with self._server:
-            await self._shutdown_event.wait()
+        if self._server is not None:
+            async with self._server:
+                await self._shutdown_event.wait()
 
     async def stop(self) -> None:
         """Stop the IPC server."""

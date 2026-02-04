@@ -565,7 +565,8 @@ class StateManager:
     def _ensure_nested_structure(self, state: dict[str, Any]) -> dict[str, Any]:
         """Ensure all nested objects exist in build state."""
         if "task" not in state:
-            state["task"] = {"description": None, "user_request": None, "target_capabilities": []}
+            # NOTE: user_request is at top-level, not in task (to avoid duplication)
+            state["task"] = {"description": None, "target_capabilities": []}
         if "iteration" not in state:
             state["iteration"] = {"current": 0, "max": 20, "start_time": None}
         if "spec" not in state:
@@ -584,10 +585,31 @@ class StateManager:
         return state
 
     async def update_build_state(self, updates: dict[str, Any]) -> None:
-        """Partially update build state with given fields."""
+        """Partially update build state with given fields.
+
+        Uses deep merge for nested dicts (phases, history, best, etc.)
+        to preserve existing values while updating specific keys.
+        """
         state = await self.get_build_state()
-        state.update(updates)
+        self._deep_merge(state, updates)
         await self.save_build_state(state)
+
+    def _deep_merge(self, base: dict, updates: dict) -> dict:
+        """Deep merge updates into base dictionary.
+
+        Recursively merges nested dicts instead of replacing them.
+        For non-dict values, updates override base.
+        """
+        for key, value in updates.items():
+            if (
+                key in base
+                and isinstance(base[key], dict)
+                and isinstance(value, dict)
+            ):
+                self._deep_merge(base[key], value)
+            else:
+                base[key] = value
+        return base
 
     async def add_build_message(self, message: dict[str, Any]) -> None:
         """Add a message to history.messages in build_state.
@@ -774,14 +796,29 @@ class StateManager:
         await self.save_current_state(state)
 
     async def commit_state(self) -> None:
-        """Commit all cached state to disk."""
+        """Commit all cached state to disk.
+
+        IMPORTANT: Skip build_state if it's in suspended state, as the suspend
+        handler already did a safe read-modify-write. The cache may not have
+        all fields loaded from the in-memory loop state.
+        """
         for name, data in self._state_cache.items():
-            if name in self.CORE_FILES:
-                async with self._file_lock(name):
-                    await self._atomic_write_json(
-                        self.state_dir / self.CORE_FILES[name],
-                        data
-                    )
+            if name not in self.CORE_FILES:
+                continue
+
+            # CRITICAL: Skip build_state if suspended - the suspend handler
+            # already saved it correctly with a full read-modify-write pattern.
+            # The cache may be stale/incomplete.
+            if name == "build_state":
+                if data and data.get("build_phase") == "suspended":
+                    logger.debug("commit_state: Skipping build_state (already saved by suspend handler)")
+                    continue
+
+            async with self._file_lock(name):
+                await self._atomic_write_json(
+                    self.state_dir / self.CORE_FILES[name],
+                    data
+                )
 
     async def read_conversation_log(self, limit: int = 100) -> list[dict[str, Any]]:
         """Read recent conversation log entries asynchronously."""

@@ -154,16 +154,9 @@ Notes:
 
 ### Copilot
 
-* `PROGENITOR_COPILOT_BIN` (default: `codex`)
-* `PROGENITOR_COPILOT_CONFIG` (default: `/config/codex.json`)
-* `PROGENITOR_COPILOT_TIMEOUT_SECONDS` (default: `300`)
-
-### Transport
-
-* `PROGENITOR_TRANSPORT` (`whatsapp` | `cli` | `webhook`, default: `whatsapp`)
-* `PROGENITOR_INBOX_ENDPOINT`
-* `PROGENITOR_OUTBOX_ENDPOINT`
-* `PROGENITOR_ALLOWED_SENDERS` (comma-separated)
+* `PROGENITOR_COPILOT_BIN` (default: `copilot`)
+* `PROGENITOR_COPILOT_CONFIG` (default: `/config/copilot.json`)
+* `PROGENITOR_COPILOT_TIMEOUT_SECONDS` (default: `720` - 12 minutes for complex builds)
 
 ### Scheduler
 

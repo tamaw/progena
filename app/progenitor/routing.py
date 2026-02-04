@@ -63,7 +63,8 @@ def should_iterate(
     - Max iterations hit
     - Tool/time budget exhausted
     """
-    iteration = state.get("current_iteration", 0)
+    # Support both flat and nested iteration keys
+    iteration = state.get("current_iteration") or state.get("iteration", {}).get("current", 0)
     verification_report = state.get("last_verification_report")
     ideal_state = ensure_ideal_state(state.get("ideal_state"))
 
@@ -130,9 +131,10 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
         logger.info("Build error, exiting inner loop")
         return "done"
 
-    # Check iteration limit
-    current_iteration = state.get("current_iteration", 0)
-    max_iterations = state.get("max_iterations", 10)
+    # Check iteration limit - support both flat and nested keys
+    current_iteration = state.get("current_iteration") or state.get("iteration", {}).get("current", 0)
+    iter_info = state.get("iteration", {})
+    max_iterations = state.get("max_iterations") or iter_info.get("max", 10)
 
     if current_iteration >= max_iterations:
         logger.info("Max iterations (%d) reached, exiting inner loop", max_iterations)
@@ -150,8 +152,9 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
         return "observe"
 
     # Check verification score (only exit if no pending items)
-    verification_score = state.get("verification_score", 0.0)
-    target_score = state.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+    # Support both flat key and nested phases.verify.score
+    verification_score = state.get("verification_score") or state.get("phases", {}).get("verify", {}).get("score", 0.0)
+    target_score = state.get("target_score") or state.get("phases", {}).get("verify", {}).get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
 
     if verification_score >= target_score:
         logger.info(
@@ -175,10 +178,14 @@ def _count_pending_backlog_items(backlog: list) -> int:
 
 def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:
     """Route after verification - learn if continuing, done if complete."""
-    verification_score = state.get("verification_score", 0.0)
-    target_score = state.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
-    current_iteration = state.get("current_iteration", 0)
-    max_iterations = state.get("max_iterations", 10)
+    # Support both flat and nested state keys
+    phases_verify = state.get("phases", {}).get("verify", {})
+    verification_score = state.get("verification_score") or phases_verify.get("score", 0.0)
+    target_score = state.get("target_score") or phases_verify.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+
+    iter_info = state.get("iteration", {})
+    current_iteration = state.get("current_iteration") or iter_info.get("current", 0)
+    max_iterations = state.get("max_iterations") or iter_info.get("max", 10)
 
     # Stop conditions
     if state.get("build_cancelled", False):
@@ -186,11 +193,14 @@ def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:
     if state.get("build_error"):
         return "done"
     if verification_score >= target_score:
+        logger.info("Verification score %.2f meets target %.2f, exiting to done", verification_score, target_score)
         return "done"
     if current_iteration >= max_iterations:
+        logger.info("Max iterations %d reached, exiting to done", max_iterations)
         return "done"
 
     # Continue to learn phase
+    logger.info("Continuing to learn phase: iteration=%d, score=%.2f/%.2f", current_iteration, verification_score, target_score)
     return "learn"
 
 

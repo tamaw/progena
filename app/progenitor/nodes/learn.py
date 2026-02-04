@@ -45,12 +45,36 @@ def create_node(
         - What to try differently next iteration
         - Patterns to remember
         """
+        logger.info("LEARN: Starting learn phase")
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()
         span = None
 
         iteration = state.get("current_iteration", 0)
         verification_report = state.get("last_verification_report")
+
+        # Fallback: check phases.verify if last_verification_report not set
+        if not verification_report:
+            phases = state.get("phases", {})
+            verify_phase = phases.get("verify", {})
+            if verify_phase:
+                # Construct a minimal report from phases.verify data
+                verification_report = {
+                    "overall_score": verify_phase.get("score", 0.0),
+                    "passed": verify_phase.get("passed", False),
+                    "gaps": verify_phase.get("gaps", []),
+                    "criterion_scores": [],
+                    "anti_criterion_violations": [],
+                }
+                logger.info("LEARN: Using phases.verify data as fallback (score=%.2f)", verify_phase.get("score", 0.0))
+
+        # Also check history.verification_reports for the latest
+        if not verification_report:
+            history = state.get("history", {})
+            reports = history.get("verification_reports", [])
+            if reports:
+                verification_report = reports[-1]
+                logger.info("LEARN: Using latest verification_report from history")
 
         if tracer:
             span = tracer.start_span(
@@ -62,13 +86,44 @@ def create_node(
             )
 
         if not verification_report:
-            logger.warning("No verification report in LEARN phase")
-            if span:
-                span.set_attribute("skipped", True)
-                span.end()
-            return {}
+            logger.warning("No verification report in LEARN phase - creating minimal lessons")
+            # Still produce lessons from available state data
+            execution_result = state.get("execution_result") or state.get("phases", {}).get("execute", {}).get("result")
+            lessons = {
+                "iteration": iteration,
+                "what_worked": [],
+                "what_failed": ["No verification data available"],
+                "adjustments": ["Ensure verification phase produces report"],
+                "insights": [],
+            }
+            if execution_result:
+                status = execution_result.get("status", "unknown") if isinstance(execution_result, dict) else "unknown"
+                lessons["what_failed"].append(f"Execution status: {status}")
 
-        report_dict = verification_report.model_dump() if hasattr(verification_report, "model_dump") else verification_report
+            history = state.get("history", {})
+            all_lessons = list(history.get("lessons_learned", []))
+            all_lessons.append(lessons)
+
+            if span:
+                span.set_attribute("fallback_mode", True)
+                span.end()
+
+            return {
+                "history": {
+                    "artefacts": history.get("artefacts", []),
+                    "verification_reports": history.get("verification_reports", []),
+                    "lessons_learned": all_lessons,
+                    "messages": history.get("messages", []),
+                },
+                "build_phase": "learn",
+            }
+
+        # Cast to dict if it's a Pydantic model, otherwise use as-is
+        report_dict: dict[str, Any]
+        if hasattr(verification_report, "model_dump"):
+            report_dict = verification_report.model_dump()  # type: ignore[union-attr]
+        else:
+            report_dict = dict(verification_report) if verification_report else {}
 
         # Extract lessons
         lessons = {
@@ -107,7 +162,7 @@ def create_node(
             ]
 
         # Use LLM for deeper insights (if available)
-        if llm_client and iteration > 0:
+        if llm_client and iteration is not None and iteration > 0:
             try:
                 insights = await _generate_insights(
                     llm_client, iteration, report_dict, state
@@ -152,13 +207,21 @@ def create_node(
 
         logger.info(
             f"Learning complete: {len(lessons['what_worked'])} successes, "
-            f"{len(lessons['what_failed'])} failures"
+            f"{len(lessons['what_failed'])} failures, iteration={iteration}"
         )
 
+        # Preserve full history structure while updating lessons_learned
+        # This prevents overwriting artefacts, verification_reports, and messages
+        full_history = {
+            "artefacts": history.get("artefacts", []),
+            "verification_reports": history.get("verification_reports", []),
+            "lessons_learned": all_lessons,
+            "messages": history.get("messages", []),
+        }
+
         return {
-            "history": {
-                "lessons_learned": all_lessons,
-            },
+            "history": full_history,
+            "build_phase": "learn",
         }
 
     return learn_node

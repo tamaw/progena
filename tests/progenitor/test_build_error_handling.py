@@ -41,6 +41,7 @@ def mock_state_manager():
     manager.load_state = AsyncMock(return_value={})
     manager.save_state = AsyncMock()
     manager.save_build_state = AsyncMock()  # Used by _checkpoint_state
+    manager.get_build_state = AsyncMock(return_value={})  # Used by _suspend_active_build
     manager.push_event = AsyncMock()
     manager.log_decision = AsyncMock()
     return manager
@@ -153,14 +154,21 @@ class TestHandleBuildError:
             llm_client=mock_llm_client,
         )
 
+        # Set up mock to return current file state for update_build_state
+        mock_state_manager.get_build_state = AsyncMock(return_value={
+            "build_in_progress": True,
+            "build_settings": {"status": "in_progress"},
+        })
+        mock_state_manager.update_build_state = AsyncMock()
+
         loop._state = {
             "build_in_progress": True,
         }
 
         await loop.handle_build_error("Checkpoint test error")
 
-        # State should have been saved via checkpoint (calls save_build_state)
-        mock_state_manager.save_build_state.assert_called()
+        # State should have been saved via update_build_state (safe merge pattern)
+        mock_state_manager.update_build_state.assert_called()
 
 
 class TestSuspendActiveBuild:
@@ -176,18 +184,32 @@ class TestSuspendActiveBuild:
             llm_client=mock_llm_client,
         )
 
-        loop._state = {
+        # Set up the mock to return the build state from file
+        file_state = {
             "build_in_progress": True,
             "build_settings": {
                 "status": "in_progress",
                 "project_name": "test",
             },
+            "build_messages": [],
+        }
+        mock_state_manager.get_build_state = AsyncMock(return_value=file_state)
+
+        loop._state = {
+            "build_in_progress": True,
         }
 
         await loop._suspend_active_build("User pressed Ctrl+C")
 
-        assert loop._state["build_settings"]["status"] == "suspended"
-        assert loop._state["build_settings"]["error_message"] == "User pressed Ctrl+C"
+        # Verify save_build_state was called with suspended status
+        mock_state_manager.save_build_state.assert_called_once()
+        saved_state = mock_state_manager.save_build_state.call_args[0][0]
+        assert saved_state["build_settings"]["status"] == "suspended"
+        assert saved_state["build_settings"]["error_message"] == "User pressed Ctrl+C"
+        assert saved_state["build_in_progress"] is False
+        assert saved_state["build_phase"] == "suspended"
+
+        # In-memory state should also be updated
         assert loop._state["build_in_progress"] is False
         assert loop._state["build_phase"] == "suspended"
 
@@ -201,12 +223,20 @@ class TestSuspendActiveBuild:
             llm_client=mock_llm_client,
         )
 
+        # Mock file state with no active build
+        mock_state_manager.get_build_state = AsyncMock(return_value={
+            "build_in_progress": False,
+        })
+
         loop._state = {
             "build_in_progress": False,
         }
 
         # Should not raise, should be a no-op
         await loop._suspend_active_build("Test")
+
+        # save_build_state should NOT have been called (no build to suspend)
+        mock_state_manager.save_build_state.assert_not_called()
 
         # State should be unchanged
         assert loop._state.get("build_phase") != "suspended"
@@ -221,20 +251,30 @@ class TestSuspendActiveBuild:
             llm_client=mock_llm_client,
         )
 
-        loop._state = {
+        # Set up the mock to return the build state from file
+        file_state = {
             "build_in_progress": True,
             "build_settings": {
                 "status": "in_progress",
             },
+            "build_messages": [],
+        }
+        mock_state_manager.get_build_state = AsyncMock(return_value=file_state)
+
+        loop._state = {
+            "build_in_progress": True,
         }
 
         await loop._suspend_active_build("Graceful shutdown")
 
-        # State should be updated (status changed to suspended)
-        assert loop._state["build_settings"]["status"] == "suspended"
+        # save_build_state should have been called with suspended status
+        mock_state_manager.save_build_state.assert_called_once()
+        saved_state = mock_state_manager.save_build_state.call_args[0][0]
+        assert saved_state["build_settings"]["status"] == "suspended"
+        assert saved_state["build_phase"] == "suspended"
+
+        # In-memory state should also be updated
         assert loop._state["build_phase"] == "suspended"
-        # The function updates health file, not full checkpoint
-        # Verify state was properly updated for persistence
 
 
 class TestBuildErrorIntegration:

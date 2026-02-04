@@ -13,6 +13,7 @@ from typing import Any, Optional, TypedDict
 
 from ..state.models import AgentRegistryEntry, AgentStatus
 from ..runtime.time_utils import utcnow
+from ..runtime.port_utils import find_available_port, is_port_available
 
 logger = logging.getLogger(__name__)
 
@@ -175,25 +176,34 @@ class ToolRegistry:
     def allocate_port(self) -> int:
         """Allocate an available port for a new agent.
 
+        Checks both the registry (ports claimed by agents) and the OS
+        (ports actually bound) to find a truly available port.
+
         Returns:
             An unused port in the agent port range.
 
         Raises:
             RuntimeError: If no ports are available.
         """
-        used_ports = set()
+        # Get ports already claimed in registry
+        claimed_ports = set()
         for agent in self._registry.get("agents", []):
             port = agent.get("port")
             if port is not None:
-                used_ports.add(port)
+                claimed_ports.add(port)
 
-        for port in range(AGENT_PORT_RANGE_START, AGENT_PORT_RANGE_END + 1):
-            if port not in used_ports:
-                return port
-
-        raise RuntimeError(
-            f"No available ports in range {AGENT_PORT_RANGE_START}-{AGENT_PORT_RANGE_END}"
-        )
+        # Use port_utils to find an actually available port
+        try:
+            return find_available_port(
+                start_port=AGENT_PORT_RANGE_START,
+                end_port=AGENT_PORT_RANGE_END,
+                host=self.host,
+                exclude_ports=claimed_ports,
+            )
+        except RuntimeError:
+            raise RuntimeError(
+                f"No available ports in range {AGENT_PORT_RANGE_START}-{AGENT_PORT_RANGE_END}"
+            )
 
     async def update_agent_status(
         self,

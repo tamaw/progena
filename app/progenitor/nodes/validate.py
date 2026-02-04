@@ -44,6 +44,7 @@ def create_node(config: "ProgenitorConfig") -> Callable[[ProgenitorState], Corou
         Reads ExecutionResult and produces ValidationResultV2 with findings.
         Does NOT invoke external commands or make code changes.
         """
+        logger.info("VALIDATE: Starting validate phase")
         current_item = state.get("current_work_item")
         iteration = state.get("current_iteration", 0)
         execution_result_data = state.get("execution_result")
@@ -59,7 +60,7 @@ def create_node(config: "ProgenitorConfig") -> Callable[[ProgenitorState], Corou
 
         # BL-005: Create data-only ValidationResultV2
         validation_result = ValidationResultV2(
-            iteration=iteration,
+            iteration=iteration or 0,  # Default to 0 if None
             validated_at=utcnow(),
             execution_result_ref=item_id,
             findings=[],

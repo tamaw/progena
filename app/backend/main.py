@@ -277,7 +277,7 @@ class RateLimiter:
 rate_limiter = RateLimiter(
     requests_per_minute=config.rate_limit_per_minute,
     requests_per_hour=config.rate_limit_per_hour,
-    cleanup_interval=config.rate_limit_cleanup_interval,
+    cleanup_interval=config.rate_limit_cleanup_interval_seconds,
     stale_client_timeout_seconds=config.rate_limit_stale_client_timeout_seconds,
 )
 

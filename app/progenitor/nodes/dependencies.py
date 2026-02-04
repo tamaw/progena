@@ -191,14 +191,19 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         "validate": validate.create_node(deps.config),
         "respond": respond.create_node(deps.state_manager),
         "idle": idle.create_node(
-            deps.config.runtime.idle_backoff_seconds
+            deps.config,
         ),
         "commit_core": commit_core.create_node(deps.state_manager),
 
         # Inner loop nodes (loop.spec.md)
         "observe": observe.create_node(deps.llm_client),
         "think": think.create_node(deps.llm_client),
-        "act": act.create_node(deps.llm_client),
+        "act": act.create_node(
+            deps.llm_client,
+            deps.tool_registry,
+            deps.config,
+            deps.worktrees_dir or deps.config.storage.worktree_dir,
+        ),
         "execute": execute.create_node(
             deps.tool_registry,
             deps.state_manager,
@@ -207,7 +212,9 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         "learn": learn.create_node(deps.llm_client),
 
         # Build infrastructure
-        "worktree_prep": worktree_prep.create_node(deps.worktrees_dir),
+        "worktree_prep": worktree_prep.create_node(
+            deps.worktrees_dir or deps.config.storage.worktree_dir
+        ),
     }
 
     # Apply any custom node overrides

@@ -7,7 +7,7 @@ Also tests and activates newly built agents for immediate interaction.
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Coroutine, Any, TYPE_CHECKING
+from typing import Callable, Coroutine, Any, Optional, TYPE_CHECKING
 
 from ..state.models import ProgenitorState, AgentRegistryEntry
 from ..runtime.time_utils import utcnow_isoformat
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def create_node(
     tool_registry,
     state_manager,
-    config: "ProgenitorConfig" = None,
+    config: "Optional[ProgenitorConfig]" = None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the register node function.
 
@@ -162,20 +162,8 @@ def create_node(
         # Update agents list in state
         agents = tool_registry.get_agents()
 
-        # Build result including agent test info if applicable
-        result = {"agents": agents}
-
-        # Include agent runner reference and test results for immediate interaction
-        if item_type == "build_agent":
-            result["agent_runner"] = agent_runner
-            result["new_agent_ready"] = {
-                "name": agent_name,
-                "entrypoint": entrypoint,
-                "test_passed": agent_test_passed,
-                "test_response": agent_test_response,
-                "test_error": agent_test_error,
-            }
-
-        return result
+        # Build result as ProgenitorState partial update
+        # Note: agents is a SchedulingState field, so this is valid
+        return {"agents": agents}
 
     return register_node
