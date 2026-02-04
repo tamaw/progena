@@ -41,7 +41,7 @@ def create_node(timezone: str = "Australia/Melbourne", state_manager=None) -> Ca
 
         # Find due items
         due_items = scheduler.get_due_items(schedule_dicts, current_time)
-        due_ids = [item.get("id") for item in due_items if item.get("id")]
+        due_ids: list[str] = [str(item.get("id")) for item in due_items if item.get("id") is not None]
 
         # If no due items, return early with just time update
         if not due_ids:

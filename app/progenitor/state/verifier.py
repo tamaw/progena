@@ -243,12 +243,42 @@ class Verifier:
         min_score = self._get_minimum_score(ideal_state)
         passed = overall_score >= min_score
 
-        # Identify gaps
-        gaps = [
-            f"Criterion '{ideal_state.success_criteria[i].description}' not met (score: {e.score:.2f})"
-            for i, e in enumerate(criterion_evidences)
-            if not e.passed
-        ]
+        # Identify gaps with DETAILED execution evidence (not just criterion name)
+        gaps = []
+        for i, e in enumerate(criterion_evidences):
+            if not e.passed:
+                criterion = ideal_state.success_criteria[i]
+                gap_detail = f"{criterion.id}: Target: {criterion.target_score:.2f}, Achieved: {e.score:.2f}"
+
+                # Include execution evidence details if available
+                if e.execution_evidence:
+                    gap_detail += f" | Execution: {e.execution_evidence}"
+                if e.validation_evidence:
+                    gap_detail += f" | Validation: {e.validation_evidence}"
+                if e.llm_assessment:
+                    gap_detail += f" | Assessment: {e.llm_assessment[:200]}"
+
+                gaps.append(gap_detail)
+
+        # Enrich gaps with raw execution data summary if available
+        if exec_data and not passed:
+            status = exec_data.get("status", "unknown")
+            errors = exec_data.get("all_errors", [])
+            runs = exec_data.get("runs", [])
+
+            # Add execution summary to gaps
+            exec_summary_parts = [f"Execution status: {status}"]
+            if errors:
+                exec_summary_parts.append(f"Errors: {'; '.join(str(e)[:100] for e in errors[:3])}")
+            if runs:
+                run_summaries = []
+                for run in runs[:2]:  # Show first 2 runs
+                    prompts_passed = run.get("prompts_passed", 0)
+                    prompts_total = run.get("prompts_total", 0)
+                    run_summaries.append(f"prompts {prompts_passed}/{prompts_total}")
+                exec_summary_parts.append(f"Runs: {', '.join(run_summaries)}")
+
+            gaps.append(f"[Execution Summary] {' | '.join(exec_summary_parts)}")
 
         # Suggest next actions
         next_actions = self._suggest_next_actions_from_evidence(criterion_evidences, gaps)
@@ -1048,13 +1078,19 @@ Format: SCORE: X.XX | EVIDENCE: explanation"""
         return 0.8  # Default
 
     def _identify_gaps(self, criterion_scores: list[CriterionScore]) -> list[str]:
-        """Identify gaps (unmet criteria)."""
+        """Identify gaps (unmet criteria) with detailed evidence."""
         gaps = []
         for score in criterion_scores:
             if not score.passed:
-                gaps.append(
-                    f"{score.criterion_id}: {score.notes}"
-                )
+                # Include both notes (target/achieved) and evidence for context
+                gap_detail = f"{score.criterion_id}: {score.notes}"
+                if score.evidence and len(score.evidence) > 10:
+                    # Truncate long evidence but include key details
+                    evidence_preview = score.evidence[:200]
+                    if len(score.evidence) > 200:
+                        evidence_preview += "..."
+                    gap_detail += f" | Evidence: {evidence_preview}"
+                gaps.append(gap_detail)
         return gaps
 
     def _suggest_next_actions(

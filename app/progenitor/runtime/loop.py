@@ -791,45 +791,76 @@ class ProgenitorLoop:
         - current_state.json: Progenitor agent state
 
         Per SPEC: restart-safe checkpoints (write state every cycle).
+
+        IMPORTANT:
+        - When build is SUSPENDED, we DON'T touch build_state.json at all since
+          _suspend_active_build already handled it with a safe read-modify-write.
+        - When build is not in progress (idle, error, etc.), use update_build_state
+          to safely merge status changes without overwriting existing data.
+        - When actively building, do a full checkpoint.
         """
-        # Build state checkpoint (agent builds only) - nested structure
-        build_checkpoint = {
-            "build_in_progress": state.get("build_in_progress", False),
-            "build_id": state.get("build_id"),
-            "build_started_at": state.get("build_started_at"),
-            "build_phase": state.get("build_phase"),
-            "task_id": state.get("task_id"),
-            "ideal_state": None,
-            "should_iterate": state.get("should_iterate", True),
-            "iteration_stop_reason": state.get("iteration_stop_reason"),
-            "backlog": self._serialize_backlog(state.get("backlog", [])),
-            # Nested objects
-            "task": state.get("task", {}),
-            "iteration": state.get("iteration", {}),
-            "spec": state.get("spec", {}),
-            "phases": state.get("phases", {}),
-            "history": state.get("history", {}),
-            "best": state.get("best", {}),
-            "clarification": state.get("clarification", {}),
-        }
+        # Check build status
+        is_suspended = state.get("build_phase") == "suspended"
+        is_actively_building = state.get("build_in_progress", False)
 
-        # BL-007: Include build_settings for structured build configuration
-        build_settings = state.get("build_settings")
-        if build_settings:
-            if hasattr(build_settings, "model_dump"):
-                build_checkpoint["build_settings"] = build_settings.model_dump()
-            elif isinstance(build_settings, dict):
-                build_checkpoint["build_settings"] = build_settings
+        if is_suspended:
+            # SUSPENDED: _suspend_active_build already saved the file correctly
+            logger.debug("Checkpoint: Skipping build state (already saved by suspend handler)")
+        elif not is_actively_building:
+            # NOT ACTIVELY BUILDING (idle, error, etc.): Use safe update pattern
+            # Read current file, merge status, write back - preserves existing data
+            status_update = {
+                "build_in_progress": False,
+                "build_phase": state.get("build_phase"),
+            }
+            # Include build_settings if it exists in the in-memory state
+            build_settings = state.get("build_settings")
+            if build_settings:
+                if hasattr(build_settings, "model_dump"):
+                    status_update["build_settings"] = build_settings.model_dump()
+                elif isinstance(build_settings, dict):
+                    status_update["build_settings"] = build_settings
+            await self.state_manager.update_build_state(status_update)
+            logger.debug("Checkpoint: Updated build state via merge (not actively building)")
+        else:
+            # Full checkpoint when actively building
+            build_checkpoint = {
+                "build_in_progress": state.get("build_in_progress", False),
+                "build_id": state.get("build_id"),
+                "build_started_at": state.get("build_started_at"),
+                "build_phase": state.get("build_phase"),
+                "task_id": state.get("task_id"),
+                "ideal_state": None,
+                "should_iterate": state.get("should_iterate", True),
+                "iteration_stop_reason": state.get("iteration_stop_reason"),
+                "backlog": self._serialize_backlog(state.get("backlog", [])),
+                # Nested objects
+                "task": state.get("task", {}),
+                "iteration": state.get("iteration", {}),
+                "spec": state.get("spec", {}),
+                "phases": state.get("phases", {}),
+                "history": state.get("history", {}),
+                "best": state.get("best", {}),
+                "clarification": state.get("clarification", {}),
+            }
 
-        # Only include ideal_state if it exists and is serializable
-        ideal_state = state.get("ideal_state")
-        if ideal_state:
-            if hasattr(ideal_state, "model_dump"):
-                build_checkpoint["ideal_state"] = ideal_state.model_dump()
-            elif isinstance(ideal_state, dict):
-                build_checkpoint["ideal_state"] = ideal_state
+            # BL-007: Include build_settings for structured build configuration
+            build_settings = state.get("build_settings")
+            if build_settings:
+                if hasattr(build_settings, "model_dump"):
+                    build_checkpoint["build_settings"] = build_settings.model_dump()
+                elif isinstance(build_settings, dict):
+                    build_checkpoint["build_settings"] = build_settings
 
-        await self.state_manager.save_build_state(build_checkpoint)
+            # Only include ideal_state if it exists and is serializable
+            ideal_state = state.get("ideal_state")
+            if ideal_state:
+                if hasattr(ideal_state, "model_dump"):
+                    build_checkpoint["ideal_state"] = ideal_state.model_dump()
+                elif isinstance(ideal_state, dict):
+                    build_checkpoint["ideal_state"] = ideal_state
+
+            await self.state_manager.save_build_state(build_checkpoint)
 
         # Current state checkpoint (progenitor agent state - user session)
         # NOTE: schedule is NOT included here - it's saved to schedule.json separately
@@ -1100,32 +1131,65 @@ class ProgenitorLoop:
         """Suspend any active build gracefully on cancellation.
 
         BL-007: When receiving a cancellation signal:
-        1. Mark build as "suspended" (not error/failed)
-        2. Write last state with status
-        3. Allow graceful shutdown to continue
+        1. Read the ACTUAL file state (not in-memory which may be stale)
+        2. Update ONLY the suspend-related fields
+        3. Write back to preserve all existing data
 
         Args:
             reason: Reason for suspension
         """
-        if not self._state.get("build_in_progress"):
-            return
-
         logger.info("SUSPEND: Suspending active build: %s", reason)
 
-        # Update build settings status to suspended
-        build_settings = self._state.get("build_settings")
-        if build_settings:
-            if isinstance(build_settings, dict):
-                build_settings["status"] = "suspended"
-                build_settings["error_message"] = reason
-                build_settings["updated_at"] = utcnow_isoformat()
-            elif hasattr(build_settings, "mark_suspended"):
-                build_settings.mark_suspended(reason)
-                self._state["build_settings"] = build_settings.model_dump()
+        try:
+            # CRITICAL: Read the actual file, not in-memory state which may be incomplete
+            build_state = await self.state_manager.get_build_state()
 
-        # Mark build as suspended (not completely cancelled)
-        self._state["build_in_progress"] = False
-        self._state["build_phase"] = "suspended"
+            # Check if there's actually a build to suspend
+            if not build_state.get("build_in_progress"):
+                logger.info("SUSPEND: No active build to suspend")
+                return
+
+            # Update suspend status fields IN THE FILE DATA
+            build_state["build_in_progress"] = False
+            build_state["build_phase"] = "suspended"
+
+            # Update build_settings if it exists in the file
+            if "build_settings" in build_state and build_state["build_settings"]:
+                build_settings = build_state["build_settings"]
+                if isinstance(build_settings, dict):
+                    build_settings["status"] = "suspended"
+                    build_settings["error_message"] = reason
+                    build_settings["updated_at"] = utcnow_isoformat()
+
+            # Add suspension message to build_messages
+            build_messages = build_state.get("build_messages", [])
+            build_messages.append({
+                "event": "suspended",
+                "timestamp": utcnow_isoformat(),
+                "reason": "shutdown_requested",
+                "iteration": build_state.get("iteration", {}).get("current", 0),
+            })
+            build_state["build_messages"] = build_messages
+
+            # Add last_build_result
+            build_state["last_build_result"] = {
+                "build_id": build_state.get("build_settings", {}).get("build_id") if build_state.get("build_settings") else None,
+                "status": "cancelled",
+                "completed_at": utcnow_isoformat(),
+                "output_summary": None,
+                "error_message": "Build was cancelled",
+            }
+
+            # Write the complete updated state back to file
+            await self.state_manager.save_build_state(build_state)
+            logger.info("SUSPEND: Build state saved successfully (read-modify-write)")
+
+            # Also update in-memory state for consistency
+            self._state["build_in_progress"] = False
+            self._state["build_phase"] = "suspended"
+
+        except Exception as e:
+            logger.warning("SUSPEND: Failed to update build state: %s", e)
 
         # Push event for any connected clients
         await self._push_event(
@@ -1140,4 +1204,4 @@ class ProgenitorLoop:
         # Update health file with suspended status
         await self._update_health_file(self._state, status="suspended", error=reason)
 
-        logger.info("SUSPEND: Build state saved as suspended")
+        logger.info("SUSPEND: Build suspended successfully")

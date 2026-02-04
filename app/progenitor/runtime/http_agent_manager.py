@@ -25,6 +25,7 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 import aiohttp
 
 from .time_utils import utcnow, utcnow_isoformat
+from .port_utils import find_available_port, is_port_available
 from ..state.models import AgentStatus
 
 if TYPE_CHECKING:
@@ -134,8 +135,19 @@ class HTTPAgentManager:
             if not entrypoint_path.exists():
                 raise FileNotFoundError(f"Agent entrypoint not found: {entrypoint_path}")
 
-            # Allocate port
+            # Allocate port (registry.allocate_port now checks OS-level availability)
             port = self.registry.allocate_port()
+
+            # Double-check port is available (in case of race conditions)
+            if not is_port_available(port):
+                logger.warning(
+                    "Allocated port %d is not available, finding alternative...", port
+                )
+                port = find_available_port(
+                    start_port=port + 1,
+                    end_port=port + 100,  # Try 100 ports above
+                )
+
             logger.info(
                 "Starting agent '%s' from %s on port %d",
                 agent_name, entrypoint_path, port

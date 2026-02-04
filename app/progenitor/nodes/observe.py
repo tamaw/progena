@@ -14,7 +14,7 @@ from typing import Any
 
 from ..state.models import ProgenitorState
 from ..state.ideal_state import IdealStateBuilder, IdealState
-from ..constants import DEFAULT_VERIFICATION_TARGET_SCORE
+from ..constants import DEFAULT_VERIFICATION_TARGET_SCORE, DEFAULT_MAX_INNER_ITERATIONS
 from ..state.clarification import create_clarification_history_entry
 from ..runtime.time_utils import utcnow_isoformat
 from . import NodeFunction, NodeStateUpdate
@@ -51,6 +51,7 @@ def create_node(
         - If clarification response: Incorporate user's additional context
         - Otherwise: Refine based on previous verification results
         """
+        logger.info("OBSERVE: Starting observe phase")
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()
         span = None
@@ -92,17 +93,22 @@ def create_node(
                 "build_phase": "observe",
                 "task_id": task_id,
                 "should_iterate": True,
+                # Sync flat iteration keys for routing compatibility
+                "current_iteration": 0,
+                "max_iterations": DEFAULT_MAX_INNER_ITERATIONS,
+                # Single source of truth for user request (not duplicated in task)
+                "user_request": task_description,
 
-                # Nested task info
+                # Nested task info (summary only - use user_request for full text)
                 "task": {
                     "description": task_description[:200],
-                    "user_request": task_description[:500],
+                    # NOTE: user_request moved to top-level to avoid duplication
                     "target_capabilities": [],
                 },
                 # Nested iteration info
                 "iteration": {
                     "current": 0,
-                    "max": 20,
+                    "max": DEFAULT_MAX_INNER_ITERATIONS,
                     "start_time": now_time,
                 },
                 # Initialize history
@@ -135,14 +141,23 @@ def create_node(
                 verification_score = verify_phase.get("score", 0.0)
                 target_score = verify_phase.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
                 if verification_score < target_score and not verify_phase.get("passed", False):
-                    next_iteration = iteration + 1
+                    next_iteration = (iteration or 0) + 1
+                    # Preserve max from state (LangGraph shallow-merges, so we need to include it)
+                    iter_info = state.get("iteration", {})
+                    max_iter = state.get("max_iterations") or iter_info.get("max", 20)
                     state_updates = {
+                        # Sync both nested and flat iteration keys for compatibility
                         "iteration": {
                             "current": next_iteration,
+                            "max": max_iter,  # Preserve max_iterations through shallow merge
                             "start_time": time.time(),
                         },
+                        "current_iteration": next_iteration,
+                        "max_iterations": max_iter,  # Also sync flat key for routing
                     }
                     iteration = next_iteration
+                    logger.info("Incrementing iteration from %d to %d (score=%.2f < target=%.2f)",
+                               next_iteration - 1, next_iteration, verification_score, target_score)
 
         if tracer:
             span = tracer.start_span(

@@ -59,6 +59,7 @@ def create_node(
 
         PLAN can select one approach deterministically (or with a simple policy).
         """
+        logger.info("THINK: Starting think phase")
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()
         span = None
@@ -85,7 +86,7 @@ def create_node(
         last_verification = state.get("last_verification_report")
 
         # Build thinking prompt for structured approaches
-        prompt = _build_thinking_prompt(ideal_state, iteration, last_verification, state)
+        prompt = _build_thinking_prompt(ideal_state, iteration or 0, last_verification, state)
 
         try:
             response = await llm_client.generate(
@@ -101,7 +102,7 @@ Format each approach clearly with numbered sections.""",
             )
 
             # BL-003: Parse into structured approaches with tradeoffs/risks
-            think_output = _parse_structured_approaches(response, iteration, last_verification)
+            think_output = _parse_structured_approaches(response, iteration or 0, last_verification)
 
             if span:
                 span.add_event("approaches_generated", {

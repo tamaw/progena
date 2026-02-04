@@ -56,6 +56,7 @@ def create_node(
         Additionally checks if Copilot CLI output indicates need for
         user clarification, which can interrupt the inner loop.
         """
+        logger.info("VERIFY: Starting verify phase")
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()
         span = None
@@ -294,7 +295,11 @@ def create_node(
                 "verification_reports": verification_reports,
             }
 
+            # Get current iteration for synced state
+            current_iter = state.get("current_iteration") or state.get("iteration", {}).get("current", 0)
+
             # Merge verification results with clarification updates
+            # Sync verification_score and verification_passed at top level for routing compatibility
             # Note: TypedDict doesn't support dynamic spread, but this is valid for LangGraph
             return {  # type: ignore[return-value]
                 # Nested structure updates
@@ -304,6 +309,11 @@ def create_node(
                 "history": history_update,
                 "best": best_update,
                 "build_phase": "verify",
+                # Sync flat keys for routing functions
+                "verification_score": verification_report.overall_score,
+                "verification_passed": verification_report.passed,
+                "last_verification_report": verification_report,
+                "current_iteration": current_iter,
                 **clarification_updates,
             }
 

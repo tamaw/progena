@@ -57,6 +57,7 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
 
     async def planner_node(state: ProgenitorState) -> ProgenitorState:
         """Generate work items based on decision or ideal state (loop.spec.md PLAN phase)."""
+        logger.info("PLAN: Starting plan phase")
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()
         span = None
@@ -554,7 +555,7 @@ async def _plan_from_ideal_state(
         task_description=task_description,
         approaches=approaches,
         gaps=gaps,
-        iteration=iteration,
+        iteration=iteration or 0,  # Default to 0 if None
         llm_client=llm_client,
         work_item_id=work_item_id,
         project_directory=project_directory,  # BL-007
@@ -577,7 +578,7 @@ async def _plan_from_ideal_state(
             task_description=task_description,
             success_criteria=success_criteria,
             gaps=gaps,
-            iteration=iteration,
+            iteration=iteration or 0,  # Default to 0 if None
             agent_name=agent_name,
         )
 
@@ -586,6 +587,8 @@ async def _plan_from_ideal_state(
         copilot_prompt = getattr(spec_doc, 'copilot_prompt', None)
 
         # Create work item with experiment plan in context
+        # NOTE: We only store spec_file_path and copilot_prompt, NOT the full spec_doc
+        # The spec content lives in the actual file, avoiding massive state duplication
         work_item = WorkItem(
             id=work_item_id,  # Use pre-generated ID for consistency with spec file
             item_type=item_type,
@@ -599,9 +602,11 @@ async def _plan_from_ideal_state(
                 "verification_method": experiment_plan.verification_method,
                 "targeted_gaps": gaps[:3] if gaps else [],
                 "capabilities": _get_target_capabilities(state),
-                "spec_doc": spec_doc_dict,  # SpecDoc: Include for BUILD consumption
-                "spec_file_path": spec_file_path,  # Path to spec file in app/agents/
+                # Reference to spec file (content read from disk when needed)
+                "spec_file_path": spec_file_path,
                 "copilot_prompt": copilot_prompt,  # The prompt that references the spec file
+                # Minimal spec metadata (not full content)
+                "spec_revision": spec_doc.revision if spec_doc else 0,
             },
         )
         backlog.append(work_item)
@@ -646,7 +651,7 @@ async def _plan_from_ideal_state(
         # Fallback - create smoke test plan
         experiment_plan = ExperimentPlan.create_smoke_test_plan(
             agent_name=agent_name,
-            iteration=iteration,
+            iteration=iteration or 0,  # Default to 0 if None
         )
 
         # Get spec file path and copilot prompt from spec_doc (even in fallback)
@@ -664,9 +669,11 @@ async def _plan_from_ideal_state(
                 "experiment_plan": experiment_plan.model_dump(),
                 "expected_outcome": "Verification score improves",
                 "capabilities": _get_target_capabilities(state),
-                "spec_doc": spec_doc_dict,  # SpecDoc: Include for BUILD consumption
-                "spec_file_path": fallback_spec_file_path,  # Include spec file path
-                "copilot_prompt": fallback_copilot_prompt,  # Include copilot prompt
+                # Reference to spec file (content read from disk when needed)
+                "spec_file_path": fallback_spec_file_path,
+                "copilot_prompt": fallback_copilot_prompt,
+                # Minimal spec metadata (not full content)
+                "spec_revision": spec_doc.revision if spec_doc else 0,
             },
         )
         backlog.append(work_item)

@@ -29,6 +29,7 @@ from ..state.execution_schemas import (
     ExperimentPlan,
 )
 from ..runtime.time_utils import utcnow_isoformat, utcnow
+from ..runtime.port_utils import find_available_port_async, DEFAULT_AGENT_PORT_START
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ def create_node(
         This node handles the actual tool execution after BUILD
         has prepared the work.
         """
+        logger.info("EXECUTE: Starting execute phase")
         start_time = time.perf_counter()
         tracer, metrics = _get_telemetry()
         span = None
@@ -270,6 +272,8 @@ def create_node(
                 "build_phase": "execute",
                 "backlog": backlog,
                 "current_work_item": None,
+                # BL-006: Set execution_result at top level for verify node to consume
+                "execution_result": exec_result_dict,
             }
 
         # Get pending tools from BUILD phase
@@ -461,7 +465,7 @@ async def _exercise_agent(
     # Get agent endpoint/entrypoint from context or registry
     agent_endpoint = None
     agent_entrypoint = None
-    agent_port = 8080  # Default port
+    agent_port = DEFAULT_AGENT_PORT_START  # Default starting port
 
     # Get project root from harness for path resolution
     project_root = harness.project_root if harness else None
@@ -470,7 +474,7 @@ async def _exercise_agent(
     if isinstance(build_output, dict):
         agent_endpoint = build_output.get("agent_endpoint")
         agent_entrypoint = build_output.get("agent_entrypoint")
-        agent_port = build_output.get("agent_port", 8080)
+        agent_port = build_output.get("agent_port", DEFAULT_AGENT_PORT_START)
 
     # Try to discover entrypoint from build settings or experiment plan
     if not agent_entrypoint:
@@ -510,8 +514,8 @@ async def _exercise_agent(
         agent_endpoint = context.get("agent_endpoint")
     if not agent_entrypoint:
         agent_entrypoint = context.get("agent_entrypoint")
-    if agent_port == 8080:
-        agent_port = context.get("agent_port", 8080)
+    if agent_port == DEFAULT_AGENT_PORT_START:
+        agent_port = context.get("agent_port", DEFAULT_AGENT_PORT_START)
 
     # Check registry for agent info
     agents = state.get("agents", [])
@@ -522,6 +526,11 @@ async def _exercise_agent(
         elif isinstance(agent, dict) and agent.get("name") == experiment_plan.agent_name:
             agent_endpoint = agent_endpoint or agent.get("endpoint")
             agent_entrypoint = agent_entrypoint or agent.get("entrypoint")
+
+    # Find an available port before spawning the agent
+    # This prevents port conflicts with the backend or other services
+    agent_port = await find_available_port_async(start_port=agent_port)
+    logger.info(f"Selected available port for agent: {agent_port}")
 
     # Determine execution strategy
     if agent_entrypoint and not agent_endpoint:

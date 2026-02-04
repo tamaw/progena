@@ -39,6 +39,12 @@ from ..state.execution_schemas import (
     PromptSpec,
 )
 from ..runtime.time_utils import utcnow, utcnow_isoformat
+from ..runtime.port_utils import (
+    find_available_port,
+    is_port_available,
+    DEFAULT_AGENT_PORT_START,
+    DEFAULT_AGENT_PORT_END,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,21 +58,25 @@ class AgentProcessRunner:
     - Health check polling
     - Crash detection
     - Graceful shutdown
+    - Automatic port allocation (finds available port)
     """
 
     DEFAULT_STARTUP_TIMEOUT = 30.0
     DEFAULT_HEALTH_CHECK_INTERVAL = 0.5
-    DEFAULT_PORT = 8080
+    DEFAULT_PORT = DEFAULT_AGENT_PORT_START
 
     def __init__(
         self,
         project_root: Path,
         agent_entrypoint: str,
         port: int = DEFAULT_PORT,
+        auto_find_port: bool = True,
     ):
         self.project_root = Path(project_root)
         self.agent_entrypoint = agent_entrypoint
+        self._requested_port = port
         self.port = port
+        self.auto_find_port = auto_find_port
         self.process: Optional[asyncio.subprocess.Process] = None
         self.stdout_lines: list[str] = []
         self.stderr_lines: list[str] = []
@@ -75,6 +85,9 @@ class AgentProcessRunner:
     async def start(self, timeout: float = DEFAULT_STARTUP_TIMEOUT) -> tuple[bool, str]:
         """
         Start the agent process and wait for it to be ready.
+
+        If auto_find_port is True, will find an available port if the
+        requested one is in use.
 
         Returns:
             Tuple of (success: bool, message: str)
@@ -88,11 +101,28 @@ class AgentProcessRunner:
         if not entrypoint_path.exists():
             return False, f"Agent entrypoint not found: {entrypoint_path}"
 
+        # Find an available port if needed
+        if self.auto_find_port:
+            if not is_port_available(self._requested_port):
+                logger.info(
+                    f"Port {self._requested_port} is not available, finding alternative..."
+                )
+                try:
+                    self.port = find_available_port(
+                        start_port=self._requested_port,
+                        end_port=DEFAULT_AGENT_PORT_END,
+                    )
+                    logger.info(f"Using alternative port: {self.port}")
+                except RuntimeError as e:
+                    return False, f"Could not find available port: {e}"
+            else:
+                self.port = self._requested_port
+
         # Prepare environment
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.project_root)
 
-        logger.info(f"Starting agent: {entrypoint_path}")
+        logger.info(f"Starting agent: {entrypoint_path} on port {self.port}")
 
         try:
             self.process = await asyncio.create_subprocess_exec(
@@ -183,10 +213,12 @@ class AgentProcessRunner:
             self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=5.0)
+                logger.info("Agent process stopped successfully")
             except asyncio.TimeoutError:
-                logger.warning("Agent did not terminate, killing...")
+                logger.warning("Agent did not terminate gracefully, killing...")
                 self.process.kill()
                 await self.process.wait()
+                logger.info("Agent process killed and stopped")
 
     def is_running(self) -> bool:
         """Check if the agent process is still running."""
@@ -883,7 +915,7 @@ class AgentExerciseHarness:
         self,
         experiment_plan: ExperimentPlan,
         agent_entrypoint: str,
-        port: int = 8080,
+        port: int = DEFAULT_AGENT_PORT_START,
         iteration: int = 0,
         task_id: Optional[str] = None,
     ) -> ExecutionResult:

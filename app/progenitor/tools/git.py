@@ -114,11 +114,11 @@ class GitWorktreeManager:
             logger.error("Failed to create worktree: %s", result['stderr'])
             raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
 
-            # Write metadata file for tracking
-            await self._write_worktree_metadata(worktree_path, work_item_id, branch_name)
+        # Write metadata file for tracking
+        await self._write_worktree_metadata(worktree_path, work_item_id, branch_name)
 
-            logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
-            return worktree_path
+        logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
+        return worktree_path
 
     async def _write_worktree_metadata(
         self, worktree_path: Path, work_item_id: str, branch_name: str

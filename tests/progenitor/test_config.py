@@ -16,7 +16,6 @@ from app.progenitor.config import (
     RuntimeConfig,
     StorageConfig,
     CopilotConfig,
-    TransportConfig,
     SchedulerConfig,
     get_config,
     reload_config,

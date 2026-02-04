@@ -142,7 +142,7 @@ def create_node(
             "current_work_item": work_item,
             "backlog": backlog,
             "actions_this_cycle": state.get("actions_this_cycle", 0) + 1,
-            "last_iteration_output": output_for_verify,
+            "execution_result": output_for_verify,  # BL-006: ExecutionState field
             "work_item_completed": error is None,
         }
 
@@ -269,12 +269,18 @@ async def _execute_build(
         if spec:  # Type guard for Pylance
             logger.info(f"BUILD: spec name={spec.get('name')}, kind={spec.get('kind')}")
 
-            # Include spec_doc content in fallback
-            spec_doc_content = ""
-            spec_doc_data = work_item.context.get("spec_doc")
-            if spec_doc_data:
-                spec_doc_content = spec_doc_data.get("content", "")
-                spec["spec_doc_content"] = spec_doc_content
+            # Read spec_doc content from file if spec_file_path is available
+            spec_file_path = work_item.context.get("spec_file_path")
+            if spec_file_path:
+                try:
+                    from pathlib import Path as PathLib
+                    spec_path = PathLib(spec_file_path)
+                    if spec_path.exists():
+                        spec_doc_content = spec_path.read_text(encoding="utf-8")
+                        spec["spec_doc_content"] = spec_doc_content
+                        logger.info(f"BUILD: Read spec content from {spec_file_path}")
+                except Exception as e:
+                    logger.warning(f"BUILD: Could not read spec file: {e}")
 
             prompt = llm_client.prompts.get_copilot_task_prompt(spec)
             logger.info(f"BUILD: Generated fallback copilot prompt, length={len(prompt)}")

@@ -334,10 +334,11 @@ class CopilotCLI:
             # Write stdin and read outputs concurrently
             try:
                 # Write stdin content
-                process.stdin.write(stdin_content.encode('utf-8'))
-                await process.stdin.drain()
-                process.stdin.close()
-                await process.stdin.wait_closed()
+                if process.stdin is not None:
+                    process.stdin.write(stdin_content.encode('utf-8'))
+                    await process.stdin.drain()
+                    process.stdin.close()
+                    await process.stdin.wait_closed()
 
                 # Read outputs with timeout
                 await asyncio.wait_for(

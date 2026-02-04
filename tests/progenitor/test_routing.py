@@ -435,3 +435,70 @@ class TestUtilityFunctions:
         assert info["verification_score"] == 0.75
         assert info["target_score"] == 0.95
         assert info["phase"] == "execute"
+
+class TestNestedStateKeyCompatibility:
+    """Tests for nested vs flat state key compatibility.
+
+    The inner loop uses nested keys (iteration.current, phases.verify.score)
+    while routing functions need to read both flat and nested keys.
+    """
+
+    def test_should_continue_inner_loop_with_nested_iteration(self):
+        """Should read iteration from nested iteration.current."""
+        state = make_state(
+            iteration={"current": 5, "max": 10},
+            # No flat current_iteration key
+        )
+        result = should_continue_inner_loop(state)
+        # Should continue since iteration 5 < max 10
+        assert result == "observe"
+
+    def test_should_continue_inner_loop_with_nested_max_iterations(self):
+        """Should read max_iterations from nested iteration.max."""
+        state = make_state(
+            iteration={"current": 10, "max": 10},
+            # No flat max_iterations key
+        )
+        result = should_continue_inner_loop(state)
+        assert result == "done"  # At max iterations
+
+    def test_should_continue_inner_loop_with_nested_verification(self):
+        """Should read verification_score from phases.verify.score."""
+        state = make_state(
+            phases={"verify": {"score": 0.95, "target_score": 0.8}},
+            iteration={"current": 1, "max": 10},
+            backlog=[],  # No pending items
+        )
+        result = should_continue_inner_loop(state)
+        assert result == "done"  # Score 0.95 >= target 0.8
+
+    def test_route_after_verify_with_nested_keys(self):
+        """Should read all values from nested structures."""
+        state = make_state(
+            phases={"verify": {"score": 0.5, "target_score": 0.8}},
+            iteration={"current": 2, "max": 10},
+        )
+        result = route_after_verify(state)
+        assert result == "learn"  # Score not met, continue
+
+    def test_route_after_verify_nested_score_met(self):
+        """Should return done when nested phases.verify.score meets target."""
+        state = make_state(
+            phases={"verify": {"score": 0.9, "target_score": 0.8}},
+            iteration={"current": 2, "max": 10},
+        )
+        result = route_after_verify(state)
+        assert result == "done"
+
+    def test_flat_keys_take_priority(self):
+        """Flat keys should take priority over nested keys."""
+        state = make_state(
+            current_iteration=5,  # Flat key
+            iteration={"current": 2, "max": 10},  # Nested has different value
+            verification_score=0.95,  # Flat key
+            phases={"verify": {"score": 0.5}},  # Nested has different value
+            target_score=0.8,
+        )
+        result = route_after_verify(state)
+        # Should use flat verification_score (0.95 >= 0.8), so done
+        assert result == "done"

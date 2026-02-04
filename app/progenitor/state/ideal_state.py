@@ -35,7 +35,7 @@ class SuccessCriterion(BaseModel):
     criterion_type: CriterionType = Field(default=CriterionType.FUNCTIONAL)
     rank: int = Field(default=1, description="Priority rank (1=highest)")
     measurement: str = Field(description="How to verify this criterion")
-    target_score: float = Field(default=1.0, description="Minimum score to pass (0-1)")
+    target_score: float = Field(default=0.8, description="Minimum score to pass (0-1), matches DEFAULT_VERIFICATION_TARGET_SCORE")
     weight: float = Field(default=1.0, description="Weight in overall score")
 
 
@@ -380,7 +380,7 @@ Return only the refinements as structured data."""
                     criterion_type=CriterionType.FUNCTIONAL,
                     rank=1,
                     measurement="Response contains calm, human-friendly advice (1 short paragraph, 2-4 sentences) and returns success=True",
-                    target_score=1.0,
+                    target_score=0.8,  # Matches DEFAULT_VERIFICATION_TARGET_SCORE
                 )
             ],
             "anti_criteria": [
@@ -485,7 +485,7 @@ Return only the refinements as structured data."""
                     criterion_type=CriterionType.FUNCTIONAL,
                     rank=1,
                     measurement="Output exists and is human-readable advice (short paragraph)",
-                    target_score=1.0,
+                    target_score=0.8,  # Matches DEFAULT_VERIFICATION_TARGET_SCORE
                 )
             ],
             stop_conditions=[

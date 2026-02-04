@@ -1675,7 +1675,11 @@ def create_node(
                             "current_decision": decision,
                             "build_in_progress": True,
                             "build_id": build_id,
-                            "build_task_description": task_description,
+                            "user_request": task_description,  # Top-level, not in task
+                            "task": {
+                                "description": task_description,
+                                "target_capabilities": [],
+                            },
                             "build_started_at": utcnow_isoformat(),
                             "build_settings": build_settings.model_dump(),  # BL-007: Serialize to dict
                         }
