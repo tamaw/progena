@@ -119,7 +119,8 @@ def create_node(
                 logger.warning(f"Could not generate insights: {e}")
 
         # Store lessons
-        all_lessons = state.get("lessons_learned", [])
+        history = state.get("history", {})
+        all_lessons = list(history.get("lessons_learned", []))
         all_lessons.append(lessons)
 
         # Log learning
@@ -155,8 +156,9 @@ def create_node(
         )
 
         return {
-            "lessons_learned": all_lessons,
-            "current_lesson": lessons,
+            "history": {
+                "lessons_learned": all_lessons,
+            },
         }
 
     return learn_node

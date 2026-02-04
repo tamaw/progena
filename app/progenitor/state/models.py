@@ -348,75 +348,128 @@ class LoopControlState(TypedDict, total=False):
     validation_result_v2: Optional[dict[str, Any]]  # ValidationResultV2 as dict
 
 
+class TaskInfo(TypedDict, total=False):
+    """Build task information."""
+    description: str  # Human-readable build description
+    user_request: str  # Original user request
+    target_capabilities: list[str]  # Capabilities being built
+
+
+class IterationInfo(TypedDict, total=False):
+    """Iteration tracking."""
+    current: int  # Current iteration number
+    max: int  # Maximum iterations allowed
+    start_time: float  # Timestamp when iteration started
+
+
+class SpecInfo(TypedDict, total=False):
+    """Spec document reference (content read from file, not stored here)."""
+    file_path: Optional[str]  # Path to spec.md file
+    revision: int  # Current revision number
+    created_at: Optional[str]  # ISO timestamp
+    updated_at: Optional[str]  # ISO timestamp
+
+
+class ThinkPhase(TypedDict, total=False):
+    """THINK phase results."""
+    approaches: list[dict[str, Any]]  # Structured approaches
+    recommended_id: Optional[str]  # Selected approach ID
+    gaps_analyzed: list[str]  # Gaps from previous iteration
+
+
+class PlanPhase(TypedDict, total=False):
+    """PLAN phase results."""
+    experiment_plan: Optional[dict[str, Any]]  # ExperimentPlan
+
+
+class ExecutePhase(TypedDict, total=False):
+    """EXECUTE phase results."""
+    completed: bool  # Whether execution finished
+    result: Optional[dict[str, Any]]  # Compact execution result (tests, duration, status)
+
+
+class VerifyPhase(TypedDict, total=False):
+    """VERIFY phase results."""
+    passed: bool  # Whether verification passed
+    score: float  # Verification score
+    target_score: float  # Target score to pass
+    gaps: list[str]  # Unmet criteria
+
+
+class BuildPhases(TypedDict, total=False):
+    """Phase-grouped state - single source of truth for each phase output."""
+    think: ThinkPhase
+    plan: PlanPhase
+    execute: ExecutePhase
+    verify: VerifyPhase
+
+
+class BuildHistory(TypedDict, total=False):
+    """Historical data accumulated across iterations."""
+    artefacts: list[dict[str, Any]]  # Per-iteration results (iteration, score, passed)
+    verification_reports: list[dict[str, Any]]  # All verification reports
+    lessons_learned: list[dict[str, Any]]  # Lessons from LEARN phase
+    messages: list[dict[str, Any]]  # Phase messages with timestamps
+
+
+class BestResult(TypedDict, total=False):
+    """Best result tracking for early-stop scenarios."""
+    iteration: int  # Iteration that produced best result
+    score: float  # Best score achieved
+    passed: bool  # Whether that iteration passed
+
+
+class ClarificationState(TypedDict, total=False):
+    """Clarification handling (user interaction during build)."""
+    needed: bool  # Whether clarification is needed
+    question: Optional[str]  # Question to ask user
+    context: Optional[str]  # Raw context indicating need
+    awaiting: bool  # Currently waiting for response
+    response: Optional[str]  # User's response
+
+
 class InnerLoopState(TypedDict, total=False):
     """Inner loop (OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN) state.
 
-    Per loop.spec.md ideal state architecture.
+    Clean nested structure with phase objects. Each phase has its own
+    namespace to avoid field collision and improve readability.
 
-    Build State Management:
-    - build_in_progress: True when actively building, rejects new build requests
-    - build_messages: LLM communications specific to the build loop only
-    - build_started_at: When the current build began
-    - build_task_description: What we're building (from user request)
-
-    SpecDoc: PLAN owns a persistent "Spec" Markdown artifact stored in
-    build_state.json that evolves each iteration and is consumed by BUILD.
+    Structure:
+    - build_*: Top-level build control
+    - task: What we're building
+    - iteration: Iteration tracking
+    - spec: Spec document reference (content read from file)
+    - phases: Phase-grouped outputs (single source of truth)
+    - history: Accumulated data across iterations
+    - best: Best result tracking
+    - clarification: User interaction state
     """
-    # Build control
+    # Build control (top-level for quick access)
     build_in_progress: bool  # True while building, blocks new builds
     build_id: Optional[str]  # Unique identifier for the current build
     build_started_at: Optional[str]  # ISO timestamp when build started
-    build_task_description: Optional[str]  # Human-readable description of build task
-    build_messages: list[dict[str, Any]]  # LLM messages specific to build loop only
     build_phase: Optional[str]  # Current phase: observe, think, plan, build, execute, verify, learn
-
-    # Ideal state and iteration tracking
-    ideal_state: Optional[Any]  # IdealState object
-    current_iteration: int  # Inner loop iteration count
-    iteration_start_time: float  # Timestamp when iteration started
     task_id: Optional[str]  # Unique task identifier
 
-    # Phase outputs
-    thinking_output: Optional[str]  # THINK phase output
-    current_approaches: list[dict[str, Any]]  # From THINK phase
-    last_iteration_output: Optional[Any]  # Output from BUILD phase
-    experiment_plan: Optional[dict[str, Any]]  # ExperimentPlan from PLAN phase
+    # Nested objects for organization
+    task: TaskInfo  # What we're building
+    iteration: IterationInfo  # Iteration tracking
+    spec: SpecInfo  # Spec document reference
+    phases: BuildPhases  # Phase-grouped outputs
+    history: BuildHistory  # Historical data
+    best: BestResult  # Best result tracking
+    clarification: ClarificationState  # User interaction
 
-    # SpecDoc: Persistent spec artifact (PLAN-owned, BUILD-consumed)
-    spec_doc: Optional[dict[str, Any]]  # SpecDoc containing content, revision, history
-
-    # Verification
-    last_verification_report: Optional[Any]  # VerificationReport object
-    verification_passed: bool
-    verification_score: float
-    verification_reports: list[dict[str, Any]]  # All verification reports
-
-    # Learning
-    lessons_learned: list[dict[str, Any]]  # Accumulated lessons
-    current_lesson: Optional[dict[str, Any]]  # Current iteration lesson
+    # Ideal state (complex object, kept at top level)
+    ideal_state: Optional[Any]  # IdealState object
 
     # Stop conditions
     should_iterate: bool  # Whether to continue iterating
     iteration_stop_reason: Optional[str]  # Why iteration stopped
 
-    # Artefacts
-    artefacts: list[dict[str, Any]]  # Produced artefacts per iteration
-    best_artefact: Optional[dict[str, Any]]  # Best artefact by verification score
-    best_artefact_score: float  # Score of best artefact
-
-    # Clarification handling (user interaction during build)
-    clarification_needed: bool  # Whether Copilot needs more information from user
-    clarification_question: Optional[str]  # Formatted question to ask user
-    clarification_context: Optional[str]  # Raw context from Copilot output indicating need
-    awaiting_clarification: bool  # Currently waiting for user response
-    clarification_response: Optional[str]  # User's response to clarification question
-    clarification_history: list[dict[str, Any]]  # History of clarification exchanges
-
 
 class ExecutionState(TypedDict, total=False):
     """Execution phase state."""
-    execution_result: Optional[Any]  # Result from EXECUTE phase
-    execution_completed: bool  # Whether execution finished
     pending_tool_calls: list[dict[str, Any]]  # Tools pending execution
     work_item_completed: bool  # Whether work item is complete
 

@@ -64,7 +64,8 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
         decision = state.get("current_decision")
         user_input = state.get("current_input")
         ideal_state = state.get("ideal_state")
-        current_approaches = state.get("current_approaches", [])
+        # Read approaches from nested structure (phases.think.approaches)
+        current_approaches = state.get("phases", {}).get("think", {}).get("approaches", [])
 
         if tracer:
             span = tracer.start_span(
@@ -624,9 +625,19 @@ async def _plan_from_ideal_state(
         })
 
         return {
+            # Nested structure
+            "phases": {
+                "plan": {
+                    "experiment_plan": experiment_plan.model_dump(),
+                },
+            },
+            "spec": {
+                "file_path": spec_doc.spec_file_path if hasattr(spec_doc, 'spec_file_path') else None,
+                "revision": spec_doc.revision,
+                "created_at": str(spec_doc.created_at) if hasattr(spec_doc, 'created_at') else None,
+                "updated_at": str(spec_doc.updated_at) if hasattr(spec_doc, 'updated_at') else None,
+            },
             "backlog": backlog,
-            "experiment_plan": experiment_plan.model_dump(),  # BL-002: Store in state
-            "spec_doc": spec_doc_dict,  # SpecDoc: Persistent spec artifact for BUILD
             "build_phase": "plan",
         }
 
@@ -667,9 +678,13 @@ async def _plan_from_ideal_state(
         })
 
         return {
+            # Nested structure (even in fallback)
+            "phases": {
+                "plan": {
+                    "experiment_plan": experiment_plan.model_dump(),
+                },
+            },
             "backlog": backlog,
-            "experiment_plan": experiment_plan.model_dump(),
-            "spec_doc": spec_doc_dict,  # SpecDoc: Still include even in fallback
             "build_phase": "plan",
         }
 

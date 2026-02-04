@@ -41,30 +41,35 @@ class TestBuildStateIsolation:
     """Test that build_state.json only contains build-related data."""
 
     async def test_build_state_default_fields(self, state_manager):
-        """Test default build state contains only build fields."""
+        """Test default build state contains build fields with new nested structure."""
         build_state = await state_manager.get_build_state()
 
-        expected_fields = {
+        # Required core fields (top-level)
+        core_fields = {
             "build_in_progress",
             "build_id",
             "build_started_at",
-            "build_task_description",
             "build_phase",
-            "build_messages",
+            "task_id",
             "ideal_state",
-            "current_iteration",
-            "verification_score",
-            "best_artefact_score",
-            "spec_doc",
+            "should_iterate",
+            "iteration_stop_reason",
             "backlog",
-            "verification_reports",
-            "lessons_learned",
-            "artefacts",
-            "clarification_needed",
-            "clarification_question",
-            "clarification_context",
-            "awaiting_clarification",
+            "build_settings",
         }
+
+        # Nested structure fields
+        nested_fields = {
+            "task",
+            "iteration",
+            "spec",
+            "phases",
+            "history",
+            "best",
+            "clarification",
+        }
+
+        expected_fields = core_fields | nested_fields
 
         assert set(build_state.keys()) == expected_fields
 

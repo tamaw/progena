@@ -142,12 +142,23 @@ Format each approach clearly with numbered sections.""",
             # Convert to dicts for state storage (LangGraph needs dicts)
             approaches_dicts = [a.model_dump() for a in think_output.approaches]
 
+            # Get gaps from previous verification for nested structure
+            gaps_analyzed = []
+            if last_verification:
+                verif_dict = last_verification.model_dump() if hasattr(last_verification, "model_dump") else last_verification
+                gaps_analyzed = verif_dict.get("gaps", [])[:5]
+
             return {
-                "current_approaches": approaches_dicts,
-                "thinking_output": think_output.model_dump(),  # Full structured output
+                # Nested structure
+                "phases": {
+                    "think": {
+                        "approaches": approaches_dicts,
+                        "recommended_id": think_output.recommended_approach_id,
+                        "gaps_analyzed": gaps_analyzed,
+                    },
+                },
                 "build_phase": "think",
             }
-
         except Exception as e:
             logger.error(f"THINK phase error: {e}")
             if metrics:
@@ -181,7 +192,13 @@ Format each approach clearly with numbered sections.""",
                 expected_success_probability=0.5,
             )
             return {
-                "current_approaches": [default_approach.model_dump()],
+                "phases": {
+                    "think": {
+                        "approaches": [default_approach.model_dump()],
+                        "recommended_id": default_approach.id,
+                        "gaps_analyzed": False,
+                    },
+                },
                 "build_phase": "think",
             }
 

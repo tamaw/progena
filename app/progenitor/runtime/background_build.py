@@ -23,6 +23,33 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from .time_utils import utcnow, utcnow_isoformat
 
+
+def deep_merge(base: dict, updates: dict) -> dict:
+    """Deep merge updates into base dictionary.
+
+    Recursively merges nested dicts instead of replacing them.
+    For non-dict values, updates override base.
+
+    Args:
+        base: The base dictionary to merge into.
+        updates: The updates to apply.
+
+    Returns:
+        The merged dictionary (base is modified in place and returned).
+    """
+    for key, value in updates.items():
+        if (
+            key in base
+            and isinstance(base[key], dict)
+            and isinstance(value, dict)
+        ):
+            # Recursively merge nested dicts
+            deep_merge(base[key], value)
+        else:
+            # Override with new value
+            base[key] = value
+    return base
+
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
     from ..state.manager import StateManager
@@ -300,7 +327,6 @@ class BackgroundBuildRunner:
                 # Build identification
                 "build_id": build_id,
                 "build_in_progress": True,
-                "build_task_description": self._current_build.task_description,
                 "build_started_at": utcnow_isoformat(),
 
                 # User input for context
@@ -311,24 +337,26 @@ class BackgroundBuildRunner:
                 # Build settings (from decide phase)
                 "build_settings": initial_state.get("build_settings"),
 
-                # Inner loop control
-                "current_iteration": 0,
-                "max_iterations": self.config.runtime.max_inner_iterations,
-                "target_score": 0.8,  # Default verification target
-                "verification_score": 0.0,
+                # Nested structure
+                "task": {
+                    "description": self._current_build.task_description,
+                    "user_request": self._current_build.user_input,
+                    "target_capabilities": self._current_build.target_capabilities,
+                },
+                "iteration": {
+                    "current": 0,
+                    "max": self.config.runtime.max_inner_iterations,
+                    "start_time": None,
+                },
+                "spec": initial_state.get("spec", {}),
+                "phases": {"think": {}, "plan": {}, "execute": {}, "verify": {"target_score": 0.8}},
+                "history": {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []},
+                "best": {"iteration": None, "score": 0.0, "passed": False},
+                "clarification": {"needed": False, "question": None, "context": None, "awaiting": False, "response": None},
 
                 # Phase tracking
                 "build_phase": "starting",
-                "build_messages": [],
-
-                # Artifacts (populated during build)
-                "spec_doc": initial_state.get("spec_doc"),
                 "ideal_state": None,  # Set by OBSERVE
-                "current_approaches": [],  # Set by THINK
-                "experiment_plan": None,  # Set by PLAN
-                "artefacts": [],
-                "verification_reports": [],
-                "lessons_learned": [],
             }
 
             # Save initial build state
@@ -347,23 +375,24 @@ class BackgroundBuildRunner:
             ):
                 for node_name, node_output in event.items():
                     if isinstance(node_output, dict):
-                        build_state.update(node_output)
+                        # Deep merge to preserve nested structures (phases, history, etc.)
+                        deep_merge(build_state, node_output)
 
                         # Save checkpoint after each node
                         await self.state_manager.save_build_state(build_state)
 
                         # Track iterations (verify node marks end of iteration)
                         if node_name == "verify":
-                            result.iterations = build_state.get("current_iteration", 0)
-                            result.verification_score = build_state.get("verification_score", 0)
+                            result.iterations = build_state.get("iteration", {}).get("current", 0)
+                            result.verification_score = build_state.get("phases", {}).get("verify", {}).get("score", 0)
 
                         # Log progress
                         logger.info(
                             "BUILD %s: node=%s, iteration=%d, score=%.2f, phase=%s",
                             build_id,
                             node_name,
-                            build_state.get("current_iteration", 0),
-                            build_state.get("verification_score", 0),
+                            build_state.get("iteration", {}).get("current", 0),
+                            build_state.get("phases", {}).get("verify", {}).get("score", 0),
                             build_state.get("build_phase", "unknown"),
                         )
 

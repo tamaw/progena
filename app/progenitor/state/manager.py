@@ -156,26 +156,81 @@ class StateManager:
 
         defaults = {
             # build_state.json - Agent builds ONLY (inner loop)
+            # Clean nested structure with phase objects
             "build_state": {
+                # Build control (top-level for quick access)
                 "build_in_progress": False,
                 "build_id": None,
                 "build_started_at": None,
-                "build_task_description": None,
                 "build_phase": None,
-                "build_messages": [],              # LLM messages during build (Copilot CLI, etc.)
+                "task_id": None,
+
+                # Nested objects for organization
+                "task": {
+                    "description": None,
+                    "user_request": None,
+                    "target_capabilities": [],
+                },
+                "iteration": {
+                    "current": 0,
+                    "max": 20,
+                    "start_time": None,
+                },
+                "spec": {
+                    "file_path": None,
+                    "revision": 0,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+                "phases": {
+                    "think": {
+                        "approaches": [],
+                        "recommended_id": None,
+                        "gaps_analyzed": [],
+                    },
+                    "plan": {
+                        "experiment_plan": None,
+                    },
+                    "execute": {
+                        "completed": False,
+                        "result": None,
+                    },
+                    "verify": {
+                        "passed": False,
+                        "score": 0.0,
+                        "target_score": 0.8,
+                        "gaps": [],
+                    },
+                },
+                "history": {
+                    "artefacts": [],
+                    "verification_reports": [],
+                    "lessons_learned": [],
+                    "messages": [],
+                },
+                "best": {
+                    "iteration": None,
+                    "score": 0.0,
+                    "passed": False,
+                },
+                "clarification": {
+                    "needed": False,
+                    "question": None,
+                    "context": None,
+                    "awaiting": False,
+                    "response": None,
+                },
+
+                # Complex objects at top level
                 "ideal_state": None,
-                "current_iteration": 0,
-                "verification_score": 0.0,
-                "best_artefact_score": 0.0,
-                "spec_doc": None,
-                "backlog": [],                     # Build work items only
-                "verification_reports": [],
-                "lessons_learned": [],
-                "artefacts": [],
-                "clarification_needed": False,
-                "clarification_question": None,
-                "clarification_context": None,
-                "awaiting_clarification": False,
+                "should_iterate": True,
+                "iteration_stop_reason": None,
+
+                # Backlog stays at top level
+                "backlog": [],
+
+                # Build settings
+                "build_settings": None,
             },
             # current_state.json - Progenitor agent operational state (user session)
             "current_state": {
@@ -498,12 +553,35 @@ class StateManager:
 
     async def save_build_state(self, state: dict[str, Any]) -> None:
         """Save build state (agent builds only)."""
+        # Ensure nested objects exist
+        state = self._ensure_nested_structure(state)
         async with self._file_lock("build_state"):
             await self._atomic_write_json(
                 self.state_dir / self.CORE_FILES["build_state"],
                 state
             )
             self._state_cache["build_state"] = state
+
+    def _ensure_nested_structure(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Ensure all nested objects exist in build state."""
+        if "task" not in state:
+            state["task"] = {"description": None, "user_request": None, "target_capabilities": []}
+        if "iteration" not in state:
+            state["iteration"] = {"current": 0, "max": 20, "start_time": None}
+        if "spec" not in state:
+            state["spec"] = {"file_path": None, "revision": 0, "created_at": None, "updated_at": None}
+        if "phases" not in state:
+            state["phases"] = {}
+        for phase in ["think", "plan", "execute", "verify"]:
+            if phase not in state["phases"]:
+                state["phases"][phase] = {}
+        if "history" not in state:
+            state["history"] = {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []}
+        if "best" not in state:
+            state["best"] = {"iteration": None, "score": 0.0, "passed": False}
+        if "clarification" not in state:
+            state["clarification"] = {"needed": False, "question": None, "context": None, "awaiting": False, "response": None}
+        return state
 
     async def update_build_state(self, updates: dict[str, Any]) -> None:
         """Partially update build state with given fields."""
@@ -512,14 +590,16 @@ class StateManager:
         await self.save_build_state(state)
 
     async def add_build_message(self, message: dict[str, Any]) -> None:
-        """Add a message to build_messages in build_state.
+        """Add a message to history.messages in build_state.
 
         Used during agent builds to track LLM communications.
         """
         state = await self.get_build_state()
-        messages = state.get("build_messages", [])
-        messages.append(message)
-        state["build_messages"] = messages
+        if "history" not in state:
+            state["history"] = {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []}
+        if "messages" not in state["history"]:
+            state["history"]["messages"] = []
+        state["history"]["messages"].append(message)
         await self.save_build_state(state)
 
     # Backward compatibility aliases

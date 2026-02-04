@@ -3,13 +3,17 @@ Build Node - Produces candidate output via Copilot CLI.
 
 This is the core build step that generates code artifacts in the inner loop.
 Extracted from graph_inner_loop.py for consistency with other node patterns.
+
+The build node picks pending backlog items and processes them, marking each
+as completed once the copilot run finishes (regardless of test results).
 """
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional, cast, TYPE_CHECKING
+from typing import Any, Callable, Coroutine, cast, TYPE_CHECKING
 
 from ..state.models import ProgenitorState
+from ..state.helpers import get_actionable_items, mark_actionable_items_completed
 from ..runtime.time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
@@ -40,8 +44,21 @@ def create_node(
     """
 
     async def build_node(state: ProgenitorState) -> ProgenitorState:
-        """BUILD phase - produce candidate output via Copilot CLI."""
+        """BUILD phase - produce candidate output via Copilot CLI.
+
+        Picks pending backlog items and runs copilot for each, marking them
+        as completed once the run finishes (regardless of test results).
+        """
         logger.info("BUILD: Starting build phase")
+
+        # Get backlog and pick pending items
+        backlog = list(state.get("backlog", []))
+        pending_items = get_actionable_items(backlog)
+
+        if pending_items:
+            logger.info(f"BUILD: Found {len(pending_items)} pending backlog items to process")
+        else:
+            logger.info("BUILD: No pending backlog items, running default build")
 
         # Get build settings
         build_settings = state.get("build_settings")
@@ -71,18 +88,42 @@ def create_node(
                 }
             })
 
-        # Get spec_doc and copilot_prompt from state (set by PLAN phase)
-        spec_doc = state.get("spec_doc")
+        # Get copilot_prompt from work item context or spec (set by PLAN phase)
+        # Priority: 1) current_work_item.context 2) backlog item context 3) spec
         copilot_prompt = None
         spec_file_path = None
 
-        if spec_doc:
-            if isinstance(spec_doc, dict):
-                copilot_prompt = spec_doc.get("copilot_prompt")
-                spec_file_path = spec_doc.get("spec_file_path")
+        # Try current work item context first
+        current_item = state.get("current_work_item")
+        if current_item:
+            if isinstance(current_item, dict):
+                ctx = current_item.get("context", {})
+            elif hasattr(current_item, "context"):
+                ctx = current_item.context if isinstance(current_item.context, dict) else {}
             else:
-                copilot_prompt = getattr(spec_doc, "copilot_prompt", None)
-                spec_file_path = getattr(spec_doc, "spec_file_path", None)
+                ctx = {}
+            copilot_prompt = ctx.get("copilot_prompt")
+            spec_file_path = ctx.get("spec_file_path")
+
+        # Try backlog items if not found
+        if not copilot_prompt and backlog:
+            for item in backlog:
+                if isinstance(item, dict):
+                    ctx = item.get("context", {})
+                elif hasattr(item, "context"):
+                    ctx = item.context if isinstance(item.context, dict) else {}
+                else:
+                    ctx = {}
+                if ctx.get("copilot_prompt"):
+                    copilot_prompt = ctx.get("copilot_prompt")
+                    spec_file_path = ctx.get("spec_file_path")
+                    break
+
+        # Fallback to spec data from state
+        if not copilot_prompt:
+            spec = state.get("spec", {})
+            if isinstance(spec, dict):
+                spec_file_path = spec.get("file_path")
 
         # Fallback prompt if none provided
         if not copilot_prompt:
@@ -112,10 +153,14 @@ def create_node(
             # Track iteration (do not increment here; increment happens in learn)
             current_iteration = state.get("current_iteration", 0)
 
+            # Mark pending backlog items as completed (run finished, regardless of test outcome)
+            updated_backlog = mark_actionable_items_completed(backlog, build_result)
+
             # Update build state
             result: dict[str, Any] = {
                 "build_phase": "build",
                 "last_build_result": build_result,
+                "backlog": updated_backlog,
                 "build_messages": state.get("build_messages", []) + [
                     {
                         "phase": "build",
@@ -139,9 +184,12 @@ def create_node(
 
         except Exception as e:
             logger.error(f"BUILD: Exception during build: {e}", exc_info=True)
+            # Still mark items as completed on error (run attempted)
+            updated_backlog = mark_actionable_items_completed(backlog, {"success": False, "error": str(e)})
             return cast(ProgenitorState, {
                 "last_iteration_output": {"success": False, "error": str(e)},
                 "build_phase": "build",
+                "backlog": updated_backlog,
             })
 
     return build_node

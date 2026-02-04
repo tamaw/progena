@@ -231,13 +231,12 @@ class TestArtefactTracking:
         from app.progenitor.state.models import ProgenitorState
         import typing
 
-        # Check TypedDict has required fields
+        # Check TypedDict has required fields (now nested)
         hints = typing.get_type_hints(ProgenitorState)
-        assert "artefacts" in hints
-        assert "best_artefact" in hints
-        assert "best_artefact_score" in hints
+        assert "history" in hints  # Contains artefacts, verification_reports
+        assert "best" in hints  # Contains iteration, score, passed
         assert "task_id" in hints
-        assert "verification_reports" in hints
+        assert "phases" in hints  # Contains verify with score, gaps
 
     def test_run_id_generation(self):
         """Test run_id generation utility."""
@@ -411,14 +410,14 @@ class TestExecutePhase:
 
         state = {
             "current_work_item": {"id": "test", "status": "pending"},
-            "last_iteration_output": {"result": "some output"},
+            "phases": {"execute": {"result": {"output": "some output"}}},
             "work_item_completed": True,
         }
 
         result = await node_fn(state)
 
-        assert result.get("execution_completed") is True
-        assert result.get("execution_result") is not None
+        assert result.get("phases", {}).get("execute", {}).get("completed") is True
+        assert result.get("phases", {}).get("execute", {}).get("result") is not None
 
     @pytest.mark.asyncio
     async def test_execute_node_with_pending_tools(self):
@@ -434,7 +433,7 @@ class TestExecutePhase:
 
         state = {
             "current_work_item": {"id": "test", "status": "in_progress"},
-            "last_iteration_output": {"result": "build output"},
+            "phases": {"execute": {"result": {"output": "build output"}}},
             "work_item_completed": False,
             "pending_tool_calls": [
                 {"tool": "unknown_tool", "arguments": {}},
@@ -443,9 +442,9 @@ class TestExecutePhase:
 
         result = await node_fn(state)
 
-        assert result.get("execution_completed") is True
-        # Should report error for unknown tool - check in build_output
-        exec_result = result.get("last_iteration_output", {})
+        assert result.get("phases", {}).get("execute", {}).get("completed") is True
+        # Should report error for unknown tool - check in result
+        exec_result = result.get("phases", {}).get("execute", {}).get("result", {})
         build_output = exec_result.get("build_output", {})
         assert build_output.get("all_succeeded") is False
 
@@ -544,17 +543,23 @@ class TestLoopSpecConformance:
         # Per spec Task State: "Artefacts, Verification reports, Lessons learned"
         from app.progenitor.state.models import ProgenitorState
 
-        # ProgenitorState is a TypedDict, check it allows these fields
+        # ProgenitorState is a TypedDict, check it allows these fields (nested)
         state: ProgenitorState = {
-            "artefacts": [],
-            "verification_reports": [],
-            "lessons_learned": [],
-            "best_artefact": None,
-            "best_artefact_score": 0.0,
+            "history": {
+                "artefacts": [],
+                "verification_reports": [],
+                "lessons_learned": [],
+            },
+            "best": {
+                "iteration": None,
+                "score": 0.0,
+                "passed": False,
+            },
         }
 
-        assert "artefacts" in state
-        assert "lessons_learned" in state
+        assert "history" in state
+        assert "artefacts" in state["history"]
+        assert "lessons_learned" in state["history"]
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ def create_node(
         span = None
 
         ideal_state = state.get("ideal_state")
-        iteration = state.get("current_iteration", 0)
+        iteration = state.get("iteration", {}).get("current", 0)
 
         if tracer:
             span = tracer.start_span(
@@ -79,10 +79,11 @@ def create_node(
                 span.end()
             return {}
 
-        iteration_start_time = state.get("iteration_start_time", time.time())
+        iteration_start_time = state.get("iteration", {}).get("start_time", time.time())
 
-        # Get the output to verify
-        output = state.get("last_iteration_output") or state.get("pending_response")
+        # Get the output to verify - from phases.execute.result
+        phases = state.get("phases", {})
+        output = phases.get("execute", {}).get("result") or state.get("pending_response")
 
         # Gather context for verification
         context = {
@@ -195,8 +196,9 @@ def create_node(
                 verification_report_dict = None
 
             # Track artefacts (loop.spec.md Task State requirement)
-            artefacts = list(state.get("artefacts", []))
-            current_artefact = {
+            history = state.get("history", {})
+            artefacts = list(history.get("artefacts", []))
+            current_artefact: dict[str, Any] = {
                 "iteration": iteration,
                 "output": str(output)[:1000] if output else None,  # Truncate for storage
                 "score": verification_report.overall_score,
@@ -205,14 +207,15 @@ def create_node(
             }
 
             # BL-006: Add evidence citations to artefact if using V2 report
-            if verification_report_dict and "evidence_citations" in verification_report_dict:
+            if verification_report_dict and isinstance(verification_report_dict, dict) and "evidence_citations" in verification_report_dict:
                 current_artefact["evidence_citations"] = verification_report_dict["evidence_citations"][:5]
 
             artefacts.append(current_artefact)
 
             # Track best artefact (for early-stop scenarios per spec)
-            best_artefact = state.get("best_artefact")
-            best_score = state.get("best_artefact_score", 0.0)
+            best = state.get("best", {})
+            best_score = best.get("score", 0.0)
+            best_artefact: dict[str, Any] | None = None
 
             if verification_report.overall_score > best_score:
                 best_artefact = current_artefact
@@ -220,10 +223,13 @@ def create_node(
                 logger.info(f"New best artefact at iteration {iteration}: score={best_score:.2f}")
 
             # Track all verification reports (loop.spec.md Task State)
-            verification_reports = list(state.get("verification_reports", []))
+            verification_reports: list[dict[str, Any]] = list(history.get("verification_reports", []))
             if verification_report_dict:
                 # Use the V2 dict we already prepared
-                report_dict = verification_report_dict
+                if isinstance(verification_report_dict, dict):
+                    report_dict = verification_report_dict
+                else:
+                    report_dict = verification_report_dict.model_dump() if hasattr(verification_report_dict, "model_dump") else {}
             elif hasattr(verification_report, "model_dump"):
                 report_dict = verification_report.model_dump()
             else:
@@ -269,16 +275,34 @@ def create_node(
                 f"passed={verification_report.passed}"
             )
 
+            # Build nested structure updates
+            phases_verify = {
+                "passed": verification_report.passed,
+                "score": verification_report.overall_score,
+                "target_score": state.get("target_score", 0.8),
+                "gaps": verification_report.gaps if hasattr(verification_report, "gaps") else [],
+            }
+
+            best_update = {
+                "iteration": best_artefact.get("iteration") if best_artefact else None,
+                "score": best_score,
+                "passed": best_artefact.get("passed", False) if best_artefact else False,
+            }
+
+            history_update = {
+                "artefacts": artefacts,
+                "verification_reports": verification_reports,
+            }
+
             # Merge verification results with clarification updates
             # Note: TypedDict doesn't support dynamic spread, but this is valid for LangGraph
             return {  # type: ignore[return-value]
-                "last_verification_report": verification_report,
-                "verification_passed": verification_report.passed,
-                "verification_score": verification_report.overall_score,
-                "artefacts": artefacts,
-                "best_artefact": best_artefact,
-                "best_artefact_score": best_score,
-                "verification_reports": verification_reports,
+                # Nested structure updates
+                "phases": {
+                    "verify": phases_verify,
+                },
+                "history": history_update,
+                "best": best_update,
                 "build_phase": "verify",
                 **clarification_updates,
             }
@@ -292,15 +316,16 @@ def create_node(
                 span.end()
             # Fallback - assume partial success
             return {
-                "last_verification_report": {
-                    "overall_score": 0.5,
-                    "passed": False,
-                    "summary": f"Verification error: {e}",
-                    "gaps": ["Verification failed"],
+                "phases": {
+                    "verify": {
+                        "score": 0.5,
+                        "passed": False,
+                        "gaps": ["Verification failed"],
+                    },
                 },
-                "verification_passed": False,
-                "verification_score": 0.5,
-                "clarification_needed": False,
+                "clarification": {
+                    "needed": False,
+                },
                 "build_phase": "verify",
             }
 
