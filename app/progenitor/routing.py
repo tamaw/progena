@@ -115,7 +115,7 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
     - Minimum verification score reached AND no more pending backlog items
     - Max iterations hit
     - Build cancelled/error
-    
+
     Continue conditions:
     - Pending backlog items exist (process all items)
     - Verification score not yet met
@@ -141,7 +141,7 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
     # Check for pending backlog items - process all items before exiting
     backlog = state.get("backlog", [])
     pending_items = _count_pending_backlog_items(backlog)
-    
+
     if pending_items > 0:
         logger.info(
             "Found %d pending backlog items, continuing inner loop",
@@ -170,36 +170,7 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
 
 def _count_pending_backlog_items(backlog: list) -> int:
     """Count the number of pending (not completed) backlog items."""
-    count = 0
-    for item in backlog:
-        if hasattr(item, "status"):
-            status = item.status
-            status_val = status.value if hasattr(status, "value") else str(status)
-        elif isinstance(item, dict):
-            status_val = item.get("status", "pending")
-        else:
-            continue
-        
-        if status_val in ("pending", "in_progress"):
-            count += 1
-    return count
-
-
-def route_after_pick_next_inner(state: ProgenitorState) -> Literal["pick_next", "build"]:
-    """Route after plan in inner loop - pick_next if backlog has items, else build directly.
-    
-    This allows the inner loop to process multiple backlog items created by the plan phase.
-    """
-    backlog = state.get("backlog", [])
-    pending = _count_pending_backlog_items(backlog)
-    
-    if pending > 0:
-        logger.debug("Inner loop: %d pending backlog items, routing to pick_next", pending)
-        return "pick_next"
-    
-    # No backlog items - go directly to build (legacy behavior)
-    logger.debug("Inner loop: No pending backlog items, routing to build")
-    return "build"
+    return len(get_actionable_items(backlog))
 
 
 def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:

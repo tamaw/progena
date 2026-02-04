@@ -200,11 +200,10 @@ class ProgenitorLoop:
         # Load schedule from schedule.json (system feature, not user session)
         self._state["schedule"] = [e.model_dump() if hasattr(e, "model_dump") else e for e in schedule_entries]
 
-        # Merge build-specific fields from build_state
+        # Merge build-specific fields from build_state (nested structure)
         for key in ["build_in_progress", "build_phase", "build_started_at",
-                    "build_task_description", "build_messages", "ideal_state",
-                    "current_iteration", "verification_score", "best_artefact_score",
-                    "spec_doc", "verification_reports", "lessons_learned", "artefacts"]:
+                    "ideal_state", "task", "iteration", "spec", "phases",
+                    "history", "best", "clarification"]:
             if key in build_state:
                 self._state[key] = build_state[key]
         # Backlog comes from build_state (build work items)
@@ -793,27 +792,25 @@ class ProgenitorLoop:
 
         Per SPEC: restart-safe checkpoints (write state every cycle).
         """
-        # Build state checkpoint (agent builds only)
+        # Build state checkpoint (agent builds only) - nested structure
         build_checkpoint = {
             "build_in_progress": state.get("build_in_progress", False),
             "build_id": state.get("build_id"),
             "build_started_at": state.get("build_started_at"),
-            "build_task_description": state.get("build_task_description"),
             "build_phase": state.get("build_phase"),
-            "build_messages": state.get("build_messages", []),
+            "task_id": state.get("task_id"),
             "ideal_state": None,
-            "current_iteration": state.get("current_iteration", 0),
-            "verification_score": state.get("verification_score"),
-            "best_artefact_score": state.get("best_artefact_score"),
-            "spec_doc": state.get("spec_doc"),
+            "should_iterate": state.get("should_iterate", True),
+            "iteration_stop_reason": state.get("iteration_stop_reason"),
             "backlog": self._serialize_backlog(state.get("backlog", [])),
-            "verification_reports": state.get("verification_reports", []),
-            "lessons_learned": state.get("lessons_learned", []),
-            "artefacts": state.get("artefacts", []),
-            "clarification_needed": state.get("clarification_needed", False),
-            "clarification_question": state.get("clarification_question"),
-            "clarification_context": state.get("clarification_context"),
-            "awaiting_clarification": state.get("awaiting_clarification", False),
+            # Nested objects
+            "task": state.get("task", {}),
+            "iteration": state.get("iteration", {}),
+            "spec": state.get("spec", {}),
+            "phases": state.get("phases", {}),
+            "history": state.get("history", {}),
+            "best": state.get("best", {}),
+            "clarification": state.get("clarification", {}),
         }
 
         # BL-007: Include build_settings for structured build configuration

@@ -443,3 +443,106 @@ def ensure_ideal_state(ideal_state: Any, allow_none: bool = True) -> Optional["I
         logger.warning("Unknown ideal_state type: %s", type(ideal_state))
         return None
     raise TypeError(f"Expected IdealState or dict, got {type(ideal_state)}")
+
+
+def mark_work_item_completed(
+    item: Any,
+    result: dict,
+    timestamp: Any = None,
+) -> Any:
+    """Mark a single work item as completed.
+
+    Handles WorkItem models, dicts, and objects with status attribute.
+    Returns the updated item (mutates in place for models/dicts).
+
+    Args:
+        item: WorkItem, dict, or object with status attribute
+        result: Result data to attach to the item
+        timestamp: Optional timestamp (defaults to utcnow())
+
+    Returns:
+        The updated item (same object, mutated)
+    """
+    from ..runtime.time_utils import utcnow
+
+    if timestamp is None:
+        timestamp = utcnow()
+
+    if isinstance(item, WorkItem):
+        item.status = WorkItemStatus.COMPLETED
+        item.result = result
+        item.updated_at = timestamp
+        return item
+
+    if isinstance(item, dict):
+        item["status"] = "completed"
+        item["result"] = result
+        if hasattr(timestamp, "isoformat"):
+            item["updated_at"] = timestamp.isoformat()
+        else:
+            item["updated_at"] = str(timestamp)
+        return item
+
+    # Generic object with status attribute
+    if hasattr(item, "status"):
+        item.status = WorkItemStatus.COMPLETED if hasattr(item.status, "value") else "completed"
+        if hasattr(item, "result"):
+            item.result = result
+        if hasattr(item, "updated_at"):
+            item.updated_at = timestamp
+
+    return item
+
+
+def mark_actionable_items_completed(
+    backlog: list,
+    result: dict,
+    timestamp: Any = None,
+) -> list:
+    """Mark all actionable (pending/in_progress) items in backlog as completed.
+
+    This is used by the BUILD phase to mark items as completed once the
+    copilot run finishes, regardless of test results.
+
+    Args:
+        backlog: List of work items
+        result: Result data to attach to completed items
+        timestamp: Optional timestamp (defaults to utcnow())
+
+    Returns:
+        Updated backlog with actionable items marked as completed
+    """
+    from ..runtime.time_utils import utcnow
+
+    if timestamp is None:
+        timestamp = utcnow()
+
+    updated_backlog = []
+    for item in backlog:
+        if is_work_item_actionable(item):
+            mark_work_item_completed(item, result, timestamp)
+            item_id = item.id if hasattr(item, "id") else item.get("id", "unknown") if isinstance(item, dict) else "unknown"
+            logger.info(f"Marked work item {item_id} as completed")
+        updated_backlog.append(item)
+
+    return updated_backlog
+
+
+def find_work_item_by_id(backlog: list, item_id: str) -> Any:
+    """Find a work item in the backlog by ID.
+
+    Args:
+        backlog: List of work items
+        item_id: ID to search for
+
+    Returns:
+        The work item if found, None otherwise
+    """
+    for item in backlog:
+        if isinstance(item, WorkItem) and item.id == item_id:
+            return item
+        if isinstance(item, dict) and item.get("id") == item_id:
+            return item
+        if hasattr(item, "id") and item.id == item_id:
+            return item
+    return None

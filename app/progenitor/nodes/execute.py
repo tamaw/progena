@@ -21,6 +21,7 @@ import time
 from typing import Callable, Coroutine, Any
 
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus
+from ..state.helpers import mark_work_item_completed, find_work_item_by_id
 from ..state.execution_schemas import (
     ExecutionResult,
     ExecutionRun,
@@ -87,9 +88,10 @@ def create_node(
         span = None
 
         current_item = state.get("current_work_item")
-        build_output = state.get("last_iteration_output")
-        iteration = state.get("current_iteration", 0)
-        experiment_plan_data = state.get("experiment_plan")  # BL-002: From PLAN phase
+        phases = state.get("phases", {})
+        build_output = phases.get("execute", {}).get("result")
+        iteration = state.get("iteration", {}).get("current", 0)
+        experiment_plan_data = phases.get("plan", {}).get("experiment_plan")
 
         if tracer:
             span = tracer.start_span(
@@ -142,9 +144,12 @@ def create_node(
                     span.end()
 
                 return {
-                    "execution_result": exec_result.model_dump(),
-                    "last_iteration_output": exec_result.model_dump(),
-                    "execution_completed": True,
+                    "phases": {
+                        "execute": {
+                            "completed": True,
+                            "result": exec_result.model_dump(),
+                        },
+                    },
                     "build_phase": "execute",
                 }
 
@@ -158,7 +163,14 @@ def create_node(
                 iteration=iteration,
                 status=ExecutionStatus.SKIPPED,
             ).finalize()
-            return {"execution_result": exec_result.model_dump()}
+            return {
+                "phases": {
+                    "execute": {
+                        "completed": False,
+                        "result": exec_result.model_dump(),
+                    },
+                },
+            }
 
         # Check if execution is needed (some work items are already complete after BUILD)
         work_completed = state.get("work_item_completed", False)
@@ -174,8 +186,12 @@ def create_node(
                 current_item,
             )
             return {
-                "execution_result": exec_result.model_dump(),
-                "execution_completed": True,
+                "phases": {
+                    "execute": {
+                        "completed": True,
+                        "result": exec_result.model_dump(),
+                    },
+                },
             }
 
         # Check if this is an agent-type work item that needs exercising
@@ -222,19 +238,38 @@ def create_node(
                 span.end()
 
             # Mark current work item as completed (run finished, regardless of test outcome)
-            updated_backlog = _mark_work_item_completed(
-                state.get("backlog", []),
-                current_item,
-                exec_result.model_dump(),
-            )
+            # Note: BUILD already marks items completed, but this is a safety net
+            backlog = list(state.get("backlog", []))
+            if current_item:
+                item_id = current_item.id if hasattr(current_item, "id") else current_item.get("id") if isinstance(current_item, dict) else None
+                if item_id:
+                    found_item = find_work_item_by_id(backlog, item_id)
+                    if found_item:
+                        mark_work_item_completed(found_item, exec_result.model_dump())
+                        logger.info(f"EXECUTE: Marked work item {item_id} as completed")
+
+            # Build compact execution result for nested structure
+            exec_result_dict = exec_result.model_dump()
+            compact_result = {
+                "task_id": exec_result_dict.get("task_id"),
+                "status": exec_result_dict.get("status"),
+                "tests_passed": exec_result_dict.get("build_output", {}).get("tests_passed", 0) if exec_result_dict.get("build_output") else 0,
+                "tests_total": exec_result_dict.get("build_output", {}).get("tests_total", 0) if exec_result_dict.get("build_output") else 0,
+                "duration_ms": exec_result_dict.get("total_duration_ms"),
+                "smoke_passed": exec_result_dict.get("smoke_test_passed"),
+                "errors": exec_result_dict.get("all_errors", [])[:3],  # Keep only first 3 errors
+            }
 
             return {
-                "execution_result": exec_result.model_dump(),
-                "last_iteration_output": exec_result.model_dump(),
-                "execution_completed": True,
+                "phases": {
+                    "execute": {
+                        "completed": True,
+                        "result": compact_result,
+                    },
+                },
                 "build_phase": "execute",
-                "backlog": updated_backlog,
-                "current_work_item": None,  # Clear for next pick_next
+                "backlog": backlog,
+                "current_work_item": None,
             }
 
         # Get pending tools from BUILD phase
@@ -256,9 +291,12 @@ def create_node(
                 current_item,
             )
             return {
-                "execution_result": exec_result.model_dump(),
-                "last_iteration_output": exec_result.model_dump(),
-                "execution_completed": True,
+                "phases": {
+                    "execute": {
+                        "completed": True,
+                        "result": exec_result.model_dump(),
+                    },
+                },
             }
 
         logger.info(f"Executing {len(pending_tools)} pending tool(s)")
@@ -374,10 +412,13 @@ def create_node(
         ).finalize()
 
         return {
-            "execution_result": exec_result.model_dump(),
-            "last_iteration_output": exec_result.model_dump(),  # Update for VERIFY phase
-            "execution_completed": True,
-            "pending_tool_calls": [],  # Clear pending tools
+            "phases": {
+                "execute": {
+                    "completed": True,
+                    "result": exec_result.model_dump(),
+                },
+            },
+            "pending_tool_calls": [],
             "actions_this_cycle": state.get("actions_this_cycle", 0) + len(pending_tools),
             "build_phase": "execute",
         }
@@ -394,67 +435,6 @@ def _get_item_type(work_item: Any) -> str:
         item_type = work_item.get("item_type", "direct_answer")
         return item_type.value if hasattr(item_type, "value") else str(item_type)
     return "direct_answer"
-
-
-def _mark_work_item_completed(
-    backlog: list,
-    current_item: Any,
-    result: dict,
-) -> list:
-    """Mark a work item as completed in the backlog.
-    
-    Marks the item as completed regardless of test success/failure.
-    This indicates the copilot run finished, not that tests passed.
-    
-    Args:
-        backlog: Current backlog list
-        current_item: The work item that was executed
-        result: Execution result to store
-        
-    Returns:
-        Updated backlog with item marked as completed
-    """
-    if not current_item:
-        return backlog
-    
-    # Get the item ID
-    if hasattr(current_item, "id"):
-        item_id = current_item.id
-    elif isinstance(current_item, dict):
-        item_id = current_item.get("id")
-    else:
-        return backlog
-    
-    updated_backlog = []
-    for item in backlog:
-        # Get this item's ID
-        if hasattr(item, "id"):
-            b_id = item.id
-        elif isinstance(item, dict):
-            b_id = item.get("id")
-        else:
-            updated_backlog.append(item)
-            continue
-        
-        if b_id == item_id:
-            # Mark as completed
-            if isinstance(item, WorkItem):
-                item.status = WorkItemStatus.COMPLETED
-                item.result = result
-                item.updated_at = utcnow()
-                updated_backlog.append(item)
-            elif isinstance(item, dict):
-                item["status"] = "completed"
-                item["result"] = result
-                item["updated_at"] = utcnow().isoformat()
-                updated_backlog.append(item)
-            else:
-                updated_backlog.append(item)
-            logger.info(f"EXECUTE: Marked work item {item_id} as completed")
-        else:
-            updated_backlog.append(item)
-    
-    return updated_backlog
 
 
 async def _exercise_agent(

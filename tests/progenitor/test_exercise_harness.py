@@ -677,22 +677,22 @@ class TestInnerLoopIntegration:
         )
 
         state: ProgenitorState = {
-            "iteration": 1,
-            "current_item": WorkItem(
+            "iteration": {"current": 1},
+            "current_work_item": WorkItem(
                 id="item_001",
                 title="Build weather agent",
                 description="Build a weather agent",
                 item_type=WorkItemType.BUILD_AGENT,  # Agent type
             ),
-            "build_output": None,
-            "experiment_plan": None,
+            "phases": {"execute": {"result": None}, "plan": {"experiment_plan": None}},
             "pending_tool_calls": [],
         }
 
         result = await node(state)
 
         # Should complete execution phase
-        assert "execution_result" in result
+        assert "phases" in result
+        assert result["phases"]["execute"]["completed"] is True
 
     @pytest.mark.asyncio
     async def test_execute_node_detects_agent_from_build_settings(self, mock_state_manager):
@@ -706,8 +706,8 @@ class TestInnerLoopIntegration:
         )
 
         state: ProgenitorState = {
-            "iteration": 1,
-            "current_item": WorkItem(
+            "iteration": {"current": 1},
+            "current_work_item": WorkItem(
                 id="item_001",
                 title="Build agent",
                 description="Build a test agent",
@@ -717,14 +717,13 @@ class TestInnerLoopIntegration:
                 "build_type": "agent",  # But build_settings says agent
                 "project_name": "test_agent",
             },
-            "build_output": None,
-            "experiment_plan": None,
+            "phases": {"execute": {"result": None}, "plan": {"experiment_plan": None}},
             "pending_tool_calls": [],
         }
 
         result = await node(state)
 
-        assert "execution_result" in result
+        assert "phases" in result
 
     @pytest.mark.asyncio
     async def test_execute_node_handles_direct_answer(self, mock_state_manager):
@@ -738,22 +737,21 @@ class TestInnerLoopIntegration:
         )
 
         state: ProgenitorState = {
-            "iteration": 1,
-            "current_item": WorkItem(
+            "iteration": {"current": 1},
+            "current_work_item": WorkItem(
                 id="item_001",
                 title="Answer question",
                 description="Answer a question",
                 item_type=WorkItemType.DIRECT_ANSWER,
             ),
-            "build_output": {"answer": "42"},
-            "experiment_plan": None,  # No experiment plan
+            "phases": {"execute": {"result": {"answer": "42"}}, "plan": {"experiment_plan": None}},
             "pending_tool_calls": [],
         }
 
         result = await node(state)
 
         # Should still produce execution result
-        assert "execution_result" in result
+        assert "phases" in result
 
     @pytest.mark.asyncio
     async def test_execute_node_no_work_item_with_agent_build(self, mock_state_manager):
@@ -768,16 +766,20 @@ class TestInnerLoopIntegration:
 
         # No current_work_item but has build_settings indicating agent build
         state: ProgenitorState = {
-            "current_iteration": 1,
+            "iteration": {"current": 1},
             "current_work_item": None,  # No work item
             "build_settings": {
                 "build_type": "agent",
                 "project_name": "test_agent",
             },
-            "last_iteration_output": None,
-            "experiment_plan": {
-                "agent_name": "test_agent",
-                "prompts": [{"prompt_id": "p1", "content": "Hello"}],
+            "phases": {
+                "execute": {"result": None},
+                "plan": {
+                    "experiment_plan": {
+                        "agent_name": "test_agent",
+                        "prompts": [{"prompt_id": "p1", "content": "Hello"}],
+                    }
+                },
             },
             "pending_tool_calls": [],
         }
@@ -785,7 +787,7 @@ class TestInnerLoopIntegration:
         result = await node(state)
 
         # Should produce execution result even without work item
-        assert "execution_result" in result
+        assert "phases" in result
 
     @pytest.mark.asyncio
     async def test_execute_node_detects_agent_from_experiment_plan(self, mock_state_manager):
@@ -800,13 +802,17 @@ class TestInnerLoopIntegration:
 
         # No work item, no build_settings, but experiment_plan has agent_name
         state: ProgenitorState = {
-            "current_iteration": 1,
+            "iteration": {"current": 1},
             "current_work_item": None,
             "build_settings": None,
-            "last_iteration_output": None,
-            "experiment_plan": {
-                "agent_name": "weather_agent",  # Named agent
-                "prompts": [{"prompt_id": "p1", "content": "What is the weather?"}],
+            "phases": {
+                "execute": {"result": None},
+                "plan": {
+                    "experiment_plan": {
+                        "agent_name": "weather_agent",  # Named agent
+                        "prompts": [{"prompt_id": "p1", "content": "What is the weather?"}],
+                    }
+                },
             },
             "pending_tool_calls": [],
         }
@@ -814,7 +820,7 @@ class TestInnerLoopIntegration:
         result = await node(state)
 
         # Should still produce execution result
-        assert "execution_result" in result
+        assert "phases" in result
 
     @pytest.mark.asyncio
     async def test_execute_node_skips_for_non_agent(self, mock_state_manager):
@@ -829,19 +835,18 @@ class TestInnerLoopIntegration:
 
         # No work item, no agent indicators
         state: ProgenitorState = {
-            "current_iteration": 1,
+            "iteration": {"current": 1},
             "current_work_item": None,
             "build_settings": None,
-            "last_iteration_output": None,
-            "experiment_plan": None,
+            "phases": {"execute": {"result": None}, "plan": {"experiment_plan": None}},
             "pending_tool_calls": [],
         }
 
         result = await node(state)
 
         # Should produce skipped execution result
-        assert "execution_result" in result
-        assert result["execution_result"]["status"] == "skipped"
+        assert "phases" in result
+        assert result["phases"]["execute"]["result"]["status"] == "skipped"
 
     @pytest.mark.asyncio
     async def test_execute_node_with_pending_tools(self, mock_state_manager):
@@ -862,15 +867,14 @@ class TestInnerLoopIntegration:
         )
 
         state: ProgenitorState = {
-            "current_iteration": 1,
+            "iteration": {"current": 1},
             "current_work_item": WorkItem(
                 id="item_001",
                 title="Run tool",
                 description="Run a tool",
                 item_type=WorkItemType.SYSTEM_TOOL,
             ),
-            "last_iteration_output": {"prepared": True},
-            "experiment_plan": None,
+            "phases": {"execute": {"result": {"prepared": True}}, "plan": {"experiment_plan": None}},
             "pending_tool_calls": [
                 {"tool": "test_tool", "arguments": {"arg1": "value1"}},
             ],
@@ -879,6 +883,6 @@ class TestInnerLoopIntegration:
         result = await node(state)
 
         # Should execute tools and clear pending
-        assert "execution_result" in result
+        assert "phases" in result
         assert result.get("pending_tool_calls") == []
 

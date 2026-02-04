@@ -81,34 +81,66 @@ def create_node(
         if iteration == 0 and not state.get("task_id"):
             import uuid
             task_description = state.get("current_input") or state.get("task_description", "Build task")
+            task_id = f"task_{uuid.uuid4().hex[:8]}"
+            now_time = time.time()
+            now_iso = utcnow_isoformat()
+
             state_updates = {
-                "current_iteration": 0,
-                "iteration_start_time": time.time(),
-                "should_iterate": True,
-                "lessons_learned": [],
-                "task_id": f"task_{uuid.uuid4().hex[:8]}",
-                "artefacts": [],
-                "best_artefact": None,
-                "best_artefact_score": 0.0,
-                "verification_reports": [],
-                # Build state tracking
+                # Top-level build control
                 "build_in_progress": True,
-                "build_started_at": utcnow_isoformat(),
-                "build_task_description": task_description[:200],
-                "build_messages": [],
+                "build_started_at": now_iso,
                 "build_phase": "observe",
+                "task_id": task_id,
+                "should_iterate": True,
+
+                # Nested task info
+                "task": {
+                    "description": task_description[:200],
+                    "user_request": task_description[:500],
+                    "target_capabilities": [],
+                },
+                # Nested iteration info
+                "iteration": {
+                    "current": 0,
+                    "max": 20,
+                    "start_time": now_time,
+                },
+                # Initialize history
+                "history": {
+                    "artefacts": [],
+                    "verification_reports": [],
+                    "lessons_learned": [],
+                    "messages": [],
+                },
+                # Initialize best result
+                "best": {
+                    "iteration": None,
+                    "score": 0.0,
+                    "passed": False,
+                },
+                # Initialize clarification
+                "clarification": {
+                    "needed": False,
+                    "question": None,
+                    "context": None,
+                    "awaiting": False,
+                    "response": None,
+                },
             }
-            logger.info("Initialized inner loop state for task %s (build_in_progress=True)", state_updates["task_id"])
+            logger.info("Initialized inner loop state for task %s (build_in_progress=True)", task_id)
         else:
             # Increment iteration at the start of a new cycle when verification did not meet target
-            if not state.get("clarification_needed", False) and not awaiting_clarification:
-                verification_score = state.get("verification_score", 0.0)
-                target_score = state.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
-                if verification_score < target_score and not state.get("verification_passed", False):
+            if not state.get("clarification", {}).get("needed", False) and not awaiting_clarification:
+                verify_phase = state.get("phases", {}).get("verify", {})
+                verification_score = verify_phase.get("score", 0.0)
+                target_score = verify_phase.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+                if verification_score < target_score and not verify_phase.get("passed", False):
                     next_iteration = iteration + 1
                     state_updates = {
-                        "current_iteration": next_iteration,
-                        "iteration_start_time": time.time(),
+                        "iteration": {
+                            "current": next_iteration,
+                            "start_time": time.time(),
+                        },
                     }
                     iteration = next_iteration
 

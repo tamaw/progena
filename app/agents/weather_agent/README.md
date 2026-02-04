@@ -3,37 +3,50 @@
 Purpose
 -------
 
-The Weather Agent is an A2A HTTP agent that retrieves current weather conditions and short-term forecasts for a specified location and returns a human-readable weather report.
+An advanced A2A weather agent that retrieves current conditions, hourly forecasts, and multi-day forecasts, and returns clear, engaging, location-aware summaries suitable for agent-to-agent calls and UIs.
 
-Supported request examples
---------------------------
+Supported queries (examples)
+----------------------------
 
-- "weather in Paris"
-- "current weather for Tokyo"
-- "what's the weather in New York right now"
-- "weather in Berlin tomorrow"
-- "3 day forecast for Madrid"
+- "What's the weather in San Francisco right now?"
+- "Forecast for Berlin today"
+- "5 day forecast Tokyo"
+- "Hourly weather NYC"
+- "Summarize tomorrow's weather in Rome"
 
-Environment variables
----------------------
+Endpoint summary
+----------------
 
-- WEATHER_API_KEY: API key for OpenWeatherMap (required for full functionality)
-- PORT: optional, HTTP server port (default 8080)
-
-How to run
-----------
-
-1. Install dependencies: `pip install aiohttp`
-2. Set `WEATHER_API_KEY` environment variable to your OpenWeatherMap API key.
-3. Run the agent: `python -m app.agents.weather_agent.agent`
+- GET /.well-known/agent.json — discovery card with metadata
+- GET /health — health check with uptime in seconds (UTC timestamp)
+- POST / — main request handler (JSON)
 
 Example curl request
 --------------------
 
-Current weather:
+curl -X POST http://localhost:8080/ -H 'Content-Type: application/json' -d '{"request": "What\'s the weather in San Francisco today?", "context": {"units": "metric", "forecast_days": 3}}'
 
-curl -X POST http://localhost:8080/ -H "Content-Type: application/json" -d '{"request": "weather in London"}'
+Example response
+----------------
 
-Forecast:
+{
+  "success": true,
+  "response": "🌤️ Current Weather for San Francisco, CA\n\nTemperature: 18°C (feels like 17°C)\nCondition: Partly Cloudy\nHumidity: 72%\nWind: 12 km/h\nPrecipitation Chance: 10%",
+  "error": null,
+  "metadata": {
+    "location": "San Francisco, CA",
+    "units": "metric",
+    "forecast_days": 3,
+    "data_source": "simulated"
+  }
+}
 
-curl -X POST http://localhost:8080/ -H "Content-Type: application/json" -d '{"request": "weather in London tomorrow"}'
+Environment variables
+---------------------
+
+- AGENT_PORT — optional port for the HTTP server (default: 8080)
+
+Notes
+-----
+
+This agent simulates weather data deterministically per location and date to ensure consistent responses and low-latency behavior without an external API. It logs status lines to stdout in the required STATUS:<state>:<message> format.

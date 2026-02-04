@@ -76,14 +76,12 @@ class TestComposableSubstates(unittest.TestCase):
 
         annotations = InnerLoopState.__annotations__
 
-        # Key inner loop fields
+        # Key inner loop fields - now nested
         assert 'ideal_state' in annotations
-        assert 'current_iteration' in annotations
-        assert 'verification_score' in annotations
-        assert 'verification_passed' in annotations
-        assert 'lessons_learned' in annotations
-        assert 'artefacts' in annotations
-        assert 'best_artefact' in annotations
+        assert 'iteration' in annotations  # Nested object with current, max, start_time
+        assert 'phases' in annotations  # Contains verify.score, verify.passed
+        assert 'history' in annotations  # Contains lessons_learned, artefacts
+        assert 'best' in annotations  # Contains iteration, score, passed
 
     def test_execution_state_fields(self):
         """Test ExecutionState has expected fields."""
@@ -91,8 +89,7 @@ class TestComposableSubstates(unittest.TestCase):
 
         annotations = ExecutionState.__annotations__
 
-        assert 'execution_result' in annotations
-        assert 'execution_completed' in annotations
+        # Execution results now in phases.execute
         assert 'pending_tool_calls' in annotations
         assert 'work_item_completed' in annotations
 
