@@ -75,3 +75,5 @@ worktrees/
 .env.local
 *.key
 *.pem
+
+*-cwd

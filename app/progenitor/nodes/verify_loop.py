@@ -99,9 +99,11 @@ def create_node(
 
         # Initialize clarification state updates
         clarification_updates = {
-            "clarification_needed": False,
-            "clarification_question": None,
-            "clarification_context": None,
+            "clarification": {
+                "needed": False,
+                "question": None,
+                "context": None,
+            },
         }
 
         try:
@@ -142,11 +144,13 @@ def create_node(
                         history.append(create_clarification_history_entry(clarification_result))
 
                         clarification_updates = {
-                            "clarification_needed": True,
-                            "clarification_question": formatted_question,
-                            "clarification_context": clarification_result.context,
-                            "awaiting_clarification": True,
-                            "clarification_history": history,
+                            "clarification": {
+                                "needed": True,
+                                "question": formatted_question,
+                                "context": clarification_result.context,
+                                "awaiting": True,
+                                "history": history,
+                            },
                         }
 
                         # Log clarification detection
@@ -295,11 +299,11 @@ def create_node(
                 "verification_reports": verification_reports,
             }
 
-            # Get current iteration for synced state
-            current_iter = state.get("current_iteration") or state.get("iteration", {}).get("current", 0)
+            # Get current iteration from nested state
+            current_iter = state.get("iteration", {}).get("current", 0)
 
             # Merge verification results with clarification updates
-            # Sync verification_score and verification_passed at top level for routing compatibility
+            # Use nested structure for state updates
             # Note: TypedDict doesn't support dynamic spread, but this is valid for LangGraph
             return {  # type: ignore[return-value]
                 # Nested structure updates
@@ -309,11 +313,17 @@ def create_node(
                 "history": history_update,
                 "best": best_update,
                 "build_phase": "verify",
-                # Sync flat keys for routing functions
-                "verification_score": verification_report.overall_score,
-                "verification_passed": verification_report.passed,
-                "last_verification_report": verification_report,
-                "current_iteration": current_iter,
+                # New nested structure for verification state
+                "verification": {
+                    "current_score": verification_report.overall_score,
+                    "current_passed": verification_report.passed,
+                    "current_report": verification_report,
+                    "target_score": state.get("target_score", 0.8),
+                    "gaps": verification_report.gaps if hasattr(verification_report, "gaps") else [],
+                },
+                "iteration": {
+                    "current": current_iter,
+                },
                 **clarification_updates,
             }
 

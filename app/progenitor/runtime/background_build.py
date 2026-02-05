@@ -363,11 +363,13 @@ class BackgroundBuildRunner:
                     "max": self.config.runtime.max_inner_iterations,
                     "start_time": None,
                 },
-                # Flat iteration keys for routing compatibility
-                "current_iteration": 0,
-                "max_iterations": self.config.runtime.max_inner_iterations,
-                "verification_score": 0.0,
-                "target_score": 0.8,
+                # Verification tracking (nested structure)
+                "verification": {
+                    "current_score": 0.0,
+                    "current_passed": False,
+                    "current_report": None,
+                    "target_score": 0.8,
+                },
 
                 "spec": initial_state.get("spec", {}),
                 "phases": {"think": {}, "plan": {}, "execute": {}, "verify": {"target_score": 0.8}},
@@ -424,11 +426,11 @@ class BackgroundBuildRunner:
             # Build completed successfully
             result.status = BuildStatus.COMPLETED
             result.completed_at = utcnow()
-            result.verification_score = build_state.get("verification_score", 0)
+            result.verification_score = build_state.get("verification", {}).get("current_score", 0)
             result.agent_name = build_state.get("agent_name") or build_state.get("build_settings", {}).get("project_name")
 
             # Extract success criteria results
-            verification_report = build_state.get("last_verification_report", {})
+            verification_report = build_state.get("verification", {}).get("current_report", {})
             if hasattr(verification_report, "model_dump"):
                 verification_report = verification_report.model_dump()
 
@@ -462,7 +464,7 @@ class BackgroundBuildRunner:
 
             # Minimal update for suspension - only set flags, don't overwrite state
             try:
-                current_iteration = build_state.get("current_iteration") or build_state.get("iteration", {}).get("current", 0)
+                current_iteration = build_state.get("iteration", {}).get("current", 0)
                 suspension_event = {
                     "event": "suspended",
                     "timestamp": utcnow_isoformat(),

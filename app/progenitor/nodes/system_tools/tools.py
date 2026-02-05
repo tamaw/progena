@@ -187,8 +187,8 @@ class BuildStatusTool(BaseSystemTool):
         build_task = effective_state.get("build_task_description")
         build_started = effective_state.get("build_started_at")
         build_id = effective_state.get("build_id")
-        current_iteration = effective_state.get("current_iteration", 0)
-        verification_score = effective_state.get("verification_score", 0)
+        current_iteration = effective_state.get("iteration", {}).get("current", 0)
+        verification_score = effective_state.get("verification", {}).get("current_score", 0.0)
         build_messages = effective_state.get("build_messages", [])
         ideal_state = effective_state.get("ideal_state")
 

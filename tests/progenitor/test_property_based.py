@@ -60,8 +60,9 @@ def progenitor_state_strategy(draw):
         "current_input": draw(st.one_of(st.none(), st.text(max_size=100))),
         "cycle_count": draw(st.integers(min_value=0, max_value=1000)),
         "actions_this_cycle": draw(st.integers(min_value=0, max_value=100)),
-        "current_iteration": draw(st.integers(min_value=0, max_value=20)),
-        "verification_score": draw(st.floats(min_value=0.0, max_value=1.0)),
+        "iteration": {"current": draw(st.integers(min_value=0, max_value=20))},
+        "verification": {"current_score": draw(st.floats(min_value=0.0, max_value=1.0))},
+        "clarification": {"needed": draw(st.booleans())},
         "shutdown_requested": draw(st.booleans()),
     }
 
@@ -87,7 +88,7 @@ class TestIterationBounds:
         from app.progenitor.graph_inner_loop import should_iterate
 
         state: ProgenitorState = {
-            "current_iteration": current_iteration,
+            "iteration": {"current": current_iteration},
             "verification_passed": False,
             "ideal_state": None,
         }
@@ -110,8 +111,8 @@ class TestIterationBounds:
     @given(st.floats(min_value=0.0, max_value=1.0))
     def test_verification_score_bounded(self, score: float):
         """Verification score should be between 0 and 1."""
-        state: ProgenitorState = {"verification_score": score}
-        assert 0.0 <= state["verification_score"] <= 1.0
+        state: ProgenitorState = {"verification": {"current_score": score}}
+        assert 0.0 <= state["verification"]["current_score"] <= 1.0
 
 
 # ============================================================================
@@ -231,8 +232,8 @@ class TestStateConsistency:
         if "cycle_count" in state:
             assert isinstance(state["cycle_count"], int)
 
-        if "verification_score" in state:
-            assert isinstance(state["verification_score"], (int, float))
+        if "verification" in state:
+            assert isinstance(state["verification"]["current_score"], (int, float))
 
         if "shutdown_requested" in state:
             assert isinstance(state["shutdown_requested"], bool)
@@ -246,8 +247,8 @@ class TestStateConsistency:
         if "actions_this_cycle" in state:
             assert state["actions_this_cycle"] >= 0
 
-        if "current_iteration" in state:
-            assert state["current_iteration"] >= 0
+        if "iteration" in state:
+            assert state["iteration"]["current"] >= 0
 
     @given(
         st.integers(min_value=0, max_value=100),

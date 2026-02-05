@@ -387,9 +387,9 @@ async def _plan_from_ideal_state(
     - First run (no spec present): Seeds from canonical template
     - Subsequent iterations: Updates spec based on THINK outputs
     """
-    iteration = state.get("current_iteration", 0)
+    iteration = state.get("iteration", {}).get("current", 0)
     backlog = list(state.get("backlog", []))
-    last_verification = state.get("last_verification_report")
+    last_verification = state.get("verification", {}).get("current_report")
 
     # Determine work item type from multiple sources (priority order):
     # 1. Current work item being processed (most reliable)

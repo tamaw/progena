@@ -46,7 +46,7 @@ def create_node(config: "ProgenitorConfig") -> Callable[[ProgenitorState], Corou
         """
         logger.info("VALIDATE: Starting validate phase")
         current_item = state.get("current_work_item")
-        iteration = state.get("current_iteration", 0)
+        iteration = state.get("iteration", {}).get("current", 0)
         execution_result_data = state.get("execution_result")
 
         if not current_item:

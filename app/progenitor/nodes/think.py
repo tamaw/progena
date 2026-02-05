@@ -65,7 +65,8 @@ def create_node(
         span = None
 
         ideal_state = state.get("ideal_state")
-        iteration = state.get("current_iteration", 0)
+        iteration_state = state.get("iteration", {})
+        iteration = iteration_state.get("current", 0) if isinstance(iteration_state, dict) else getattr(iteration_state, "current", 0)
 
         if tracer:
             span = tracer.start_span(
@@ -83,7 +84,8 @@ def create_node(
                 span.end()
             return {}
 
-        last_verification = state.get("last_verification_report")
+        verification_state = state.get("verification", {})
+        last_verification = verification_state.get("current_report") if isinstance(verification_state, dict) else getattr(verification_state, "current_report", None)
 
         # Build thinking prompt for structured approaches
         prompt = _build_thinking_prompt(ideal_state, iteration or 0, last_verification, state)

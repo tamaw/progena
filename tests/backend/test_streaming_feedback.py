@@ -526,8 +526,8 @@ class TestBuildStateTracking:
         build = BuildInfo.from_dict({
             "build_in_progress": True,
             "build_phase": "verify",
-            "verification_score": 0.85,
-            "current_iteration": 5,
+            "verification": {"current_score": 0.85},
+            "iteration": {"current": 5},
         })
 
         assert build.score == 0.85

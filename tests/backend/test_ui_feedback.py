@@ -382,8 +382,8 @@ class TestStateReader:
             "build_phase": "execute",
             "build_task_description": "Implementing feature X",
             "build_started_at": "2024-01-01T00:00:00Z",
-            "current_iteration": 3,
-            "verification_score": 0.75,
+            "iteration": {"current": 3},
+            "verification": {"current_score": 0.75},
             "build_messages": [{"role": "user", "content": "test"}] * 5,
         }
 
@@ -506,8 +506,8 @@ class TestStateReaderFileOperations:
         build_state = {
             "build_in_progress": True,
             "build_phase": "verify",
-            "current_iteration": 2,
-            "verification_score": 0.5,
+            "iteration": {"current": 2},
+            "verification": {"current_score": 0.5},
             "build_messages": [],
             "backlog": [
                 {"id": "1", "item_type": "task", "status": "pending", "description": "Test task"}

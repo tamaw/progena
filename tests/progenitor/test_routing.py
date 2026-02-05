@@ -97,15 +97,15 @@ class TestShouldIterate:
 
     def test_first_iteration_continues(self):
         """First iteration (0) should always continue."""
-        state = make_state(current_iteration=0)
+        state = make_state(iteration={"current": 0})
         result = should_iterate(state)
         assert result == "observe"
 
     def test_clarification_needed_stops(self):
         """Should stop when clarification is needed."""
         state = make_state(
-            current_iteration=1,
-            clarification_needed=True,
+            iteration={"current": 1},
+            clarification={"needed": True},
         )
         result = should_iterate(state)
         assert result == "respond"
@@ -113,21 +113,21 @@ class TestShouldIterate:
     def test_verification_passed_stops(self):
         """Should stop when verification passed."""
         state = make_state(
-            current_iteration=1,
-            verification_passed=True,
+            iteration={"current": 1},
+            verification={"current_passed": True},
         )
         result = should_iterate(state)
         assert result == "respond"
 
     def test_max_iterations_stops(self):
         """Should stop at max iterations."""
-        state = make_state(current_iteration=5)
+        state = make_state(iteration={"current": 5})
         result = should_iterate(state, max_iterations=5)
         assert result == "respond"
 
     def test_custom_max_iterations(self):
         """Should respect custom max_iterations parameter."""
-        state = make_state(current_iteration=3)
+        state = make_state(iteration={"current": 3})
         # Under custom limit - continue
         result = should_iterate(state, max_iterations=10)
         assert result == "observe"
@@ -138,7 +138,7 @@ class TestShouldIterate:
 
     def test_continues_under_limit(self):
         """Should continue when under max iterations."""
-        state = make_state(current_iteration=2)
+        state = make_state(iteration={"current": 2})
         result = should_iterate(state, max_iterations=5)
         assert result == "observe"
 
@@ -161,8 +161,7 @@ class TestShouldContinueInnerLoop:
     def test_max_iterations_exits(self):
         """Should exit at max iterations."""
         state = make_state(
-            current_iteration=10,
-            max_iterations=10,
+            iteration={"current": 10, "max": 10},
         )
         result = should_continue_inner_loop(state)
         assert result == "done"
@@ -170,10 +169,8 @@ class TestShouldContinueInnerLoop:
     def test_target_score_reached_exits(self):
         """Should exit when verification score reaches target."""
         state = make_state(
-            verification_score=0.95,
-            target_score=0.95,
-            current_iteration=1,
-            max_iterations=10,
+            verification={"current_score": 0.95, "target_score": 0.95},
+            iteration={"current": 1, "max": 10},
         )
         result = should_continue_inner_loop(state)
         assert result == "done"
@@ -181,10 +178,8 @@ class TestShouldContinueInnerLoop:
     def test_continues_when_under_limits(self):
         """Should continue when under all limits."""
         state = make_state(
-            verification_score=0.5,
-            target_score=0.95,
-            current_iteration=2,
-            max_iterations=10,
+            verification={"current_score": 0.5, "target_score": 0.95},
+            iteration={"current": 2, "max": 10},
         )
         result = should_continue_inner_loop(state)
         assert result == "observe"
@@ -208,8 +203,7 @@ class TestRouteAfterVerify:
     def test_score_met_returns_done(self):
         """Should return done when score met."""
         state = make_state(
-            verification_score=0.96,
-            target_score=0.95,
+            verification={"current_score": 0.96, "target_score": 0.95},
         )
         result = route_after_verify(state)
         assert result == "done"
@@ -217,8 +211,7 @@ class TestRouteAfterVerify:
     def test_max_iterations_returns_done(self):
         """Should return done at max iterations."""
         state = make_state(
-            current_iteration=10,
-            max_iterations=10,
+            iteration={"current": 10, "max": 10},
         )
         result = route_after_verify(state)
         assert result == "done"
@@ -226,10 +219,8 @@ class TestRouteAfterVerify:
     def test_continues_to_learn(self):
         """Should continue to learn when not done."""
         state = make_state(
-            verification_score=0.5,
-            target_score=0.95,
-            current_iteration=2,
-            max_iterations=10,
+            verification={"current_score": 0.5, "target_score": 0.95},
+            iteration={"current": 2, "max": 10},
         )
         result = route_after_verify(state)
         assert result == "learn"
@@ -412,21 +403,19 @@ class TestUtilityFunctions:
 
     def test_should_stop_for_clarification_true(self):
         """Should return True when clarification needed."""
-        state = make_state(clarification_needed=True)
+        state = make_state(clarification={"needed": True})
         assert should_stop_for_clarification(state) is True
 
     def test_should_stop_for_clarification_false(self):
         """Should return False when no clarification needed."""
-        state = make_state(clarification_needed=False)
+        state = make_state(clarification={"needed": False})
         assert should_stop_for_clarification(state) is False
 
     def test_get_iteration_info(self):
         """Should return correct iteration info dict."""
         state = make_state(
-            current_iteration=3,
-            max_iterations=10,
-            verification_score=0.75,
-            target_score=0.95,
+            iteration={"current": 3, "max": 10},
+            verification={"current_score": 0.75, "target_score": 0.95},
             build_phase="execute",
         )
         info = get_iteration_info(state)
@@ -439,7 +428,7 @@ class TestUtilityFunctions:
 class TestNestedStateKeyCompatibility:
     """Tests for nested vs flat state key compatibility.
 
-    The inner loop uses nested keys (iteration.current, phases.verify.score)
+    The inner loop uses nested keys (iteration.current, verification.current_score)
     while routing functions need to read both flat and nested keys.
     """
 
@@ -447,7 +436,6 @@ class TestNestedStateKeyCompatibility:
         """Should read iteration from nested iteration.current."""
         state = make_state(
             iteration={"current": 5, "max": 10},
-            # No flat current_iteration key
         )
         result = should_continue_inner_loop(state)
         # Should continue since iteration 5 < max 10
@@ -457,15 +445,14 @@ class TestNestedStateKeyCompatibility:
         """Should read max_iterations from nested iteration.max."""
         state = make_state(
             iteration={"current": 10, "max": 10},
-            # No flat max_iterations key
         )
         result = should_continue_inner_loop(state)
         assert result == "done"  # At max iterations
 
     def test_should_continue_inner_loop_with_nested_verification(self):
-        """Should read verification_score from phases.verify.score."""
+        """Should read verification_score from verification.current_score."""
         state = make_state(
-            phases={"verify": {"score": 0.95, "target_score": 0.8}},
+            verification={"current_score": 0.95, "target_score": 0.8},
             iteration={"current": 1, "max": 10},
             backlog=[],  # No pending items
         )
@@ -475,30 +462,27 @@ class TestNestedStateKeyCompatibility:
     def test_route_after_verify_with_nested_keys(self):
         """Should read all values from nested structures."""
         state = make_state(
-            phases={"verify": {"score": 0.5, "target_score": 0.8}},
+            verification={"current_score": 0.5, "target_score": 0.8},
             iteration={"current": 2, "max": 10},
         )
         result = route_after_verify(state)
         assert result == "learn"  # Score not met, continue
 
     def test_route_after_verify_nested_score_met(self):
-        """Should return done when nested phases.verify.score meets target."""
+        """Should return done when nested verification.current_score meets target."""
         state = make_state(
-            phases={"verify": {"score": 0.9, "target_score": 0.8}},
+            verification={"current_score": 0.9, "target_score": 0.8},
             iteration={"current": 2, "max": 10},
         )
         result = route_after_verify(state)
         assert result == "done"
 
-    def test_flat_keys_take_priority(self):
-        """Flat keys should take priority over nested keys."""
+    def test_nested_verification_score_determines_routing(self):
+        """Nested verification.current_score determines routing decision."""
         state = make_state(
-            current_iteration=5,  # Flat key
-            iteration={"current": 2, "max": 10},  # Nested has different value
-            verification_score=0.95,  # Flat key
-            phases={"verify": {"score": 0.5}},  # Nested has different value
-            target_score=0.8,
+            iteration={"current": 2, "max": 10},
+            verification={"current_score": 0.95, "target_score": 0.8},  # Score meets target
         )
         result = route_after_verify(state)
-        # Should use flat verification_score (0.95 >= 0.8), so done
+        # Should use verification.current_score (0.95 >= 0.8), so done
         assert result == "done"

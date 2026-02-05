@@ -339,7 +339,7 @@ class TestStateUpdateMethods:
             "build_id": "build-123",
             "build_phase": "observe",
             "build_messages": [{"role": "system", "content": "Building..."}],
-            "current_iteration": 1,
+            "iteration": {"current": 1},
         }
 
         await state_manager.save_build_state(new_state)
@@ -383,7 +383,7 @@ class TestStateSeparationIntegrity:
             for i in range(10):
                 await state_manager.save_build_state({
                     "build_in_progress": True,
-                    "current_iteration": i,
+                    "iteration": {"current": i},
                 })
 
         async def write_current():
@@ -399,7 +399,7 @@ class TestStateSeparationIntegrity:
         build_state = await state_manager.get_build_state()
         current_state = await state_manager.get_current_state()
 
-        assert build_state["current_iteration"] == 9
+        assert build_state["iteration"]["current"] == 9
         assert current_state["cycle_count"] == 9
 
 

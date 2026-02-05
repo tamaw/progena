@@ -34,7 +34,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         # Check if this is a clarification request
         clarification_updates: dict[str, Any] = {}
-        if state.get("clarification_needed") and state.get("clarification_question"):
+        if state.get("clarification", {}).get("needed") and state.get("clarification_question"):
             # This is a clarification request - present question to user
             response_text = state.get("clarification_question", "")
             clarification_updates = {
@@ -51,7 +51,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 metadata={
                     "type": "clarification_request",
                     "clarification_context": state.get("clarification_context"),
-                    "iteration": state.get("current_iteration", 0),
+                    "iteration": state.get("iteration", {}).get("current", 0),
                 }
             )
             await state_manager.log_conversation(message)
@@ -135,8 +135,8 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             metadata={
                 "decision_action": _get_decision_action(decision),
                 "work_item_id": _get_work_item_id(current_item),
-                "verification_score": state.get("verification_score"),
-                "iteration_count": state.get("current_iteration", 0),
+                "verification_score": state.get("verification", {}).get("current_score", 0.0),
+                "iteration_count": state.get("iteration", {}).get("current", 0),
                 "stop_reason": state.get("iteration_stop_reason"),
             }
         )
@@ -185,7 +185,7 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
     - If stopped early, return best artefact plus unmet criteria
     - Final output must include compact verification summary
     """
-    verification_report = state.get("last_verification_report")
+    verification_report = state.get("verification", {}).get("current_report")
     ideal_state = state.get("ideal_state")
     stop_reason = state.get("iteration_stop_reason")
 
@@ -201,7 +201,7 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
     score = report_dict.get("overall_score", 0)
     passed = report_dict.get("passed", False)
     gaps = report_dict.get("gaps", [])
-    iteration = state.get("current_iteration", 0)
+    iteration = state.get("iteration", {}).get("current", 0)
 
     # Build compact summary
     summary_parts = ["---", "**Verification Summary**"]
