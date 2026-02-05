@@ -29,7 +29,7 @@ from ..state.execution_schemas import (
     ExperimentPlan,
 )
 from ..runtime.time_utils import utcnow_isoformat, utcnow
-from ..runtime.port_utils import find_available_port_async, DEFAULT_AGENT_PORT_START
+from ..runtime.port_utils import find_available_port_async, TEST_HARNESS_PORT_START, TEST_HARNESS_PORT_END
 
 logger = logging.getLogger(__name__)
 
@@ -458,6 +458,10 @@ async def _exercise_agent(
     1. If agent_endpoint is available -> use traditional HTTP exercise
     2. If agent_entrypoint is available -> spawn agent, run test script
     3. Otherwise -> try to discover entrypoint from build output
+
+    Uses TEST_HARNESS_PORT_START (9500+) range to avoid conflicts with:
+    - Backend API server (8000)
+    - Production A2A agents (8080-8199)
     """
     # Parse experiment plan
     experiment_plan = ExperimentPlan(**experiment_plan_data)
@@ -465,7 +469,7 @@ async def _exercise_agent(
     # Get agent endpoint/entrypoint from context or registry
     agent_endpoint = None
     agent_entrypoint = None
-    agent_port = DEFAULT_AGENT_PORT_START  # Default starting port
+    agent_port = TEST_HARNESS_PORT_START  # Use test harness port range
 
     # Get project root from harness for path resolution
     project_root = harness.project_root if harness else None
@@ -474,7 +478,7 @@ async def _exercise_agent(
     if isinstance(build_output, dict):
         agent_endpoint = build_output.get("agent_endpoint")
         agent_entrypoint = build_output.get("agent_entrypoint")
-        agent_port = build_output.get("agent_port", DEFAULT_AGENT_PORT_START)
+        agent_port = build_output.get("agent_port", TEST_HARNESS_PORT_START)
 
     # Try to discover entrypoint from build settings or experiment plan
     if not agent_entrypoint:
@@ -514,8 +518,8 @@ async def _exercise_agent(
         agent_endpoint = context.get("agent_endpoint")
     if not agent_entrypoint:
         agent_entrypoint = context.get("agent_entrypoint")
-    if agent_port == DEFAULT_AGENT_PORT_START:
-        agent_port = context.get("agent_port", DEFAULT_AGENT_PORT_START)
+    if agent_port == TEST_HARNESS_PORT_START:
+        agent_port = context.get("agent_port", TEST_HARNESS_PORT_START)
 
     # Check registry for agent info
     agents = state.get("agents", [])
@@ -528,9 +532,12 @@ async def _exercise_agent(
             agent_entrypoint = agent_entrypoint or agent.get("entrypoint")
 
     # Find an available port before spawning the agent
-    # This prevents port conflicts with the backend or other services
-    agent_port = await find_available_port_async(start_port=agent_port)
-    logger.info(f"Selected available port for agent: {agent_port}")
+    # Use TEST_HARNESS port range (9500+) to avoid conflicts with backend (8000) and production agents (8080+)
+    agent_port = await find_available_port_async(
+        start_port=agent_port,
+        end_port=TEST_HARNESS_PORT_END
+    )
+    logger.info(f"Selected available test harness port for agent: {agent_port}")
 
     # Determine execution strategy
     if agent_entrypoint and not agent_endpoint:

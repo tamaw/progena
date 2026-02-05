@@ -168,6 +168,11 @@ async def find_available_port_async(
     )
 
 
-# Default port range for A2A agents
+# Default port range for A2A agents (production/registered agents)
 DEFAULT_AGENT_PORT_START = 8080
 DEFAULT_AGENT_PORT_END = 8199
+
+# Port range for test harness agents (avoids conflicts with backend on 8000 and agents on 8080+)
+# Using 9500-9599 range to be well separated from the application and other services
+TEST_HARNESS_PORT_START = 9500
+TEST_HARNESS_PORT_END = 9599

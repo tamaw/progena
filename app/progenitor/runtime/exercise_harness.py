@@ -44,6 +44,8 @@ from ..runtime.port_utils import (
     is_port_available,
     DEFAULT_AGENT_PORT_START,
     DEFAULT_AGENT_PORT_END,
+    TEST_HARNESS_PORT_START,
+    TEST_HARNESS_PORT_END,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,12 +60,13 @@ class AgentProcessRunner:
     - Health check polling
     - Crash detection
     - Graceful shutdown
-    - Automatic port allocation (finds available port)
+    - Automatic port allocation (finds available port in test harness range)
     """
 
     DEFAULT_STARTUP_TIMEOUT = 30.0
     DEFAULT_HEALTH_CHECK_INTERVAL = 0.5
-    DEFAULT_PORT = DEFAULT_AGENT_PORT_START
+    # Use test harness port range by default to avoid conflicts with backend (8000) and production agents (8080+)
+    DEFAULT_PORT = TEST_HARNESS_PORT_START
 
     def __init__(
         self,
@@ -80,6 +83,9 @@ class AgentProcessRunner:
         self.process: Optional[asyncio.subprocess.Process] = None
         self.stdout_lines: list[str] = []
         self.stderr_lines: list[str] = []
+        self._reader_task: Optional[asyncio.Task[None]] = None
+        # Track the actual port used (may differ from requested if port was in use)
+        self.actual_port: Optional[int] = None
         self._reader_task: Optional[asyncio.Task[None]] = None
 
     async def start(self, timeout: float = DEFAULT_STARTUP_TIMEOUT) -> tuple[bool, str]:
@@ -105,18 +111,22 @@ class AgentProcessRunner:
         if self.auto_find_port:
             if not is_port_available(self._requested_port):
                 logger.info(
-                    f"Port {self._requested_port} is not available, finding alternative..."
+                    f"Port {self._requested_port} is not available, finding alternative in test harness range..."
                 )
                 try:
+                    # Use test harness port range to avoid conflicts with backend and production agents
                     self.port = find_available_port(
-                        start_port=self._requested_port,
-                        end_port=DEFAULT_AGENT_PORT_END,
+                        start_port=TEST_HARNESS_PORT_START,
+                        end_port=TEST_HARNESS_PORT_END,
                     )
                     logger.info(f"Using alternative port: {self.port}")
                 except RuntimeError as e:
-                    return False, f"Could not find available port: {e}"
+                    return False, f"Could not find available port in test harness range ({TEST_HARNESS_PORT_START}-{TEST_HARNESS_PORT_END}): {e}"
             else:
                 self.port = self._requested_port
+
+        # Track the actual port we're using
+        self.actual_port = self.port
 
         # Prepare environment
         env = os.environ.copy()
@@ -915,7 +925,7 @@ class AgentExerciseHarness:
         self,
         experiment_plan: ExperimentPlan,
         agent_entrypoint: str,
-        port: int = DEFAULT_AGENT_PORT_START,
+        port: int = TEST_HARNESS_PORT_START,
         iteration: int = 0,
         task_id: Optional[str] = None,
     ) -> ExecutionResult:
@@ -932,12 +942,12 @@ class AgentExerciseHarness:
         Args:
             experiment_plan: The experiment plan with prompts to test.
             agent_entrypoint: Path to agent's main.py or equivalent.
-            port: Port the agent should listen on.
+            port: Port the agent should listen on (defaults to test harness range).
             iteration: Current iteration number.
             task_id: Task identifier.
 
         Returns:
-            ExecutionResult with test results and captured output.
+            ExecutionResult with test results, captured output, and the actual port used.
         """
         result = ExecutionResult(
             iteration=iteration,
@@ -957,10 +967,11 @@ class AgentExerciseHarness:
 
         agent_runner: Optional[AgentProcessRunner] = None
         test_script_path: Optional[str] = None
+        actual_port: Optional[int] = None  # Track the actual port used for registry/shutdown
 
         try:
             # Step 1: Spawn agent process
-            logger.info(f"Spawning agent from {agent_entrypoint} on port {port}")
+            logger.info(f"Spawning agent from {agent_entrypoint} on port {port} (test harness range)")
             agent_runner = AgentProcessRunner(
                 project_root=self.project_root,
                 agent_entrypoint=agent_entrypoint,
@@ -968,6 +979,13 @@ class AgentExerciseHarness:
             )
 
             success, message = await agent_runner.start(timeout=30.0)
+
+            # Track the actual port the agent is running on (may differ from requested)
+            actual_port = agent_runner.actual_port or agent_runner.port
+            logger.info(f"Agent using actual port: {actual_port}")
+
+            # Update run endpoint with actual port
+            run.agent_endpoint = f"http://localhost:{actual_port}"
 
             if not success:
                 # Agent crashed or failed to start
@@ -983,6 +1001,7 @@ class AgentExerciseHarness:
                 result.runs.append(run)
                 result.build_output = {
                     "agent_entrypoint": agent_entrypoint,
+                    "agent_port": actual_port,  # Track port even on failure for cleanup
                     "startup_failed": True,
                     "error": message,
                     "agent_stdout": agent_output["stdout"][-20:],
@@ -1010,7 +1029,7 @@ class AgentExerciseHarness:
 
             test_script_path = test_runner.generate_test_script(
                 agent_name=experiment_plan.agent_name,
-                port=port,
+                port=actual_port,  # Use actual port, not requested port
                 prompts=prompts,
                 description=experiment_plan.experiment_description or "",
             )
@@ -1049,8 +1068,11 @@ class AgentExerciseHarness:
                 run.status = ExecutionStatus.FAILED
 
             # Store test output for verification
+            # Include agent_port for registry and shutdown tracking
             result.build_output = {
                 "agent_entrypoint": agent_entrypoint,
+                "agent_port": actual_port,  # Track port for agent registry/shutdown
+                "agent_endpoint": f"http://localhost:{actual_port}",
                 "test_script": test_script_path,
                 "test_stdout": test_results["stdout"],
                 "test_stderr": test_results["stderr"],
