@@ -1,45 +1,27 @@
-Weather Agent
+# Weather Agent
 
-Agent purpose
+Purpose:
 
-The Weather Agent provides real-time weather conditions, hourly (next 12 hours) and daily (next 3 days) forecasts, and plain-language explanations of weather terms.
+A conversational A2A HTTP agent that retrieves real-time weather conditions and short-term forecasts and explains them in clear, user-friendly language.
 
-Supported request examples
+Supported question examples:
 
-- Current weather: {"request": "What's the weather in London?", "context": {"units": "metric"}}
-- Hourly forecast: {"request": "Will it rain later today in Seattle?", "context": {"location": "Seattle, US", "units": "imperial"}}
-- Daily forecast: {"request": "3-day forecast for Rome", "context": {"units": "metric"}}
-- Explanation: {"request": "What does humidity mean?", "context": {"language": "en"}}
+- What’s the weather in Tokyo right now?
+- Will it rain in London tomorrow?
+- What’s the weather looking like in New York this week?
+- What’s the weather like today?
 
-Required environment variables
+Environment variables required:
 
-- WEATHER_API_KEY — API key for OpenWeatherMap
+- WEATHER_API_KEY - API key for OpenWeatherMap (recommended)
 
 How to run the agent:
 
 ```bash
-python agent.py --port 8000
+python agent.py --port 8080
 ```
 
-Example curl request
+Notes:
 
-```bash
-curl -X POST "http://localhost:8000/" -H "Content-Type: application/json" -d '{"request":"What's the weather in London?","context":{"units":"metric"}}'
-```
-
-Example response
-
-```json
-{
-  "success": true,
-  "response": "Current weather in London, UK:\n• Temperature: 18°C (feels like 17°C)\n• Conditions: Light rain\n• Wind: 12 km/h\n• Humidity: 72%",
-  "error": null,
-  "metadata": {
-    "location": "London, UK",
-    "coordinates": {"lat": 51.51, "lon": -0.13},
-    "units": "metric",
-    "data_source": "OpenWeatherMap",
-    "request_id": null
-  }
-}
-```
+- The agent uses the OpenWeatherMap Geocoding and One Call APIs by default. If WEATHER_API_KEY is not set or API calls fail, the agent will return a friendly error message.
+- Units default to metric (°C, km/h). Set context.units to "imperial" or include 'F' or 'fahrenheit' in the request to request imperial units.

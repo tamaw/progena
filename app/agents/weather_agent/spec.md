@@ -2,378 +2,376 @@
 
 > Task: build weather agent
 
-**Build Description:** An A2A conversational agent that retrieves real-time weather data, provides current conditions and short-term forecasts, and explains weather information in a clear, user-friendly way.
+**Build Description:** An A2A conversational agent that retrieves real-time weather data and forecasts and explains current conditions and upcoming weather in a clear, user-friendly way.
 
 **Project Name:** weather_agent
-> Generated at: 2026-02-04T13:12:15.430732+00:00
+> Generated at: 2026-02-04T13:51:37.783078+00:00
 
 ---
 
 ```markdown
 # Agent Structure Specification — weather_agent
 
-This document defines the **complete build specification** for the `weather_agent` A2A conversational agent.  
-All requirements in this document are **mandatory** unless explicitly marked optional.
-
----
-
 ## Project Overview
 
-- **Project Name:** weather_agent  
-- **Agent Name:** weather_agent  
-- **Agent Class:** `WeatherAgent`  
-- **Protocol:** A2A (Agent-to-Agent)  
-- **Transport:** HTTP (aiohttp-based server)
+**Project Name:** weather_agent  
+**Agent Name:** weather_agent  
+**Agent Class:** WeatherAgent  
 
-### Purpose
+**Purpose:**  
+An A2A-compatible conversational HTTP agent that retrieves **real-time weather conditions and short-term forecasts** for a given location and explains them in **clear, plain-language summaries** suitable for non-technical users.
 
-`weather_agent` is an A2A conversational agent that:
-- Retrieves **real-time weather data**
-- Provides **current weather conditions**
-- Provides **short-term forecasts (up to 7 days, default 3 days)**
-- Explains weather information in **clear, non-technical, user-friendly language**
-
-The agent must be usable both by:
-- Humans (natural language queries)
-- Other agents (structured requests)
+The agent is designed to:
+- Accept natural-language weather questions
+- Resolve locations and timeframes from user input
+- Retrieve live weather data from an external API
+- Explain conditions, temperatures, precipitation, wind, and hazards
+- Provide concise forecasts (today, tomorrow, next 7 days)
+- Handle errors and ambiguities gracefully
 
 ---
 
-## Directory Structure (CRITICAL — MUST FOLLOW EXACTLY)
+## Directory Structure (CRITICAL - MUST FOLLOW EXACTLY)
 
-**DO NOT create files directly in `app/agents/`.**  
-ALL agent files MUST be placed in a subdirectory.
+**DO NOT create files directly in `app/agents/`. ALL agent files MUST go in a subdirectory.**
 
-✅ **Correct structure:**
+Create the agent in the subdirectory:
 
 ```
-app/
-└── agents/
-    └── weather_agent/
-        ├── __init__.py
-        ├── agent.py
-        └── README.md
+app/agents/weather_agent/
 ```
 
-❌ **Incorrect examples (DO NOT USE):**
-- `app/agents/weather_agent.py`
-- `app/agents/weather_agent_agent.py`
+With these EXACT files:
+
+- `app/agents/weather_agent/__init__.py`  
+  - Exports the `WeatherAgent` class
+
+- `app/agents/weather_agent/agent.py`  
+  - Main agent implementation (REQUIRED)
+
+- `app/agents/weather_agent/README.md`  
+  - Human-readable documentation for usage and behavior
+
+❌ WRONG:
+```
+app/agents/weather_agent.py
+app/agents/weather_agent_agent.py
+```
+
+✅ CORRECT:
+```
+app/agents/weather_agent/agent.py
+```
 
 ---
 
-## Agent Metadata
+## Agent Identity & Discovery
 
-### Class Attributes (MANDATORY)
+### Required Class Attributes
 
-The `WeatherAgent` class MUST define the following class attributes:
+The `WeatherAgent` class MUST define:
 
 ```python
 AGENT_ID = "weather_agent"
 AGENT_NAME = "Weather Agent"
-DESCRIPTION = "Provides real-time weather conditions, short-term forecasts, and clear explanations of weather data."
+DESCRIPTION = "Provides real-time weather conditions and forecasts in clear, user-friendly language"
 CAPABILITIES = [
     "current_weather",
     "weather_forecast",
+    "location_weather_lookup",
     "weather_explanation",
-    "location_resolution"
+    "weather_alerts_summary"
 ]
 ```
 
 ---
 
+## Transport Type
+
+✅ **HTTP Agent (A2A-compliant)**  
+The weather agent MUST be implemented as an HTTP server using `aiohttp`.
+
+---
+
 ## HTTP Agent Requirements (CRITICAL)
 
-The agent MUST be implemented as an **HTTP server** using `aiohttp`.
-
-There is **no shared base class** — the agent must be fully self-contained.
+The agent MUST implement **all three required endpoints** and follow the response schemas exactly.
 
 ---
 
-## Required HTTP Endpoints
+## Endpoint 1: Agent Card
 
-### 1. GET `/.well-known/agent.json` — Agent Card
+### `GET /.well-known/agent.json`
 
 **Purpose:**  
-Used by the A2A agent manager for discovery.
+Allows agent discovery via the A2A protocol.
 
-**Response JSON (EXACT FIELDS REQUIRED):**
+### Response Format (EXACT):
+
 ```json
 {
-  "name": "Weather Agent",
-  "description": "Provides real-time weather conditions, short-term forecasts, and clear explanations of weather data.",
-  "version": "0.1.0",
-  "protocol": "a2a",
-  "capabilities": [
-    "current_weather",
-    "weather_forecast",
-    "weather_explanation",
-    "location_resolution"
-  ],
-  "endpoint": "http://localhost:{port}"
+    "name": "Weather Agent",
+    "description": "Provides real-time weather conditions and forecasts in clear, user-friendly language",
+    "version": "0.1.0",
+    "protocol": "a2a",
+    "capabilities": [
+        "current_weather",
+        "weather_forecast",
+        "location_weather_lookup",
+        "weather_explanation",
+        "weather_alerts_summary"
+    ],
+    "endpoint": "http://localhost:{port}"
 }
 ```
 
 ---
 
-### 2. GET `/health` — Health Check
+## Endpoint 2: Health Check
+
+### `GET /health`
 
 **Purpose:**  
-Used for monitoring and orchestration.
+Allows agent manager to verify agent health and uptime.
 
-**Response JSON:**
-```json
-{
-  "status": "healthy",
-  "name": "Weather Agent",
-  "version": "0.1.0",
-  "uptime_seconds": 123.45,
-  "timestamp": "2024-01-01T00:00:00+00:00"
-}
-```
-
-- `uptime_seconds` MUST be calculated from agent startup time.
-- `timestamp` MUST be UTC ISO-8601 format.
-
----
-
-### 3. POST `/` — Main Request Handler
-
-#### Request Format
+### Response Format (EXACT):
 
 ```json
 {
-  "request": "What is the weather in Paris today?",
-  "context": {},
-  "id": "optional-request-id"
-}
-```
-
-- `request` (string): Natural language user or agent request.
-- `context` (object): Optional structured metadata (location hints, units, language).
-- `id` (string, optional): Request identifier.
-
----
-
-#### Response Format (SUCCESS)
-
-```json
-{
-  "success": true,
-  "response": "The current weather in Paris is 18°C with light rain...",
-  "error": null,
-  "metadata": {
-    "location": "Paris, FR",
-    "units": "metric",
-    "data_source": "open-meteo",
-    "timestamp": "2024-01-01T12:00:00Z"
-  }
-}
-```
-
-#### Response Format (ERROR)
-
-```json
-{
-  "success": false,
-  "response": null,
-  "error": "Unable to determine location from request",
-  "metadata": {}
+    "status": "healthy",
+    "name": "Weather Agent",
+    "version": "0.1.0",
+    "uptime_seconds": 123.45,
+    "timestamp": "2024-01-01T00:00:00Z"
 }
 ```
 
 ---
 
-## Status Protocol (CRITICAL)
+## Endpoint 3: Main Request Handler
 
-The agent MUST emit status messages to **stdout** exactly in the following format:
+### `POST /`
+
+### Request Format (EXACT):
+
+```json
+{
+    "request": "What is the weather in Paris tomorrow?",
+    "context": {
+        "units": "metric",
+        "language": "en"
+    },
+    "id": "optional-request-id"
+}
+```
+
+### Required Request Handling Behavior
+
+The agent MUST:
+
+1. Emit status:
+   ```
+   STATUS:executing:Processing request
+   ```
+
+2. Parse the `request` field as natural language
+3. Extract or infer:
+   - **Location** (city, region, country, or coordinates)
+   - **Timeframe** (now, today, tomorrow, specific date, next 7 days)
+4. If location is missing or ambiguous:
+   - Ask a **clarifying question** in the response
+5. Fetch weather data from a real-time weather API (e.g., OpenWeatherMap, WeatherAPI)
+6. Convert raw data into **plain-language explanations**
+7. Emit:
+   ```
+   STATUS:waiting:Idle, waiting for requests
+   ```
+
+---
+
+## Response Format (EXACT)
+
+```json
+{
+    "success": true,
+    "response": "Human-readable weather explanation",
+    "error": null,
+    "metadata": {
+        "location": "Paris, FR",
+        "timeframe": "tomorrow",
+        "units": "metric",
+        "data_source": "external_weather_api"
+    }
+}
+```
+
+---
+
+## Weather Explanation Rules (CRITICAL)
+
+All weather responses MUST:
+
+- Use **non-technical language**
+- Avoid API-specific jargon
+- Use full sentences
+- Be concise but informative (3–6 sentences)
+- Include temperatures, conditions, and notable risks
+
+---
+
+## Exact Response Behaviors
+
+### 1. Current Weather Query
+
+**Input:**
+```json
+{
+    "request": "What's the weather like in New York right now?",
+    "context": {}
+}
+```
+
+**Response (Example Structure):**
+```json
+{
+    "success": true,
+    "response": "It is currently 22°C in New York City with partly cloudy skies. The air feels comfortable, and there is a light breeze coming from the west. No rain is expected in the next few hours.",
+    "error": null,
+    "metadata": {
+        "location": "New York City, US",
+        "timeframe": "current",
+        "units": "metric"
+    }
+}
+```
+
+---
+
+### 2. Tomorrow Forecast
+
+**Input:**
+```json
+{
+    "request": "Will it rain in London tomorrow?",
+    "context": {}
+}
+```
+
+**Required Behavior:**
+- Explicitly answer the rain question
+- Include temperature range
+- Mention confidence if precipitation is likely
+
+**Response MUST include:**
+- Yes/no on rain
+- High/low temperature
+- General conditions
+
+---
+
+### 3. Multi-Day Forecast
+
+**Input:**
+```json
+{
+    "request": "Give me a 7 day forecast for Tokyo",
+    "context": {}
+}
+```
+
+**Response Rules:**
+- Summarize trends, not hourly detail
+- Mention temperature trend and major weather events
+- No more than 8 sentences total
+
+---
+
+### 4. Missing Location
+
+**Input:**
+```json
+{
+    "request": "What's the weather like today?",
+    "context": {}
+}
+```
+
+**Response MUST be:**
+```json
+{
+    "success": true,
+    "response": "I can help with that — could you please tell me the city or location you want the weather for?",
+    "error": null,
+    "metadata": {
+        "reason": "missing_location"
+    }
+}
+```
+
+---
+
+### 5. Invalid or Unsupported Request
+
+**Input:**
+```json
+{
+    "request": "Tell me a joke",
+    "context": {}
+}
+```
+
+**Response MUST be:**
+```json
+{
+    "success": false,
+    "response": null,
+    "error": "Unsupported request. I can provide current weather and forecasts for specific locations.",
+    "metadata": {}
+}
+```
+
+---
+
+## Error Handling Rules
+
+- API failures → return `success: false` with a clear explanation
+- Timeouts → explain temporary unavailability
+- Never expose API keys or stack traces
+
+---
+
+## Status Protocol (MANDATORY)
+
+The agent MUST emit these lines to stdout:
 
 ```
 STATUS:starting:Initializing Weather Agent
 STATUS:running:Server started on port {port}
 STATUS:executing:Processing request
 STATUS:waiting:Idle, waiting for requests
-STATUS:failed:{error_message}
+STATUS:failed:{error message}
 STATUS:stopping:Shutting down
 STATUS:stopped:Agent terminated
-```
-
-- Status lines MUST be flushed immediately.
-- `STATUS:executing` MUST be emitted at the start of request processing.
-- `STATUS:waiting` MUST be emitted after request completion (success or failure).
-
----
-
-## Weather Data Requirements
-
-### Data Source
-
-- The agent MUST use a **real-time public weather API**, such as:
-  - Open-Meteo (preferred, no API key)
-  - OpenWeatherMap (allowed, API key via environment variable)
-
-### Required Data Points
-
-For **current conditions**:
-- Temperature
-- Feels-like temperature (if available)
-- Weather description (clear, rain, snow, etc.)
-- Wind speed
-- Precipitation (if present)
-
-For **forecast**:
-- Daily high and low temperatures
-- General conditions per day
-- Precipitation chance (if available)
-
----
-
-## Core Behavior Specification
-
-### 1. Location Resolution
-
-The agent MUST:
-- Extract location from natural language (e.g., “London”, “Tokyo”, “90210”)
-- Use `context.location` if provided
-- If no location can be determined:
-  - Return `success: false`
-  - Error message:  
-    **"Unable to determine location from request"**
-
----
-
-### 2. Units Handling
-
-- Default units: **metric (°C, km/h)**
-- If request contains:
-  - “Fahrenheit” → use imperial
-  - “Celsius” → use metric
-- Units used MUST be reflected in the response text and metadata.
-
----
-
-### 3. Response Style (MANDATORY)
-
-All responses MUST:
-- Be written in **plain, friendly English**
-- Avoid meteorological jargon
-- Use short paragraphs or bullet points
-- Include units explicitly (°C, °F, km/h, mph)
-
-✅ Correct:
-> “It’s currently 22°C and sunny in Madrid. Winds are light at about 10 km/h.”
-
-❌ Incorrect:
-> “Surface temperatures indicate anticyclonic dominance.”
-
----
-
-## EXACT Response Behavior by Request Type
-
-### A. Current Weather Request
-
-**Example Input:**
-```json
-{
-  "request": "What's the weather in Berlin right now?"
-}
-```
-
-**Response Text MUST:**
-1. State location
-2. State current temperature
-3. Describe conditions
-4. Mention wind and precipitation if relevant
-
-**Example Response:**
-```
-Right now in Berlin, it’s 16°C with partly cloudy skies.
-Winds are light at around 8 km/h, and there’s no rain at the moment.
-```
-
----
-
-### B. Forecast Request
-
-**Example Input:**
-```json
-{
-  "request": "Will it rain in Seattle this week?"
-}
-```
-
-**Default Behavior:**
-- Provide a **3-day forecast**
-- Mention rain chances explicitly
-
-**Example Response:**
-```
-Here’s a quick look at the next few days in Seattle:
-
-• Today: Cloudy with occasional rain, high of 14°C  
-• Tomorrow: Rain likely throughout the day, high of 13°C  
-• Day after tomorrow: Mostly cloudy with a chance of showers, high of 15°C
-```
-
----
-
-### C. Weather Explanation Request
-
-**Example Input:**
-```json
-{
-  "request": "Why is it so windy today in Chicago?"
-}
-```
-
-**Response MUST:**
-- Provide a simple explanation
-- Avoid technical pressure-system terminology unless simplified
-
-**Example Response:**
-```
-It’s windy in Chicago today because a weather system is moving through the area.
-As it passes, it creates pressure differences in the atmosphere, which causes the air to move faster — that’s what we feel as strong wind.
-```
-
----
-
-### D. Ambiguous or Unsupported Requests
-
-**Example Input:**
-```json
-{
-  "request": "Tell me about the weather"
-}
-```
-
-**Response MUST:**
-```
-I can help with that — just let me know which city or location you’re interested in.
 ```
 
 ---
 
 ## README.md Requirements
 
-The `README.md` MUST include:
+The README MUST include:
 - Agent purpose
-- Supported request examples
-- How to run the agent
-- Required environment variables (if any)
 - Example curl request
+- Example response
+- Supported query types
+- Environment variables required (e.g., WEATHER_API_KEY)
 
 ---
 
-## Summary of Key Constraints
+## Summary
 
-✅ MUST use HTTP A2A protocol  
-✅ MUST implement all required endpoints  
-✅ MUST follow directory structure exactly  
-✅ MUST emit STATUS lines  
-✅ MUST provide clear, friendly weather explanations  
-✅ MUST return structured JSON responses  
-
----
-
-**End of Specification — weather_agent**
+The `weather_agent` is a **self-contained A2A HTTP agent** that:
+- Understands natural-language weather questions
+- Retrieves real-time and forecast weather data
+- Explains weather clearly and safely
+- Strictly adheres to the A2A protocol and response formats
 ```

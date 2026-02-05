@@ -280,6 +280,36 @@ class Verifier:
 
             gaps.append(f"[Execution Summary] {' | '.join(exec_summary_parts)}")
 
+            # Include build_output details for debugging (agent stderr/stdout on failure)
+            build_output = exec_data.get("build_output", {})
+            if build_output:
+                build_parts = []
+                if build_output.get("startup_failed"):
+                    build_parts.append("STARTUP FAILED")
+                    if build_output.get("error"):
+                        build_parts.append(f"Error: {str(build_output['error'])[:500]}")
+                    agent_stderr = build_output.get("agent_stderr", [])
+                    if agent_stderr:
+                        # Include up to last 100 lines of stderr for debugging
+                        stderr_lines = [str(line) for line in agent_stderr[-100:]]
+                        stderr_snippet = "\n".join(stderr_lines)
+                        build_parts.append(f"Stderr ({len(agent_stderr)} lines, last {min(len(agent_stderr), 100)}):\n{stderr_snippet}")
+                    agent_stdout = build_output.get("agent_stdout", [])
+                    if agent_stdout:
+                        # Include up to last 50 lines of stdout
+                        stdout_lines = [str(line) for line in agent_stdout[-50:]]
+                        stdout_snippet = "\n".join(stdout_lines)
+                        build_parts.append(f"Stdout ({len(agent_stdout)} lines, last {min(len(agent_stdout), 50)}):\n{stdout_snippet}")
+                elif build_output.get("test_stderr"):
+                    # Include test stderr if present (up to 100 lines)
+                    test_stderr = build_output.get("test_stderr", "")
+                    if test_stderr.strip():
+                        stderr_lines = test_stderr.strip().split("\n")[-100:]
+                        build_parts.append(f"Test stderr ({len(stderr_lines)} lines):\n{chr(10).join(stderr_lines)}")
+
+                if build_parts:
+                    gaps.append(f"[Build Output] {' | '.join(build_parts)}")
+
         # Suggest next actions
         next_actions = self._suggest_next_actions_from_evidence(criterion_evidences, gaps)
 
@@ -385,6 +415,7 @@ class Verifier:
         - Runs actually executed: bonus for coverage
         - Skipped/no data: penalized appropriately
         - Test script results (when available): factored into scoring
+        - BUILD FAILURE: 0.0 score (agent didn't even start!)
         """
         exec_evidence = ""
         valid_evidence = ""
@@ -398,6 +429,20 @@ class Verifier:
         runs = exec_data.get("runs", [])
         errors = exec_data.get("all_errors", [])
         build_output = exec_data.get("build_output", {})
+
+        # CRITICAL: Check for build/startup failure FIRST
+        # If the agent failed to start, score is 0.0 - nothing else matters
+        if build_output and build_output.get("startup_failed"):
+            startup_error = build_output.get("error", "Unknown startup error")
+            agent_stderr = build_output.get("agent_stderr", [])
+
+            exec_evidence = f"BUILD FAILURE - Agent failed to start: {startup_error}. "
+            if agent_stderr:
+                # Extract the most relevant error (usually syntax errors)
+                stderr_snippet = "; ".join(agent_stderr[-3:])[:300]
+                exec_evidence += f"Stderr: {stderr_snippet}"
+
+            return 0.0, exec_evidence.strip(), "Agent never started - cannot evaluate output."
 
         # Check for test script results (from execute_with_test_script)
         tests_passed = build_output.get("tests_passed") if build_output else None
@@ -615,7 +660,7 @@ class Verifier:
     ) -> tuple[float, str]:
         """Use LLM to score subjective criterion.
 
-        Enhanced to include test script output for better evaluation.
+        Enhanced to include test script output and build failure context for better evaluation.
         """
         if not self.llm_client:
             return 0.5, "LLM not available"
@@ -628,20 +673,35 @@ class Verifier:
             context_parts.append(f"Smoke test passed: {exec_data.get('smoke_test_passed', 'unknown')}")
             errors = exec_data.get('all_errors', [])
             if errors:
-                context_parts.append(f"Errors: {'; '.join(errors[:3])}")
+                context_parts.append(f"Errors: {'; '.join(str(e)[:200] for e in errors[:5])}")
 
-            # Include test script output if available (from execute_with_test_script)
+            # CRITICAL: Check for build/startup failures first - these mean the agent never ran
             build_output = exec_data.get('build_output', {})
             if build_output:
-                test_stdout = build_output.get('test_stdout', '')
-                if test_stdout:
-                    # Include relevant portion of test output
-                    context_parts.append(f"Test Output:\n{test_stdout[:1500]}")
+                startup_failed = build_output.get('startup_failed', False)
+                if startup_failed:
+                    context_parts.append("\n⚠️ CRITICAL BUILD FAILURE - Agent did not start!")
+                    context_parts.append(f"Startup Error: {build_output.get('error', 'Unknown error')}")
+                    # Include stderr for debugging context
+                    agent_stderr = build_output.get('agent_stderr', [])
+                    if agent_stderr:
+                        stderr_text = '\n'.join(agent_stderr[-10:])  # Last 10 lines
+                        context_parts.append(f"Agent stderr (last 10 lines):\n{stderr_text}")
+                    agent_stdout = build_output.get('agent_stdout', [])
+                    if agent_stdout:
+                        stdout_text = '\n'.join(agent_stdout[-5:])
+                        context_parts.append(f"Agent stdout (last 5 lines):\n{stdout_text}")
+                else:
+                    # Agent started - check for test output
+                    test_stdout = build_output.get('test_stdout', '')
+                    if test_stdout:
+                        # Include relevant portion of test output
+                        context_parts.append(f"Test Output:\n{test_stdout[:1500]}")
 
-                tests_passed = build_output.get('tests_passed')
-                tests_total = build_output.get('tests_total')
-                if tests_passed is not None and tests_total is not None:
-                    context_parts.append(f"Test Results: {tests_passed}/{tests_total} tests passed")
+                    tests_passed = build_output.get('tests_passed')
+                    tests_total = build_output.get('tests_total')
+                    if tests_passed is not None and tests_total is not None:
+                        context_parts.append(f"Test Results: {tests_passed}/{tests_total} tests passed")
 
         if valid_data:
             findings = valid_data.get('findings', [])
@@ -649,12 +709,25 @@ class Verifier:
                 finding_msgs = [f.get('message', '') for f in findings[:3]]
                 context_parts.append(f"Validation findings: {'; '.join(finding_msgs)}")
 
+        # Check if we have a build failure
+        has_build_failure = (
+            exec_data and
+            exec_data.get('build_output', {}).get('startup_failed', False)
+        )
+
         prompt = f"""Score this criterion from 0.0 to 1.0 based on the evidence:
 
 {chr(10).join(context_parts)}
 
 Provide a score (0.0-1.0) and brief explanation.
+
+IMPORTANT SCORING RULES:
+1. If there is a BUILD FAILURE or STARTUP FAILURE, the score MUST be 0.0 - the agent never ran!
+2. If the agent started but tests failed, score based on how many tests passed.
+3. If tests passed and responses look good, score accordingly.
+
 Consider:
+- Did the agent even start? (Check for startup failures first!)
 - Did tests actually run and pass?
 - Are there real responses from the agent?
 - Do the responses demonstrate the criterion is met?
