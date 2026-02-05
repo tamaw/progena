@@ -96,8 +96,8 @@ def mock_state_files(tmp_path):
         "build_phase": "execute",
         "build_task_description": "Establishing first contact protocol",
         "build_started_at": datetime.now(timezone.utc).isoformat(),
-        "current_iteration": 3,
-        "verification_score": 0.75,
+        "iteration": {"current": 3},
+        "verification": {"current_score": 0.75},
         "build_messages": [
             {"role": "user", "content": "Start contact"},
             {"role": "assistant", "content": "Initiating..."},

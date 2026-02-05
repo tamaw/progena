@@ -273,7 +273,7 @@ class TestClarificationIntegration:
         # State with build output that needs clarification
         state = cast(ProgenitorState, {
             "ideal_state": IdealState(task_description="Build an agent").model_dump(),
-            "current_iteration": 1,
+            "iteration": {"current": 1},
             "iteration_start_time": 0,
             "last_iteration_output": {
                 "build_result": {
@@ -287,7 +287,7 @@ class TestClarificationIntegration:
         result = await verify_node(state)
 
         # Should detect clarification need
-        assert result.get("clarification_needed") is True or result.get("verification_score", 0) < 1.0
+        assert result.get("clarification", {}).get("needed") is True or result.get("verification", {}).get("current_score", 0) < 1.0
 
     @pytest.mark.asyncio
     async def test_intake_recognizes_clarification_response(self):
@@ -332,7 +332,7 @@ NEW_ANTI_CRITERIA:
         )
 
         state = cast(ProgenitorState, {
-            "current_iteration": 1,
+            "iteration": {"current": 1},
             "ideal_state": initial_ideal_state,
             "awaiting_clarification": True,
             "clarification_response": "Use OAuth2 for authentication",
@@ -385,10 +385,10 @@ NEW_ANTI_CRITERIA:
 
         # State where clarification is needed
         state = cast(ProgenitorState, {
-            "current_iteration": 1,
-            "clarification_needed": True,
+            "iteration": {"current": 1},
+            "clarification": {"needed": True},
             "verification_passed": False,
-            "verification_score": 0.5,
+            "verification": {"current_score": 0.5},
         })
 
         route = should_iterate(state)

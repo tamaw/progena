@@ -130,8 +130,8 @@ def complete_state_files(tmp_path):
         "build_phase": "execute",
         "build_task_description": "Establishing first contact protocol",
         "build_started_at": (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat(),
-        "current_iteration": 7,
-        "verification_score": 0.89,
+        "iteration": {"current": 7},
+        "verification": {"current_score": 0.89},
         "build_messages": [
             {"role": "user", "content": "Begin first contact sequence"},
             {"role": "assistant", "content": "Initializing diplomatic protocols..."},

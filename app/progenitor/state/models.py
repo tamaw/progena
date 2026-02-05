@@ -47,6 +47,28 @@ class DecisionAction(str, Enum):
     SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)
 
 
+class BuildPhase(str, Enum):
+    """Phases of the inner build loop."""
+    OBSERVE = "observe"
+    THINK = "think"
+    PLAN = "plan"
+    BUILD = "build"
+    EXECUTE = "execute"
+    VERIFY = "verify"
+    LEARN = "learn"
+
+
+class IterationStopReason(str, Enum):
+    """Reasons why the inner loop iteration stopped."""
+    MAX_ITERATIONS = "max_iterations"
+    VERIFICATION_PASSED = "verification_passed"
+    USER_INTERVENTION = "user_intervention"
+    BUILD_FAILURE = "build_failure"
+    TIMEOUT = "timeout"
+    STAGNATING = "stagnating"  # No progress across iterations
+    MANUAL_STOP = "manual_stop"
+
+
 # Patterns for secret redaction - (pattern, replacement_or_handler)
 # Order matters: more specific patterns should come first
 # NOTE: Patterns are carefully crafted to avoid false positives (e.g., UUIDs, hashes)
@@ -351,8 +373,8 @@ class LoopControlState(TypedDict, total=False):
 class TaskInfo(TypedDict, total=False):
     """Build task information."""
     description: str  # Human-readable build description (summary)
-    # NOTE: user_request is now at top-level state, not duplicated here
     target_capabilities: list[str]  # Capabilities being built
+    created_at: Optional[str]  # ISO timestamp when task was created
 
 
 class IterationInfo(TypedDict, total=False):
@@ -375,17 +397,20 @@ class ThinkPhase(TypedDict, total=False):
     approaches: list[dict[str, Any]]  # Structured approaches
     recommended_id: Optional[str]  # Selected approach ID
     gaps_analyzed: list[str]  # Gaps from previous iteration
+    completed_at: Optional[str]  # ISO timestamp when thinking completed
 
 
 class PlanPhase(TypedDict, total=False):
     """PLAN phase results."""
     experiment_plan: Optional[dict[str, Any]]  # ExperimentPlan
+    completed_at: Optional[str]  # ISO timestamp when planning completed
 
 
 class ExecutePhase(TypedDict, total=False):
     """EXECUTE phase results."""
     completed: bool  # Whether execution finished
     result: Optional[dict[str, Any]]  # Compact execution result (tests, duration, status)
+    completed_at: Optional[str]  # ISO timestamp when execution completed
 
 
 class VerifyPhase(TypedDict, total=False):
@@ -394,14 +419,35 @@ class VerifyPhase(TypedDict, total=False):
     score: float  # Verification score
     target_score: float  # Target score to pass
     gaps: list[str]  # Unmet criteria
+    completed_at: Optional[str]  # ISO timestamp when verification completed
 
 
 class BuildPhases(TypedDict, total=False):
-    """Phase-grouped state - single source of truth for each phase output."""
+    """Phase-grouped state - single source of truth for each phase output.
+
+    Each phase includes optional completion timestamps for traceability.
+    """
     think: ThinkPhase
+    think_completed_at: Optional[str]  # ISO timestamp
     plan: PlanPhase
+    plan_completed_at: Optional[str]  # ISO timestamp
     execute: ExecutePhase
+    execute_completed_at: Optional[str]  # ISO timestamp
     verify: VerifyPhase
+    verify_completed_at: Optional[str]  # ISO timestamp
+
+
+class VerificationState(TypedDict, total=False):
+    """Current verification state (consolidated for routing and access).
+
+    This provides a single source of truth for verification status,
+    avoiding duplication across phases.verify and top-level fields.
+    """
+    current_score: Optional[float]  # Latest verification score
+    current_passed: Optional[bool]  # Whether latest verification passed
+    target_score: float  # Target score needed to pass (default 0.8)
+    current_report: Optional[dict[str, Any]]  # Latest VerificationReportV2 as dict
+    gaps: list[str]  # Current unmet criteria
 
 
 class BuildHistory(TypedDict, total=False):
@@ -417,15 +463,26 @@ class BestResult(TypedDict, total=False):
     iteration: int  # Iteration that produced best result
     score: float  # Best score achieved
     passed: bool  # Whether that iteration passed
+    achieved_at: Optional[str]  # ISO timestamp when best result was achieved
+    verification_report_ref: Optional[str]  # Reference to report in history (e.g., index or ID)
+
+
+class ClarificationQA(TypedDict, total=False):
+    """A single clarification question-answer pair."""
+    question: str
+    response: str
+    asked_at: str  # ISO timestamp
+    answered_at: Optional[str]  # ISO timestamp
 
 
 class ClarificationState(TypedDict, total=False):
     """Clarification handling (user interaction during build)."""
     needed: bool  # Whether clarification is needed
-    question: Optional[str]  # Question to ask user
+    question: Optional[str]  # Current question to ask user
     context: Optional[str]  # Raw context indicating need
     awaiting: bool  # Currently waiting for response
-    response: Optional[str]  # User's response
+    response: Optional[str]  # User's response to current question
+    history: list[ClarificationQA]  # Previous Q&As for context
 
 
 class InnerLoopState(TypedDict, total=False):
@@ -435,45 +492,43 @@ class InnerLoopState(TypedDict, total=False):
     namespace to avoid field collision and improve readability.
 
     Structure:
-    - build_*: Top-level build control
+    - build_*: Top-level build control (uses BuildPhase enum)
     - user_request: Original user request (single source of truth)
     - task: What we're building (summary only)
-    - iteration: Iteration tracking
+    - iteration: Iteration tracking (single source of truth for iteration number)
     - spec: Spec document reference (content read from file)
-    - phases: Phase-grouped outputs (single source of truth)
+    - phases: Phase-grouped outputs with timestamps
+    - verification: Consolidated verification state (single source of truth)
     - history: Accumulated data across iterations
-    - best: Best result tracking
-    - clarification: User interaction state
+    - best: Best result tracking with timestamps
+    - clarification: User interaction state with history
     """
     # Build control (top-level for quick access)
     build_in_progress: bool  # True while building, blocks new builds
     build_id: Optional[str]  # Unique identifier for the current build
     build_started_at: Optional[str]  # ISO timestamp when build started
-    build_phase: Optional[str]  # Current phase: observe, think, plan, build, execute, verify, learn
+    build_phase: Optional[str]  # Current phase (use BuildPhase enum values)
     task_id: Optional[str]  # Unique task identifier
-    user_request: Optional[str]  # Original user request (single source of truth, not duplicated in task)
+    user_request: Optional[str]  # Original user request (single source of truth)
 
     # Nested objects for organization
-    task: TaskInfo  # What we're building (summary description, not full user_request)
-    iteration: IterationInfo  # Iteration tracking
+    task: TaskInfo  # What we're building (summary description)
+    iteration: IterationInfo  # Iteration tracking (iteration.current is the source of truth)
     spec: SpecInfo  # Spec document reference
-    phases: BuildPhases  # Phase-grouped outputs
+    phases: BuildPhases  # Phase-grouped outputs with timestamps
     history: BuildHistory  # Historical data
-    best: BestResult  # Best result tracking
-    clarification: ClarificationState  # User interaction
+    best: BestResult  # Best result tracking with timestamps
+    clarification: ClarificationState  # User interaction with history
 
-    # Ideal state (complex object, kept at top level)
-    ideal_state: Optional[Any]  # IdealState object
+    # Ideal state (from IdealState model or dict representation)
+    ideal_state: Optional[dict[str, Any]]  # IdealState as dict for JSON serialization
 
-    # Verification state (synced at top level for routing and learn phase)
-    verification_score: Optional[float]  # Last verification score for routing
-    verification_passed: Optional[bool]  # Whether last verification passed
-    last_verification_report: Optional[Any]  # Full VerificationReport for learn phase
-    current_iteration: Optional[int]  # Current iteration number (synced for routing)
+    # Consolidated verification state (single source of truth)
+    verification: VerificationState  # All verification data in one place
 
     # Stop conditions
     should_iterate: bool  # Whether to continue iterating
-    iteration_stop_reason: Optional[str]  # Why iteration stopped
+    iteration_stop_reason: Optional[str]  # Why iteration stopped (use IterationStopReason enum values)
 
 
 class ExecutionState(TypedDict, total=False):

@@ -196,8 +196,8 @@ class BuildInfo:
             phase=data.get("build_phase"),
             task_description=data.get("build_task_description"),
             started_at=data.get("build_started_at"),
-            iteration=data.get("current_iteration", 0),
-            score=data.get("verification_score", 0.0),
+            iteration=data.get("iteration", {}).get("current", 0),
+            score=data.get("verification", {}).get("current_score", 0.0),
             message_count=len(data.get("build_messages", [])),
         )
 
@@ -334,8 +334,8 @@ class StateReader:
             # Keep build-specific fields from build_state
             "build_in_progress": build.get("build_in_progress", False),
             "build_phase": build.get("build_phase"),
-            "verification_score": build.get("verification_score", 0.0),
-            "current_iteration": build.get("current_iteration", 0),
+            "verification_score": build.get("verification", {}).get("current_score", 0.0),
+            "current_iteration": build.get("iteration", {}).get("current", 0),
         }
         return combined
 

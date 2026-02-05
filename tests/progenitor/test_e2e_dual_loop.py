@@ -152,15 +152,14 @@ class TestDualLoopEndToEnd:
             "backlog": [test_work_item],
             "current_work_item": None,
             "cycle_count": 0,
-            "current_iteration": 0,
-            "verification_passed": False,
-            "verification_score": 0.0,
+            "iteration": {"current": 0},
+            "verification": {"current_passed": False, "current_score": 0.0},
             "should_iterate": True,
         }
 
         assert len(state["backlog"]) == 1
         assert state["backlog"][0].id == "test-item-001"
-        assert state["current_iteration"] == 0
+        assert state["iteration"]["current"] == 0
 
     def test_work_item_transitions(self, test_work_item):
         """Test that work items can transition through statuses."""
@@ -202,47 +201,46 @@ class TestIterationControl:
     def test_iteration_increment(self):
         """Test that iterations are tracked correctly."""
         state: ProgenitorState = {
-            "current_iteration": 0,
-            "verification_passed": False,
+            "iteration": {"current": 0},
+            "verification": {"current_passed": False},
             "should_iterate": True,
         }
 
         # Simulate iteration increment
-        state["current_iteration"] += 1
-        assert state["current_iteration"] == 1
+        state["iteration"]["current"] += 1
+        assert state["iteration"]["current"] == 1
 
-        state["current_iteration"] += 1
-        assert state["current_iteration"] == 2
+        state["iteration"]["current"] += 1
+        assert state["iteration"]["current"] == 2
 
     def test_verification_stops_iteration(self):
         """Test that passing verification stops iteration."""
         state: ProgenitorState = {
-            "current_iteration": 1,
-            "verification_passed": False,
-            "verification_score": 0.5,
+            "iteration": {"current": 1},
+            "verification": {"current_passed": False, "current_score": 0.5},
             "should_iterate": True,
         }
 
         # Simulate verification passing
-        state["verification_passed"] = True
-        state["verification_score"] = 0.9
+        state["verification"]["current_passed"] = True
+        state["verification"]["current_score"] = 0.9
         state["should_iterate"] = False
 
         assert not state["should_iterate"]
-        assert state["verification_score"] >= 0.8
+        assert state["verification"]["current_score"] >= 0.8
 
     def test_max_iterations_stops_loop(self, test_config):
         """Test that max iterations setting is respected."""
         max_iter = test_config.runtime.max_inner_iterations
 
         state: ProgenitorState = {
-            "current_iteration": max_iter,
-            "verification_passed": False,
+            "iteration": {"current": max_iter},
+            "verification": {"current_passed": False},
             "should_iterate": True,
         }
 
         # At max iterations, should stop
-        if state["current_iteration"] >= max_iter:
+        if state["iteration"]["current"] >= max_iter:
             state["should_iterate"] = False
             state["iteration_stop_reason"] = "max_iterations_reached"
 

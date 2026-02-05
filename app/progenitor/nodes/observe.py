@@ -56,7 +56,7 @@ def create_node(
         tracer, metrics = _get_telemetry()
         span = None
 
-        iteration = state.get("current_iteration", 0)
+        iteration = state.get("iteration", {}).get("current", 0)
         ideal_state = state.get("ideal_state")
 
         # Convert ideal_state from dict to IdealState object if necessary
@@ -93,9 +93,6 @@ def create_node(
                 "build_phase": "observe",
                 "task_id": task_id,
                 "should_iterate": True,
-                # Sync flat iteration keys for routing compatibility
-                "current_iteration": 0,
-                "max_iterations": DEFAULT_MAX_INNER_ITERATIONS,
                 # Single source of truth for user request (not duplicated in task)
                 "user_request": task_description,
 
@@ -104,12 +101,21 @@ def create_node(
                     "description": task_description[:200],
                     # NOTE: user_request moved to top-level to avoid duplication
                     "target_capabilities": [],
+                    "created_at": now_iso,
                 },
-                # Nested iteration info
+                # Nested iteration info (single source of truth)
                 "iteration": {
                     "current": 0,
                     "max": DEFAULT_MAX_INNER_ITERATIONS,
                     "start_time": now_time,
+                },
+                # Initialize verification state
+                "verification": {
+                    "current_score": 0.0,
+                    "current_passed": False,
+                    "target_score": DEFAULT_VERIFICATION_TARGET_SCORE,
+                    "current_report": None,
+                    "gaps": [],
                 },
                 # Initialize history
                 "history": {
@@ -131,29 +137,28 @@ def create_node(
                     "context": None,
                     "awaiting": False,
                     "response": None,
+                    "history": [],
                 },
             }
             logger.info("Initialized inner loop state for task %s (build_in_progress=True)", task_id)
         else:
             # Increment iteration at the start of a new cycle when verification did not meet target
             if not state.get("clarification", {}).get("needed", False) and not awaiting_clarification:
-                verify_phase = state.get("phases", {}).get("verify", {})
-                verification_score = verify_phase.get("score", 0.0)
-                target_score = verify_phase.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
-                if verification_score < target_score and not verify_phase.get("passed", False):
+                verification = state.get("verification", {})
+                verification_score = verification.get("current_score", 0.0)
+                target_score = verification.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+                if verification_score < target_score and not verification.get("current_passed", False):
                     next_iteration = (iteration or 0) + 1
                     # Preserve max from state (LangGraph shallow-merges, so we need to include it)
                     iter_info = state.get("iteration", {})
-                    max_iter = state.get("max_iterations") or iter_info.get("max", 20)
+                    max_iter = iter_info.get("max", DEFAULT_MAX_INNER_ITERATIONS)
                     state_updates = {
-                        # Sync both nested and flat iteration keys for compatibility
+                        # Nested iteration info (single source of truth)
                         "iteration": {
                             "current": next_iteration,
                             "max": max_iter,  # Preserve max_iterations through shallow merge
                             "start_time": time.time(),
                         },
-                        "current_iteration": next_iteration,
-                        "max_iterations": max_iter,  # Also sync flat key for routing
                     }
                     iteration = next_iteration
                     logger.info("Incrementing iteration from %d to %d (score=%.2f < target=%.2f)",
@@ -261,7 +266,7 @@ def create_node(
 
             else:
                 # Subsequent iterations - refine based on results
-                last_verification = state.get("last_verification_report")
+                last_verification = state.get("verification", {}).get("current_report")
                 last_output = state.get("last_iteration_output")
 
                 if last_verification:

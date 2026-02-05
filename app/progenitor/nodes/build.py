@@ -151,7 +151,8 @@ def create_node(
             logger.info(f"BUILD: Copilot completed, success={build_result.get('success')}")
 
             # Track iteration (do not increment here; increment happens in learn)
-            current_iteration = state.get("current_iteration", 0)
+            iteration_state = state.get("iteration", {})
+            current_iteration = iteration_state.get("current", 0) if isinstance(iteration_state, dict) else getattr(iteration_state, "current", 0)
 
             # Mark pending backlog items as completed (run finished, regardless of test outcome)
             updated_backlog = mark_actionable_items_completed(backlog, build_result)

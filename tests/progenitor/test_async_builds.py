@@ -123,7 +123,7 @@ class TestBackgroundBuildRunner:
     def mock_graph(self):
         """Create a mock graph."""
         graph = AsyncMock()
-        graph.ainvoke = AsyncMock(return_value={"verification_score": 0.9, "agent_name": "test_agent"})
+        graph.ainvoke = AsyncMock(return_value={"verification": {"current_score": 0.9}, "agent_name": "test_agent"})
         return graph
 
     @pytest.fixture
@@ -511,7 +511,7 @@ class TestAsyncBuildIntegration:
         async def quick_invoke(state, config=None):
             await asyncio.sleep(0.05)
             return {
-                "verification_score": 0.85,
+                "verification": {"current_score": 0.85},
                 "agent_name": "test_agent",
             }
         graph.ainvoke = quick_invoke

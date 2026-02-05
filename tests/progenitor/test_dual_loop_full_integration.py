@@ -216,7 +216,7 @@ class TestShouldIterateLogic:
     def test_first_iteration_continues(self):
         """First iteration should always continue."""
         state: ProgenitorState = {
-            "current_iteration": 0,
+            "iteration": {"current": 0},
             "ideal_state": None,
         }
 
@@ -226,8 +226,8 @@ class TestShouldIterateLogic:
     def test_verification_passed_stops(self):
         """Should stop when verification passes."""
         state: ProgenitorState = {
-            "current_iteration": 2,
-            "verification_passed": True,
+            "iteration": {"current": 2},
+            "verification": {"current_passed": True},
             "last_verification_report": {"overall_score": 0.95},
         }
 
@@ -237,8 +237,8 @@ class TestShouldIterateLogic:
     def test_max_iterations_stops(self):
         """Should stop when max iterations reached."""
         state: ProgenitorState = {
-            "current_iteration": 5,
-            "verification_passed": False,
+            "iteration": {"current": 5},
+            "verification": {"current_passed": False},
         }
 
         result = should_iterate(state, max_iterations=5)
@@ -247,8 +247,8 @@ class TestShouldIterateLogic:
     def test_continues_under_limit(self):
         """Should continue if under limit and not passed."""
         state: ProgenitorState = {
-            "current_iteration": 2,
-            "verification_passed": False,
+            "iteration": {"current": 2},
+            "verification": {"current_passed": False},
             "ideal_state": None,
         }
 
@@ -379,7 +379,7 @@ class TestDualLoopIntegration:
             "cycle_count": 0,
             "actions_this_cycle": 0,
             "shutdown_requested": True,  # Exit after one cycle for test
-            "current_iteration": 0,
+            "iteration": {"current": 0},
         }
 
         config_dict: Any = {"configurable": {"thread_id": "test-iteration"}}

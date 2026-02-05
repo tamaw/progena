@@ -46,7 +46,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
     context = {}
 
     # Iteration info
-    context["iteration"] = state.get("current_iteration", 0)
+    context["iteration"] = state.get("iteration", {}).get("current", 0)
     context["user_request"] = state.get("user_request", "")
 
     # Ideal state - the target we're trying to reach
@@ -87,7 +87,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
             context["execution_result"] = {"raw": str(execution_result)}
 
     # Verification report - how well we did
-    verification_report = state.get("last_verification_report")
+    verification_report = state.get("verification", {}).get("current_report")
     if not verification_report:
         verify_phase = phases.get("verify", {})
         if verify_phase:
@@ -142,7 +142,7 @@ def create_node(
         tracer, metrics = _get_telemetry()
         span = None
 
-        iteration = state.get("current_iteration", 0)
+        iteration = state.get("iteration", {}).get("current", 0)
 
         if tracer:
             span = tracer.start_span(
