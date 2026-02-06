@@ -369,34 +369,5 @@ Files changed: 3
         assert summary == ""
 
 
-# Legacy compatibility tests
-class TestLegacyCompatibility(unittest.IsolatedAsyncioTestCase):
-    """Test backward compatibility with old interface."""
-
-    async def asyncSetUp(self):
-        """Set up test fixtures."""
-        self.temp_dir = Path(tempfile.mkdtemp())
-        self.config_path = self.temp_dir / "copilot.json"
-        self.config_path.write_text(json.dumps({"command": "copilot"}))
-
-    async def test_legacy_acp_client_parameter(self):
-        """Test that legacy acp_client parameter still works."""
-        from app.progenitor.tools.copilot import CopilotCLI
-        from app.progenitor.runtime.copilot_acp import CopilotACPManager
-
-        mock_manager = MagicMock(spec=CopilotACPManager)
-
-        with patch("app.progenitor.tools.copilot.logger") as mock_logger:
-            cli = CopilotCLI(
-                config_path=self.config_path,
-                acp_client=mock_manager,  # Using old parameter name
-            )
-
-            # Should log deprecation warning
-            warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
-            # Manager should still be set
-            assert cli.acp_manager == mock_manager
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

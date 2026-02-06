@@ -72,8 +72,8 @@ def mock_state_manager():
     """Create a mock state manager."""
     manager = Mock()
     manager.log_decision = AsyncMock()
-    manager.save_state = AsyncMock()
-    manager.get_state = AsyncMock(return_value={})
+    manager.save_build_state = AsyncMock()
+    manager.get_build_state = AsyncMock(return_value={})
     return manager
 
 
@@ -94,9 +94,9 @@ def test_config():
 
 @pytest.fixture
 def mock_copilot_acp_client():
-    """Create a mock CopilotACPClient for testing."""
-    from app.progenitor.runtime.copilot_acp import CopilotACPClient
-    client = MagicMock(spec=CopilotACPClient)
+    """Create a mock ProgenitorACPClient for testing."""
+    from app.progenitor.runtime.copilot_acp import ProgenitorACPClient
+    client = MagicMock(spec=ProgenitorACPClient)
     client.port = 3000
     client.timeout = 1200
     client._initialized = True

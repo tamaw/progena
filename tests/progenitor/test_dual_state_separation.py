@@ -403,33 +403,6 @@ class TestStateSeparationIntegrity:
         assert current_state["cycle_count"] == 9
 
 
-class TestBackwardCompatibility:
-    """Test backward compatibility with deprecated methods."""
-
-    async def test_get_state_returns_build_state(self, state_manager):
-        """Test deprecated get_state() returns build_state."""
-        await state_manager.save_build_state({
-            "build_in_progress": True,
-            "build_id": "compat-test",
-        })
-
-        # Use deprecated method
-        state = await state_manager.get_state()
-
-        assert state.get("build_in_progress") is True
-        assert state.get("build_id") == "compat-test"
-
-    async def test_save_state_saves_build_state(self, state_manager):
-        """Test deprecated save_state() saves to build_state."""
-        await state_manager.save_state({
-            "build_in_progress": True,
-            "build_phase": "plan",
-        })
-
-        build_state = await state_manager.get_build_state()
-        assert build_state["build_phase"] == "plan"
-
-
 class TestBuildMessagesTracking:
     """Test that build_messages are properly tracked in build_state."""
 

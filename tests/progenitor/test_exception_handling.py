@@ -30,13 +30,13 @@ class TestCopilotExceptionHandling:
     async def test_validate_installation_returns_false_on_error(self, tmp_path):
         """Test that validate_installation handles errors gracefully."""
         from app.progenitor.tools.copilot import CopilotCLI
-        from app.progenitor.runtime.copilot_acp import CopilotACPClient
+        from app.progenitor.runtime.copilot_acp import ProgenitorACPClient
 
         config_path = tmp_path / "copilot.json"
         config_path.write_text('{"command": "copilot"}')
 
         # Create mock ACP client
-        mock_acp_client = MagicMock(spec=CopilotACPClient)
+        mock_acp_client = MagicMock(spec=ProgenitorACPClient)
 
         cli = CopilotCLI(config_path=config_path, acp_client=mock_acp_client, timeout=10)
 

@@ -38,8 +38,8 @@ from app.backend.ui_routes import (
     UIStatusResponse,
     SubAgentInfo,
     LoopInfo as UILoopInfo,
-    broadcast_event,
-    _event_subscribers,
+    broadcast_chat_event,
+    _chat_subscribers,
 )
 
 
@@ -288,16 +288,16 @@ class TestRealTimeFeedbackConsistency:
 
     def test_broadcast_event_reaches_subscribers(self):
         """Events must be broadcast to all subscribers - aliens might be listening."""
-        _event_subscribers.clear()
+        _chat_subscribers.clear()
 
         # Create multiple subscriber queues (like multiple alien terminals)
         queues = [asyncio.Queue() for _ in range(5)]
         for q in queues:
-            _event_subscribers.append(q)
+            _chat_subscribers.append(q)
 
         try:
             # Broadcast an important message
-            broadcast_event("first_contact", {
+            broadcast_chat_event("first_contact", {
                 "status": "initiated",
                 "signal_strength": 0.98,
                 "decoded_message": "Greetings from Earth",
@@ -313,13 +313,13 @@ class TestRealTimeFeedbackConsistency:
                 assert event_data["status"] == "initiated"
         finally:
             for q in queues:
-                _event_subscribers.remove(q)
+                _chat_subscribers.remove(q)
 
     def test_multiple_broadcasts_in_sequence(self):
         """Multiple events must arrive in order."""
-        _event_subscribers.clear()
+        _chat_subscribers.clear()
         queue = asyncio.Queue()
-        _event_subscribers.append(queue)
+        _chat_subscribers.append(queue)
 
         try:
             events = [
@@ -330,7 +330,7 @@ class TestRealTimeFeedbackConsistency:
             ]
 
             for event_type, data in events:
-                broadcast_event(event_type, data)
+                broadcast_chat_event(event_type, data)
 
             # Verify all events arrived in order
             received = []
@@ -343,7 +343,7 @@ class TestRealTimeFeedbackConsistency:
             assert received[2]["type"] == "signal_decoded"
             assert received[3]["type"] == "response_sent"
         finally:
-            _event_subscribers.remove(queue)
+            _chat_subscribers.remove(queue)
 
     def test_status_changes_detected(self, complete_state_files):
         """Status changes must be detected between reads."""

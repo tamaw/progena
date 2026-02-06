@@ -451,15 +451,15 @@ class StateManager:
     # Backlog management (embedded in build_state.json)
     async def get_backlog(self) -> list[WorkItem]:
         """Get the current backlog from build_state."""
-        state = await self.get_state()
+        state = await self.get_build_state()
         backlog_data = state.get("backlog", [])
         return [WorkItem(**item) for item in backlog_data]
 
     async def save_backlog(self, backlog: list[WorkItem]) -> None:
         """Save the backlog to build_state."""
-        state = await self.get_state()
+        state = await self.get_build_state()
         state["backlog"] = [item.model_dump() for item in backlog]
-        await self.save_state(state)
+        await self.save_build_state(state)
 
     async def add_work_item(self, item: WorkItem) -> None:
         """Add a work item to the backlog."""
@@ -504,24 +504,24 @@ class StateManager:
     # SpecDoc management (persistent spec artifact in build_state.json)
     async def get_spec_doc(self) -> dict[str, Any] | None:
         """Get the current spec_doc from build_state, if it exists."""
-        state = await self.get_state()
+        state = await self.get_build_state()
         return state.get("spec_doc")
 
     async def save_spec_doc(self, spec_doc) -> None:
         """Save spec_doc to build_state.json (backward compatible - only adds key)."""
-        state = await self.get_state()
+        state = await self.get_build_state()
         if hasattr(spec_doc, "model_dump"):
             state["spec_doc"] = spec_doc.model_dump()
         else:
             state["spec_doc"] = spec_doc
-        await self.save_state(state)
+        await self.save_build_state(state)
 
     async def clear_spec_doc(self) -> None:
         """Clear the spec_doc from build_state (for task completion/reset)."""
-        state = await self.get_state()
+        state = await self.get_build_state()
         if "spec_doc" in state:
             del state["spec_doc"]
-            await self.save_state(state)
+            await self.save_build_state(state)
 
     # Registry management
     async def get_registry(self) -> dict[str, Any]:
@@ -622,15 +622,6 @@ class StateManager:
         if "messages" not in state["history"]:
             state["history"]["messages"] = []
         state["history"]["messages"].append(message)
-        await self.save_build_state(state)
-
-    # Backward compatibility aliases
-    async def get_state(self) -> dict[str, Any]:
-        """Get build state. DEPRECATED: Use get_build_state() instead."""
-        return await self.get_build_state()
-
-    async def save_state(self, state: dict[str, Any]) -> None:
-        """Save build state. DEPRECATED: Use save_build_state() instead."""
         await self.save_build_state(state)
 
     # ==========================================================================

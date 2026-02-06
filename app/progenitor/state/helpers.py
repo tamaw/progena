@@ -172,19 +172,16 @@ def normalize_schedule_entry(item: Any) -> Optional[ScheduleEntry]:
         return item
 
     if isinstance(item, dict):
-        # Handle run_at - required field
         run_at = item.get("run_at")
         if run_at is None:
-            # Fallback for legacy entries
-            from ..runtime.time_utils import utcnow
-            run_at = utcnow()
+            return None
 
         return ScheduleEntry(
             id=item.get("id", "unknown"),
             description=item.get("description", ""),
             instruction=item.get("instruction", ""),
             run_at=run_at,
-            repeat_minutes=item.get("repeat_minutes") or item.get("interval_minutes"),  # Support old field
+            repeat_minutes=item.get("repeat_minutes"),
             enabled=item.get("enabled", True),
             last_run=item.get("last_run"),
         )

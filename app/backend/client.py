@@ -281,8 +281,7 @@ class ProgenitorClient:
         """Send a message and stream the response in real-time.
 
         Reads streaming chunks from the Progenitor subprocess and yields them
-        as they arrive. Handles both legacy full responses and new streaming
-        chunks for better UX.
+        as they arrive.
 
         Args:
             message: The user message to send.
@@ -346,14 +345,6 @@ class ProgenitorClient:
 
                     elif msg_type == "stream_end":
                         # Explicit stream end signal
-                        break
-
-                    elif msg_type == "assistant_message":
-                        # Legacy full response - simulate streaming by chunking
-                        words = content.split()
-                        for i, word in enumerate(words):
-                            yield word + (" " if i < len(words) - 1 else "")
-                            await asyncio.sleep(0.02)  # Small delay for streaming effect
                         break
 
                     else:

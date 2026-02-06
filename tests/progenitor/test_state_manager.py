@@ -204,7 +204,7 @@ class TestStateManager:
         await manager.initialize()
 
         # Make some changes
-        await manager.save_state({
+        await manager.save_build_state({
             "cycle_count": 5,
             "run_id": "test-run",
         })
@@ -212,5 +212,5 @@ class TestStateManager:
         await manager.commit_state()
 
         # Verify state persisted
-        state = await manager.get_state()
+        state = await manager.get_build_state()
         assert state.get("cycle_count") == 5

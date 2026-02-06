@@ -481,13 +481,11 @@ class TestSplitSSEEndpoints:
         assert "/api/ui/status" in paths or "/api/ui/status/snapshot" in paths, "Status endpoint should be registered"
 
     def test_broadcast_functions_exist(self):
-        """Test that the new broadcast functions are available."""
+        """Test that the broadcast functions are available."""
         from app.backend.ui_routes import (
-            broadcast_event,
             broadcast_chat_event,
             broadcast_status_event,
         )
         # Just verify they're callable
-        assert callable(broadcast_event)
         assert callable(broadcast_chat_event)
         assert callable(broadcast_status_event)

@@ -2,7 +2,7 @@
 Agent Exercise Harness - Runs experiments against built agents.
 
 BL-004: Implements the agent exercise harness for EXECUTE phase.
-- Starts the built agent (HTTP preferred, stdio fallback)
+- Starts the built agent via HTTP
 - Runs the prompt suite from ExperimentPlan
 - Captures transcripts, timing, and errors into ExecutionResult
 - At least one "smoke" prompt always runs

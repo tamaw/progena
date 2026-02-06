@@ -105,9 +105,6 @@ class ResponseRequest(BaseModel):
     input: list[ResponseInputMessage] | str
     stream: bool = False
 
-    # Accept legacy chat format as a fallback for compatibility
-    messages: Optional[list[ChatMessage]] = None
-
 
 class ResponsePayload(BaseModel):
     """Unified Responses API response payload."""

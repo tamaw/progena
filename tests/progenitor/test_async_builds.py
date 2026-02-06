@@ -130,8 +130,6 @@ class TestBackgroundBuildRunner:
     def mock_state_manager(self):
         """Create a mock state manager."""
         manager = AsyncMock()
-        manager.get_state = AsyncMock(return_value={})
-        manager.save_state = AsyncMock()
         manager.get_build_state = AsyncMock(return_value={})
         manager.save_build_state = AsyncMock()
         manager.update_current_state = AsyncMock()
@@ -149,7 +147,6 @@ class TestBackgroundBuildRunner:
     def runner(self, mock_graph, mock_state_manager, mock_config, mock_llm_client):
         """Create a BackgroundBuildRunner instance."""
         return BackgroundBuildRunner(
-            graph=mock_graph,
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
@@ -409,14 +406,14 @@ class TestBuildStatusToolIntegration:
         """Create a mock state manager that reads from files."""
         manager = AsyncMock()
 
-        # Set up get_state to return persisted build state
-        async def get_state():
+        # Set up get_build_state to return persisted build state
+        async def get_build_state():
             state_file = temp_state_dir / "build_state.json"
             if state_file.exists():
                 return json.loads(state_file.read_text())
             return {}
 
-        manager.get_state = get_state
+        manager.get_build_state = get_build_state
         manager.state_dir = temp_state_dir
         return manager
 
@@ -436,7 +433,7 @@ class TestBuildStatusToolIntegration:
             "build_phase": "act",
         })
 
-        state = await mock_state_manager.get_state()
+        state = await mock_state_manager.get_build_state()
 
         assert state["build_in_progress"] is True
         assert state["build_task_description"] == "Test agent build"
@@ -454,7 +451,7 @@ class TestBuildStatusToolIntegration:
             "build_score": 0.95,
         })
 
-        state = await mock_state_manager.get_state()
+        state = await mock_state_manager.get_build_state()
 
         assert state["build_in_progress"] is False
         assert state["build_phase"] == "completed"
@@ -464,7 +461,7 @@ class TestBuildStatusToolIntegration:
     async def test_handles_missing_state_file(self, temp_state_dir, mock_state_manager):
         """Should handle missing state file gracefully."""
         # Don't write any state file
-        state = await mock_state_manager.get_state()
+        state = await mock_state_manager.get_build_state()
         assert state == {}
 
     @pytest.mark.asyncio
@@ -483,7 +480,7 @@ class TestBuildStatusToolIntegration:
         }
 
         # Merge: in-memory takes priority
-        persisted = await mock_state_manager.get_state()
+        persisted = await mock_state_manager.get_build_state()
         effective = {**persisted, **in_memory_state}
 
         assert effective["build_in_progress"] is False
@@ -522,8 +519,6 @@ class TestAsyncBuildIntegration:
     def mock_state_manager(self):
         """Create mock state manager."""
         manager = AsyncMock()
-        manager.get_state = AsyncMock(return_value={})
-        manager.save_state = AsyncMock()
         manager.get_build_state = AsyncMock(return_value={})
         manager.save_build_state = AsyncMock()
         manager.update_current_state = AsyncMock()
@@ -543,7 +538,6 @@ class TestAsyncBuildIntegration:
     ):
         """Starting a build should return build_id and acknowledgment."""
         runner = BackgroundBuildRunner(
-            graph=mock_graph,
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
@@ -567,7 +561,6 @@ class TestAsyncBuildIntegration:
     ):
         """Build status should preserve the task description."""
         runner = BackgroundBuildRunner(
-            graph=mock_graph,
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,

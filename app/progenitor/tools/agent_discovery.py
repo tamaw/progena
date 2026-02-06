@@ -45,7 +45,7 @@ class DiscoveredAgentSpec(BaseModel):
     )
     transport: str = Field(
         default="http",
-        description="Transport protocol: 'http' (preferred) or 'stdio' (legacy)",
+        description="Transport protocol: 'http'",
     )
     version: str = Field(default="0.1.0", description="Agent version")
     is_valid_agent: bool = Field(
@@ -265,13 +265,13 @@ For folders that are not valid agents, set is_valid_agent=false with a reason.""
                 transport = "http"
             elif "agent.py" in folder.files:
                 entrypoint = "agent.py"
-                transport = "stdio"  # Default for legacy agent.py
+                transport = "http"  # Default for agent.py
             else:
                 # Look for any Python file
                 py_files = [f for f in folder.files if f.endswith(".py")]
                 if py_files:
                     entrypoint = py_files[0]
-                    transport = "stdio"
+                    transport = "http"
                 else:
                     continue
 

@@ -293,7 +293,7 @@ class AgentRegistryEntry(BaseModel):
     entrypoint: str  # File path to agent module
 
     # HTTP endpoint configuration
-    transport: str = "http"  # http (default) | stdio (legacy)
+    transport: str = "http"  # http only
     port: Optional[int] = None  # Assigned HTTP port (e.g., 8100-8199)
     endpoint: Optional[str] = None  # Base URL (e.g., http://localhost:8100)
     agent_card_url: Optional[str] = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)

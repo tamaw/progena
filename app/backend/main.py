@@ -3,10 +3,7 @@ Backend Main - FastAPI application with OpenAI-compatible interface.
 
 This provides a standardized chat API that proxies to the Progenitor agent.
 
-Communication modes:
-- IPC (default): Socket-based communication for reliability and streaming
-- Subprocess: Legacy stdin/stdout mode (deprecated)
-- In-process: Direct service calls (for testing)
+Communication: IPC (socket-based) for reliability and streaming.
 
 Features (from text-generation-webui patterns):
 - Streaming callbacks for real-time token streaming
@@ -34,11 +31,6 @@ from .config import ChatServerConfig
 from .client import ProgenitorClient, get_client
 from .ipc_client import IPCProgenitorClient, get_ipc_client
 from .models import (
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    ChatCompletionChoice,
-    ChatCompletionChunk,
-    ChatMessage,
     Usage,
     ModelsResponse,
     ModelInfo,
@@ -49,7 +41,6 @@ from .models import (
     ResponseOutputMessage,
     ResponseOutputText,
     SimpleChatRequest,
-    StreamingChatRequest,
     StreamingResponseRequest,
 )
 
@@ -455,50 +446,45 @@ async def lifespan(app: FastAPI):
             timeout=5.0,
         )
 
-    # Choose client based on configuration
-    if config.progenitor_ipc_enabled:
-        logger.info(
-            "Using IPC client (host=%s, port=%d)",
-            config.progenitor_ipc_host,
-            config.progenitor_ipc_port,
-        )
-        # Import broadcast_chat_event for IPC events (chat, alerts, tasks)
-        # These go to the /chat SSE stream (and legacy /events for compatibility)
-        from .ui_routes import broadcast_chat_event
+    # Initialize IPC client
+    logger.info(
+        "Using IPC client (host=%s, port=%d)",
+        config.progenitor_ipc_host,
+        config.progenitor_ipc_port,
+    )
+    # Import broadcast_chat_event for IPC events (chat, alerts, tasks)
+    from .ui_routes import broadcast_chat_event
 
-        # Create a combined event callback that handles both SSE and Telegram
-        def combined_event_callback(event_type: str, data: dict) -> None:
-            """Route IPC events to SSE and/or Telegram.
+    # Create a combined event callback that handles both SSE and Telegram
+    def combined_event_callback(event_type: str, data: dict) -> None:
+        """Route IPC events to SSE and/or Telegram.
 
-            - Always broadcasts to SSE for any connected web clients
-            - If no web clients connected, also sends to Telegram (if enabled)
-            - Only forwards certain event types to Telegram (agent_message, scheduled_response)
-            """
-            # Always broadcast to SSE
-            broadcast_chat_event(event_type, data)
+        - Always broadcasts to SSE for any connected web clients
+        - If no web clients connected, also sends to Telegram (if enabled)
+        - Only forwards certain event types to Telegram (agent_message, scheduled_response)
+        """
+        # Always broadcast to SSE
+        broadcast_chat_event(event_type, data)
 
-            # Check if we should also send to Telegram
-            telegram = get_telegram_client()
-            if telegram and not has_active_chat_subscribers():
-                # Only send actual message content to Telegram
-                # Skip status updates, heartbeats, etc.
-                telegram_event_types = {
-                    "scheduled_response",  # Scheduled task responses
-                    "agent_message",       # Direct agent messages
-                }
+        # Check if we should also send to Telegram
+        telegram = get_telegram_client()
+        if telegram and not has_active_chat_subscribers():
+            # Only send actual message content to Telegram
+            # Skip status updates, heartbeats, etc.
+            telegram_event_types = {
+                "scheduled_response",  # Scheduled task responses
+                "agent_message",       # Direct agent messages
+            }
 
-                if event_type in telegram_event_types:
-                    content = data.get("content", "")
-                    if content:
-                        # Fire and forget - don't block SSE broadcast
-                        asyncio.create_task(
-                            _send_telegram_message(telegram, content, event_type)
-                        )
+            if event_type in telegram_event_types:
+                content = data.get("content", "")
+                if content:
+                    # Fire and forget - don't block SSE broadcast
+                    asyncio.create_task(
+                        _send_telegram_message(telegram, content, event_type)
+                    )
 
-        client = get_ipc_client(config, event_callback=combined_event_callback)
-    else:
-        logger.info("Using subprocess client (legacy mode)")
-        client = get_client(config)
+    client = get_ipc_client(config, event_callback=combined_event_callback)
 
     # Register client shutdown callback
     if client:
@@ -635,7 +621,7 @@ app.add_middleware(
 async def request_tracking_middleware(request: Request, call_next):
     """Track active requests for graceful shutdown (OPS-002)."""
     # Skip tracking for health/liveness probes
-    if request.url.path in ("/health", "/health/detailed", "/ready", "/live"):
+    if request.url.path in ("/health", "/ready", "/live"):
         return await call_next(request)
 
     # Check if we're accepting new requests
@@ -692,7 +678,7 @@ async def rate_limit_middleware(request: Request, call_next):
     # Skip rate limiting for health checks, UI endpoints, and if disabled
     # Health endpoints should never be rate-limited to allow monitoring
     # UI endpoints are for the frontend and don't hit the LLM
-    health_paths = ("/health", "/health/detailed", "/ready", "/live", "/docs", "/openapi.json")
+    health_paths = ("/health", "/ready", "/live", "/docs", "/openapi.json")
     if not config.rate_limit_enabled:
         return await call_next(request)
     if request.url.path in health_paths:
@@ -770,13 +756,9 @@ async def health_check():
     }
 
 
-@app.get("/health/detailed", deprecated=True)
 async def health_check_detailed():
     """
-    Detailed health check endpoint with full diagnostics (OPS-001).
-
-    DEPRECATED: Use SSE endpoint /api/ui/events for real-time status updates.
-    This endpoint will be removed in a future version.
+    Internal detailed health check for use by other modules.
 
     Returns comprehensive information about:
     - Server status and configuration
@@ -1006,115 +988,6 @@ async def responses(request: Request, body: ResponseRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-async def chat_completions(request: Request, body: ChatCompletionRequest):
-    """Legacy Chat Completions API.
-
-    Kept for backwards compatibility but internally powered by
-    the same engine as /v1/responses.
-    """
-    if not client:
-        raise HTTPException(status_code=503, detail="Client not initialized")
-
-    # Get request ID for correlation
-    request_id = getattr(request.state, "request_id", None)
-
-    try:
-        last_user_msg = _extract_chat_message(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    try:
-        if body.stream:
-            # CR-002: Validate request for streaming
-            try:
-                StreamingChatRequest.validate_for_streaming(body)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-
-            return StreamingResponse(
-                stream_response(last_user_msg, body.model, request_id),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",  # Disable nginx buffering if present
-                },
-            )
-
-        response_text = await client.send_message(last_user_msg, request_id=request_id)
-        completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-
-        return ChatCompletionResponse(
-            id=completion_id,
-            model=body.model,
-            choices=[
-                ChatCompletionChoice(
-                    index=0,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=response_text,
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=Usage(
-                prompt_tokens=len(last_user_msg.split()),
-                completion_tokens=len(response_text.split()),
-                total_tokens=len(last_user_msg.split()) + len(response_text.split()),
-            ),
-        )
-
-    except TimeoutError as e:
-        raise HTTPException(status_code=504, detail=str(e))
-    except Exception as e:
-        logger.error(f"Chat completion error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def stream_response(
-    message: str,
-    model: str,
-    request_id: str | None = None,
-) -> AsyncIterator[str]:
-    """Stream response chunks in SSE format."""
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-
-    try:
-        async for chunk in client.send_message_stream(message, request_id=request_id):
-            chunk_data = ChatCompletionChunk(
-                id=completion_id,
-                model=model,
-                choices=[
-                    {
-                        "index": 0,
-                        "delta": {"content": chunk},
-                        "finish_reason": None,
-                    }
-                ],
-            )
-            yield f"data: {chunk_data.model_dump_json()}\n\n"
-
-        # Send final chunk with finish_reason
-        final_chunk = ChatCompletionChunk(
-            id=completion_id,
-            model=model,
-            choices=[
-                {
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }
-            ],
-        )
-        yield f"data: {final_chunk.model_dump_json()}\n\n"
-        yield "data: [DONE]\n\n"
-
-    except Exception as e:
-        logger.error(f"Streaming error: {e}", exc_info=True)
-        error_chunk = {"error": str(e)}
-        yield f"data: {error_chunk}\n\n"
-
 
 def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
     """Normalize Responses API input to a single user string."""
@@ -1130,33 +1003,10 @@ def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
             else:
                 inputs.append(item.content)
 
-    if not inputs and request.messages:
-        inputs.extend([msg.content for msg in request.messages if msg.role in ("user", "system")])
-
     if not inputs:
         raise ValueError("No input provided")
 
     return inputs[-1], inputs
-
-
-def _extract_chat_message(request: ChatCompletionRequest) -> str:
-    """Extract last user message from Chat Completions request."""
-    if not request.messages:
-        raise ValueError("No messages provided")
-
-    user_messages = [
-        f"{msg.role}: {msg.content}"
-        for msg in request.messages
-        if msg.role in ("user", "system")
-    ]
-
-    if not user_messages:
-        raise ValueError("No user message found")
-
-    return next(
-        (msg.content for msg in reversed(request.messages) if msg.role == "user"),
-        user_messages[-1],
-    )
 
 
 async def stream_response_unified(

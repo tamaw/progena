@@ -313,135 +313,48 @@ class TestSSEEventDelivery:
         response = client.get("/api/ui/status/snapshot")
         assert response.status_code == 200
 
-    def test_broadcast_event_functionality(self):
-        """Test broadcast_event adds events to subscriber queues."""
-        from app.backend.ui_routes import _event_subscribers, broadcast_event
-
-        _event_subscribers.clear()
-
-        queue = asyncio.Queue()
-        _event_subscribers.append(queue)
-
-        try:
-            # Broadcast different event types
-            broadcast_event("message_received", {"content": "Hello"})
-            broadcast_event("typing_start", {"user": "agent"})
-            broadcast_event("error", {"code": "ERR001", "message": "Test error"})
-
-            # Verify all events were queued
-            assert queue.qsize() == 3
-
-            # Verify event structure
-            event1 = queue.get_nowait()
-            assert event1["type"] == "message_received"
-            # data is JSON-serialized string
-            data1 = json.loads(event1["data"])
-            assert data1["content"] == "Hello"
-        finally:
-            _event_subscribers.remove(queue)
-
-    def test_multiple_subscribers_receive_events(self):
-        """Test events are broadcast to all subscribers."""
-        from app.backend.ui_routes import _event_subscribers, broadcast_event
-
-        _event_subscribers.clear()
-
-        queue1 = asyncio.Queue()
-        queue2 = asyncio.Queue()
-        queue3 = asyncio.Queue()
-
-        _event_subscribers.extend([queue1, queue2, queue3])
-
-        try:
-            broadcast_event("test_event", {"value": 42})
-
-            # All subscribers should receive the event
-            assert not queue1.empty()
-            assert not queue2.empty()
-            assert not queue3.empty()
-        finally:
-            for q in [queue1, queue2, queue3]:
-                _event_subscribers.remove(q)
-
-    def test_event_timestamp_included(self):
-        """Test broadcast events include timestamp when provided in data."""
-        from app.backend.ui_routes import _event_subscribers, broadcast_event
-
-        _event_subscribers.clear()
-
-        queue = asyncio.Queue()
-        _event_subscribers.append(queue)
-
-        try:
-            before = time.time()
-            # Include timestamp in data since broadcast_event doesn't add it
-            broadcast_event("test", {"key": "value", "timestamp": time.time()})
-            after = time.time()
-
-            event = queue.get_nowait()
-            assert "type" in event
-            assert event["type"] == "test"
-            # data is JSON string containing our payload
-            data = json.loads(event["data"])
-            assert "timestamp" in data
-            assert before <= data["timestamp"] <= after
-        finally:
-            _event_subscribers.remove(queue)
-
     def test_broadcast_chat_event_functionality(self):
-        """Test broadcast_chat_event adds events to chat and legacy subscribers."""
+        """Test broadcast_chat_event adds events to chat subscribers."""
         from app.backend.ui_routes import (
-            _chat_subscribers, _event_subscribers, broadcast_chat_event
+            _chat_subscribers, broadcast_chat_event
         )
 
         _chat_subscribers.clear()
-        _event_subscribers.clear()
 
         chat_queue = asyncio.Queue()
-        legacy_queue = asyncio.Queue()
         _chat_subscribers.append(chat_queue)
-        _event_subscribers.append(legacy_queue)
 
         try:
             # Broadcast a chat event
             broadcast_chat_event("agent_message", {"content": "Hello from agent"})
 
-            # Both queues should receive the event
+            # Chat queue should receive the event
             assert chat_queue.qsize() == 1
-            assert legacy_queue.qsize() == 1
 
             # Verify structure
             chat_event = chat_queue.get_nowait()
             assert chat_event["type"] == "agent_message"
             data = json.loads(chat_event["data"])
             assert data["content"] == "Hello from agent"
-
-            legacy_event = legacy_queue.get_nowait()
-            assert legacy_event["type"] == "agent_message"
         finally:
             if chat_queue in _chat_subscribers:
                 _chat_subscribers.remove(chat_queue)
-            if legacy_queue in _event_subscribers:
-                _event_subscribers.remove(legacy_queue)
 
     def test_broadcast_status_event_functionality(self):
         """Test broadcast_status_event adds events to status subscribers only."""
         from app.backend.ui_routes import (
-            _status_subscribers, _chat_subscribers, _event_subscribers,
+            _status_subscribers, _chat_subscribers,
             broadcast_status_event
         )
 
         _status_subscribers.clear()
         _chat_subscribers.clear()
-        _event_subscribers.clear()
 
         status_queue = asyncio.Queue()
         chat_queue = asyncio.Queue()
-        legacy_queue = asyncio.Queue()
 
         _status_subscribers.append(status_queue)
         _chat_subscribers.append(chat_queue)
-        _event_subscribers.append(legacy_queue)
 
         try:
             # Broadcast a status event
@@ -450,7 +363,6 @@ class TestSSEEventDelivery:
             # Only status queue should receive
             assert status_queue.qsize() == 1
             assert chat_queue.qsize() == 0  # Chat doesn't get status
-            assert legacy_queue.qsize() == 0  # Legacy doesn't get status via this func
 
             status_event = status_queue.get_nowait()
             assert status_event["type"] == "status"
@@ -459,8 +371,6 @@ class TestSSEEventDelivery:
                 _status_subscribers.remove(status_queue)
             if chat_queue in _chat_subscribers:
                 _chat_subscribers.remove(chat_queue)
-            if legacy_queue in _event_subscribers:
-                _event_subscribers.remove(legacy_queue)
 
 
 class TestEventPayloadValidation:
@@ -708,18 +618,18 @@ class TestTypingIndicatorEvents:
 
     def test_typing_indicator_state_transitions(self):
         """Test typing indicator event state transitions."""
-        from app.backend.ui_routes import _event_subscribers, broadcast_event
+        from app.backend.ui_routes import _chat_subscribers, broadcast_chat_event
 
-        _event_subscribers.clear()
+        _chat_subscribers.clear()
 
         queue = asyncio.Queue()
-        _event_subscribers.append(queue)
+        _chat_subscribers.append(queue)
 
         try:
             # Simulate typing indicator sequence
-            broadcast_event("typing_start", {"agent": "progenitor"})
-            broadcast_event("typing_update", {"agent": "progenitor", "text": "..."})
-            broadcast_event("typing_stop", {"agent": "progenitor"})
+            broadcast_chat_event("typing_start", {"agent": "progenitor"})
+            broadcast_chat_event("typing_update", {"agent": "progenitor", "text": "..."})
+            broadcast_chat_event("typing_stop", {"agent": "progenitor"})
 
             events = []
             while not queue.empty():
@@ -730,7 +640,7 @@ class TestTypingIndicatorEvents:
             assert events[1]["type"] == "typing_update"
             assert events[2]["type"] == "typing_stop"
         finally:
-            _event_subscribers.remove(queue)
+            _chat_subscribers.remove(queue)
 
 
 class TestAgentActivityEvents:

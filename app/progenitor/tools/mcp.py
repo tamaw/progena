@@ -229,67 +229,12 @@ class A2AClient:
                 "error": f"Agent is in failed state: {agent_config.get('last_error', 'Unknown error')}",
             }
 
-        if transport == "http":
-            # For HTTP, check if endpoint is available
-            endpoint = agent_config.get("endpoint")
-            if not endpoint:
-                # Fall back to stdio if no endpoint configured
-                if agent_config.get("entrypoint"):
-                    logger.info("No HTTP endpoint for agent, falling back to stdio")
-                    return await self._call_stdio_agent(agent_config, request, context, timeout)
-                return {"success": False, "error": "No endpoint or entrypoint specified"}
-            return await self._call_http_agent(agent_config, request, context, timeout)
-        elif transport == "stdio":
-            return await self._call_stdio_agent(agent_config, request, context, timeout)
-        else:
-            raise ValueError(f"Unknown transport: {transport}")
-
-    async def _call_stdio_agent(
-        self,
-        agent_config: dict[str, Any],
-        request: str,
-        context: Optional[dict[str, Any]] = None,
-        timeout: float = 60.0,
-    ) -> dict[str, Any]:
-        """Call an agent via stdio (legacy support)."""
-        entrypoint = agent_config.get("entrypoint")
-        if not entrypoint:
-            raise ValueError("No entrypoint specified for agent")
-
-        # Build input payload
-        payload = {
-            "request": request,
-            "context": context or {},
-        }
-
-        # Run the agent
-        process = await asyncio.create_subprocess_exec(
-            "python", entrypoint,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        input_bytes = json.dumps(payload).encode() + b"\n"
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(input=input_bytes),
-            timeout=timeout
-        )
-
-        if process.returncode != 0:
-            return {
-                "success": False,
-                "error": f"Agent exited with code {process.returncode}",
-                "stderr": stderr.decode() if stderr else None,
-            }
-
-        try:
-            return json.loads(stdout.decode())
-        except json.JSONDecodeError:
-            return {
-                "success": True,
-                "response": stdout.decode(),
-            }
+        if transport != "http":
+            return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
+        endpoint = agent_config.get("endpoint")
+        if not endpoint:
+            return {"success": False, "error": "No HTTP endpoint configured for agent"}
+        return await self._call_http_agent(agent_config, request, context, timeout)
 
     async def _call_http_agent(
         self,

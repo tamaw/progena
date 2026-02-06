@@ -133,17 +133,16 @@ class TestNormalizeScheduleEntry:
         assert result.repeat_minutes == 1440
 
     def test_normalize_dict_legacy_interval(self):
-        """Test normalizing legacy dict with interval_minutes."""
+        """Test that legacy interval_minutes field is not supported."""
         data = {
             "id": "sched-2",
             "description": "Legacy task",
             "instruction": "Test",
-            "interval_minutes": 60,  # Old field name
+            "interval_minutes": 60,  # Old field name - no longer supported
         }
         result = normalize_schedule_entry(data)
-        assert isinstance(result, ScheduleEntry)
-        # Should map to repeat_minutes
-        assert result.repeat_minutes == 60
+        # Without run_at, should return None
+        assert result is None
 
 
 class TestToDict:
