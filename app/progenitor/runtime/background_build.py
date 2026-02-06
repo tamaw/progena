@@ -107,14 +107,12 @@ class BackgroundBuildRunner:
 
     def __init__(
         self,
-        graph,  # Outer loop graph (kept for compatibility, not used for builds)
         state_manager: "StateManager",
         config: "ProgenitorConfig",
         llm_client: "LLMClient",
         worktrees_dir: Optional[Path] = None,
         copilot_acp_manager=None,
     ):
-        self.outer_graph = graph  # Renamed to clarify it's the outer loop
         self.state_manager = state_manager
         self.config = config
         self.llm_client = llm_client

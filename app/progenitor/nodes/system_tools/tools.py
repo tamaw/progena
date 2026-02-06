@@ -165,7 +165,7 @@ class BuildStatusTool(BaseSystemTool):
         persisted_state = None
         if context.state_manager:
             try:
-                persisted_state = await context.state_manager.get_state()
+                persisted_state = await context.state_manager.get_build_state()
             except Exception as e:
                 logger.warning("Failed to read persisted state: %s", e)
 

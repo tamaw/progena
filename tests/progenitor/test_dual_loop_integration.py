@@ -16,9 +16,9 @@ from app.progenitor.config import ProgenitorConfig
 
 
 def _create_mock_copilot_acp_client():
-    """Create a mock CopilotACPClient for testing."""
-    from app.progenitor.runtime.copilot_acp import CopilotACPClient
-    client = MagicMock(spec=CopilotACPClient)
+    """Create a mock ProgenitorACPClient for testing."""
+    from app.progenitor.runtime.copilot_acp import ProgenitorACPClient
+    client = MagicMock(spec=ProgenitorACPClient)
     client.port = 3000
     client.timeout = 1200
     client._initialized = True

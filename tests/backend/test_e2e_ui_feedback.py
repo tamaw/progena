@@ -372,19 +372,19 @@ class TestRealTimeSSEFeedback:
 
     def test_broadcast_mechanism_works(self):
         """Test broadcast_event puts events in subscriber queues."""
-        from app.backend.ui_routes import _event_subscribers, broadcast_event
+        from app.backend.ui_routes import _chat_subscribers, broadcast_chat_event
         import asyncio
 
         # Clear existing subscribers
-        _event_subscribers.clear()
+        _chat_subscribers.clear()
 
         # Add test subscriber
         queue = asyncio.Queue()
-        _event_subscribers.append(queue)
+        _chat_subscribers.append(queue)
 
         try:
             # Broadcast test event
-            broadcast_event("alien_contact", {
+            broadcast_chat_event("alien_contact", {
                 "message": "First contact initiated",
                 "species": "Unknown",
             })
@@ -396,7 +396,7 @@ class TestRealTimeSSEFeedback:
             event = queue.get_nowait()
             assert event["type"] == "alien_contact"
         finally:
-            _event_subscribers.remove(queue)
+            _chat_subscribers.remove(queue)
 
 
 class TestChatFlowFeedback:

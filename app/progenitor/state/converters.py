@@ -243,9 +243,6 @@ def to_dict(value: Any) -> Optional[dict[str, Any]]:
     if hasattr(value, "model_dump"):
         return value.model_dump()
 
-    if hasattr(value, "dict"):
-        return value.dict()  # Pydantic v1 compatibility
-
     return None
 
 

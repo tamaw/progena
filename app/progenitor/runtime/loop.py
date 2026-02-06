@@ -158,7 +158,6 @@ class ProgenitorLoop:
         if self.llm_client:
             from .background_build import BackgroundBuildRunner, set_background_runner
             self._background_runner = BackgroundBuildRunner(
-                graph=self.graph,
                 state_manager=self.state_manager,
                 config=self.config,
                 llm_client=self.llm_client,

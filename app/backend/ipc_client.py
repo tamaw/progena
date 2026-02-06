@@ -24,7 +24,7 @@ from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
 
-# Type for event callback (will be ui_routes.broadcast_event)
+# Type for event callback (will be ui_routes.broadcast_chat_event)
 EventCallback = Callable[[str, dict], None]
 
 

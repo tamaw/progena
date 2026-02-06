@@ -184,21 +184,7 @@ def create_node(
                     validation_result=validation_result,
                     iteration=iteration,
                 )
-                # Convert VerificationReportV2 to dict for state compatibility
-                if hasattr(verification_report, "model_dump"):
-                    verification_report_dict = verification_report.model_dump()
-                else:
-                    verification_report_dict = verification_report
-            else:
-                # Fallback to legacy verification
-                logger.debug("Using legacy verification (no structured data)")
-                verification_report = await verifier.verify(
-                    ideal_state=ideal_state,
-                    output=output,
-                    iteration=iteration,
-                    context=context,
-                )
-                verification_report_dict = None
+                verification_report_dict = verification_report.model_dump()
 
             # Track artefacts (loop.spec.md Task State requirement)
             history = state.get("history", {})

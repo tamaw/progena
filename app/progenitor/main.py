@@ -4,9 +4,8 @@ Progenitor Service Entrypoint
 Perpetual loop agent that orchestrates TARDIS system operations.
 Runs as a continuous LangGraph loop inside a Docker container.
 
-Communication modes:
-- IPC (default): Socket-based communication for reliability and streaming
-- STDIO: Legacy stdin/stdout mode for backward compatibility
+Communication:
+- IPC: Socket-based communication for reliability and streaming
 """
 
 import asyncio
@@ -14,7 +13,6 @@ import contextlib
 import json
 import logging
 import signal
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -140,9 +138,7 @@ class Progenitor:
         This method runs indefinitely until shutdown is requested.
         On graceful shutdown, it persists state before exiting.
 
-        Communication mode is determined by config.runtime.ipc_enabled:
-        - True (default): Use socket-based IPC for reliability and streaming
-        - False: Use legacy stdin/stdout for backward compatibility
+        Uses socket-based IPC for communication.
         """
         self.running = True
 
@@ -154,32 +150,24 @@ class Progenitor:
         loop_task = asyncio.create_task(self.loop_runner.run_forever())  # type: ignore[arg-type]
         self._background_tasks = [loop_task]
 
-        # Choose communication mode based on configuration
-        if self.config.runtime.ipc_enabled:
-            logger.info(
-                "Starting IPC server on %s:%d",
-                self.config.runtime.ipc_host,
-                self.config.runtime.ipc_port,
-            )
-            from .ipc import IPCServer
+        # Start IPC server for communication
+        logger.info(
+            "Starting IPC server on %s:%d",
+            self.config.runtime.ipc_host,
+            self.config.runtime.ipc_port,
+        )
+        from .ipc import IPCServer
 
-            assert self.loop_runner is not None, "loop_runner must be initialized before IPC server"
-            self._ipc_server = IPCServer(
-                loop_runner=self.loop_runner,
-                host=self.config.runtime.ipc_host,
-                port=self.config.runtime.ipc_port,
-                max_clients=self.config.runtime.ipc_max_clients,
-            )
-            await self._ipc_server.start()
-            ipc_task = asyncio.create_task(self._ipc_server.serve_forever())
-            self._background_tasks.append(ipc_task)
-        else:
-            # Legacy stdin/stdout mode
-            logger.info("Using legacy stdin/stdout communication mode")
-            stdin_task = asyncio.create_task(self._stdin_listener())
-            output_task = asyncio.create_task(self._output_writer())
-            stream_task = asyncio.create_task(self._stream_writer())
-            self._background_tasks.extend([stdin_task, output_task, stream_task])
+        assert self.loop_runner is not None, "loop_runner must be initialized before IPC server"
+        self._ipc_server = IPCServer(
+            loop_runner=self.loop_runner,
+            host=self.config.runtime.ipc_host,
+            port=self.config.runtime.ipc_port,
+            max_clients=self.config.runtime.ipc_max_clients,
+        )
+        await self._ipc_server.start()
+        ipc_task = asyncio.create_task(self._ipc_server.serve_forever())
+        self._background_tasks.append(ipc_task)
 
         try:
             done, pending = await asyncio.wait(
@@ -264,61 +252,6 @@ class Progenitor:
             logger.info("Health status set to '%s'", status)
         except Exception as e:
             logger.warning("Failed to write health status: %s", e)
-
-    async def _stdin_listener(self) -> None:
-        """Read user messages from stdin and enqueue them for processing."""
-        while not self._shutdown_started:
-            try:
-                line = await asyncio.to_thread(sys.stdin.readline)
-            except Exception as exc:  # pragma: no cover - defensive guard
-                logger.error(f"Stdin listener error: {exc}", exc_info=True)
-                await asyncio.sleep(0.1)
-                continue
-
-            if not line:
-                await asyncio.sleep(0.05)
-                continue
-
-            raw = line.strip()
-            if not raw:
-                continue
-
-            try:
-                payload = json.loads(raw)
-                content = payload.get("content") or payload.get("message")
-                if payload.get("type") == "user_message" and payload.get("content"):
-                    content = payload["content"]
-            except json.JSONDecodeError:
-                content = raw
-
-            if content:
-                await self.loop_runner.enqueue_input(str(content))  # type: ignore[union-attr]
-
-    async def _output_writer(self) -> None:
-        """Write assistant outputs to stdout as JSON lines for the client."""
-        while not self._shutdown_started:
-            message = await self.loop_runner.get_output(timeout=0.1)  # type: ignore[union-attr]
-            if not message:
-                continue
-
-            payload = {"type": "assistant_message", "content": message}
-            sys.stdout.write(json.dumps(payload) + "\n")
-            sys.stdout.flush()
-
-    async def _stream_writer(self) -> None:
-        """Write streaming chunks to stdout as JSON lines for the client.
-
-        Streaming chunks have type="stream_chunk" and include is_final flag.
-        This enables real-time token streaming for better UX.
-        """
-        while not self._shutdown_started:
-            chunk = await self.loop_runner.get_stream_chunk(timeout=0.1)  # type: ignore[union-attr]
-            if not chunk:
-                continue
-
-            # Stream chunks are already dicts with type, content, is_final
-            sys.stdout.write(json.dumps(chunk) + "\n")
-            sys.stdout.flush()
 
 
 def setup_signal_handlers(progenitor: Progenitor) -> None:

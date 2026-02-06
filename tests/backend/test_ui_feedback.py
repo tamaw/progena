@@ -37,7 +37,7 @@ from app.backend.ui_routes import (
     UIStatusResponse,
     SubAgentInfo,
     LoopInfo as UILoopInfo,
-    broadcast_event,
+    broadcast_chat_event,
 )
 
 
@@ -656,21 +656,21 @@ class TestBroadcastEvent:
     """Tests for event broadcasting to UI subscribers."""
 
     def test_broadcast_event_structure(self):
-        """Test broadcast_event creates proper structure."""
-        from app.backend.ui_routes import _event_subscribers
+        """Test broadcast_chat_event creates proper structure."""
+        from app.backend.ui_routes import _chat_subscribers
 
         # Clear any existing subscribers
-        _event_subscribers.clear()
+        _chat_subscribers.clear()
 
         # Create a mock queue
         queue = asyncio.Queue()
-        _event_subscribers.append(queue)
+        _chat_subscribers.append(queue)
 
         try:
             # Broadcast an event
-            broadcast_event("test_event", {"key": "value"})
+            broadcast_chat_event("test_event", {"key": "value"})
 
             # Verify event was queued (non-blocking check)
             assert not queue.empty()
         finally:
-            _event_subscribers.remove(queue)
+            _chat_subscribers.remove(queue)

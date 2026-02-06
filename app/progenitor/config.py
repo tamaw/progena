@@ -20,13 +20,6 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-# Keep local aliases for backward compatibility within this module
-_env_bool = env_bool
-_env_int = env_int
-_env_float = env_float
-_env_list = env_list
-
-
 @dataclass
 class LLMConfig:
     """LLM provider configuration."""
@@ -122,65 +115,65 @@ class RuntimeConfig:
         fc = file_config or {}
         return cls(
             timezone=os.getenv("PROGENITOR_TIMEZONE", fc.get("timezone", "Australia/Melbourne")),
-            idle_backoff_seconds=_env_int(
+            idle_backoff_seconds=env_int(
                 "PROGENITOR_IDLE_BACKOFF_SECONDS", fc.get("idle_backoff_seconds", 30)
             ),
-            max_actions_per_cycle=_env_int(
+            max_actions_per_cycle=env_int(
                 "PROGENITOR_MAX_ACTIONS_PER_CYCLE", fc.get("max_actions_per_cycle", 10)
             ),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", fc.get("log_level", "info")),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", fc.get("log_format", "text")),
-            backoff_multiplier=_env_float(
+            backoff_multiplier=env_float(
                 "PROGENITOR_BACKOFF_MULTIPLIER", fc.get("backoff_multiplier", 1.5)
             ),
-            max_backoff_seconds=_env_int(
+            max_backoff_seconds=env_int(
                 "PROGENITOR_MAX_BACKOFF_SECONDS", fc.get("max_backoff_seconds", 300)
             ),
-            checkpoint_interval_seconds=_env_int(
+            checkpoint_interval_seconds=env_int(
                 "PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", fc.get("checkpoint_interval_seconds", 30)
             ),
-            input_timeout_seconds=_env_int(
+            input_timeout_seconds=env_int(
                 "PROGENITOR_INPUT_TIMEOUT_SECONDS", fc.get("input_timeout_seconds", 300)
             ),
             # Queue bounds
-            max_input_queue_size=_env_int(
+            max_input_queue_size=env_int(
                 "PROGENITOR_MAX_INPUT_QUEUE_SIZE", fc.get("max_input_queue_size", 100)
             ),
-            max_output_queue_size=_env_int(
+            max_output_queue_size=env_int(
                 "PROGENITOR_MAX_OUTPUT_QUEUE_SIZE", fc.get("max_output_queue_size", 100)
             ),
-            max_stream_queue_size=_env_int(
+            max_stream_queue_size=env_int(
                 "PROGENITOR_MAX_STREAM_QUEUE_SIZE", fc.get("max_stream_queue_size", 1000)
             ),
             # Health check settings
-            health_stale_seconds=_env_int(
+            health_stale_seconds=env_int(
                 "PROGENITOR_HEALTH_STALE_SECONDS", fc.get("health_stale_seconds", 120)
             ),
             # IPC settings
-            ipc_enabled=_env_bool(
+            ipc_enabled=env_bool(
                 "PROGENITOR_IPC_ENABLED", fc.get("ipc_enabled", True)
             ),
             ipc_host=os.getenv(
                 "PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")
             ),
-            ipc_port=_env_int(
+            ipc_port=env_int(
                 "PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)
             ),
-            ipc_max_clients=_env_int(
+            ipc_max_clients=env_int(
                 "PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)
             ),
             # Inner loop settings
-            max_inner_iterations=_env_int(
+            max_inner_iterations=env_int(
                 "PROGENITOR_MAX_INNER_ITERATIONS", fc.get("max_inner_iterations", 5)
             ),
-            min_verification_score=_env_float(
+            min_verification_score=env_float(
                 "PROGENITOR_MIN_VERIFICATION_SCORE", fc.get("min_verification_score", 0.8)
             ),
-            iteration_time_limit_seconds=_env_int(
+            iteration_time_limit_seconds=env_int(
                 "PROGENITOR_ITERATION_TIME_LIMIT_SECONDS", fc.get("iteration_time_limit_seconds", 600)
             ),
             # Decision routing settings
-            build_confidence_threshold=_env_float(
+            build_confidence_threshold=env_float(
                 "PROGENITOR_BUILD_CONFIDENCE_THRESHOLD", fc.get("build_confidence_threshold", 0.95)
             ),
         )
@@ -210,7 +203,7 @@ class StorageConfig:
             log_dir=Path(os.getenv("PROGENITOR_LOG_DIR", default_logs)),
             worktree_dir=Path(os.getenv("PROGENITOR_WORKTREE_DIR", default_worktrees)),
             prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", default_prompts)),
-            state_lock_timeout_seconds=_env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
+            state_lock_timeout_seconds=env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
         )
 
 
@@ -238,13 +231,13 @@ class CopilotConfig:
         return cls(
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", fc.get("command", "copilot")),
             config_path=Path(os.getenv("PROGENITOR_COPILOT_CONFIG", default_config_path)),
-            timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", fc.get("timeout", 1200)),
-            default_flags=fc.get("default_flags", ["--yolo"]),
+            timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", fc.get("timeout", 1200)),
+            default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", fc.get("default_flags", ["--yolo"])),
             model=os.getenv("PROGENITOR_COPILOT_MODEL", fc.get("model", "claude-haiku-4.5")),
-            max_tokens=fc.get("max_tokens", 8192),
+            max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", fc.get("max_tokens", 8192)),
             # ACP settings
-            acp_port=_env_int("PROGENITOR_COPILOT_ACP_PORT", fc.get("acp_port", 3000)),
-            acp_allowed_dirs=_env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", fc.get("acp_allowed_dirs", [])),
+            acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", fc.get("acp_port", 3000)),
+            acp_allowed_dirs=env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", fc.get("acp_allowed_dirs", [])),
         )
 
 
@@ -271,10 +264,10 @@ class TelemetryConfig:
             output_dir = None
 
         return cls(
-            enabled=_env_bool("PROGENITOR_TELEMETRY_ENABLED", True),
+            enabled=env_bool("PROGENITOR_TELEMETRY_ENABLED", True),
             output_dir=output_dir,
-            console_export=_env_bool("PROGENITOR_TELEMETRY_CONSOLE", False),
-            metrics_interval_seconds=_env_float(
+            console_export=env_bool("PROGENITOR_TELEMETRY_CONSOLE", False),
+            metrics_interval_seconds=env_float(
                 "PROGENITOR_TELEMETRY_METRICS_INTERVAL", 15.0
             ),
             traces_file=os.getenv("PROGENITOR_TELEMETRY_TRACES_FILE", "traces.jsonl"),
@@ -293,8 +286,8 @@ class SchedulerConfig:
     def from_env(cls) -> "SchedulerConfig":
         """Load scheduler config from environment."""
         return cls(
-            enabled=_env_bool("PROGENITOR_SCHEDULER_ENABLED", True),
-            poll_seconds=_env_int("PROGENITOR_SCHEDULER_POLL_SECONDS", 30),
+            enabled=env_bool("PROGENITOR_SCHEDULER_ENABLED", True),
+            poll_seconds=env_int("PROGENITOR_SCHEDULER_POLL_SECONDS", 30),
         )
 
 

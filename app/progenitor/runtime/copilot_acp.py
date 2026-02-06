@@ -697,8 +697,3 @@ class ACPLogCapture:
             logger.exception("COPILOT_ACP_LOG: Failed to write log: %s", e)
 
         return log_path
-
-
-# Legacy compatibility aliases
-CopilotACPService = CopilotACPManager
-CopilotACPClient = ProgenitorACPClient

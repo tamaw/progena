@@ -923,7 +923,7 @@ async def _execute_system_tool_inline(
         persisted_state = None
         if state_manager:
             try:
-                persisted_state = await state_manager.get_state()
+                persisted_state = await state_manager.get_build_state()
             except Exception as e:
                 logger.warning("Failed to read persisted state: %s", e)
 

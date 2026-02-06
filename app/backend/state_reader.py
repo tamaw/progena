@@ -318,33 +318,12 @@ class StateReader:
         data = self._read_json("current_state.json")
         return data or {}
 
-    # Alias for backwards compatibility
-    def get_current_state(self) -> dict:
-        """Get combined state for backwards compatibility.
-
-        Returns progenitor state merged with build state metadata.
-        """
-        progenitor = self.get_progenitor_state()
-        build = self.get_build_state()
-
-        # Merge for backward compat - progenitor state takes precedence
-        combined = {
-            **build,
-            **progenitor,
-            # Keep build-specific fields from build_state
-            "build_in_progress": build.get("build_in_progress", False),
-            "build_phase": build.get("build_phase"),
-            "verification_score": build.get("verification", {}).get("current_score", 0.0),
-            "current_iteration": build.get("iteration", {}).get("current", 0),
-        }
-        return combined
-
     def get_loops(self, health: HealthInfo) -> list[LoopInfo]:
         """Get loop status based on health and current state."""
         if not health.is_running():
             return []
 
-        current = self.get_current_state()
+        current = self.get_progenitor_state()
         actions = current.get("actions_this_cycle", 0)
 
         # Determine loop states based on activity

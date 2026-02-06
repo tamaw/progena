@@ -46,8 +46,6 @@ class CopilotCLI:
         timeout: int = 1200,  # 20 minutes per request
         log_callback=None,
         logs_dir: Optional[Path] = None,
-        # Legacy parameter kept for backward compatibility
-        acp_client: Optional[Any] = None,
     ):
         """Initialize Copilot CLI wrapper.
 
@@ -57,22 +55,14 @@ class CopilotCLI:
             timeout: Default timeout for copilot commands (20 minutes).
             log_callback: Optional callback for logging invocations.
             logs_dir: Directory for log files (for ACPLogCapture).
-            acp_client: DEPRECATED - use acp_manager instead.
         """
         self.config_path = Path(config_path)
         self.default_timeout = timeout
         self.config = self._load_config()
         self.log_callback = log_callback
 
-        # Support both new acp_manager and legacy acp_client parameter
         if acp_manager is not None:
             self.acp_manager = acp_manager
-        elif acp_client is not None:
-            # Legacy compatibility - wrap in a manager if possible
-            logger.warning(
-                "COPILOT: acp_client parameter is deprecated, use acp_manager instead"
-            )
-            self.acp_manager = acp_client
         else:
             # Create a default manager from config
             self.acp_manager = CopilotACPManager(
@@ -126,7 +116,6 @@ class CopilotCLI:
         worktree_path: Path,
         prompt: str,
         target_path: Optional[str] = None,
-        spec_file_path: Optional[str] = None,
     ) -> dict[str, Any]:
         """Execute a build task via Copilot ACP.
 
@@ -135,7 +124,6 @@ class CopilotCLI:
             worktree_path: Working directory for the build.
             prompt: The prompt text that instructs Copilot.
             target_path: Optional target path for the build.
-            spec_file_path: DEPRECATED - kept for backward compatibility.
 
         Returns:
             Dict with success status, output, and any errors.
