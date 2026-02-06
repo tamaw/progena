@@ -220,10 +220,14 @@ class CopilotConfig:
 
     bin_path: str = "copilot"
     config_path: Path = field(default_factory=lambda: Path("/config/copilot.json"))
-    timeout_seconds: int = 720  # 12 minutes - complex builds need more time
+    timeout_seconds: int = 1200  # 20 minutes per ACP request
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
     model: str = "claude-haiku-4.5"
     max_tokens: int = 8192
+
+    # ACP (Agent Client Protocol) settings
+    acp_port: int = 3000  # Port for the ACP server
+    acp_allowed_dirs: list[str] = field(default_factory=list)  # Restricted directories
 
     @classmethod
     def from_env(cls, file_config: dict[str, Any] | None = None, project_root: Path | None = None) -> "CopilotConfig":
@@ -234,14 +238,16 @@ class CopilotConfig:
         return cls(
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", fc.get("command", "copilot")),
             config_path=Path(os.getenv("PROGENITOR_COPILOT_CONFIG", default_config_path)),
-            timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", fc.get("timeout", 720)),
+            timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", fc.get("timeout", 1200)),
             default_flags=fc.get("default_flags", ["--yolo"]),
-            model=fc.get("model", "claude-haiku-4.5"),
+            model=os.getenv("PROGENITOR_COPILOT_MODEL", fc.get("model", "claude-haiku-4.5")),
             max_tokens=fc.get("max_tokens", 8192),
+            # ACP settings
+            acp_port=_env_int("PROGENITOR_COPILOT_ACP_PORT", fc.get("acp_port", 3000)),
+            acp_allowed_dirs=_env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", fc.get("acp_allowed_dirs", [])),
         )
 
 
-@dataclass
 @dataclass
 class TelemetryConfig:
     """Telemetry and observability configuration."""
@@ -425,6 +431,8 @@ class ProgenitorConfig:
                 "default_flags": self.copilot.default_flags,
                 "model": self.copilot.model,
                 "max_tokens": self.copilot.max_tokens,
+                "acp_port": self.copilot.acp_port,
+                "acp_allowed_dirs": self.copilot.acp_allowed_dirs,
             },
             "scheduler": {
                 "enabled": self.scheduler.enabled,

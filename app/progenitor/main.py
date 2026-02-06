@@ -24,6 +24,7 @@ from .runtime.loop import ProgenitorLoop
 from .state.manager import StateManager
 from .llm.client import LLMClient
 from .tools.registry import ToolRegistry
+from .runtime.copilot_acp import CopilotACPManager
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class Progenitor:
         self.loop_runner = None
         self._background_tasks: list[asyncio.Task] = []
         self._ipc_server = None  # Socket-based IPC server
+        self._copilot_acp_manager: Optional[CopilotACPManager] = None
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -71,6 +73,18 @@ class Progenitor:
 
         # Load tool/agent registry
         await self.tool_registry.load()
+
+        # Initialize Copilot ACP manager
+        # The manager spawns copilot processes per-request via stdio (no persistent service)
+        logger.info("Initializing Copilot ACP manager")
+        self._copilot_acp_manager = CopilotACPManager(
+            copilot_cmd=self.config.copilot.bin_path,
+            model=self.config.copilot.model,
+            yolo="--yolo" in self.config.copilot.default_flags,
+            allowed_dirs=self.config.copilot.acp_allowed_dirs,
+            timeout=self.config.copilot.timeout_seconds,
+        )
+        logger.info("Copilot ACP manager initialized")
 
         # Create a deferred event pusher that will be bound to the loop later
         # This allows the graph to be created before the loop, but still have
@@ -91,6 +105,7 @@ class Progenitor:
             config=self.config,
             worktrees_dir=self.worktrees_dir,
             event_pusher=deferred_push_event,
+            copilot_acp_manager=self._copilot_acp_manager,
         )
 
         # Create loop runner
@@ -100,6 +115,7 @@ class Progenitor:
             config=self.config,
             llm_client=self.llm_client,
             worktrees_dir=self.worktrees_dir,
+            copilot_acp_manager=self._copilot_acp_manager,
         )
 
     async def _log_startup_config(self) -> None:
@@ -196,6 +212,9 @@ class Progenitor:
         if self._ipc_server:
             await self._ipc_server.stop()
             self._ipc_server = None
+
+        # Clear Copilot ACP manager reference
+        self._copilot_acp_manager = None
 
         # Stop loop runner so the main loop exits promptly
         if self.loop_runner:

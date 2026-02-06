@@ -16,6 +16,7 @@ from ..state.models import ProgenitorState, Decision, DecisionAction, WorkItem
 from ..state.helpers import is_work_item_actionable
 from ..runtime.time_utils import utcnow_isoformat
 from .errors import RecoverableError, LLMError, ValidationError
+from ..tools.mcp import A2AClient
 
 if TYPE_CHECKING:
     from ..state.execution_schemas import BuildSettings
@@ -113,6 +114,70 @@ def _looks_like_agent_build_request(user_input: str) -> bool:
             "the agent",  # Referring to existing agent
             "your agent",
             "this agent",
+        ]
+        if any(fp in text for fp in false_positives):
+            return False
+        return True
+
+    return False
+
+
+def _looks_like_tool_build_request(user_input: str) -> bool:
+    """Heuristic: detect explicit requests to build/create a new FastMCP tool.
+
+    This should only trigger for very explicit tool creation requests.
+    The user must clearly express intent to BUILD/CREATE a TOOL.
+    """
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    # Explicit combined phrases that clearly indicate tool building intent
+    explicit_build_phrases = [
+        "build a tool",
+        "build a new tool",
+        "build me a tool",
+        "build an mcp tool",
+        "build a mcp tool",
+        "build a fastmcp tool",
+        "build an fastmcp tool",
+        "create a tool",
+        "create a new tool",
+        "create me a tool",
+        "create an mcp tool",
+        "create a mcp tool",
+        "create a fastmcp tool",
+        "scaffold a tool",
+        "scaffold a new tool",
+        "generate a tool",
+        "generate a new tool",
+        "make a tool",
+        "make a new tool",
+        "make me a tool",
+        "implement a tool",
+        "implement a new tool",
+    ]
+
+    # Check for explicit phrases first
+    if any(phrase in text for phrase in explicit_build_phrases):
+        return True
+
+    # Pattern: build/create/scaffold + optional words + tool
+    import re
+    build_tool_pattern = r'\b(build|create|scaffold|generate|implement)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:[a-z]+\s+){0,3}(?:mcp\s+)?tool\b'
+
+    if re.search(build_tool_pattern, text):
+        # Exclude false positives
+        false_positives = [
+            "use a tool",
+            "use the tool",
+            "what tool",
+            "which tool",
+            "about tool",
+            "the tool",  # Referring to existing tool
+            "your tool",
+            "this tool",
+            "list tool",
         ]
         if any(fp in text for fp in false_positives):
             return False
@@ -984,6 +1049,55 @@ async def _execute_system_tool_inline(
     return None, f"Unknown system tool: {tool_name}"
 
 
+async def _execute_a2a_agent_inline(
+    target_capabilities: list[str],
+    user_input: str,
+    tool_registry,
+    timeout: float = 60.0,
+) -> tuple[dict | None, str | None]:
+    """Execute an A2A agent call inline without going through backlog.
+
+    Args:
+        target_capabilities: List of capabilities to match agent
+        user_input: The user's request to send to the agent
+        tool_registry: Registry to find agent by capability
+        timeout: Request timeout in seconds
+
+    Returns:
+        Tuple of (result_dict, error_string)
+    """
+    if not target_capabilities:
+        return None, "No target capabilities specified"
+
+    # Find agent by first matching capability
+    capability = target_capabilities[0]
+    agent_config = tool_registry.find_agent_by_capability(capability)
+
+    if not agent_config:
+        return None, f"No agent found for capability: {capability}"
+
+    agent_name = agent_config.get("name", "unknown")
+    status = agent_config.get("status", "stopped")
+
+    # Check agent status
+    if status == "failed":
+        error = agent_config.get("last_error", "Unknown error")
+        return None, f"Agent '{agent_name}' is in failed state: {error}"
+
+    if status not in ("running", "waiting", "executing"):
+        return None, f"Agent '{agent_name}' is not running (status: {status})"
+
+    # Call the agent
+    a2a_client = A2AClient()
+    result = await a2a_client.call_agent(
+        agent_config,
+        request=user_input,
+        timeout=timeout,
+    )
+
+    return result, None
+
+
 async def _execute_schedule_task_inline(
     user_input: str,
     schedule_params: dict[str, Any],
@@ -1082,7 +1196,28 @@ async def _format_schedule_result(result: dict, llm_client) -> str:
     except Exception:
         pass
 
-    return f"Got it. I’ll {instruction}."
+    return f"Got it. I'll {instruction}."
+
+
+def _format_a2a_response(result: dict, agent_name: str) -> str:
+    """Format an A2A agent response for display.
+
+    Args:
+        result: The result dictionary from A2AClient.call_agent()
+        agent_name: Name of the agent for error messages
+
+    Returns:
+        Human-readable response string
+    """
+    if result.get("success", False):
+        response = result.get("response") or result.get("result") or result.get("data")
+        if isinstance(response, dict):
+            # Format dict as readable text
+            return str(response)
+        return str(response) if response else "Agent completed successfully."
+    else:
+        error = result.get("error", "Unknown error")
+        return f"Agent '{agent_name}' error: {error}"
 
 
 def _format_tool_result(tool_name: str, result: dict) -> str:
@@ -1546,7 +1681,7 @@ def create_node(
 
             # Check if LLM wants a build action
             llm_action = str(action_str).lower().strip()
-            is_build_action = llm_action in ("build_agent", "build_mcp", "upgrade")
+            is_build_action = llm_action in ("build_agent", "build_tool", "upgrade")
 
             # For build actions, enforce confidence threshold
             if is_build_action:
@@ -1718,6 +1853,76 @@ def create_node(
             except ValueError:
                 logger.warning("Unknown action '%s', falling back to answer_directly", action_str)
                 action = DecisionAction.ANSWER_DIRECTLY
+
+            # ============================================================
+            # FAST-PATH: Handle delegate_a2a without backlog
+            # ============================================================
+            if action == DecisionAction.DELEGATE_A2A:
+                target_capabilities = decision_data.get("target_capabilities", [])
+
+                if not target_capabilities:
+                    # No capabilities - can't route
+                    decision = Decision(
+                        action=DecisionAction.ANSWER_DIRECTLY,
+                        reasoning="delegate_a2a without target_capabilities - responding directly",
+                        requires_planning=False,
+                        direct_response="I wasn't able to determine which agent to use. Could you please clarify your request?",
+                    )
+                    return {"current_decision": decision}
+
+                # Get loop for streaming status
+                from ..runtime.loop import get_current_loop
+                loop = get_current_loop()
+                capability = target_capabilities[0]
+                agent_config = tool_registry.find_agent_by_capability(capability)
+                agent_name = agent_config.get("name", capability) if agent_config else capability
+
+                # Stream status message if streaming is enabled
+                if loop and loop._streaming_enabled:
+                    await loop.stream_token(f"Calling {agent_name}...")
+
+                # Execute agent call
+                result, error = await _execute_a2a_agent_inline(
+                    target_capabilities=target_capabilities,
+                    user_input=user_input,
+                    tool_registry=tool_registry,
+                )
+
+                if error:
+                    response_text = f"Agent unavailable: {error}"
+                    if loop and loop._streaming_enabled:
+                        await loop.stream_token(f"\n{response_text}")
+                        loop._streamed_response_content = f"Calling {agent_name}...\n{response_text}"
+                        loop._response_was_streamed = True
+                else:
+                    # Format successful response using helper
+                    assert result is not None, "result must not be None when error is None"
+                    response_text = _format_a2a_response(result, agent_name)
+
+                    if loop and loop._streaming_enabled:
+                        await loop.stream_token(f"\n\n{response_text}")
+                        loop._streamed_response_content = f"Calling {agent_name}...\n\n{response_text}"
+                        loop._response_was_streamed = True
+
+                decision = Decision(
+                    action=DecisionAction.ANSWER_DIRECTLY,
+                    reasoning=f"Fast-path: A2A call to {agent_name} (capability: {capability})",
+                    requires_planning=False,
+                    target_capabilities=target_capabilities,
+                    direct_response=None if (loop and loop._streaming_enabled) else response_text,
+                )
+
+                if state_manager:
+                    await state_manager.log_decision({
+                        "event": "a2a_agent_call_fast_path",
+                        "agent_name": agent_name,
+                        "capability": capability,
+                        "success": error is None,
+                        "error": error,
+                        "timestamp": utcnow_isoformat(),
+                    })
+
+                return {"current_decision": decision}
 
             # For direct answers, ALWAYS stream if streaming is enabled (ignore LLM's direct_response)
             direct_resp = None

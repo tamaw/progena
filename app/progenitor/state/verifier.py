@@ -1047,6 +1047,7 @@ Format: SCORE: X.XX | EVIDENCE: explanation"""
             if not self.uses_llm:
                 return self._heuristic_verification(criterion, output, context)
 
+            assert self.llm_client is not None, "llm_client must be available when uses_llm is True"
             response = await self.llm_client.generate(
                 prompt=prompt,
                 system_prompt="You are an objective quality evaluator.",

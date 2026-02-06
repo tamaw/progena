@@ -193,7 +193,9 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
         return None
 
     # Extract report data
-    if hasattr(verification_report, "model_dump"):
+    if isinstance(verification_report, dict):
+        report_dict = verification_report
+    elif hasattr(verification_report, "model_dump"):
         report_dict = verification_report.model_dump()
     else:
         report_dict = verification_report

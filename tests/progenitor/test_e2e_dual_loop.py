@@ -6,7 +6,7 @@ with mocked LLM but real state transitions.
 """
 
 import pytest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, MagicMock, patch
 from pathlib import Path
 import json
 
@@ -93,6 +93,17 @@ def test_config():
 
 
 @pytest.fixture
+def mock_copilot_acp_client():
+    """Create a mock CopilotACPClient for testing."""
+    from app.progenitor.runtime.copilot_acp import CopilotACPClient
+    client = MagicMock(spec=CopilotACPClient)
+    client.port = 3000
+    client.timeout = 1200
+    client._initialized = True
+    return client
+
+
+@pytest.fixture
 def test_work_item():
     """Create a test work item."""
     return WorkItem(
@@ -112,6 +123,7 @@ class TestDualLoopEndToEnd:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
+        mock_copilot_acp_client,
         test_config,
     ):
         """Test that the graph can be created without errors."""
@@ -121,6 +133,7 @@ class TestDualLoopEndToEnd:
             tool_registry=mock_tool_registry,
             config=test_config,
             worktrees_dir=Path("./worktrees"),
+            copilot_acp_client=mock_copilot_acp_client,
         )
 
         assert graph is not None

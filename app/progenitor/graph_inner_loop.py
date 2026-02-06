@@ -30,6 +30,7 @@ def create_inner_loop_graph(
     llm_client,
     config,
     worktrees_dir,
+    copilot_acp_manager=None,
 ):
     """Create the inner loop graph for build operations.
 
@@ -38,6 +39,7 @@ def create_inner_loop_graph(
         llm_client: LLM client for model calls.
         config: ProgenitorConfig with build settings.
         worktrees_dir: Path to worktrees directory.
+        copilot_acp_manager: CopilotACPManager for ACP communication.
 
     Returns:
         Compiled StateGraph implementing:
@@ -56,10 +58,18 @@ def create_inner_loop_graph(
     from .tools.registry import ToolRegistry
     from pathlib import Path
 
+    if copilot_acp_manager is None:
+        raise RuntimeError(
+            "copilot_acp_manager is required for inner loop graph. "
+            "Ensure CopilotACPManager is initialized."
+        )
+
     # Initialize tools needed for build
     copilot_cli = CopilotCLI(
         config_path=config.copilot.config_path,
+        acp_manager=copilot_acp_manager,
         timeout=config.copilot.timeout_seconds,
+        logs_dir=config.storage.log_dir,
     )
 
     # Tool registry for execute phase

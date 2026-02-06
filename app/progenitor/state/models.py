@@ -26,7 +26,7 @@ class WorkItemStatus(str, Enum):
 class WorkItemType(str, Enum):
     """Type of work item."""
     BUILD_AGENT = "build_agent"
-    BUILD_MCP = "build_mcp"
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/tools/
     UPGRADE = "upgrade"
     A2A_CALL = "a2a_call"
     MCP_CALL = "mcp_call"
@@ -41,7 +41,7 @@ class DecisionAction(str, Enum):
     DELEGATE_A2A = "delegate_a2a"
     USE_MCP = "use_mcp"
     BUILD_AGENT = "build_agent"
-    BUILD_MCP = "build_mcp"
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/tools/
     UPGRADE = "upgrade"
     MIXED = "mixed"
     SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)
@@ -203,7 +203,7 @@ class WorkItem(BaseModel):
         """Check if this is a build-related work item."""
         return self.item_type_value in (
             WorkItemType.BUILD_AGENT.value,
-            WorkItemType.BUILD_MCP.value,
+            WorkItemType.BUILD_TOOL.value,
             WorkItemType.UPGRADE.value
         )
 

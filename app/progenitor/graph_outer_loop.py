@@ -48,6 +48,7 @@ def create_progenitor_graph(
     config,
     worktrees_dir,
     event_pusher=None,
+    copilot_acp_manager=None,
 ):
     """Create the outer loop LangGraph for Progenitor.
 
@@ -67,6 +68,7 @@ def create_progenitor_graph(
         config: ProgenitorConfig instance with all configuration.
         worktrees_dir: Path to worktrees directory.
         event_pusher: Optional callback to push events to clients via IPC.
+        copilot_acp_manager: CopilotACPManager instance for ACP communication.
 
     Returns:
         Compiled StateGraph implementing the outer loop.
@@ -78,7 +80,10 @@ def create_progenitor_graph(
         "decide": decide.create_node(llm_client, tool_registry, state_manager, config),
         "pick_next": pick_next.create_node(),
         "worktree_prep": worktree_prep.create_node(worktrees_dir),
-        "act": act.create_node(llm_client, tool_registry, config, worktrees_dir, state_manager, event_pusher),
+        "act": act.create_node(
+            llm_client, tool_registry, config, worktrees_dir, state_manager,
+            event_pusher, copilot_acp_manager
+        ),
         "validate": validate.create_node(config),
         "commit_core": commit_core.create_node(state_manager),
         "respond": respond.create_node(state_manager),

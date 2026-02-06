@@ -7,6 +7,8 @@ Extract a descriptive snake_case name from the description. Examples:
 - "hello world agent" → name: "hello_world"
 - "email notification agent" → name: "email_notifier"
 - "weather lookup agent" → name: "weather_lookup"
+- "calculator tool" → name: "calculator"
+- "file converter tool" → name: "file_converter"
 
 NEVER use "unnamed" as the name - always derive from the description.
 
@@ -16,7 +18,7 @@ NEVER use "unnamed" as the name - always derive from the description.
 - Follow Progenitor framework patterns
 - Make it registrable in registry.json
 
-## Directory Structure for Agents (CRITICAL)
+## Directory Structure for Agents (A2A)
 Agents MUST be created in a subdirectory under `app/agents/<agent_name>/`:
 
 CORRECT structure:
@@ -32,7 +34,20 @@ app/agents/<agent_name>/
 WRONG: Creating files directly in app/agents/ like `app/agents/my_agent.py`
 CORRECT: Creating files in subdirectory like `app/agents/my_agent/agent.py`
 
-## Agent Implementation Requirements
+## Directory Structure for Tools (FastMCP)
+Tools MUST be created in a subdirectory under `app/tools/<tool_name>/`:
+
+CORRECT structure:
+```
+app/tools/<tool_name>/
+├── __init__.py          # Exports the mcp server and tool functions
+├── server.py            # FastMCP server implementation (REQUIRED)
+├── config.py            # Tool configuration (optional)
+└── tests/
+    └── test_<tool_name>.py  # Pytest tests
+```
+
+## Agent Implementation Requirements (A2A)
 
 Each agent is **self-contained** - there is no base class to inherit from. The agent.py file MUST:
 
@@ -55,6 +70,35 @@ Each agent is **self-contained** - there is no base class to inherit from. The a
 
 See `data/prompts/agent_structure.md` for complete HTTP endpoint specifications and code examples.
 
+## Tool Implementation Requirements (FastMCP)
+
+Each tool uses FastMCP. The server.py file MUST:
+
+1. Initialize FastMCP with the tool name:
+   ```python
+   from mcp.server.fastmcp import FastMCP
+   mcp = FastMCP("<tool_name>")
+   ```
+
+2. Define tool functions with @mcp.tool() decorator:
+   ```python
+   @mcp.tool()
+   async def my_function(param1: str, param2: int = 10) -> str:
+       """Description of the tool function."""
+       return result
+   ```
+
+3. Include a main entry point:
+   ```python
+   def main():
+       mcp.run()
+
+   if __name__ == "__main__":
+       main()
+   ```
+
+See `data/prompts/tool_structure.md` for complete FastMCP specifications and code examples.
+
 ## Requirements
 - Clear name and description
 - List of capabilities (for registry discovery)
@@ -67,14 +111,14 @@ See `data/prompts/agent_structure.md` for complete HTTP endpoint specifications 
 {
     "name": "<component_name_snake_case>",
     "description": "<what it does>",
-    "kind": "agent|mcp",
+    "kind": "agent|tool",
     "capabilities": ["<capability_1>", "<capability_2>"],
     "interface": {
         "inputs": [],
         "outputs": []
     },
     "transport": "http|stdio",
-    "entrypoint": "app/agents/<agent_name>/agent.py",
+    "entrypoint": "app/agents/<agent_name>/agent.py | app/tools/<tool_name>/server.py",
     "dependencies": [],
     "implementation_notes": "<guidance for implementation>",
     "test_cases": [
@@ -85,6 +129,7 @@ See `data/prompts/agent_structure.md` for complete HTTP endpoint specifications 
 
 ## Transport Selection
 
+**For Agents (A2A):**
 - Use `http` transport for agents that:
   - Need to handle multiple concurrent requests
   - Require long-running processes
@@ -95,3 +140,8 @@ See `data/prompts/agent_structure.md` for complete HTTP endpoint specifications 
   - Are simple request-response style
   - Don't need persistent state
   - Are called occasionally
+
+**For Tools (FastMCP):**
+- Always use `stdio` transport (FastMCP default)
+- Tools are stateless by design
+- Called via MCP protocol

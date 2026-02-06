@@ -230,6 +230,7 @@ class HTTPAgentManager:
     async def _monitor_stdout(self, agent: ManagedAgent) -> None:
         """Monitor agent stdout for status updates."""
         try:
+            assert agent.process.stdout is not None, "stdout should be available"
             while not self._shutdown and agent.process.returncode is None:
                 line = await agent.process.stdout.readline()
                 if not line:
@@ -256,6 +257,7 @@ class HTTPAgentManager:
         """Monitor agent stderr for errors."""
         error_lines = []
         try:
+            assert agent.process.stderr is not None, "stderr should be available"
             while not self._shutdown and agent.process.returncode is None:
                 line = await agent.process.stderr.readline()
                 if not line:

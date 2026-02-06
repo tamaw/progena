@@ -209,7 +209,7 @@ class TestWorktreePrepBuildTypes:
     """Test different build types trigger submodule init."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("item_type", ["build_agent", "build_mcp", "upgrade"])
+    @pytest.mark.parametrize("item_type", ["build_agent", "build_tool", "upgrade"])
     async def test_all_build_types_trigger_submodule(self, tmp_path, item_type):
         """Test that all build types trigger submodule initialization."""
         mock_git = MagicMock()

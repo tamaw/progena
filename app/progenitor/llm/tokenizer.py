@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from typing import Sequence
+    import tiktoken
 
 logger = logging.getLogger(__name__)
 

@@ -6,13 +6,23 @@ Integration test for outer and inner loop implementations.
 """
 
 import pytest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, MagicMock
 from pathlib import Path
 
 from app.progenitor.graph_outer_loop import create_progenitor_graph
 from app.progenitor.graph_inner_loop import create_inner_loop_graph
 from app.progenitor.state.models import ProgenitorState
 from app.progenitor.config import ProgenitorConfig
+
+
+def _create_mock_copilot_acp_client():
+    """Create a mock CopilotACPClient for testing."""
+    from app.progenitor.runtime.copilot_acp import CopilotACPClient
+    client = MagicMock(spec=CopilotACPClient)
+    client.port = 3000
+    client.timeout = 1200
+    client._initialized = True
+    return client
 
 
 def test_outer_loop_graph_compiles():
@@ -37,6 +47,7 @@ def test_outer_loop_graph_compiles():
         tool_registry=tool_registry,
         config=config,
         worktrees_dir=worktrees_dir,
+        copilot_acp_client=_create_mock_copilot_acp_client(),
     )
 
     assert graph is not None
@@ -83,6 +94,7 @@ def test_inner_loop_graph_compiles():
         llm_client=llm_client,
         config=config,
         worktrees_dir=worktrees_dir,
+        copilot_acp_client=_create_mock_copilot_acp_client(),
     )
 
     assert graph is not None
@@ -116,6 +128,7 @@ def test_inner_loop_phases_connected():
         llm_client=llm_client,
         config=config,
         worktrees_dir=worktrees_dir,
+        copilot_acp_client=_create_mock_copilot_acp_client(),
     )
 
     # Get edges to verify flow

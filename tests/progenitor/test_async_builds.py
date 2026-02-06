@@ -153,6 +153,7 @@ class TestBackgroundBuildRunner:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
+            copilot_acp_manager=None,
         )
 
     def test_initial_state(self, runner):
@@ -546,6 +547,7 @@ class TestAsyncBuildIntegration:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
+            copilot_acp_manager=None,
         )
 
         build_id, ack = await runner.start_build(
@@ -569,6 +571,7 @@ class TestAsyncBuildIntegration:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
+            copilot_acp_manager=None,
         )
 
         build_id, _ = await runner.start_build(

@@ -144,7 +144,7 @@ def create_node(
         try:
             build_result = await copilot_cli.build(
                 work_item_id=build_id,
-                worktree_path=working_dir.parent,  # Parent of project dir
+                worktree_path=working_dir,  # Project dir (e.g. app/agents/calculator_agent)
                 prompt=copilot_prompt,
             )
 

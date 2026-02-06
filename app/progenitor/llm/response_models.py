@@ -17,7 +17,7 @@ class DecisionAction(str, Enum):
     DELEGATE_A2A = "delegate_a2a"
     USE_MCP = "use_mcp"
     BUILD_AGENT = "build_agent"
-    BUILD_MCP = "build_mcp"
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool
     UPGRADE = "upgrade"
     MIXED = "mixed"
     # Note: SCHEDULE removed - scheduling is handled via system tool fast-path
@@ -56,7 +56,7 @@ class DecisionResponse(BaseModel):
         default=None,
         description="Direct response content if action is answer_directly (deprecated, use user_response)"
     )
-    # Build-specific fields (populated when action is build_agent, build_mcp, or upgrade)
+    # Build-specific fields (populated when action is build_agent, build_tool, or upgrade)
     project_name: Optional[str] = Field(
         default=None,
         description="For build actions: the agent/project name in snake_case (e.g., 'weather_agent'). "
@@ -167,8 +167,8 @@ class WorkItemSpec(BaseModel):
         type_mapping = {
             "build": "build_agent",
             "agent": "build_agent",
-            "mcp": "build_mcp",
-            "tool": "mcp_call",
+            "mcp": "build_tool",  # Map mcp to build_tool
+            "tool": "build_tool",  # Map tool to build_tool
             "a2a": "a2a_call",
             "schedule": "scheduled",
             "answer": "direct_answer",
@@ -277,9 +277,10 @@ class BuildSpec(BaseModel):
 
         kind_mapping = {
             "build_agent": "agent",
-            "build_mcp": "mcp",
-            "mcp_server": "mcp",
-            "tool": "mcp",
+            "build_tool": "tool",
+            "mcp_server": "tool",
+            "tool": "tool",
+            "mcp": "tool",
             "upgrade": "upgrade",
         }
 

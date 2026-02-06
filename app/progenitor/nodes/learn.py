@@ -52,7 +52,9 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
     # Ideal state - the target we're trying to reach
     ideal_state = state.get("ideal_state")
     if ideal_state:
-        if hasattr(ideal_state, "model_dump"):
+        if isinstance(ideal_state, dict):
+            context["ideal_state"] = ideal_state
+        elif hasattr(ideal_state, "model_dump"):
             context["ideal_state"] = ideal_state.model_dump()
         else:
             context["ideal_state"] = ideal_state
