@@ -131,12 +131,15 @@ class AgentProcessRunner:
         # Prepare environment
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.project_root)
+        env["PORT"] = str(self.port)
 
         logger.info(f"Starting agent: {entrypoint_path} on port {self.port}")
 
         try:
+            # Pass --port as CLI arg in addition to env var (covers argparse-based agents)
             self.process = await asyncio.create_subprocess_exec(
                 sys.executable, str(entrypoint_path),
+                "--port", str(self.port),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.project_root,
@@ -156,7 +159,7 @@ class AgentProcessRunner:
                     return False, f"Agent crashed on startup (exit code {self.process.returncode}): {stderr}"
                 return False, "Agent did not respond to health check within timeout"
 
-            return True, f"Agent started successfully on port {self.port}"
+            return True, f"Agent started successfully on port {self.actual_port}"
 
         except Exception as e:
             logger.error(f"Failed to start agent: {e}")
@@ -181,10 +184,32 @@ class AgentProcessRunner:
             read_stream(self.process.stderr, self.stderr_lines),
         )
 
+    def _detect_port_from_stdout(self) -> Optional[int]:
+        """Detect the actual port the agent started on from stdout.
+
+        Scans for STATUS:running messages or common port patterns to find
+        the port the agent is actually listening on, which may differ from
+        the port we requested via env var.
+        """
+        for line in self.stdout_lines:
+            # Match "Server started on port XXXX" or similar patterns
+            match = re.search(r'(?:port|PORT)\s+(\d+)', line)
+            if match:
+                detected = int(match.group(1))
+                if 1024 <= detected <= 65535:
+                    return detected
+        return None
+
     async def _wait_for_ready(self, timeout: float) -> bool:
-        """Poll health endpoint until ready or timeout."""
+        """Poll health endpoint until ready or timeout.
+
+        Checks the requested port first. If the agent reports starting on a
+        different port (detected from stdout), falls back to checking that
+        port instead. Updates self.actual_port accordingly.
+        """
         start = time.perf_counter()
         health_url = f"http://localhost:{self.port}/health"
+        fallback_port_checked = False
 
         async with httpx.AsyncClient(timeout=2.0) as client:
             while time.perf_counter() - start < timeout:
@@ -193,17 +218,44 @@ class AgentProcessRunner:
                     logger.warning(f"Agent process died with code {self.process.returncode}")
                     return False
 
+                # Try the expected port first
                 try:
                     resp = await client.get(health_url)
                     if resp.status_code == 200:
                         data = resp.json()
                         if data.get("status") == "healthy":
-                            logger.info(f"Agent is healthy after {time.perf_counter() - start:.2f}s")
+                            logger.info(f"Agent is healthy on port {self.port} after {time.perf_counter() - start:.2f}s")
                             return True
                 except (httpx.ConnectError, httpx.TimeoutException):
                     pass
                 except Exception as e:
                     logger.debug(f"Health check error: {e}")
+
+                # After a few seconds, check if agent reported a different port via stdout
+                if not fallback_port_checked and time.perf_counter() - start > 3.0:
+                    detected_port = self._detect_port_from_stdout()
+                    if detected_port and detected_port != self.port:
+                        logger.warning(
+                            f"Agent reported starting on port {detected_port} instead of requested {self.port}. "
+                            f"Adapting health check to actual port."
+                        )
+                        self.port = detected_port
+                        self.actual_port = detected_port
+                        health_url = f"http://localhost:{detected_port}/health"
+                        fallback_port_checked = True
+                        # Immediately try the new port
+                        try:
+                            resp = await client.get(health_url)
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                if data.get("status") == "healthy":
+                                    logger.info(
+                                        f"Agent is healthy on detected port {detected_port} "
+                                        f"after {time.perf_counter() - start:.2f}s"
+                                    )
+                                    return True
+                        except (httpx.ConnectError, httpx.TimeoutException):
+                            pass
 
                 await asyncio.sleep(self.DEFAULT_HEALTH_CHECK_INTERVAL)
 

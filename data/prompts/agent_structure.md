@@ -129,9 +129,22 @@ class MyAgent:
 
     def __init__(self, port: int):
         self.port = port
-        self.app = web.Application()
         self.startup_time = datetime.now(timezone.utc)
+
+        async def lifespan(app: web.Application):
+            emit_status("starting", f"Initializing {self.AGENT_NAME}")
+            yield
+            emit_status("stopping", "Shutting down")
+
+        self.app = web.Application()
+        self.app.cleanup_ctx.append(self._lifespan_wrapper(lifespan))
         self._setup_routes()
+
+    def _lifespan_wrapper(self, lifespan):
+        async def _ctx(app: web.Application):
+            async with lifespan(app):
+                yield
+        return _ctx
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/.well-known/agent.json", self._handle_agent_card)
@@ -174,7 +187,6 @@ class MyAgent:
         return f"Processed: {request}"
 
     async def run(self) -> None:
-        emit_status("starting", f"Initializing {self.AGENT_NAME}")
         runner = web.AppRunner(self.app)
         await runner.setup()
         site = web.TCPSite(runner, "localhost", self.port)

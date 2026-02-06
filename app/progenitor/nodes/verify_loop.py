@@ -175,7 +175,8 @@ def create_node(
                             })
 
             # BL-006: Prefer structured data verification when available
-            execution_result = state.get("execution_result")
+            # Check both top-level and phases.execute.result for execution data
+            execution_result = state.get("execution_result") or state.get("phases", {}).get("execute", {}).get("result")
             # BL-006 FIX: validate node stores as validation_result_v2, not validation_result
             validation_result = state.get("validation_result_v2") or state.get("validation_result")
 
