@@ -544,7 +544,7 @@ async def _plan_from_ideal_state(
     work_item_id = str(uuid.uuid4())
 
     # BL-BUG-002: Get lessons_learned from state for spec_doc update
-    lessons_learned = state.get("lessons_learned", [])
+    lessons_learned = state.get("history", {}).get("lessons_learned", [])
 
     # =========================================================================
     # SpecDoc Management: Seed or Update the persistent spec artifact

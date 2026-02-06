@@ -30,15 +30,15 @@ class TestCopilotExceptionHandling:
     async def test_validate_installation_returns_false_on_error(self, tmp_path):
         """Test that validate_installation handles errors gracefully."""
         from app.progenitor.tools.copilot import CopilotCLI
-        from app.progenitor.runtime.copilot_acp import ProgenitorACPClient
+        from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
         config_path = tmp_path / "copilot.json"
         config_path.write_text('{"command": "copilot"}')
 
-        # Create mock ACP client
-        mock_acp_client = MagicMock(spec=ProgenitorACPClient)
+        # Create mock ACP manager
+        mock_acp_manager = MagicMock(spec=CopilotACPManager)
 
-        cli = CopilotCLI(config_path=config_path, acp_client=mock_acp_client, timeout=10)
+        cli = CopilotCLI(config_path=config_path, acp_manager=mock_acp_manager, timeout=10)
 
         # Mock asyncio.create_subprocess_exec to raise FileNotFoundError
         with patch('asyncio.create_subprocess_exec', side_effect=FileNotFoundError("Not found")):

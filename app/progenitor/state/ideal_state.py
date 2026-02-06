@@ -4,27 +4,52 @@ Ideal State Models - Core of loop.spec.md outer loop.
 Defines the target state with success criteria, anti-criteria, quality bar,
 verification methods, and stop conditions. The Ideal State is the primary
 control surface for the agent loop.
+
+All LLM interactions use structured output (Pydantic models) for reliable
+parsing. Prompts are loaded from data/prompts/ via PromptTemplates.
 """
 
+import json
 import logging
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Any
+from typing import Any, Optional, TypeVar, cast
+
 from pydantic import BaseModel, Field
 
+from ..llm.client import _build_json_schema_format
+from ..llm.prompts import PromptTemplates
+from ..llm.response_models import (
+    AntiCriteriaExtractionResponse,
+    AntiCriterionSpec,
+    CriteriaValidationResponse,
+    IdealStateClarificationResponse,
+    IdealStateExtractionResponse,
+    IdealStateRefinementResponse,
+    SuccessCriterionSpec,
+    VerificationMethodSuggestionResponse,
+)
 from ..runtime.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
+# Type variable for generic structured LLM call
+T = TypeVar('T', bound=BaseModel)
+
+
+# ============================================================================
+# Domain Models
+# ============================================================================
+
 
 class CriterionType(str, Enum):
     """Type of success criterion."""
-    FUNCTIONAL = "functional"  # Does it work?
-    QUALITY = "quality"  # Is it good?
-    PERFORMANCE = "performance"  # Is it fast enough?
-    SECURITY = "security"  # Is it safe?
-    MAINTAINABILITY = "maintainability"  # Can we maintain it?
-    USER_EXPERIENCE = "user_experience"  # Will users like it?
+    FUNCTIONAL = "functional"
+    QUALITY = "quality"
+    PERFORMANCE = "performance"
+    SECURITY = "security"
+    MAINTAINABILITY = "maintainability"
+    USER_EXPERIENCE = "user_experience"
 
 
 class SuccessCriterion(BaseModel):
@@ -35,7 +60,7 @@ class SuccessCriterion(BaseModel):
     criterion_type: CriterionType = Field(default=CriterionType.FUNCTIONAL)
     rank: int = Field(default=1, description="Priority rank (1=highest)")
     measurement: str = Field(description="How to verify this criterion")
-    target_score: float = Field(default=0.8, description="Minimum score to pass (0-1), matches DEFAULT_VERIFICATION_TARGET_SCORE")
+    target_score: float = Field(default=0.8, description="Minimum score to pass (0-1)")
     weight: float = Field(default=1.0, description="Weight in overall score")
 
 
@@ -148,7 +173,6 @@ class IdealState(BaseModel):
         met_condition_ids = []
 
         for condition in self.stop_conditions:
-            # Skip already-met conditions (check but don't mutate)
             if condition.met:
                 continue
 
@@ -177,26 +201,17 @@ class IdealState(BaseModel):
             if condition_met:
                 met_condition_ids.append(condition.condition_type)
 
-        # Check if any conditions are now met (including previously met ones)
         should_stop = len(reasons) > 0 or any(c.met for c in self.stop_conditions)
         return should_stop, reasons, met_condition_ids
 
     def mark_conditions_met(self, condition_types: list[str]) -> "IdealState":
         """Create a new IdealState with specified conditions marked as met.
 
-        This is the proper way to update stop conditions - returns a new
-        immutable state rather than mutating in place.
-
-        Args:
-            condition_types: List of condition_type values to mark as met.
-
-        Returns:
-            New IdealState with updated stop_conditions.
+        Returns a new immutable state rather than mutating in place.
         """
         new_conditions = []
         for condition in self.stop_conditions:
             if condition.condition_type in condition_types and not condition.met:
-                # Create new condition with met=True
                 new_condition = StopCondition(
                     condition_type=condition.condition_type,
                     threshold=condition.threshold,
@@ -209,42 +224,134 @@ class IdealState(BaseModel):
         return self.model_copy(update={"stop_conditions": new_conditions})
 
 
+# ============================================================================
+# Conversion helpers: LLM response specs → domain models
+# ============================================================================
+
+
+def _parse_criterion_type(value: str) -> CriterionType:
+    """Safely parse a criterion type string to enum."""
+    try:
+        return CriterionType(value)
+    except ValueError:
+        return CriterionType.FUNCTIONAL
+
+
+def _spec_to_success_criterion(spec: SuccessCriterionSpec) -> SuccessCriterion:
+    """Convert an LLM response spec to a domain SuccessCriterion."""
+    return SuccessCriterion(
+        id=spec.id,
+        description=spec.description,
+        criterion_type=_parse_criterion_type(spec.criterion_type),
+        rank=spec.rank,
+        measurement=spec.measurement,
+        target_score=spec.target_score,
+        weight=spec.weight,
+    )
+
+
+def _spec_to_anti_criterion(spec: AntiCriterionSpec) -> AntiCriterion:
+    """Convert an LLM response spec to a domain AntiCriterion."""
+    return AntiCriterion(
+        id=spec.id,
+        description=spec.description,
+        severity=spec.severity,
+        detection=spec.detection,
+    )
+
+
+# ============================================================================
+# IdealStateBuilder - uses structured LLM output
+# ============================================================================
+
+
 class IdealStateBuilder:
-    """Builds and refines ideal state from task descriptions."""
+    """Builds and refines ideal state using structured LLM outputs.
+
+    All LLM calls use Pydantic response models for guaranteed schema
+    compliance. Prompts are loaded from data/prompts/ via PromptTemplates.
+    """
 
     def __init__(self, llm_client):
+        """Initialize with an LLM client that supports chat() with response_format."""
         self.llm_client = llm_client
+        self.prompts = PromptTemplates()
 
-    async def build_from_task(self, task_description: str, context: Optional[dict[str, Any]] = None) -> IdealState:
-        """
-        Build an ideal state from a task description.
+    def _get_response_format(
+        self,
+        response_model: type,
+        schema_name: str,
+    ) -> dict[str, Any]:
+        """Get structured output response format, using provider-aware method if available."""
+        if hasattr(self.llm_client, '_get_json_response_format'):
+            return self.llm_client._get_json_response_format(response_model, schema_name)
+        return _build_json_schema_format(response_model, schema_name)
 
-        Uses LLM to extract:
-        - Success criteria (ranked, measurable)
-        - Anti-criteria (what to avoid)
-        - Quality bar
-        - Verification methods
-        - Stop conditions
+    async def _structured_call(
+        self,
+        prompt: str,
+        system_prompt: str,
+        response_model: type[T],
+        schema_name: str,
+        temperature: float = 0.3,
+    ) -> T:
+        """Make a structured LLM call returning a validated Pydantic model.
+
+        Uses the LLM client's chat() method with response_format for
+        guaranteed schema compliance. Falls back gracefully on parse errors.
         """
-        prompt = self._build_extraction_prompt(task_description, context or {})
+        response_format = self._get_response_format(response_model, schema_name)
+
+        # If using json_object fallback (older Azure), add json instruction
+        if response_format.get("type") == "json_object":
+            system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
+
+        response = await self.llm_client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt=system_prompt,
+            temperature=temperature,
+            response_format=response_format,
+        )
+
+        raw_data = json.loads(response)
+        return response_model.model_validate(raw_data)
+
+    # ================================================================
+    # Core methods: build, refine, clarify
+    # ================================================================
+
+    async def build_from_task(
+        self,
+        task_description: str,
+        context: Optional[dict[str, Any]] = None,
+    ) -> IdealState:
+        """Build an ideal state from a task description using structured LLM output.
+
+        Uses LLM to extract success criteria, anti-criteria, quality bar,
+        verification methods, and stop conditions. All via structured output.
+        """
+        prompt = self.prompts.get_ideal_state_extraction_prompt(
+            task_description, context or {}
+        )
 
         try:
-            response = await self.llm_client.generate(
+            extraction = await self._structured_call(
                 prompt=prompt,
-                system_prompt="You are an expert at analyzing tasks and defining measurable success criteria.",
+                system_prompt=(
+                    "You are an expert at analyzing tasks and defining measurable "
+                    "success criteria. Extract a structured ideal state."
+                ),
+                response_model=IdealStateExtractionResponse,
+                schema_name="ideal_state_extraction",
             )
-
-            # Parse LLM response into IdealState
-            ideal_state_data = self._parse_llm_response(response, task_description)
-            return IdealState(**ideal_state_data)
+            return self._extraction_to_ideal_state(extraction, task_description)
 
         except Exception as e:
-            # Log parsing failures at WARNING level for debugging (TD-003)
             logger.warning(
-                "Failed to parse LLM response for ideal state extraction: %s. "
-                "Task: %s. Falling back to default ideal state.",
+                "Failed to extract ideal state via structured output: %s. "
+                "Task: %s. Falling back to default.",
                 str(e),
-                task_description[:100] + "..." if len(task_description) > 100 else task_description
+                task_description[:100] + "..." if len(task_description) > 100 else task_description,
             )
             return self._create_default_ideal_state(task_description)
 
@@ -253,239 +360,348 @@ class IdealStateBuilder:
         current_ideal_state: IdealState,
         iteration_results: dict[str, Any],
     ) -> IdealState:
-        """
-        Refine ideal state based on iteration results.
+        """Refine ideal state based on iteration results using structured LLM output.
 
         Called during OBSERVE phase per loop.spec.md:
         - Tighten criteria that were too loose
         - Add anti-criteria for observed issues
-        - Update based on verification gaps
+        - Update quality bar based on what's achievable
         """
-        # Defensive: convert dict to IdealState if necessary
-        if isinstance(current_ideal_state, dict):
-            logger.debug("Converting current_ideal_state from dict to IdealState")
-            current_ideal_state = IdealState(**current_ideal_state)
-
-        # First, extract anti-criteria from violations (loop.spec.md behavioral rule)
-        violations = iteration_results.get("violations", [])
-        existing_anti_ids = {ac.id for ac in current_ideal_state.anti_criteria}
-
-        new_anti_criteria = self._extract_anti_criteria_from_violations(
-            violations, existing_anti_ids
+        prompt = self.prompts.get_ideal_state_refinement_prompt(
+            current_ideal_state.model_dump_json(indent=2),
+            json.dumps(iteration_results, indent=2, default=str),
         )
 
-        # Add any new anti-criteria directly
-        refined_state = current_ideal_state
-        for anti in new_anti_criteria:
-            refined_state.add_anti_criterion(anti)
+        try:
+            refinement = await self._structured_call(
+                prompt=prompt,
+                system_prompt=(
+                    "You refine success criteria based on observed outcomes. "
+                    "Be specific about what to tighten or add."
+                ),
+                response_model=IdealStateRefinementResponse,
+                schema_name="ideal_state_refinement",
+            )
+            return self._apply_refinement(current_ideal_state, refinement)
 
-        # Also ask LLM for refinements
-        prompt = self._build_refinement_prompt(current_ideal_state, iteration_results)
+        except Exception as e:
+            logger.warning("Failed to refine ideal state: %s. Incrementing version.", e)
+            return current_ideal_state.refine({})
+
+    async def refine_with_clarification(
+        self,
+        current_ideal_state: IdealState,
+        clarification_context: dict[str, Any],
+    ) -> IdealState:
+        """Refine ideal state with user's clarification using structured LLM output.
+
+        Called when the user provides additional context after the agent
+        indicated it needed more information.
+        """
+        user_clarification = clarification_context.get("user_clarification", "")
+        original_context = clarification_context.get("original_context", "")
+
+        if not user_clarification:
+            return current_ideal_state
+
+        prompt = self.prompts.get_ideal_state_clarification_prompt(
+            original_task=current_ideal_state.task_description,
+            trigger=str(original_context),
+            clarification=user_clarification,
+            current_state_json=current_ideal_state.model_dump_json(indent=2),
+        )
 
         try:
-            response = await self.llm_client.generate(
+            response = await self._structured_call(
                 prompt=prompt,
-                system_prompt="You refine success criteria based on observed outcomes. Be specific about what to tighten or add.",
+                system_prompt=(
+                    "You incorporate user clarifications into task specifications. "
+                    "Be specific and actionable."
+                ),
+                response_model=IdealStateClarificationResponse,
+                schema_name="ideal_state_clarification",
+            )
+            return self._apply_clarification(
+                current_ideal_state, response, user_clarification
             )
 
-            refinements = self._parse_refinement_response(response)
+        except Exception as e:
+            logger.warning("Failed to incorporate clarification: %s", e)
+            current_ideal_state.constraints.append(
+                f"User clarification: {user_clarification[:200]}"
+            )
+            return current_ideal_state.refine({})
 
-            # Handle LLM-suggested anti-criteria
-            if "_new_anti_criteria" in refinements:
-                for i, desc in enumerate(refinements["_new_anti_criteria"]):
-                    anti_id = f"anti_llm_{refined_state.version}_{i+1}"
-                    if anti_id not in existing_anti_ids:
-                        refined_state.add_anti_criterion(AntiCriterion(
-                            id=anti_id,
-                            description=desc,
-                            severity=0.8,
-                            detection=f"Check for: {desc[:30]}",
-                        ))
-                del refinements["_new_anti_criteria"]
+    # ================================================================
+    # New LLM-powered methods
+    # ================================================================
 
-            # Apply other refinements
-            if refinements:
-                refined_state = refined_state.refine(refinements)
-            else:
-                # Increment version even if just anti-criteria added
-                refined_state = refined_state.refine({})
-
-            return refined_state
-
-        except (ValueError, KeyError, TypeError) as e:
-            # Log and return with at least the violation-based refinements
-            logger.warning("Failed to parse LLM refinement response: %s", e)
-            return refined_state.refine({})
-
-    def _build_extraction_prompt(self, task: str, context: dict) -> str:
-        """Build prompt for extracting ideal state from task."""
-        return f"""Analyze this task and extract measurable success criteria:
-
-TASK: {task}
-
-CONTEXT: {context}
-
-Extract:
-1. Success Criteria (ranked by priority, measurable)
-   - What defines success?
-   - How can we measure each criterion?
-   - What's the minimum acceptable score?
-
-2. Anti-Criteria (what to avoid)
-   - Common failure modes
-   - User annoyances
-   - Quality violations
-
-3. Quality Bar
-   - What would "euphoric surprise" look like?
-   - What's the difference between acceptable and amazing?
-
-4. Verification Methods
-   - How to verify each criterion (tests, heuristics, human check)
-
-5. Stop Conditions
-   - Minimum verification score (0-1)
-   - Max iterations
-   - Time/resource limits
-
-Format as structured data."""
-
-    def _build_refinement_prompt(self, ideal_state: IdealState, results: dict) -> str:
-        """Build prompt for refining ideal state."""
-        return f"""Refine the ideal state based on iteration results:
-
-CURRENT IDEAL STATE:
-{ideal_state.model_dump_json(indent=2)}
-
-ITERATION RESULTS:
-{results}
-
-Suggest refinements:
-1. Tighten any criteria that were too loose
-2. Add new anti-criteria for observed issues
-3. Adjust quality bar based on what's achievable
-4. Update verification methods if needed
-
-Return only the refinements as structured data."""
-
-    def _parse_llm_response(self, response: str, task_description: str) -> dict[str, Any]:
-        """Parse LLM response into ideal state data."""
-        # Simplified parser - in production would use structured output
-        return {
-            "task_description": task_description,
-            "success_criteria": [
-                SuccessCriterion(
-                    id="task_completed_successfully",
-                    description="Task completed successfully",
-                    criterion_type=CriterionType.FUNCTIONAL,
-                    rank=1,
-                    measurement="Response contains calm, human-friendly advice (1 short paragraph, 2-4 sentences) and returns success=True",
-                    target_score=0.8,  # Matches DEFAULT_VERIFICATION_TARGET_SCORE
-                )
-            ],
-            "anti_criteria": [
-                AntiCriterion(
-                    id="anti_1",
-                    description="Avoid verbose or unnecessary output",
-                    severity=0.5,
-                    detection="Check for fluff words and redundancy",
-                )
-            ],
-            "stop_conditions": [
-                StopCondition(condition_type="min_score", threshold=0.8),
-                StopCondition(condition_type="max_iterations", threshold=5),
-            ],
-        }
-
-    def _parse_refinement_response(self, response: str) -> dict[str, Any]:
-        """Parse refinement suggestions from LLM response."""
-        # Try to extract structured refinements
-        refinements = {}
-
-        # Simple heuristic parsing - in production use structured output
-        lines = response.strip().split("\n")
-        new_anti_criteria = []
-        tightened_criteria = []
-
-        in_anti_criteria = False
-        in_tightening = False
-
-        for line in lines:
-            line_lower = line.lower().strip()
-
-            # Detect sections
-            if "anti-criteria" in line_lower or "avoid" in line_lower:
-                in_anti_criteria = True
-                in_tightening = False
-                continue
-            if "tighten" in line_lower or "criteria" in line_lower:
-                in_anti_criteria = False
-                in_tightening = True
-                continue
-
-            # Extract anti-criteria
-            if in_anti_criteria and line.strip().startswith("-"):
-                content = line.strip().lstrip("- ")
-                if content:
-                    new_anti_criteria.append(content)
-
-            # Extract criteria tightening (for future use)
-            if in_tightening and line.strip().startswith("-"):
-                content = line.strip().lstrip("- ")
-                if content:
-                    tightened_criteria.append(content)
-
-        if new_anti_criteria:
-            refinements["_new_anti_criteria"] = new_anti_criteria
-
-        return refinements
-
-    def _extract_anti_criteria_from_violations(
+    async def extract_anti_criteria_from_violations(
         self,
         violations: list[dict[str, Any]],
-        existing_ids: set[str],
+        current_ideal_state: IdealState,
     ) -> list[AntiCriterion]:
+        """Use LLM to extract generalized anti-criteria from observed violations.
+
+        Goes beyond simple 1:1 mapping - identifies patterns across violations
+        and creates anti-criteria that prevent entire classes of issues.
         """
-        Extract new anti-criteria from observed violations.
+        if not violations:
+            return []
 
-        Per loop.spec.md: Anti-criteria actively penalise fluff, violations, and user annoyances.
-        This method creates new anti-criteria from observed issues.
+        existing_anti = [
+            {"id": ac.id, "description": ac.description}
+            for ac in current_ideal_state.anti_criteria
+        ]
+
+        prompt = self.prompts.get_ideal_state_anti_criteria_prompt(
+            violations_str=json.dumps(violations, indent=2, default=str),
+            existing_anti_criteria_str=json.dumps(existing_anti, indent=2),
+            task_description=current_ideal_state.task_description,
+        )
+
+        try:
+            response = await self._structured_call(
+                prompt=prompt,
+                system_prompt=(
+                    "You analyze violations and extract generalized anti-criteria "
+                    "to prevent recurrence. Focus on patterns, not individual violations."
+                ),
+                response_model=AntiCriteriaExtractionResponse,
+                schema_name="anti_criteria_extraction",
+            )
+
+            existing_ids = {ac.id for ac in current_ideal_state.anti_criteria}
+            return [
+                _spec_to_anti_criterion(spec)
+                for spec in response.anti_criteria
+                if spec.id not in existing_ids
+            ]
+
+        except Exception as e:
+            logger.warning("Failed to extract anti-criteria from violations: %s", e)
+            return []
+
+    async def validate_criteria(
+        self,
+        ideal_state: IdealState,
+    ) -> CriteriaValidationResponse:
+        """Use LLM to validate whether criteria are well-formed and measurable.
+
+        Checks for vagueness, unmeasurability, conflicts, and redundancy.
+        Returns validation result with issues and suggestions.
         """
-        new_anti_criteria = []
+        criteria_data = [
+            {"id": sc.id, "description": sc.description, "measurement": sc.measurement,
+             "type": sc.criterion_type.value, "target_score": sc.target_score}
+            for sc in ideal_state.success_criteria
+        ]
+        anti_data = [
+            {"id": ac.id, "description": ac.description, "detection": ac.detection}
+            for ac in ideal_state.anti_criteria
+        ]
 
-        for i, violation in enumerate(violations):
-            violation_desc = violation.get("description", "")
-            if not violation_desc:
-                continue
+        prompt = self.prompts.get_ideal_state_validation_prompt(
+            criteria_str=json.dumps(criteria_data, indent=2),
+            anti_criteria_str=json.dumps(anti_data, indent=2),
+            task_description=ideal_state.task_description,
+        )
 
-            # Generate ID
-            anti_id = f"anti_violation_{len(existing_ids) + i + 1}"
+        try:
+            return await self._structured_call(
+                prompt=prompt,
+                system_prompt=(
+                    "You validate success criteria for quality, measurability, "
+                    "and completeness. Be honest about issues."
+                ),
+                response_model=CriteriaValidationResponse,
+                schema_name="criteria_validation",
+            )
 
-            # Don't duplicate
-            if violation_desc.lower() in [ac.lower() for ac in existing_ids]:
-                continue
+        except Exception as e:
+            logger.warning("Failed to validate criteria: %s", e)
+            return CriteriaValidationResponse(
+                is_valid=True,
+                issues=[],
+                suggestions=["Validation unavailable - proceeding with current criteria"],
+                overall_quality_score=0.5,
+            )
 
-            new_anti_criteria.append(AntiCriterion(
-                id=anti_id,
-                description=f"Avoid: {violation_desc}",
-                severity=violation.get("severity", 1.0),
-                detection=f"Check for recurrence of: {violation_desc[:50]}",
-            ))
+    async def suggest_verification_methods(
+        self,
+        ideal_state: IdealState,
+        context: Optional[dict[str, Any]] = None,
+    ) -> list[VerificationMethod]:
+        """Use LLM to suggest verification methods for each success criterion.
 
-        return new_anti_criteria
+        Considers the task type and available infrastructure to recommend
+        the most appropriate verification approaches.
+        """
+        criteria_data = [
+            {"id": sc.id, "description": sc.description, "measurement": sc.measurement,
+             "type": sc.criterion_type.value}
+            for sc in ideal_state.success_criteria
+        ]
+
+        prompt = self.prompts.get_ideal_state_verification_prompt(
+            criteria_str=json.dumps(criteria_data, indent=2),
+            task_description=ideal_state.task_description,
+            context_str=json.dumps(context or {}, indent=2, default=str),
+        )
+
+        try:
+            response = await self._structured_call(
+                prompt=prompt,
+                system_prompt=(
+                    "You suggest verification methods for success criteria. "
+                    "Prefer automated methods where possible."
+                ),
+                response_model=VerificationMethodSuggestionResponse,
+                schema_name="verification_method_suggestion",
+            )
+            return [
+                VerificationMethod(
+                    method_type=vm.method_type,
+                    description=vm.description,
+                    automated=vm.automated,
+                )
+                for vm in response.verification_methods
+            ]
+
+        except Exception as e:
+            logger.warning("Failed to suggest verification methods: %s", e)
+            return []
+
+    # ================================================================
+    # Internal conversion helpers
+    # ================================================================
+
+    def _extraction_to_ideal_state(
+        self,
+        extraction: IdealStateExtractionResponse,
+        task_description: str,
+    ) -> IdealState:
+        """Convert a structured extraction response to an IdealState domain model."""
+        return IdealState(
+            task_description=task_description,
+            success_criteria=[
+                _spec_to_success_criterion(sc)
+                for sc in extraction.success_criteria
+            ],
+            anti_criteria=[
+                _spec_to_anti_criterion(ac)
+                for ac in extraction.anti_criteria
+            ],
+            quality_bar=QualityBar(
+                description=extraction.quality_bar.description,
+                examples=extraction.quality_bar.examples,
+                anti_examples=extraction.quality_bar.anti_examples,
+            ),
+            verification_methods=[
+                VerificationMethod(
+                    method_type=vm.method_type,
+                    description=vm.description,
+                    automated=vm.automated,
+                )
+                for vm in extraction.verification_methods
+            ],
+            stop_conditions=[
+                StopCondition(
+                    condition_type=sc.condition_type,
+                    threshold=sc.threshold,
+                )
+                for sc in extraction.stop_conditions
+            ],
+            constraints=extraction.constraints,
+            assumptions=extraction.assumptions,
+        )
+
+    def _apply_refinement(
+        self,
+        current_state: IdealState,
+        refinement: IdealStateRefinementResponse,
+    ) -> IdealState:
+        """Apply a structured refinement response to the current ideal state."""
+        refined = current_state
+
+        # Add new success criteria
+        for sc_spec in refinement.new_success_criteria:
+            refined.add_success_criterion(_spec_to_success_criterion(sc_spec))
+
+        # Tighten existing criteria
+        for tc in refinement.tightened_criteria:
+            for criterion in refined.success_criteria:
+                if criterion.id == tc.criterion_id:
+                    if tc.updated_measurement:
+                        criterion.measurement = tc.updated_measurement
+                    criterion.target_score = tc.updated_target_score
+                    break
+
+        # Add new anti-criteria
+        existing_ids = {ac.id for ac in refined.anti_criteria}
+        for ac_spec in refinement.new_anti_criteria:
+            if ac_spec.id not in existing_ids:
+                refined.add_anti_criterion(_spec_to_anti_criterion(ac_spec))
+
+        # Update quality bar if provided
+        if refinement.updated_quality_description:
+            refined.quality_bar = QualityBar(
+                description=refinement.updated_quality_description,
+                examples=refinement.updated_quality_examples or refined.quality_bar.examples,
+                anti_examples=refinement.updated_quality_anti_examples or refined.quality_bar.anti_examples,
+            )
+
+        return refined.refine({})
+
+    def _apply_clarification(
+        self,
+        current_state: IdealState,
+        response: IdealStateClarificationResponse,
+        user_clarification: str,
+    ) -> IdealState:
+        """Apply a structured clarification response to the current ideal state."""
+        refinements: dict[str, Any] = {}
+
+        # Update task description if provided
+        if response.updated_task_description:
+            refinements["task_description"] = (
+                f"{current_state.task_description}\n\n"
+                f"Additional context: {response.updated_task_description}"
+            )
+
+        # Add new success criteria
+        for sc_spec in response.new_success_criteria:
+            current_state.add_success_criterion(_spec_to_success_criterion(sc_spec))
+
+        # Add new anti-criteria
+        existing_ids = {ac.id for ac in current_state.anti_criteria}
+        for ac_spec in response.new_anti_criteria:
+            if ac_spec.id not in existing_ids:
+                current_state.add_anti_criterion(_spec_to_anti_criterion(ac_spec))
+
+        # Add constraints
+        for constraint in response.additional_constraints:
+            current_state.constraints.append(constraint)
+
+        # Always record the clarification
+        current_state.constraints.append(
+            f"User clarification: {user_clarification[:200]}"
+        )
+
+        return current_state.refine(refinements)
 
     def _create_default_ideal_state(self, task_description: str) -> IdealState:
-        """Create a basic fallback ideal state."""
+        """Create a basic fallback ideal state when LLM extraction fails."""
         return IdealState(
             task_description=task_description,
             success_criteria=[
                 SuccessCriterion(
-                    id="task_completed_successfully_default",
+                    id="default_task_completion",
                     description="Task completed successfully",
                     criterion_type=CriterionType.FUNCTIONAL,
                     rank=1,
                     measurement="Output exists and is human-readable advice (short paragraph)",
-                    target_score=0.8,  # Matches DEFAULT_VERIFICATION_TARGET_SCORE
+                    target_score=0.8,
                 )
             ],
             stop_conditions=[
@@ -493,178 +709,3 @@ Return only the refinements as structured data."""
                 StopCondition(condition_type="max_iterations", threshold=5),
             ],
         )
-
-    async def refine_with_clarification(
-        self,
-        current_ideal_state: "IdealState",
-        clarification_context: dict[str, Any],
-    ) -> "IdealState":
-        """
-        Refine ideal state with user's clarification response.
-
-        Called when the user provides additional context after Copilot
-        indicated it needed more information. This incorporates the
-        user's response into the ideal state criteria and task description.
-
-        Args:
-            current_ideal_state: The ideal state before clarification
-            clarification_context: Contains:
-                - user_clarification: The user's response text
-                - original_context: What triggered the clarification need
-                - iteration_before_clarification: Which iteration needed it
-
-        Returns:
-            Updated IdealState with clarification incorporated
-        """
-        # Defensive: convert dict to IdealState if necessary
-        if isinstance(current_ideal_state, dict):
-            logger.debug("Converting current_ideal_state from dict to IdealState in refine_with_clarification")
-            current_ideal_state = IdealState(**current_ideal_state)
-
-        user_clarification = clarification_context.get("user_clarification", "")
-        original_context = clarification_context.get("original_context", "")
-
-        if not user_clarification:
-            return current_ideal_state
-
-        # Build prompt to incorporate clarification into ideal state
-        prompt = f"""The user has provided additional clarification for this task.
-
-ORIGINAL TASK:
-{current_ideal_state.task_description}
-
-WHAT TRIGGERED CLARIFICATION:
-{original_context}
-
-USER'S CLARIFICATION:
-{user_clarification}
-
-Based on this clarification, update the task understanding:
-1. How does this clarification change or enhance the task description?
-2. Are there new success criteria to add?
-3. Are there new anti-criteria (things to avoid)?
-4. Does this tighten any existing criteria?
-
-Provide:
-- UPDATED_TASK: An enhanced task description incorporating the clarification
-- NEW_CRITERIA: Any new success criteria (one per line, starting with -)
-- NEW_ANTI_CRITERIA: Any new anti-criteria (one per line, starting with -)
-- TIGHTENED: Any criteria that should be more specific now"""
-
-        try:
-            response = await self.llm_client.generate(
-                prompt=prompt,
-                system_prompt="You incorporate user clarifications into task specifications. Be specific and actionable.",
-            )
-
-            refinements = self._parse_clarification_response(response, current_ideal_state)
-
-            # Update task description if provided
-            if "task_description" in refinements:
-                current_ideal_state.task_description = refinements["task_description"]
-                del refinements["task_description"]
-
-            # Add new criteria
-            if "_new_criteria" in refinements:
-                for i, desc in enumerate(refinements["_new_criteria"]):
-                    criterion_id = f"criterion_clarification_{current_ideal_state.version}_{i+1}"
-                    current_ideal_state.add_success_criterion(SuccessCriterion(
-                        id=criterion_id,
-                        description=desc,
-                        criterion_type=CriterionType.FUNCTIONAL,
-                        rank=2,  # Lower priority than original criteria
-                        measurement=f"Verify: {desc[:50]}",
-                        target_score=0.8,
-                    ))
-                del refinements["_new_criteria"]
-
-            # Add new anti-criteria
-            if "_new_anti_criteria" in refinements:
-                for i, desc in enumerate(refinements["_new_anti_criteria"]):
-                    anti_id = f"anti_clarification_{current_ideal_state.version}_{i+1}"
-                    current_ideal_state.add_anti_criterion(AntiCriterion(
-                        id=anti_id,
-                        description=desc,
-                        severity=0.8,
-                        detection=f"Check for: {desc[:30]}",
-                    ))
-                del refinements["_new_anti_criteria"]
-
-            # Add clarification to constraints for context
-            current_ideal_state.constraints.append(
-                f"User clarification: {user_clarification[:200]}"
-            )
-
-            return current_ideal_state.refine(refinements)
-
-        except Exception as e:
-            logger.warning("Failed to incorporate clarification: %s", e)
-            # At minimum, add clarification as a constraint
-            current_ideal_state.constraints.append(
-                f"User clarification: {user_clarification[:200]}"
-            )
-            return current_ideal_state.refine({})
-
-    def _parse_clarification_response(
-        self,
-        response: str,
-        ideal_state: "IdealState"
-    ) -> dict[str, Any]:
-        """Parse clarification refinement response from LLM."""
-        refinements = {}
-        lines = response.strip().split("\n")
-
-        current_section = None
-        new_criteria = []
-        new_anti_criteria = []
-        updated_task = []
-
-        for line in lines:
-            line_stripped = line.strip()
-            line_lower = line_stripped.lower()
-
-            # Detect section headers
-            if line_lower.startswith("updated_task:"):
-                current_section = "task"
-                content = line_stripped.split(":", 1)
-                if len(content) > 1 and content[1].strip():
-                    updated_task.append(content[1].strip())
-                continue
-            elif line_lower.startswith("new_criteria:"):
-                current_section = "criteria"
-                continue
-            elif line_lower.startswith("new_anti_criteria:"):
-                current_section = "anti"
-                continue
-            elif line_lower.startswith("tightened:"):
-                current_section = "tightened"
-                continue
-
-            # Extract content based on section
-            if current_section == "task" and line_stripped:
-                updated_task.append(line_stripped)
-            elif current_section == "criteria" and line_stripped.startswith("-"):
-                content = line_stripped.lstrip("- ")
-                if content:
-                    new_criteria.append(content)
-            elif current_section == "anti" and line_stripped.startswith("-"):
-                content = line_stripped.lstrip("- ")
-                if content:
-                    new_anti_criteria.append(content)
-
-        # Build refinements
-        if updated_task:
-            # Append clarification context to task, don't replace entirely
-            clarification_summary = " ".join(updated_task)
-            refinements["task_description"] = (
-                f"{ideal_state.task_description}\n\n"
-                f"Additional context: {clarification_summary}"
-            )
-
-        if new_criteria:
-            refinements["_new_criteria"] = new_criteria
-
-        if new_anti_criteria:
-            refinements["_new_anti_criteria"] = new_anti_criteria
-
-        return refinements

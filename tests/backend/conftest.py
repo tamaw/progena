@@ -43,9 +43,7 @@ def mock_progenitor_client():
     mock_client.start = AsyncMock()
     mock_client.stop = AsyncMock()
 
-    with patch('app.backend.main.get_client', return_value=mock_client), \
-         patch('app.backend.main.get_ipc_client', return_value=mock_client), \
-         patch('app.backend.main.config.progenitor_ipc_enabled', False), \
+    with patch('app.backend.main.get_ipc_client', return_value=mock_client), \
          patch('app.backend.main.config.telegram_enabled', False):
         yield
 

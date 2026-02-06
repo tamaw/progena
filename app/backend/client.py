@@ -249,6 +249,7 @@ class ProgenitorClient:
             await self._process.stdin.drain()
 
             # Read response
+            response_line: bytes | None = None
             try:
                 response_line = await asyncio.wait_for(
                     self._process.stdout.readline(),
@@ -271,7 +272,7 @@ class ProgenitorClient:
             except json.JSONDecodeError as e:
                 # Return raw text if not JSON
                 self._last_heartbeat = time.time()  # CR-001
-                return response_line.decode().strip()
+                return response_line.decode().strip() if response_line else ""
 
     async def send_message_stream(
         self,

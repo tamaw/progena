@@ -550,9 +550,9 @@ class TestBuildStateTracking:
 class TestChatAPIStreaming:
     """Tests for chat API streaming responses."""
 
-    @patch('app.backend.main.get_client')
-    def test_chat_completions_endpoint_exists(self, mock_get_client):
-        """Test chat completions endpoint accepts requests."""
+    @patch('app.backend.main.get_ipc_client')
+    def test_responses_endpoint_exists(self, mock_get_client):
+        """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
         from app.backend.main import app
 
@@ -563,10 +563,10 @@ class TestChatAPIStreaming:
 
         client = TestClient(app)
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "test"}],
+                "input": "test",
                 "stream": False,
             },
         )
@@ -574,8 +574,8 @@ class TestChatAPIStreaming:
         # May return error but endpoint should be reachable
         assert response.status_code in [200, 500, 503, 504]
 
-    @patch('app.backend.main.get_client')
-    def test_responses_endpoint_exists(self, mock_get_client):
+    @patch('app.backend.main.get_ipc_client')
+    def test_responses_api_endpoint_exists(self, mock_get_client):
         """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
         from app.backend.main import app

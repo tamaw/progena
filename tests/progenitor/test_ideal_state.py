@@ -153,11 +153,27 @@ def _make_ideal_state(**overrides) -> IdealState:
     return IdealState(**defaults)
 
 
-def _make_mock_llm(return_value: dict) -> AsyncMock:
+class SimpleMockLLM:
+    """Minimal mock LLM client for testing IdealStateBuilder.
+
+    Only exposes chat() as an AsyncMock. Does NOT have _get_json_response_format,
+    so the builder falls through to _build_json_schema_format.
+    """
+
+    def __init__(self, chat_return_value: str):
+        self.chat = AsyncMock(return_value=chat_return_value)
+
+
+class FailingMockLLM:
+    """Mock LLM client where chat() raises an exception."""
+
+    def __init__(self, error: Exception):
+        self.chat = AsyncMock(side_effect=error)
+
+
+def _make_mock_llm(return_value: dict) -> SimpleMockLLM:
     """Create a mock LLM client returning JSON from chat()."""
-    mock = AsyncMock()
-    mock.chat.return_value = json.dumps(return_value)
-    return mock
+    return SimpleMockLLM(json.dumps(return_value))
 
 
 # ============================================================================
@@ -463,8 +479,7 @@ class TestBuildFromTask:
     @pytest.mark.asyncio
     async def test_build_from_task_fallback_on_llm_error(self):
         """Test graceful fallback when LLM call fails."""
-        mock_llm = AsyncMock()
-        mock_llm.chat.side_effect = RuntimeError("API unavailable")
+        mock_llm = FailingMockLLM(RuntimeError("API unavailable"))
         builder = IdealStateBuilder(mock_llm)
 
         state = await builder.build_from_task("Some task")
@@ -476,8 +491,7 @@ class TestBuildFromTask:
     @pytest.mark.asyncio
     async def test_build_from_task_fallback_on_json_error(self):
         """Test fallback when LLM returns invalid JSON."""
-        mock_llm = AsyncMock()
-        mock_llm.chat.return_value = "This is not JSON"
+        mock_llm = SimpleMockLLM("This is not JSON")
         builder = IdealStateBuilder(mock_llm)
 
         state = await builder.build_from_task("Some task")
@@ -631,8 +645,7 @@ class TestRefineFromIteration:
 
     @pytest.mark.asyncio
     async def test_refine_fallback_on_error(self):
-        mock_llm = AsyncMock()
-        mock_llm.chat.side_effect = RuntimeError("LLM down")
+        mock_llm = FailingMockLLM(RuntimeError("LLM down"))
         builder = IdealStateBuilder(mock_llm)
         initial = _make_ideal_state()
 
@@ -696,7 +709,7 @@ class TestRefineWithClarification:
 
     @pytest.mark.asyncio
     async def test_clarification_empty_returns_unchanged(self):
-        mock_llm = AsyncMock()
+        mock_llm = SimpleMockLLM("{}")
         builder = IdealStateBuilder(mock_llm)
         initial = _make_ideal_state()
 
@@ -709,8 +722,7 @@ class TestRefineWithClarification:
 
     @pytest.mark.asyncio
     async def test_clarification_fallback_records_constraint(self):
-        mock_llm = AsyncMock()
-        mock_llm.chat.side_effect = RuntimeError("LLM error")
+        mock_llm = FailingMockLLM(RuntimeError("LLM error"))
         builder = IdealStateBuilder(mock_llm)
         initial = _make_ideal_state()
 
@@ -783,7 +795,7 @@ class TestExtractAntiCriteria:
 
     @pytest.mark.asyncio
     async def test_empty_violations_returns_empty(self):
-        mock_llm = AsyncMock()
+        mock_llm = SimpleMockLLM("{}")
         builder = IdealStateBuilder(mock_llm)
         state = _make_ideal_state()
 
@@ -794,8 +806,7 @@ class TestExtractAntiCriteria:
 
     @pytest.mark.asyncio
     async def test_llm_error_returns_empty(self):
-        mock_llm = AsyncMock()
-        mock_llm.chat.side_effect = RuntimeError("LLM error")
+        mock_llm = FailingMockLLM(RuntimeError("LLM error"))
         builder = IdealStateBuilder(mock_llm)
         state = _make_ideal_state()
 
@@ -856,8 +867,7 @@ class TestValidateCriteria:
 
     @pytest.mark.asyncio
     async def test_validate_criteria_fallback_on_error(self):
-        mock_llm = AsyncMock()
-        mock_llm.chat.side_effect = RuntimeError("LLM down")
+        mock_llm = FailingMockLLM(RuntimeError("LLM down"))
         builder = IdealStateBuilder(mock_llm)
         state = _make_ideal_state()
 
@@ -920,8 +930,7 @@ class TestSuggestVerificationMethods:
 
     @pytest.mark.asyncio
     async def test_suggest_fallback_on_error(self):
-        mock_llm = AsyncMock()
-        mock_llm.chat.side_effect = RuntimeError("LLM down")
+        mock_llm = FailingMockLLM(RuntimeError("LLM down"))
         builder = IdealStateBuilder(mock_llm)
         state = _make_ideal_state()
 
@@ -988,8 +997,7 @@ class TestStructuredCall:
 
     @pytest.mark.asyncio
     async def test_raises_on_invalid_json(self):
-        mock_llm = AsyncMock()
-        mock_llm.chat.return_value = "not json at all"
+        mock_llm = SimpleMockLLM("not json at all")
         builder = IdealStateBuilder(mock_llm)
 
         with pytest.raises(json.JSONDecodeError):

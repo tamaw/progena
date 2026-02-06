@@ -680,7 +680,6 @@ class TestInnerLoopIntegration:
             "iteration": {"current": 1},
             "current_work_item": WorkItem(
                 id="item_001",
-                title="Build weather agent",
                 description="Build a weather agent",
                 item_type=WorkItemType.BUILD_AGENT,  # Agent type
             ),
@@ -709,7 +708,6 @@ class TestInnerLoopIntegration:
             "iteration": {"current": 1},
             "current_work_item": WorkItem(
                 id="item_001",
-                title="Build agent",
                 description="Build a test agent",
                 item_type=WorkItemType.DIRECT_ANSWER,  # Wrong type
             ),
@@ -740,7 +738,6 @@ class TestInnerLoopIntegration:
             "iteration": {"current": 1},
             "current_work_item": WorkItem(
                 id="item_001",
-                title="Answer question",
                 description="Answer a question",
                 item_type=WorkItemType.DIRECT_ANSWER,
             ),
@@ -870,7 +867,6 @@ class TestInnerLoopIntegration:
             "iteration": {"current": 1},
             "current_work_item": WorkItem(
                 id="item_001",
-                title="Run tool",
                 description="Run a tool",
                 item_type=WorkItemType.SYSTEM_TOOL,
             ),

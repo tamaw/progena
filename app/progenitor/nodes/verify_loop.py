@@ -106,6 +106,10 @@ def create_node(
             },
         }
 
+        # Initialize verification_report to avoid possibly unbound errors
+        verification_report: VerificationReportV2 | None = None
+        verification_report_dict: dict[str, Any] | None = None
+
         try:
             # Check for clarification needs from Copilot output
             # Only check if we have build output with Copilot results
@@ -183,6 +187,19 @@ def create_node(
                     execution_result=execution_result,
                     validation_result=validation_result,
                     iteration=iteration,
+                )
+                verification_report_dict = verification_report.model_dump()
+
+            if not verification_report:
+                # Fallback if no verification was performed
+                logger.warning("No verification report generated, using default")
+                verification_report = VerificationReportV2(
+                    iteration=iteration,
+                    overall_score=0.5,
+                    passed=False,
+                    gaps=["No verification performed"],
+                    next_actions=["Gather execution/validation data"],
+                    summary="No verification was performed due to missing execution or validation data.",
                 )
                 verification_report_dict = verification_report.model_dump()
 

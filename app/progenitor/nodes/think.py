@@ -4,28 +4,72 @@ THINK Node - Second phase of inner loop (loop.spec.md).
 BL-003: Upgraded to output 2-3 structured approaches with explicit
 tradeoffs/risks and recommended experiment plan deltas.
 
+Uses structured LLM output (ThinkResponse) for validated responses,
+PromptTemplates for maintainable prompts.
+
+Includes:
+- Strict approach quality validation
+- Multi-factor selection with exploration bias
+- Approach comparison matrix for PLAN node
+- Retry logic on validation failure
+- Approach history tracking in build_state.json
+
 PLAN can select one approach deterministically (or with a simple policy).
 """
 
+import json
 import logging
+import random
 import time
 import uuid
 from typing import Any
 
+from ..llm.prompts import PromptTemplates
+from ..llm.response_models import ThinkResponse
 from ..state.models import ProgenitorState
 from ..state.execution_schemas import (
     StructuredApproach,
     ThinkOutput,
     TradeOff,
     Risk,
-    ExperimentPlanDelta,
-    PromptSpec,
 )
 from ..runtime.time_utils import utcnow_isoformat
 from . import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+THINK_SYSTEM_PROMPT = (
+    "You are a strategic thinker analyzing approaches to reach an ideal state. "
+    "Generate exactly 2-3 distinct approaches, each with a different strategy. "
+    "For each approach provide clear implementation steps, explicit trade-offs "
+    "(what we gain vs what we give up), known risks with likelihood and impact, "
+    "and an estimated success probability. "
+    "Be specific and actionable. Approaches should be meaningfully different, "
+    "not minor variations of the same idea."
+)
+
+# Validation thresholds
+MIN_IMPLEMENTATION_STEPS = 2
+MIN_QUALITY_SCORE = 0.5
+
+# Retry on validation failure
+MAX_LLM_RETRIES = 1
+
+# Exploration probability for selection algorithm (prefer novel approaches)
+EXPLORATION_PROBABILITY = 0.15
+
+# Scoring weights for risk/trade-off penalties
+_RISK_PENALTY = {"low": 0.0, "medium": 0.05, "high": 0.15}
+_TRADEOFF_PENALTY = {"low": 0.0, "medium": 0.03, "high": 0.08}
+
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
 
 def _get_telemetry():
     """Get telemetry components if available."""
@@ -35,6 +79,571 @@ def _get_telemetry():
     except ImportError:
         return None, None
 
+
+# ---------------------------------------------------------------------------
+# Structured output helpers
+# ---------------------------------------------------------------------------
+
+def _get_response_format(llm_client) -> dict[str, Any]:
+    """Get structured output response format for ThinkResponse."""
+    if hasattr(llm_client, '_get_json_response_format'):
+        return llm_client._get_json_response_format(ThinkResponse, "think_response")
+    # Fallback: import the builder from the client module
+    from ..llm.client import _build_json_schema_format
+    return _build_json_schema_format(ThinkResponse, "think_response")
+
+
+def _extract_gaps(last_verification) -> list[str]:
+    """Extract gap list from a verification report."""
+    if not last_verification:
+        return []
+    if hasattr(last_verification, "model_dump"):
+        verif_dict = last_verification.model_dump()
+    elif isinstance(last_verification, dict):
+        verif_dict = last_verification
+    else:
+        return []
+    return verif_dict.get("gaps", [])[:5]
+
+
+# ---------------------------------------------------------------------------
+# Approach conversion (LLM response -> internal models)
+# ---------------------------------------------------------------------------
+
+def _convert_approaches(think_resp: ThinkResponse) -> list[StructuredApproach]:
+    """Convert LLM ThinkResponse approaches to internal StructuredApproach objects.
+
+    Returns a plain list (may be empty if the LLM returned nothing).
+    """
+    approaches: list[StructuredApproach] = []
+    for i, resp_approach in enumerate(think_resp.approaches[:3]):
+        approach = StructuredApproach(
+            id=f"approach_{uuid.uuid4().hex[:6]}",
+            name=resp_approach.name[:50] or f"approach_{i + 1}",
+            description=resp_approach.strategy,
+            strategy=resp_approach.strategy,
+            implementation_steps=resp_approach.implementation_steps,
+            trade_offs=[
+                TradeOff(
+                    aspect=to.aspect[:50],
+                    positive=to.positive[:100],
+                    negative=to.negative[:100],
+                    severity=to.severity,
+                )
+                for to in resp_approach.trade_offs
+            ],
+            risks=[
+                Risk(
+                    id=f"risk_{uuid.uuid4().hex[:6]}",
+                    description=r.description[:200],
+                    likelihood=r.likelihood,
+                    impact=r.impact,
+                )
+                for r in resp_approach.risks
+            ],
+            addresses_gaps=resp_approach.addresses_gaps,
+            expected_success_probability=resp_approach.expected_success_probability,
+            priority=i + 1,
+        )
+        # Build description from strategy + steps
+        if approach.implementation_steps:
+            approach.description += ". Steps: " + "; ".join(approach.implementation_steps[:3])
+        approaches.append(approach)
+    return approaches
+
+
+# ---------------------------------------------------------------------------
+# Strict approach validation
+# ---------------------------------------------------------------------------
+
+def _validate_approach(
+    approach: StructuredApproach,
+    gaps: list[str],
+) -> tuple[bool, float, list[str]]:
+    """Validate a single approach strictly.
+
+    Returns (is_valid, quality_score, issues).
+    Approaches with quality_score below MIN_QUALITY_SCORE are rejected.
+    """
+    issues: list[str] = []
+    score = 1.0
+
+    # Must have enough implementation steps
+    if len(approach.implementation_steps) < MIN_IMPLEMENTATION_STEPS:
+        issues.append(
+            f"Too few implementation steps ({len(approach.implementation_steps)}, "
+            f"need >= {MIN_IMPLEMENTATION_STEPS})"
+        )
+        score -= 0.3
+
+    # When gaps exist, approach should reference them
+    if gaps and not approach.addresses_gaps:
+        issues.append("Doesn't address any identified gaps")
+        score -= 0.4
+
+    # Must have at least one trade-off
+    if not approach.trade_offs:
+        issues.append("No trade-offs identified")
+        score -= 0.2
+
+    # Must have at least one risk
+    if not approach.risks:
+        issues.append("No risks identified")
+        score -= 0.2
+
+    # Reject overly generic approaches (empty or trivial strategy)
+    if not approach.strategy or len(approach.strategy.strip()) < 15:
+        issues.append("Strategy is too short or empty")
+        score -= 0.3
+
+    # Success probability must be plausible
+    if approach.expected_success_probability <= 0.0:
+        issues.append("Success probability is zero or negative")
+        score -= 0.1
+
+    quality = max(0.0, score)
+    return quality >= MIN_QUALITY_SCORE, quality, issues
+
+
+def _validate_approaches(
+    approaches: list[StructuredApproach],
+    gaps: list[str],
+) -> tuple[list[StructuredApproach], dict[str, list[str]]]:
+    """Validate all approaches, returning only those that pass.
+
+    Returns (valid_approaches, all_issues_by_approach_id).
+    """
+    valid: list[StructuredApproach] = []
+    all_issues: dict[str, list[str]] = {}
+
+    for approach in approaches:
+        is_valid, quality, issues = _validate_approach(approach, gaps)
+        if issues:
+            all_issues[approach.id] = issues
+        if is_valid:
+            valid.append(approach)
+        else:
+            logger.info(
+                "THINK: Rejected approach '%s' (quality=%.2f): %s",
+                approach.name, quality, "; ".join(issues),
+            )
+
+    return valid, all_issues
+
+
+# ---------------------------------------------------------------------------
+# Multi-factor selection algorithm with exploration bias
+# ---------------------------------------------------------------------------
+
+def _select_recommended_approach(
+    approaches: list[StructuredApproach],
+    gaps: list[str],
+    previous_approach_names: list[str],
+) -> tuple[str, str]:
+    """Select best approach using multi-factor scoring with exploration bias.
+
+    Factors considered:
+    - Base success probability
+    - Gap coverage bonus
+    - Risk penalty (high-likelihood + high-impact risks penalized most)
+    - Trade-off severity penalty
+    - Novelty bonus (approaches not tried in previous iterations)
+    - Complexity penalty (>10 steps)
+
+    Has EXPLORATION_PROBABILITY chance of selecting a random non-optimal
+    approach to avoid local optima.
+    """
+    if not approaches:
+        return "", "No approaches available"
+
+    scored: list[tuple[float, StructuredApproach]] = []
+
+    for approach in approaches:
+        score = approach.expected_success_probability
+
+        # Gap coverage bonus
+        if gaps:
+            gap_overlap = len(set(approach.addresses_gaps) & set(gaps))
+            coverage = gap_overlap / len(gaps)
+            score += coverage * 0.3
+
+        # Risk penalty
+        for risk in approach.risks:
+            if risk.likelihood == "high" and risk.impact == "high":
+                score -= 0.20
+            else:
+                lp = _RISK_PENALTY.get(risk.likelihood, 0.05)
+                ip = _RISK_PENALTY.get(risk.impact, 0.05)
+                score -= (lp + ip) / 2
+
+        # Trade-off severity penalty
+        for to in approach.trade_offs:
+            score -= _TRADEOFF_PENALTY.get(to.severity, 0.03)
+
+        # Novelty bonus (prefer untried approaches)
+        if previous_approach_names and approach.name not in previous_approach_names:
+            score += 0.05
+
+        # Complexity penalty for very long plans
+        if len(approach.implementation_steps) > 10:
+            score -= 0.03
+
+        scored.append((score, approach))
+
+    # Sort best-first
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Exploration: occasionally pick a non-best approach
+    if len(scored) > 1 and random.random() < EXPLORATION_PROBABILITY:
+        _, selected = random.choice(scored[1:])
+        reasoning = (
+            f"Exploring '{selected.name}' (exploration mode) — "
+            f"base probability {selected.expected_success_probability:.0%}"
+        )
+        return selected.id, reasoning
+
+    # Exploitation: pick the best
+    best_score, best = scored[0]
+    reasoning = (
+        f"Selected '{best.name}' with adjusted score {best_score:.2f} "
+        f"(base probability {best.expected_success_probability:.0%})"
+    )
+    if gaps:
+        gap_overlap = len(set(best.addresses_gaps) & set(gaps))
+        if gap_overlap > 0:
+            reasoning += f", addresses {gap_overlap}/{len(gaps)} gaps"
+
+    return best.id, reasoning
+
+
+# ---------------------------------------------------------------------------
+# Approach comparison matrix
+# ---------------------------------------------------------------------------
+
+def _build_comparison(
+    approaches: list[StructuredApproach],
+    gaps: list[str],
+) -> dict[str, Any]:
+    """Build comparison matrix between approaches for the PLAN node."""
+    values = []
+    for a in approaches:
+        risk_score = sum(
+            (_RISK_PENALTY.get(r.likelihood, 0.05) + _RISK_PENALTY.get(r.impact, 0.05))
+            for r in a.risks
+        )
+        gap_count = len(set(a.addresses_gaps) & set(gaps)) if gaps else 0
+        values.append({
+            "approach_id": a.id,
+            "name": a.name,
+            "success_prob": a.expected_success_probability,
+            "risk_level": round(risk_score, 3),
+            "complexity": len(a.implementation_steps),
+            "gap_coverage": gap_count,
+            "trade_off_count": len(a.trade_offs),
+        })
+
+    key_diffs: list[str] = []
+    if len(approaches) >= 2:
+        probs = [a.expected_success_probability for a in approaches]
+        if max(probs) - min(probs) > 0.15:
+            key_diffs.append(
+                f"Success probability range: {min(probs):.0%} to {max(probs):.0%}"
+            )
+        complexities = [len(a.implementation_steps) for a in approaches]
+        if max(complexities) - min(complexities) > 3:
+            key_diffs.append(
+                f"Complexity range: {min(complexities)} to {max(complexities)} steps"
+            )
+        strategies = [a.strategy[:60] for a in approaches]
+        key_diffs.append(f"Strategies: {' vs '.join(strategies)}")
+
+    return {
+        "dimensions": [
+            "success_prob", "risk_level", "complexity",
+            "gap_coverage", "trade_off_count",
+        ],
+        "values": values,
+        "key_differences": key_diffs,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prompt building (with enhanced context)
+# ---------------------------------------------------------------------------
+
+def _build_thinking_prompt(
+    prompts: PromptTemplates,
+    ideal_state,
+    iteration: int,
+    last_verification,
+    state,
+) -> str:
+    """Build the user prompt for THINK phase using the prompt template.
+
+    Includes: ideal state, criteria, anti-criteria, iteration context,
+    lessons learned, available tools, constraints, and dependencies.
+    """
+    ideal_state_dict = (
+        ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
+    )
+
+    # Extract success criteria
+    criteria = ideal_state_dict.get('success_criteria', [])
+    criteria_text = "\n".join([
+        f"- {c.get('description', 'N/A')} (target: {c.get('target_score', 0.8)})"
+        for c in criteria[:5]
+    ]) or "- Complete task successfully"
+
+    # Extract anti-criteria
+    anti_criteria = ideal_state_dict.get('anti_criteria', [])
+    anti_text = "\n".join([
+        f"- {ac.get('description', 'N/A')}"
+        for ac in anti_criteria[:3]
+    ]) or "- None specified"
+
+    # Build iteration context (empty if first iteration)
+    iteration_context = ""
+    gaps: list[str] = []
+    if iteration > 0 and last_verification:
+        if hasattr(last_verification, "model_dump"):
+            verif_dict = last_verification.model_dump()
+        elif isinstance(last_verification, dict):
+            verif_dict = last_verification
+        else:
+            verif_dict = {"overall_score": 0, "passed": False, "gaps": []}
+
+        gaps = verif_dict.get('gaps', [])[:5]
+        gap_lines = (
+            "\n".join([f"  - {gap}" for gap in gaps]) if gaps
+            else "  - None identified"
+        )
+        iteration_context = (
+            f"## Previous Iteration (#{iteration})\n\n"
+            f"**Score:** {verif_dict.get('overall_score', 0):.2f}\n"
+            f"**Passed:** {verif_dict.get('passed', False)}\n\n"
+            f"**Gaps identified:**\n{gap_lines}"
+        )
+
+    # Build lessons context
+    lessons_context = ""
+    lessons_learned = state.get("history", {}).get("lessons_learned", [])
+    if lessons_learned and iteration > 0:
+        recent_lessons = (
+            lessons_learned[-2:] if len(lessons_learned) > 2 else lessons_learned
+        )
+        parts = ["## Lessons From Previous Iterations\n"]
+        for lesson in recent_lessons:
+            iter_num = lesson.get("iteration", "?")
+            parts.append(f"### Iteration {iter_num}")
+            for key, label in [
+                ("what_worked", "**What worked:**"),
+                ("what_failed", "**What failed:**"),
+                ("adjustments", "**Recommended adjustments:**"),
+            ]:
+                items = lesson.get(key, [])
+                if items:
+                    parts.append(label)
+                    for item in items[:3]:
+                        parts.append(f"  - {item}")
+            insights = lesson.get("insights", [])
+            if insights:
+                parts.append("**Key insights:**")
+                for item in insights[:2]:
+                    parts.append(f"  - {item}")
+        lessons_context = "\n".join(parts)
+
+    # Build tools context
+    tools_context = ""
+    config = state.get("config", {})
+    if isinstance(config, dict):
+        available_tools = config.get("available_tools", [])
+        if available_tools:
+            tool_lines = "\n".join([f"- {tool}" for tool in available_tools[:10]])
+            tools_context = f"## Available Tools\n\n{tool_lines}"
+
+    # Build constraints context
+    constraints_context = ""
+    if isinstance(config, dict):
+        constraints = config.get("constraints", {})
+        if isinstance(constraints, dict) and constraints:
+            parts = ["## Constraints\n"]
+            for key, val in constraints.items():
+                parts.append(f"- **{key}:** {val}")
+            constraints_context = "\n".join(parts)
+
+    # Build dependencies context
+    dependencies_context = ""
+    deps = state.get("dependencies", {})
+    if isinstance(deps, dict):
+        critical = deps.get("critical", [])
+        if critical:
+            dep_lines = "\n".join([f"- {dep}" for dep in critical[:5]])
+            dependencies_context = f"## Dependencies\n\n{dep_lines}"
+
+    # Build dynamic focus items
+    focus_parts = []
+    if gaps:
+        focus_parts.append("- Addressing the identified gaps from previous iteration")
+    else:
+        focus_parts.append("- Meeting success criteria")
+    if lessons_learned and iteration > 0:
+        focus_parts.append("- Learning from previous iteration lessons")
+    focus_items = "\n".join(focus_parts)
+
+    return prompts.get_think_prompt(
+        task_description=ideal_state_dict.get('task_description', 'N/A'),
+        criteria=criteria_text,
+        anti_criteria=anti_text,
+        iteration_context=iteration_context,
+        lessons_context=lessons_context,
+        focus_items=focus_items,
+        tools_context=tools_context,
+        constraints_context=constraints_context,
+        dependencies_context=dependencies_context,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Default / fallback output
+# ---------------------------------------------------------------------------
+
+def _build_default_output(iteration: int, gaps_analyzed: list[str]) -> ThinkOutput:
+    """Build a single default approach when the LLM fails to produce valid output."""
+    default_approach = StructuredApproach(
+        id=f"default_{uuid.uuid4().hex[:6]}",
+        name="direct_execution",
+        description="Proceed with standard execution using available tools",
+        strategy="Execute the task directly using available tools and verify the result",
+        implementation_steps=[
+            "Analyze the task requirements",
+            "Execute primary action using available tools",
+            "Verify the result matches success criteria",
+        ],
+        trade_offs=[
+            TradeOff(
+                aspect="Simplicity",
+                positive="Fast execution with minimal overhead",
+                negative="May miss edge cases without deeper analysis",
+                severity="medium",
+            )
+        ],
+        risks=[
+            Risk(
+                id="risk_default",
+                description="Limited analysis due to thinking phase failure",
+                likelihood="medium",
+                impact="medium",
+            )
+        ],
+        expected_success_probability=0.5,
+    )
+    return ThinkOutput(
+        iteration=iteration,
+        approaches=[default_approach],
+        gaps_analyzed=gaps_analyzed,
+        constraints_considered=[],
+        recommended_approach_id=default_approach.id,
+        recommendation_reasoning="Default approach used due to analysis failure",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
+
+def _handle_error(
+    error: Exception,
+    iteration: int,
+    last_verification,
+    start_time: float,
+    metrics,
+    span,
+    error_type: str = "unknown",
+) -> NodeStateUpdate:
+    """Handle errors consistently, returning a usable fallback state.
+
+    Distinguishes between error types for better diagnostics:
+    - json_parse: LLM returned invalid JSON
+    - validation: Pydantic validation failed
+    - llm_error: LLM call itself failed
+    - unknown: Unexpected error
+    """
+    if metrics:
+        metrics.increment("node_invocations_total", {
+            "node": "think", "success": "false", "error_type": error_type,
+        })
+    if span:
+        span.set_attribute("error_type", error_type)
+        span.record_exception(error)
+        span.end()
+
+    gaps_analyzed = _extract_gaps(last_verification)
+    think_output = _build_default_output(iteration or 0, gaps_analyzed)
+
+    return {
+        "phases": {
+            "think": {
+                "approaches": [a.model_dump() for a in think_output.approaches],
+                "recommended_id": think_output.recommended_approach_id,
+                "recommendation_reasoning": think_output.recommendation_reasoning,
+                "gaps_analyzed": gaps_analyzed,
+                "error": {
+                    "type": error_type,
+                    "message": str(error)[:500],
+                },
+            },
+        },
+        "build_phase": "think",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Approach history (stored in build_state.json)
+# ---------------------------------------------------------------------------
+
+async def _load_approach_history(state_manager) -> list[dict[str, Any]]:
+    """Load approach history from build_state.json."""
+    if not state_manager:
+        return []
+    try:
+        build_state = await state_manager.get_build_state()
+        return build_state.get("history", {}).get("approach_history", [])
+    except Exception:
+        return []
+
+
+async def _save_approach_history(
+    state_manager,
+    approach_history: list[dict[str, Any]],
+    selected_approach: StructuredApproach,
+    iteration: int,
+    quality_score: float,
+) -> None:
+    """Append the selected approach to history in build_state.json."""
+    if not state_manager:
+        return
+    try:
+        approach_history.append({
+            "iteration": iteration,
+            "approach_name": selected_approach.name,
+            "approach_id": selected_approach.id,
+            "strategy_preview": selected_approach.strategy[:200],
+            "success_probability": selected_approach.expected_success_probability,
+            "quality_score": quality_score,
+            "timestamp": utcnow_isoformat(),
+        })
+        await state_manager.update_build_state({
+            "history": {
+                "approach_history": approach_history,
+            }
+        })
+    except Exception as e:
+        logger.warning("THINK: Failed to save approach history: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Node factory
+# ---------------------------------------------------------------------------
 
 def create_node(
     llm_client,
@@ -46,18 +655,21 @@ def create_node(
     ProgenitorState and returns NodeStateUpdate (partial dict).
     """
 
+    prompts = PromptTemplates()
+
     async def think_node(state: ProgenitorState) -> NodeStateUpdate:
         """
         THINK phase: Generate 2-3 structured approaches with explicit
         tradeoffs/risks and recommended experiment plan deltas (BL-003).
 
-        Considers:
-        - Current ideal state and criteria
-        - Previous iteration results (if any)
-        - Available tools and capabilities
-        - Constraints and anti-criteria
-
-        PLAN can select one approach deterministically (or with a simple policy).
+        Flow:
+        1. Build prompt with full context (tools, constraints, dependencies)
+        2. Call LLM with structured output
+        3. Validate approaches strictly (reject low-quality ones)
+        4. Retry LLM if all approaches rejected
+        5. Select recommended approach via multi-factor scoring
+        6. Build comparison matrix for PLAN node
+        7. Store approach history in build_state.json
         """
         logger.info("THINK: Starting think phase")
         start_time = time.perf_counter()
@@ -66,7 +678,11 @@ def create_node(
 
         ideal_state = state.get("ideal_state")
         iteration_state = state.get("iteration", {})
-        iteration = iteration_state.get("current", 0) if isinstance(iteration_state, dict) else getattr(iteration_state, "current", 0)
+        iteration = (
+            iteration_state.get("current", 0)
+            if isinstance(iteration_state, dict)
+            else getattr(iteration_state, "current", 0)
+        )
 
         if tracer:
             span = tracer.start_span(
@@ -85,502 +701,207 @@ def create_node(
             return {}
 
         verification_state = state.get("verification", {})
-        last_verification = verification_state.get("current_report") if isinstance(verification_state, dict) else getattr(verification_state, "current_report", None)
+        last_verification = (
+            verification_state.get("current_report")
+            if isinstance(verification_state, dict)
+            else getattr(verification_state, "current_report", None)
+        )
 
-        # Build thinking prompt for structured approaches
-        prompt = _build_thinking_prompt(ideal_state, iteration or 0, last_verification, state)
+        # Build prompt with enhanced context
+        prompt = _build_thinking_prompt(
+            prompts, ideal_state, iteration or 0, last_verification, state,
+        )
 
-        try:
-            response = await llm_client.generate(
-                prompt=prompt,
-                system_prompt="""You are a strategic thinker analyzing approaches to reach ideal state.
-Generate exactly 2-3 distinct approaches, each with:
-- Clear strategy and implementation steps
-- Explicit trade-offs (what we gain vs what we give up)
-- Known risks with likelihood and impact
-- Expected success probability
+        # Get structured output response format
+        response_format = _get_response_format(llm_client)
+        system_prompt = THINK_SYSTEM_PROMPT
 
-Format each approach clearly with numbered sections.""",
+        # If using json_object fallback (older Azure), add json instruction
+        if response_format.get("type") == "json_object":
+            system_prompt += (
+                "\n\nReturn a single JSON object and nothing else (valid json)."
             )
 
-            # BL-003: Parse into structured approaches with tradeoffs/risks
-            think_output = _parse_structured_approaches(response, iteration or 0, last_verification)
+        # Load approach history for exploration/novelty scoring
+        approach_history = await _load_approach_history(state_manager)
+        previous_names = [h.get("approach_name", "") for h in approach_history]
 
+        gaps_analyzed = _extract_gaps(last_verification)
+        valid_approaches: list[StructuredApproach] = []
+        all_issues: dict[str, list[str]] = {}
+        raw_response = ""
+
+        try:
+            # Retry loop: generate approaches, validate, retry if all rejected
+            for attempt in range(MAX_LLM_RETRIES + 1):
+                raw_response = await llm_client.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=system_prompt,
+                    temperature=0.7,
+                    response_format=response_format,
+                )
+
+                raw_data = json.loads(raw_response)
+                think_resp = ThinkResponse.model_validate(raw_data)
+
+                approaches = _convert_approaches(think_resp)
+
+                if not approaches:
+                    logger.warning(
+                        "THINK: LLM returned no approaches (attempt %d/%d)",
+                        attempt + 1, MAX_LLM_RETRIES + 1,
+                    )
+                    if attempt < MAX_LLM_RETRIES:
+                        continue
+                    break
+
+                # Strict validation
+                valid_approaches, all_issues = _validate_approaches(
+                    approaches, gaps_analyzed,
+                )
+
+                if valid_approaches:
+                    logger.info(
+                        "THINK: %d/%d approaches passed validation (attempt %d)",
+                        len(valid_approaches), len(approaches), attempt + 1,
+                    )
+                    break
+
+                logger.warning(
+                    "THINK: All %d approaches rejected on attempt %d/%d",
+                    len(approaches), attempt + 1, MAX_LLM_RETRIES + 1,
+                )
+
+            # Fall back to default if nothing survived
+            if not valid_approaches:
+                logger.warning("THINK: No valid approaches after retries, using default")
+                default_output = _build_default_output(iteration or 0, gaps_analyzed)
+                valid_approaches = list(default_output.approaches)
+
+            # Multi-factor selection with exploration bias
+            rec_id, rec_reasoning = _select_recommended_approach(
+                valid_approaches, gaps_analyzed, previous_names,
+            )
+
+            # Build comparison matrix
+            comparison = _build_comparison(valid_approaches, gaps_analyzed)
+
+            # Build final ThinkOutput
+            think_output = ThinkOutput(
+                iteration=iteration or 0,
+                approaches=valid_approaches,
+                gaps_analyzed=gaps_analyzed,
+                constraints_considered=[],
+                recommended_approach_id=rec_id,
+                recommendation_reasoning=rec_reasoning,
+            )
+
+            # Telemetry
             if span:
                 span.add_event("approaches_generated", {
                     "count": len(think_output.approaches),
                     "prompt_length": len(prompt),
+                    "structured_output": True,
+                    "validation_issues": len(all_issues),
                 })
 
+            # Audit trail + build messages
             if state_manager:
-                # Log decision for audit trail
                 await state_manager.log_decision({
                     "event": "thinking_phase",
                     "iteration": iteration,
                     "approaches_generated": len(think_output.approaches),
                     "approach_names": [a.name for a in think_output.approaches],
                     "recommended_approach": think_output.recommended_approach_id,
+                    "recommendation_reasoning": rec_reasoning,
+                    "validation_issues": {
+                        k: v for k, v in all_issues.items()
+                    } if all_issues else None,
                     "timestamp": utcnow_isoformat(),
                 })
-                # Track LLM call in build_messages (build_state.json)
+                response_preview = (
+                    raw_response[:500] + "..."
+                    if len(raw_response) > 500 else raw_response
+                )
                 await state_manager.add_build_message({
                     "phase": "think",
                     "iteration": iteration,
-                    "prompt_preview": prompt[:500] + "..." if len(prompt) > 500 else prompt,
-                    "response_preview": response[:500] + "..." if len(response) > 500 else response,
+                    "prompt_preview": (
+                        prompt[:500] + "..." if len(prompt) > 500 else prompt
+                    ),
+                    "response_preview": response_preview,
                     "timestamp": utcnow_isoformat(),
                 })
+
+            # Store approach history
+            selected = next(
+                (a for a in valid_approaches if a.id == rec_id), None,
+            )
+            if selected:
+                # Compute quality score for the selected approach
+                _, quality, _ = _validate_approach(selected, gaps_analyzed)
+                await _save_approach_history(
+                    state_manager, approach_history, selected,
+                    iteration or 0, quality,
+                )
 
             # Record metrics
             duration = time.perf_counter() - start_time
             if metrics:
-                metrics.record_histogram("node_duration_seconds", duration, {"node": "think"})
-                metrics.increment("node_invocations_total", {"node": "think", "success": "true"})
+                metrics.record_histogram(
+                    "node_duration_seconds", duration, {"node": "think"},
+                )
+                metrics.increment(
+                    "node_invocations_total", {"node": "think", "success": "true"},
+                )
 
             if span:
                 span.set_attribute("duration_seconds", duration)
                 span.set_attribute("approaches_count", len(think_output.approaches))
                 span.end()
 
-            # Convert to dicts for state storage (LangGraph needs dicts)
             approaches_dicts = [a.model_dump() for a in think_output.approaches]
 
-            # Get gaps from previous verification for nested structure
-            gaps_analyzed = []
-            if last_verification:
-                if isinstance(last_verification, dict):
-                    verif_dict = last_verification
-                elif hasattr(last_verification, "model_dump"):
-                    verif_dict = last_verification.model_dump()
-                else:
-                    verif_dict = last_verification
-                gaps_analyzed = verif_dict.get("gaps", [])[:5]
-
             return {
-                # Nested structure
                 "phases": {
                     "think": {
                         "approaches": approaches_dicts,
                         "recommended_id": think_output.recommended_approach_id,
+                        "recommendation_reasoning": rec_reasoning,
                         "gaps_analyzed": gaps_analyzed,
+                        "comparison": comparison,
+                        "validation_issues": (
+                            {k: v for k, v in all_issues.items()}
+                            if all_issues else {}
+                        ),
                     },
                 },
                 "build_phase": "think",
             }
-        except Exception as e:
-            logger.error(f"THINK phase error: {e}")
-            if metrics:
-                metrics.increment("node_invocations_total", {"node": "think", "success": "false"})
-            if span:
-                span.record_exception(e)
-                span.end()
-            # BL-003: Fallback to structured default approach
-            default_approach = StructuredApproach(
-                id=f"default_{uuid.uuid4().hex[:6]}",
-                name="default",
-                description="Proceed with standard execution",
-                strategy="Execute the task using available tools",
-                implementation_steps=["Execute primary action", "Verify result"],
-                trade_offs=[
-                    TradeOff(
-                        aspect="Time",
-                        positive="Fast execution",
-                        negative="May miss edge cases",
-                        severity="medium",
-                    )
-                ],
-                risks=[
-                    Risk(
-                        id="risk_unknown",
-                        description="Unknown risks due to thinking error",
-                        likelihood="medium",
-                        impact="medium",
-                    )
-                ],
-                expected_success_probability=0.5,
+
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "THINK: Could not parse JSON from LLM response: %s", e,
             )
-            return {
-                "phases": {
-                    "think": {
-                        "approaches": [default_approach.model_dump()],
-                        "recommended_id": default_approach.id,
-                        "gaps_analyzed": False,
-                    },
-                },
-                "build_phase": "think",
-            }
+            return _handle_error(
+                e, iteration, last_verification,
+                start_time, metrics, span, error_type="json_parse",
+            )
+
+        except ValueError as e:
+            logger.warning(
+                "THINK: Pydantic validation error: %s", e,
+            )
+            return _handle_error(
+                e, iteration, last_verification,
+                start_time, metrics, span, error_type="validation",
+            )
+
+        except Exception as e:
+            logger.error("THINK phase error: %s", e, exc_info=True)
+            return _handle_error(
+                e, iteration, last_verification,
+                start_time, metrics, span, error_type="llm_error",
+            )
 
     return think_node
-
-
-def _build_thinking_prompt(ideal_state, iteration: int, last_verification, state) -> str:
-    """Build prompt for thinking phase with structured output requirements."""
-    ideal_state_dict = ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
-
-    # Extract success criteria descriptions
-    criteria = ideal_state_dict.get('success_criteria', [])
-    criteria_text = "\n".join([
-        f"  - {c.get('description', 'N/A')} (target: {c.get('target_score', 0.8)})"
-        for c in criteria[:5]
-    ])
-
-    # Extract anti-criteria
-    anti_criteria = ideal_state_dict.get('anti_criteria', [])
-    anti_text = "\n".join([
-        f"  - {ac.get('description', 'N/A')}"
-        for ac in anti_criteria[:3]
-    ])
-
-    prompt_parts = [
-        "Analyze approaches to reach this ideal state and generate 2-3 structured approaches:",
-        "",
-        "IDEAL STATE:",
-        f"Task: {ideal_state_dict.get('task_description', 'N/A')}",
-        "",
-        "Success Criteria:",
-        criteria_text if criteria_text else "  - Complete task successfully",
-        "",
-        "Anti-Criteria (things to avoid):",
-        anti_text if anti_text else "  - None specified",
-    ]
-
-    # Add previous iteration context
-    gaps = []
-    if iteration > 0 and last_verification:
-        if hasattr(last_verification, "model_dump"):
-            verif_dict = last_verification.model_dump()
-        elif isinstance(last_verification, dict):
-            verif_dict = last_verification
-        else:
-            verif_dict = {"overall_score": 0, "passed": False, "gaps": []}
-
-        gaps = verif_dict.get('gaps', [])[:5]
-        gap_lines = [f"  - {gap}" for gap in gaps] if gaps else ["  - None identified"]
-        prompt_parts.extend([
-            "",
-            f"PREVIOUS ITERATION (#{iteration}):",
-            f"Score: {verif_dict.get('overall_score', 0):.2f}",
-            f"Passed: {verif_dict.get('passed', False)}",
-            "Gaps identified:",
-        ])
-        prompt_parts.extend(gap_lines)
-
-    # BL-BUG-002: Add lessons_learned to the prompt so THINK can learn from past iterations
-    lessons_learned = state.get("lessons_learned", [])
-    if lessons_learned and iteration > 0:
-        # Get most recent lessons (last 2 iterations)
-        recent_lessons = lessons_learned[-2:] if len(lessons_learned) > 2 else lessons_learned
-        prompt_parts.extend([
-            "",
-            "LESSONS FROM PREVIOUS ITERATIONS:",
-        ])
-        for lesson in recent_lessons:
-            iter_num = lesson.get("iteration", "?")
-            prompt_parts.append(f"  Iteration {iter_num}:")
-            # What worked
-            what_worked = lesson.get("what_worked", [])
-            if what_worked:
-                prompt_parts.append("    What worked:")
-                for item in what_worked[:3]:
-                    prompt_parts.append(f"      - {item}")
-            # What failed
-            what_failed = lesson.get("what_failed", [])
-            if what_failed:
-                prompt_parts.append("    What failed:")
-                for item in what_failed[:3]:
-                    prompt_parts.append(f"      - {item}")
-            # Adjustments
-            adjustments = lesson.get("adjustments", [])
-            if adjustments:
-                prompt_parts.append("    Recommended adjustments:")
-                for item in adjustments[:3]:
-                    prompt_parts.append(f"      - {item}")
-            # Insights
-            insights = lesson.get("insights", [])
-            if insights:
-                prompt_parts.append("    Key insights:")
-                for item in insights[:2]:
-                    prompt_parts.append(f"      - {item}")
-
-    prompt_parts.extend([
-        "",
-        "Generate 2-3 DISTINCT approaches. For each approach provide:",
-        "",
-        "APPROACH [N]: [Name]",
-        "STRATEGY: [Core strategy/technique]",
-        "STEPS:",
-        "  1. [Step 1]",
-        "  2. [Step 2]",
-        "  ...",
-        "TRADE-OFFS:",
-        "  - [Aspect]: Gain [X] but lose [Y] (severity: low/medium/high)",
-        "RISKS:",
-        "  - [Risk]: likelihood=low/medium/high, impact=low/medium/high",
-        "SUCCESS_PROBABILITY: [0.0-1.0]",
-        "ADDRESSES_GAPS: [Which gaps from previous iteration this addresses]",
-        "",
-        "Focus on:",
-        "- Addressing the identified gaps" if gaps else "- Meeting success criteria",
-        "- Learning from previous iteration lessons" if lessons_learned else "",
-        "- Avoiding anti-criteria",
-        "- Providing measurable outcomes",
-    ])
-
-    return "\n".join(prompt_parts)
-
-
-def _parse_structured_approaches(response: str, iteration: int, last_verification) -> ThinkOutput:
-    """Parse LLM response into structured ThinkOutput with StructuredApproach objects.
-
-    BL-003: Approaches become typed/JSON with explicit tradeoffs/risks.
-    """
-    approaches = []
-    lines = response.split("\n")
-
-    current_approach = None
-    current_section = None
-    approach_count = 0
-
-    # Extract gaps from last verification
-    gaps_analyzed = []
-    if last_verification:
-        if hasattr(last_verification, "model_dump"):
-            verif_dict = last_verification.model_dump()
-        elif isinstance(last_verification, dict):
-            verif_dict = last_verification
-        else:
-            verif_dict = {}
-        gaps_analyzed = verif_dict.get("gaps", [])[:5]
-
-    for line in lines:
-        line_stripped = line.strip()
-        line_lower = line_stripped.lower()
-
-        # Detect new approach
-        if line_lower.startswith("approach") and (":" in line_stripped or "[" in line_stripped):
-            # Save previous approach
-            if current_approach:
-                approaches.append(current_approach)
-
-            approach_count += 1
-            # Extract name from line like "APPROACH 1: Direct Implementation" or "APPROACH [1]: Name"
-            name_part = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else f"approach_{approach_count}"
-
-            current_approach = StructuredApproach(
-                id=f"approach_{uuid.uuid4().hex[:6]}",
-                name=name_part[:50] or f"approach_{approach_count}",
-                description="",
-                strategy="",
-                implementation_steps=[],
-                trade_offs=[],
-                risks=[],
-                addresses_gaps=[],
-                priority=approach_count,
-            )
-            current_section = "name"
-
-        # Parse sections within approach
-        elif current_approach:
-            if line_lower.startswith("strategy:"):
-                current_approach.strategy = line_stripped.split(":", 1)[-1].strip()
-                current_section = "strategy"
-
-            elif line_lower.startswith("steps:"):
-                current_section = "steps"
-
-            elif line_lower.startswith("trade-off") or line_lower.startswith("tradeoff"):
-                current_section = "tradeoffs"
-
-            elif line_lower.startswith("risk"):
-                current_section = "risks"
-
-            elif line_lower.startswith("success_probability:") or line_lower.startswith("probability:"):
-                try:
-                    prob_str = line_stripped.split(":", 1)[-1].strip()
-                    current_approach.expected_success_probability = float(prob_str)
-                except (ValueError, IndexError):
-                    pass
-
-            elif line_lower.startswith("addresses_gaps:") or line_lower.startswith("addresses:"):
-                gap_text = line_stripped.split(":", 1)[-1].strip()
-                current_approach.addresses_gaps = [g.strip() for g in gap_text.split(",") if g.strip()]
-
-            # Parse content based on current section
-            elif current_section == "strategy" and line_stripped and not line_stripped.startswith(("-", "•")):
-                current_approach.strategy += " " + line_stripped
-
-            elif current_section == "steps" and (line_stripped.startswith(("-", "•", "1", "2", "3", "4", "5"))):
-                step = line_stripped.lstrip("-•0123456789. ").strip()
-                if step:
-                    current_approach.implementation_steps.append(step)
-
-            elif current_section == "tradeoffs" and line_stripped.startswith(("-", "•")):
-                tradeoff = _parse_tradeoff(line_stripped)
-                if tradeoff:
-                    current_approach.trade_offs.append(tradeoff)
-
-            elif current_section == "risks" and line_stripped.startswith(("-", "•")):
-                risk = _parse_risk(line_stripped)
-                if risk:
-                    current_approach.risks.append(risk)
-
-    # Don't forget the last approach
-    if current_approach:
-        approaches.append(current_approach)
-
-    # Ensure we have at least one approach
-    if not approaches:
-        approaches.append(StructuredApproach(
-            id=f"default_{uuid.uuid4().hex[:6]}",
-            name="primary",
-            description=response[:500] if response else "Standard approach",
-            strategy="Execute the task directly",
-            implementation_steps=["Execute primary action", "Verify result"],
-            trade_offs=[
-                TradeOff(
-                    aspect="Simplicity",
-                    positive="Quick to implement",
-                    negative="May miss nuances",
-                    severity="low",
-                )
-            ],
-            risks=[
-                Risk(
-                    id="risk_iteration",
-                    description="May need iteration",
-                    likelihood="medium",
-                    impact="low",
-                )
-            ],
-            expected_success_probability=0.6,
-        ))
-
-    # Ensure we have 2-3 approaches (BL-003 requirement)
-    while len(approaches) < 2:
-        alt_approach = StructuredApproach(
-            id=f"alternative_{uuid.uuid4().hex[:6]}",
-            name=f"alternative_{len(approaches) + 1}",
-            description="Alternative approach with different trade-offs",
-            strategy="Take a different angle to the problem",
-            implementation_steps=["Identify alternative path", "Execute alternative", "Compare results"],
-            trade_offs=[
-                TradeOff(
-                    aspect="Exploration",
-                    positive="May find better solution",
-                    negative="Takes more time",
-                    severity="medium",
-                )
-            ],
-            risks=[
-                Risk(
-                    id=f"risk_alt_{len(approaches)}",
-                    description="Alternative may not be better",
-                    likelihood="medium",
-                    impact="low",
-                )
-            ],
-            expected_success_probability=0.4,
-            priority=len(approaches) + 1,
-        )
-        approaches.append(alt_approach)
-
-    # Build description from strategy and steps for each approach
-    for approach in approaches:
-        if not approach.description:
-            approach.description = approach.strategy
-            if approach.implementation_steps:
-                approach.description += ". Steps: " + "; ".join(approach.implementation_steps[:3])
-
-    # Select recommended approach (highest success probability that addresses gaps)
-    recommended = max(approaches, key=lambda a: (
-        len(set(a.addresses_gaps) & set(gaps_analyzed)) * 0.3 + a.expected_success_probability
-    ))
-
-    return ThinkOutput(
-        iteration=iteration,
-        approaches=approaches[:3],  # Limit to 3
-        gaps_analyzed=gaps_analyzed,
-        constraints_considered=[],
-        recommended_approach_id=recommended.id,
-        recommendation_reasoning=f"Selected '{recommended.name}' with {recommended.expected_success_probability:.0%} success probability",
-    )
-
-
-def _parse_tradeoff(line: str) -> TradeOff | None:
-    """Parse a trade-off from a line like '- Speed: Gain fast execution but lose thoroughness (medium)'"""
-    try:
-        content = line.lstrip("-• ").strip()
-
-        # Try to extract aspect and details
-        if ":" in content:
-            aspect, rest = content.split(":", 1)
-            aspect = aspect.strip()
-        else:
-            aspect = "General"
-            rest = content
-
-        # Look for gain/lose or positive/negative patterns
-        positive = "Benefit"
-        negative = "Cost"
-        severity = "medium"
-
-        rest_lower = rest.lower()
-        if "gain" in rest_lower and "lose" in rest_lower:
-            parts = rest.split("but")
-            if len(parts) == 2:
-                positive = parts[0].replace("gain", "").replace("Gain", "").strip()
-                negative = parts[1].replace("lose", "").replace("Lose", "").strip()
-        elif "but" in rest_lower:
-            parts = rest.split("but")
-            if len(parts) == 2:
-                positive = parts[0].strip()
-                negative = parts[1].strip()
-        else:
-            positive = rest.strip()
-
-        # Extract severity
-        for sev in ["low", "medium", "high"]:
-            if sev in rest_lower:
-                severity = sev
-                break
-
-        return TradeOff(
-            aspect=aspect[:50],
-            positive=positive[:100],
-            negative=negative[:100],
-            severity=severity,
-        )
-    except Exception:
-        return None
-
-
-def _parse_risk(line: str) -> Risk | None:
-    """Parse a risk from a line like '- May fail: likelihood=medium, impact=high'"""
-    try:
-        content = line.lstrip("-• ").strip()
-
-        description = content
-        likelihood = "medium"
-        impact = "medium"
-
-        # Extract likelihood and impact if present
-        content_lower = content.lower()
-        for level in ["low", "medium", "high"]:
-            if f"likelihood={level}" in content_lower or f"likelihood: {level}" in content_lower:
-                likelihood = level
-            if f"impact={level}" in content_lower or f"impact: {level}" in content_lower:
-                impact = level
-
-        # Clean description
-        description = content.split(",")[0].split("likelihood")[0].split("impact")[0].strip()
-        if ":" in description:
-            description = description.split(":", 1)[-1].strip()
-
-        return Risk(
-            id=f"risk_{uuid.uuid4().hex[:6]}",
-            description=description[:200],
-            likelihood=likelihood,
-            impact=impact,
-        )
-    except Exception:
-        return None

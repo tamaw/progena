@@ -1,12 +1,12 @@
 # Build Spec: calculator_agent
 
-> Task: Build the calculator app again. no need for human-like responses it's a calculator. simple calculator. We're really just testing the agent building capabilities more than anything
+> Task: lets build the calculator agent again
 
-**Build Description:** An A2A agent that accepts simple addition expressions (e.g., '5 + 5') and returns the computed sum without conversational or human-like responses.
+**Build Description:** An A2A calculator agent that parses simple addition expressions (e.g., '5 + 5') and returns the computed numeric result without conversational text.
 
 **Project Name:** calculator_agent
 > Type: agent
-> Generated at: 2026-02-06T00:13:30.208530+00:00
+> Generated at: 2026-02-06T11:09:20.239053+00:00
 
 ---
 
@@ -20,14 +20,12 @@
 **Agent Class:** CalculatorAgent  
 
 **Build Description:**  
-An A2A-compliant HTTP agent that accepts **simple addition expressions** (e.g., `"5 + 5"`) and returns the **computed numeric sum**.  
-This agent is **non-conversational** and **non-human-like**. It behaves as a deterministic calculator only.
-
-The primary goal is to validate agent construction, routing, and protocol compliance—not advanced reasoning.
+An A2A-compatible calculator agent that parses and evaluates **simple addition expressions only** (e.g., `"5 + 5"`) and returns the **computed numeric result**.  
+The agent MUST return **only the numeric result as a string**, with **no conversational text, no explanations, and no formatting beyond the number itself**.
 
 ---
 
-## Directory Structure (CRITICAL — MUST FOLLOW EXACTLY)
+## Directory Structure (CRITICAL - MUST FOLLOW EXACTLY)
 
 **DO NOT create files directly in `app/agents/`. ALL agent files MUST go in a subdirectory.**
 
@@ -37,146 +35,64 @@ Create the agent in the subdirectory:
 app/agents/calculator_agent/
 ```
 
-With these **EXACT paths**:
+With these EXACT paths:
 
+- `app/agents/calculator_agent/__init__.py`  
+  - Exports the `CalculatorAgent` class
+
+- `app/agents/calculator_agent/agent.py`  
+  - Main agent implementation (REQUIRED)
+
+- `app/agents/calculator_agent/README.md`  
+  - Agent documentation
+
+- `app/agents/calculator_agent/tests/`
+  - `test_calculator_agent.py`
+
+❌ WRONG:
 ```
-app/agents/calculator_agent/__init__.py
+app/agents/calculator_agent.py
+app/agents/calculator_agent_agent.py
+```
+
+✅ CORRECT:
+```
 app/agents/calculator_agent/agent.py
-app/agents/calculator_agent/README.md
-app/agents/calculator_agent/tests/test_calculator_agent.py
 ```
-
-❌ WRONG  
-`app/agents/calculator_agent.py`  
-
-✅ CORRECT  
-`app/agents/calculator_agent/agent.py`
 
 ---
 
 ## Agent Type
 
-✅ **HTTP Agent (A2A protocol)**  
-❌ STDIO agent is NOT used for this build
+**HTTP Agent (A2A Protocol)**  
+The agent MUST implement all required HTTP endpoints and status output behavior exactly as specified.
 
 ---
 
-## CalculatorAgent — Class Requirements
+## Agent Identity & Metadata
 
-The agent MUST define the following **class-level attributes**:
+### Required Class Attributes (CalculatorAgent)
 
 ```python
 AGENT_ID = "calculator_agent"
 AGENT_NAME = "Calculator Agent"
-DESCRIPTION = "Evaluates simple addition expressions and returns the numeric sum."
+DESCRIPTION = "Parses and evaluates simple addition expressions and returns the numeric result."
 CAPABILITIES = ["addition", "arithmetic", "calculator"]
 ```
 
 ---
 
-## Supported Functionality
+## HTTP Endpoints (CRITICAL)
 
-### ✅ Supported Input
+### 1. GET `/.well-known/agent.json` — Agent Card
 
-The agent supports **ONLY simple addition** of two numeric operands.
+Returns a valid A2A agent card.
 
-Valid examples:
-- `"5 + 5"`
-- `"10+20"`
-- `"3.5 + 2.5"`
-- `"-4 + 10"`
-
-Operands:
-- Integers or floats
-- Optional whitespace around numbers and `+`
-
-Operator:
-- **Only `+` is supported**
-
----
-
-### ❌ Unsupported Input
-
-The agent MUST NOT support:
-- Subtraction (`-`)
-- Multiplication (`*`)
-- Division (`/`)
-- Multiple operators (`1 + 2 + 3`)
-- Natural language (`"what is 5 plus 5?"`)
-- Variables or symbols
-
----
-
-## Response Behavior (STRICT)
-
-### ✅ Success Response Format
-
-For valid addition expressions, the agent MUST return:
-
-```json
-{
-  "success": true,
-  "response": "<computed_sum>",
-  "error": null,
-  "metadata": {}
-}
-```
-
-#### Response Value Rules
-
-- `response` MUST be:
-  - A **string**
-  - Containing **only the numeric result**
-  - No extra text, punctuation, or explanation
-
-Examples:
-
-| Input Request | Response |
-|---------------|----------|
-| `"5 + 5"` | `"10"` |
-| `"2.5 + 2.5"` | `"5.0"` |
-| `"-1 + 4"` | `"3"` |
-
-❌ INVALID RESPONSES:
-- `"The answer is 10"`
-- `"10 ✅"`
-- `"5 + 5 = 10"`
-
----
-
-### ❌ Error Handling
-
-If the input does NOT match a valid addition expression, return:
-
-```json
-{
-  "success": false,
-  "response": null,
-  "error": "Invalid addition expression",
-  "metadata": {}
-}
-```
-
-This applies to:
-- Missing operands
-- Non-numeric values
-- Unsupported operators
-- Empty or null request strings
-
----
-
-## HTTP Endpoint Requirements (MANDATORY)
-
-### 1. GET `/.well-known/agent.json`
-
-**Purpose:** Agent discovery (A2A standard)
-
-Response JSON:
-
+**Response JSON (example):**
 ```json
 {
   "name": "Calculator Agent",
-  "description": "Evaluates simple addition expressions and returns the numeric sum.",
+  "description": "Parses and evaluates simple addition expressions and returns the numeric result.",
   "version": "0.1.0",
   "protocol": "a2a",
   "capabilities": ["addition", "arithmetic", "calculator"],
@@ -186,25 +102,22 @@ Response JSON:
 
 ---
 
-### 2. GET `/health`
+### 2. GET `/health` — Health Check
 
-**Purpose:** Health monitoring
-
-Response JSON:
-
+**Response JSON:**
 ```json
 {
   "status": "healthy",
   "name": "Calculator Agent",
   "version": "0.1.0",
-  "uptime_seconds": <float>,
-  "timestamp": "<ISO-8601 UTC timestamp>"
+  "uptime_seconds": 123.45,
+  "timestamp": "2024-01-01T00:00:00+00:00"
 }
 ```
 
 ---
 
-### 3. POST `/` — Main Invocation Endpoint
+### 3. POST `/` — Main Request Handler
 
 #### Request Format
 
@@ -212,129 +125,211 @@ Response JSON:
 {
   "request": "5 + 5",
   "context": {},
-  "id": "optional-id"
+  "id": "optional-request-id"
 }
 ```
 
-- Only the `request` field is used
-- `context` is ignored
-- `id` is ignored
+#### Response Format (SUCCESS)
+
+```json
+{
+  "success": true,
+  "response": "10",
+  "error": null,
+  "metadata": {}
+}
+```
+
+#### Response Format (FAILURE)
+
+```json
+{
+  "success": false,
+  "response": null,
+  "error": "Error message",
+  "metadata": {}
+}
+```
 
 ---
 
-## Calculator Logic Specification
+## Core Behavior Specification
 
-Inside `CalculatorAgent.process(request: str, context: dict)`:
+### Supported Input
 
-1. Trim leading/trailing whitespace from `request`
-2. Match against a regex equivalent to:
-   ```
-   ^\s*(-?\d+(\.\d+)?)\s*\+\s*(-?\d+(\.\d+)?)\s*$
-   ```
-3. Parse both operands as `float`
-4. Compute the sum
-5. Convert result to string:
-   - Remove trailing `.0` ONLY if result is mathematically an integer
-6. Return the result string
+The agent MUST support:
 
-No logging, no explanation, no formatting beyond the numeric string.
+- **Simple addition expressions only**
+- Format:
+  ```
+  <number> + <number>
+  ```
+- Numbers MAY be:
+  - Integers: `5`, `10`, `-3`
+  - Floats: `2.5`, `-4.75`
+
+Valid examples:
+- `"5 + 5"`
+- `"10+20"`
+- `"3.5 + 4.5"`
+- `"-2 + 8"`
 
 ---
 
-## Status Protocol (STDOUT — REQUIRED)
+### Parsing Rules
 
-The agent MUST emit the following status lines:
+- Whitespace around numbers and `+` is OPTIONAL
+- Only ONE `+` operator is allowed
+- Expression MUST contain exactly two operands
+
+---
+
+### Output Rules (STRICT)
+
+- The response MUST be:
+  - The computed numeric result
+  - Returned as a **string**
+  - With **no additional text**
+- No units, no explanations, no prefixes, no suffixes
+
+✅ CORRECT:
+```json
+"response": "10"
+```
+
+❌ INCORRECT:
+```json
+"response": "The result is 10"
+"response": "10.0 apples"
+"response": "Here you go: 10"
+```
+
+---
+
+## Error Handling Rules
+
+If the input does NOT conform to supported addition expressions, the agent MUST:
+
+- Return `success: false`
+- Provide a clear error message
+- NOT attempt to guess user intent
+
+### Invalid Input Cases
+
+| Input              | Behavior |
+|-------------------|----------|
+| `"hello"`         | Error: invalid expression |
+| `"5 - 3"`         | Error: unsupported operation |
+| `"5 * 5"`         | Error: unsupported operation |
+| `"5 + 5 + 5"`     | Error: too many operands |
+| `"+"`             | Error: invalid expression |
+| `""`              | Error: empty request |
+| `null`            | Error: missing request |
+
+**Example Error Response:**
+```json
+{
+  "success": false,
+  "response": null,
+  "error": "Invalid addition expression",
+  "metadata": {}
+}
+```
+
+---
+
+## `process()` Method Specification
+
+### Method Signature
+
+```python
+async def process(self, request: str, context: dict) -> str
+```
+
+### Behavior
+
+1. Trim whitespace from `request`
+2. Validate request is non-empty
+3. Parse the expression:
+   - Split on `+`
+   - Ensure exactly two operands
+4. Convert operands to `float`
+5. Compute the sum
+6. Return:
+   - Integer result without decimal if whole number
+   - Float result otherwise
+
+### Return Value Rules
+
+| Input        | Return Value |
+|-------------|--------------|
+| `"5 + 5"`   | `"10"` |
+| `"2.5 + 2"` | `"4.5"` |
+| `"-1 + 1"`  | `"0"` |
+
+---
+
+## Status Protocol (MANDATORY)
+
+The agent MUST emit the following status lines to stdout:
 
 ```
 STATUS:starting:Initializing Calculator Agent
 STATUS:running:Server started on port {port}
 STATUS:executing:Processing request
 STATUS:waiting:Idle, waiting for requests
-STATUS:failed:{error_message}
+STATUS:failed:{error message}
 STATUS:stopping:Shutting down
 STATUS:stopped:Agent terminated
 ```
-
-- `STATUS:executing` MUST be emitted for every POST `/` request
-- After completion, return to `STATUS:waiting`
-
----
-
-## README.md Requirements
-
-`app/agents/calculator_agent/README.md` MUST include:
-
-- Agent purpose
-- Supported input examples
-- Explicit statement:
-  > “This agent supports addition only. All other operations are rejected.”
-- Example curl request and response
 
 ---
 
 ## Testing Requirements
 
-### Test File Location
+### Test Directory
 
 ```
-app/agents/calculator_agent/tests/test_calculator_agent.py
+app/agents/calculator_agent/tests/
 ```
 
----
+### Test File
+
+```
+test_calculator_agent.py
+```
 
 ### Required Tests
 
-#### 1. Health Endpoint Test
-- Confirms `/health` returns HTTP 200
-- Confirms `"status": "healthy"`
-
-#### 2. Agent Card Test
-- Confirms agent card contains:
-  - `name`
-  - `capabilities`
-  - `endpoint`
-
-#### 3. Valid Addition Test
-
-Input:
-```json
-{ "request": "5 + 5", "context": {} }
-```
-
-Assertions:
-- `success == true`
-- `response == "10"`
+1. Health endpoint returns `status: healthy`
+2. Agent card contains:
+   - `name`
+   - `capabilities`
+3. Valid addition request:
+   - `"5 + 5"` → `"10"`
+4. Invalid request:
+   - `"5 - 3"` → `success: false`
+5. Float addition:
+   - `"2.5 + 2.5"` → `"5"`
 
 ---
 
-#### 4. Invalid Expression Test
+## README.md Requirements
 
-Input:
-```json
-{ "request": "5 * 5", "context": {} }
-```
+The README MUST include:
 
-Assertions:
-- `success == false`
-- `error == "Invalid addition expression"`
-
----
-
-## Non-Goals (Explicit)
-
-The agent MUST NOT:
-- Explain calculations
-- Ask clarifying questions
-- Handle multiple operations
-- Maintain conversation state
-- Use FastMCP tools
-- Use natural language responses
+- Agent purpose
+- Supported input format
+- Example requests and responses
+- Error behavior
+- How to run the agent
 
 ---
 
 ## Registration
 
 After implementation:
+
 1. Start the agent
 2. Run the system tool:
    ```
@@ -344,12 +339,14 @@ After implementation:
 
 ---
 
-## Summary
+## Summary (Non-Negotiable Constraints)
 
-This specification defines a **minimal, deterministic, A2A-compliant calculator agent** whose sole responsibility is:
+- ✅ Addition ONLY
+- ✅ No conversational output
+- ✅ Numeric result only
+- ✅ Strict A2A compliance
+- ✅ Exact directory structure
+- ✅ Explicit error handling
 
-> **Input:** `"a + b"`  
-> **Output:** `"a+b"`
-
-Nothing more.
+This specification MUST be followed exactly.
 ```

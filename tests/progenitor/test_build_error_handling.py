@@ -74,7 +74,7 @@ class TestHandleBuildError:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         # Set initial state with build_settings
@@ -102,7 +102,7 @@ class TestHandleBuildError:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         loop._state = {
@@ -133,7 +133,7 @@ class TestHandleBuildError:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         loop._state = {
@@ -155,7 +155,7 @@ class TestHandleBuildError:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         # Set up mock to return current file state for update_build_state
@@ -186,7 +186,7 @@ class TestSuspendActiveBuild:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         # Set up the mock to return the build state from file
@@ -226,7 +226,7 @@ class TestSuspendActiveBuild:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         # Mock file state with no active build
@@ -255,7 +255,7 @@ class TestSuspendActiveBuild:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         # Set up the mock to return the build state from file
@@ -295,7 +295,7 @@ class TestBuildErrorIntegration:
             state_manager=mock_state_manager,
             config=mock_config,
             llm_client=mock_llm_client,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         loop._state = {

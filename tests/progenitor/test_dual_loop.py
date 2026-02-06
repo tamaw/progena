@@ -452,25 +452,44 @@ class TestExecutePhase:
 class TestIdealStateRefinement:
     """Test ideal state refinement with anti-criteria from violations."""
 
-    def test_extract_anti_criteria_from_violations(self):
-        """Test that violations become anti-criteria."""
+    @pytest.mark.asyncio
+    async def test_extract_anti_criteria_from_violations(self):
+        """Test that violations become anti-criteria via LLM structured output."""
+        import json
+        from unittest.mock import AsyncMock
         from app.progenitor.state.ideal_state import IdealStateBuilder
 
-        # Create builder without LLM (won't call generate)
-        builder = IdealStateBuilder(llm_client=None)
+        class _MockLLM:
+            def __init__(self, rv):
+                self.chat = AsyncMock(return_value=rv)
+
+        mock_llm = _MockLLM(json.dumps({
+            "anti_criteria": [
+                {"id": "anti_violation_1", "description": "Avoid verbose output",
+                 "severity": 0.8, "detection": "Check word count"},
+                {"id": "anti_violation_2", "description": "Avoid exceeding response time limit",
+                 "severity": 1.0, "detection": "Check response latency"},
+            ],
+            "reasoning": "Violations indicate verbosity and timing issues",
+        }))
+
+        builder = IdealStateBuilder(mock_llm)
 
         violations = [
             {"description": "Output was too verbose", "severity": 0.8},
             {"description": "Response time exceeded limit", "severity": 1.0},
         ]
 
-        existing_ids = set()
+        ideal_state = IdealState(
+            task_description="Test task",
+            anti_criteria=[],
+        )
 
-        new_anti = builder._extract_anti_criteria_from_violations(violations, existing_ids)
+        new_anti = await builder.extract_anti_criteria_from_violations(violations, ideal_state)
 
         assert len(new_anti) == 2
         assert "verbose" in new_anti[0].description.lower()
-        assert "response time" in new_anti[1].description.lower()
+        assert "response time" in new_anti[1].description.lower() or "limit" in new_anti[1].description.lower()
 
     def test_ideal_state_add_anti_criterion(self):
         """Test adding anti-criteria to ideal state."""

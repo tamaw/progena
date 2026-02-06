@@ -111,17 +111,17 @@ def test_backend_with_mock_progenitor():
         print(f"✗ FAILED: {e}")
         raise
 
-    # Test 4: Verify OpenAI-compatible endpoint structure
-    print("TEST 4: OpenAI Chat Completions Endpoint Structure")
+    # Test 4: Verify Responses API endpoint structure
+    print("TEST 4: Responses API Endpoint Structure")
     print("-" * 70)
-    print("Verifying OpenAI-compatible endpoint exists and handles requests")
+    print("Verifying Responses API endpoint exists and handles requests")
 
     # Test with TestClient directly (avoid async loop issues)
     response = client.post(
-        "/v1/chat/completions",
+        "/v1/responses",
         json={
             "model": "progenitor-v1",
-            "messages": [{"role": "user", "content": "test"}],
+            "input": "test",
         },
     )
 

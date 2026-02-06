@@ -232,10 +232,8 @@ class TestAsyncFileIOIntegration:
         # Create work item
         item = WorkItem(
             id="test-1",
-            title="Test Task",
-            description="A test task",
+            description="Test Task",
             status="pending",
-            priority=1,
         )
 
         # Add to backlog
@@ -260,10 +258,8 @@ class TestAsyncFileIOIntegration:
 
         item = WorkItem(
             id="persist-test",
-            title="Persistence Test",
-            description="Testing persistence",
+            description="Persistence Test",
             status="pending",
-            priority=2,
         )
         await manager1.add_work_item(item)
 

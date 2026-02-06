@@ -105,8 +105,11 @@ class WeatherAgent:
             timeframe = "tomorrow"
         elif re.search(r"next\s+\d+\s+days", t):
             m = re.search(r"next\s+(\d+)\s+days", t)
-            days = int(m.group(1))
-            timeframe = f"next_{min(days,7)}_days"
+            if m:
+                days = int(m.group(1))
+                timeframe = f"next_{min(days,7)}_days"
+            else:
+                timeframe = "now"
         elif "this week" in t or "next week" in t or "this coming week" in t:
             timeframe = "next_7_days"
         elif "today" in t or "later today" in t:
@@ -131,7 +134,7 @@ class WeatherAgent:
         url = "https://geocoding-api.open-meteo.com/v1/search"
         params = {"name": location, "count": 1, "language": "en", "format": "json"}
         try:
-            async with session.get(url, params=params, timeout=10) as r:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 if r.status != 200:
                     return None
                 data = await r.json()
@@ -161,7 +164,7 @@ class WeatherAgent:
         params["hourly"] = "temperature_2m,precipitation,weathercode,windspeed_10m,precipitation_probability"
         params["forecast_days"] = 7
         try:
-            async with session.get(url, params=params, timeout=10) as r:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 if r.status != 200:
                     return None
                 return await r.json()
@@ -329,6 +332,7 @@ class WeatherAgent:
 
         # days parsing
         days = 1
+        timeframe_key = "current"  # Initialize to avoid possibly unbound variable
         if timeframe.startswith("next_"):
             m = re.search(r"next_(\d+)_days", timeframe)
             if m:
@@ -340,8 +344,6 @@ class WeatherAgent:
         elif timeframe in ("today",):
             timeframe_key = "daily"
         elif timeframe == "now":
-            timeframe_key = "current"
-        else:
             timeframe_key = "current"
 
         # Geocode
@@ -362,9 +364,12 @@ class WeatherAgent:
                 cw = data.get("current_weather") or {}
                 temp = cw.get("temperature")
                 wind = cw.get("windspeed")
-                code = int(cw.get("weathercode")) if cw.get("weathercode") is not None else None
+                weathercode_val = cw.get("weathercode")
+                code = int(weathercode_val) if weathercode_val is not None else None
                 cond = self.WEATHERCODE_MAP.get(code, "variable conditions") if code is not None else "variable conditions"
-                resp = f"Right now in {pretty}, it’s {round(temp)}{unit_sym} with {cond}. Winds are around {round(wind)} {'km/h' if units=='metric' else 'mph'}."
+                temp_str = f"{round(temp)}" if temp is not None else "N/A"
+                wind_str = f"{round(wind)}" if wind is not None else "N/A"
+                resp = f"Right now in {pretty}, it's {temp_str}{unit_sym} with {cond}. Winds are around {wind_str} {'km/h' if units=='metric' else 'mph'}."
                 context["_metadata"] = {"location": pretty, "timeframe": "current", "units": units, "data_source": "open-meteo"}
                 return resp
             else:
@@ -382,7 +387,9 @@ class WeatherAgent:
                     cond = self.WEATHERCODE_MAP.get(code, "variable conditions") if code is not None else "variable conditions"
                     pprob = int(pprobs[idx]) if idx < len(pprobs) else None
                     note = f"There is a {pprob}% chance of precipitation." if pprob is not None else "Precipitation chances are unclear."
-                    resp = f"Tomorrow in {pretty}, temperatures will range from {round(tmin)}{unit_sym} to {round(tmax)}{unit_sym}. Expect {cond}. {note}"
+                    tmin_str = f"{round(tmin)}" if tmin is not None else "N/A"
+                    tmax_str = f"{round(tmax)}" if tmax is not None else "N/A"
+                    resp = f"Tomorrow in {pretty}, temperatures will range from {tmin_str}{unit_sym} to {tmax_str}{unit_sym}. Expect {cond}. {note}"
                     context["_metadata"] = {"location": pretty, "timeframe": "daily", "units": units}
                     return resp
                 else:

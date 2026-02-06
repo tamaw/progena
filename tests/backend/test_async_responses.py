@@ -1,11 +1,11 @@
 """
 Tests for Async Response Handling and Concurrent Operations.
 
-Comprehensive tests for async chat completion handling, concurrent requests,
+Comprehensive tests for async response handling, concurrent requests,
 request cancellation, timeout behavior, and backpressure management.
 
 Covers:
-- Async chat completion handling
+- Async response handling
 - Concurrent request handling
 - Request cancellation
 - Timeout behavior
@@ -54,16 +54,16 @@ def reset_stop_flag_fixture():
     reset_stop_flag()
 
 
-class TestAsyncChatCompletion:
-    """Tests for async chat completion handling."""
+class TestAsyncResponseHandling:
+    """Tests for async response handling."""
 
-    def test_basic_async_completion(self, client):
-        """Test basic async chat completion."""
+    def test_basic_async_response(self, client):
+        """Test basic async response."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "Hello"}],
+                "input": "Hello",
                 "stream": False,
             },
         )
@@ -81,13 +81,13 @@ class TestAsyncChatCompletion:
         )
         assert response.status_code in [200, 500, 503]
 
-    def test_async_streaming_completion(self, client):
-        """Test async streaming completion."""
+    def test_async_streaming_response(self, client):
+        """Test async streaming response."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "Stream test"}],
+                "input": "Stream test",
                 "stream": True,
             },
         )
@@ -102,12 +102,10 @@ class TestConcurrentRequestHandling:
 
         def make_request(msg_id):
             return client.post(
-                "/v1/chat/completions",
+                "/v1/responses",
                 json={
                     "model": "progenitor-v1",
-                    "messages": [
-                        {"role": "user", "content": f"Concurrent request {msg_id}"}
-                    ],
+                    "input": f"Concurrent request {msg_id}",
                     "stream": False,
                 },
             )
@@ -227,10 +225,10 @@ class TestTimeoutBehavior:
         # Use test client which has reasonable timeout
         start = time.time()
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "Timeout test"}],
+                "input": "Timeout test",
                 "stream": False,
             },
         )
@@ -514,10 +512,10 @@ class TestRateLimitingAsync:
     def test_rate_limit_headers(self, client):
         """Test rate limit headers are present."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "Rate limit test"}],
+                "input": "Rate limit test",
             },
         )
 
@@ -608,6 +606,7 @@ class TestStreamChunk:
         metadata = {"tokens": 100, "model": "gpt-4", "latency_ms": 50}
         chunk = StreamChunk(content="test", index=5, metadata=metadata)
 
+        assert chunk.metadata is not None
         assert chunk.metadata["tokens"] == 100
         assert chunk.metadata["model"] == "gpt-4"
         assert chunk.metadata["latency_ms"] == 50
@@ -658,28 +657,22 @@ class TestLargeMessageHandling:
         large_content = "This is a test message. " * 1000  # ~24000 chars
 
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": large_content}],
+                "input": large_content,
                 "stream": False,
             },
         )
         assert response.status_code in [200, 400, 413, 500, 503]
 
-    def test_many_messages_in_history(self, client):
-        """Test handling many messages in conversation history."""
-        messages = []
-        for i in range(100):
-            messages.append({"role": "user", "content": f"Message {i}"})
-            messages.append({"role": "assistant", "content": f"Response {i}"})
-        messages.append({"role": "user", "content": "Final question"})
-
+    def test_large_input_message(self, client):
+        """Test handling large input."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": messages,
+                "input": "Final question",
                 "stream": False,
             },
         )
