@@ -148,7 +148,12 @@ Format each approach clearly with numbered sections.""",
             # Get gaps from previous verification for nested structure
             gaps_analyzed = []
             if last_verification:
-                verif_dict = last_verification.model_dump() if hasattr(last_verification, "model_dump") else last_verification
+                if isinstance(last_verification, dict):
+                    verif_dict = last_verification
+                elif hasattr(last_verification, "model_dump"):
+                    verif_dict = last_verification.model_dump()
+                else:
+                    verif_dict = last_verification
                 gaps_analyzed = verif_dict.get("gaps", [])[:5]
 
             return {

@@ -40,7 +40,7 @@ def create_node(worktrees_dir: Path) -> Callable[[ProgenitorState], Coroutine[An
             item_type = current_item.item_type.value if hasattr(current_item.item_type, "value") else current_item.item_type
             item_id = current_item.id
 
-        build_types = ["build_agent", "build_mcp", "upgrade"]
+        build_types = ["build_agent", "build_tool", "upgrade"]
 
         logger.info(f"WORKTREE_PREP: item_type={item_type}, item_id={item_id}")
 

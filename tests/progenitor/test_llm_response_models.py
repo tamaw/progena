@@ -192,8 +192,8 @@ class TestPlannerResponse:
         }
         result = validate_planner_response(data)
         assert result.work_items[0].item_type == "build_agent"
-        assert result.work_items[1].item_type == "build_mcp"
-        assert result.work_items[2].item_type == "mcp_call"
+        assert result.work_items[1].item_type == "build_tool"
+        assert result.work_items[2].item_type == "build_tool"
 
 
 class TestBuildSpec:

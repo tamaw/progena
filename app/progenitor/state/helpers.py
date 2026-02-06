@@ -543,6 +543,6 @@ def find_work_item_by_id(backlog: list, item_id: str) -> Any:
             return item
         if isinstance(item, dict) and item.get("id") == item_id:
             return item
-        if hasattr(item, "id") and item.id == item_id:
+        if hasattr(item, "id") and getattr(item, "id") == item_id:
             return item
     return None

@@ -295,10 +295,10 @@ class TestRouteAfterAct:
         result = route_after_act(state)
         assert result == "validate"
 
-    def test_build_mcp_validates(self):
-        """Should validate for build_mcp items."""
+    def test_build_tool_validates(self):
+        """Should validate for build_tool items."""
         state = make_state(
-            current_work_item=make_work_item(item_type=WorkItemType.BUILD_MCP, description="test"),
+            current_work_item=make_work_item(item_type=WorkItemType.BUILD_TOOL, description="test"),
         )
         result = route_after_act(state)
         assert result == "validate"

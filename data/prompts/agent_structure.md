@@ -241,3 +241,85 @@ Every agent (HTTP or stdio) MUST have these class attributes:
 - `AGENT_NAME` - Human-readable name
 - `DESCRIPTION` - What the agent does
 - `CAPABILITIES` - List of capability strings for discovery
+
+## Testing Requirements
+
+Create tests in `app/agents/{agent_name}/tests/`:
+
+### tests/test_{agent_name}.py
+
+```python
+"""Tests for {agent_name} agent."""
+
+import pytest
+import aiohttp
+from aiohttp import web
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint(agent_url: str):
+    """Test agent health endpoint."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{agent_url}/health") as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_agent_card(agent_url: str):
+    """Test agent card endpoint."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{agent_url}/.well-known/agent.json") as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert "name" in data
+            assert "capabilities" in data
+
+
+@pytest.mark.asyncio
+async def test_invoke_basic(agent_url: str):
+    """Test basic agent invocation."""
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{agent_url}/",
+            json={"request": "Hello!", "context": {}},
+        ) as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["success"] is True
+            assert "response" in data
+
+
+@pytest.fixture
+def agent_url():
+    """Agent URL for testing - configure via environment or use default."""
+    import os
+    return os.getenv("AGENT_URL", "http://localhost:8080")
+```
+
+## Integration with FastMCP Tools
+
+Agents can use FastMCP tools from `app/tools/` by:
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def call_tool(tool_name: str, args: dict) -> str:
+    """Call a FastMCP tool."""
+    params = StdioServerParameters(
+        command="python",
+        args=["-m", f"app.tools.{tool_name}.server"],
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments=args)
+            return result.content[0].text if result.content else ""
+```
+
+## Registration
+
+After building, run `rediscover_agents` system tool to register in `registry.json`.
+

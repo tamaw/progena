@@ -112,12 +112,14 @@ class BackgroundBuildRunner:
         config: "ProgenitorConfig",
         llm_client: "LLMClient",
         worktrees_dir: Optional[Path] = None,
+        copilot_acp_manager=None,
     ):
         self.outer_graph = graph  # Renamed to clarify it's the outer loop
         self.state_manager = state_manager
         self.config = config
         self.llm_client = llm_client
         self.worktrees_dir = worktrees_dir or Path("worktrees")
+        self.copilot_acp_manager = copilot_acp_manager
 
         # Inner loop graph - created lazily
         self._inner_loop_graph = None
@@ -139,6 +141,7 @@ class BackgroundBuildRunner:
                 llm_client=self.llm_client,
                 config=self.config,
                 worktrees_dir=self.worktrees_dir,
+                copilot_acp_manager=self.copilot_acp_manager,
             )
             logger.info("Created inner loop graph for builds")
         return self._inner_loop_graph

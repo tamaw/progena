@@ -32,16 +32,16 @@ class TestBuildTypeDetection:
     """Test build type detection from user input."""
 
     @pytest.mark.asyncio
-    async def test_detects_mcp_type(self, mock_llm_client):
-        """Test that MCP is detected from user input."""
+    async def test_detects_tool_type(self, mock_llm_client):
+        """Test that tool is detected from user input."""
         settings = await _generate_build_settings(
-            user_input="create an MCP server for database access",
+            user_input="create an MCP tool for database access",
             llm_client=mock_llm_client,
-            llm_action="build_mcp",
+            llm_action="build_tool",
         )
 
-        assert settings.build_type == "mcp"
-        assert settings.project_directory.startswith("app/mcp/")
+        assert settings.build_type == "tool"
+        assert settings.project_directory.startswith("app/tools/")
 
     @pytest.mark.asyncio
     async def test_detects_agent_type_by_default(self, mock_llm_client):
@@ -56,15 +56,15 @@ class TestBuildTypeDetection:
         assert settings.project_directory.startswith("app/agents/")
 
     @pytest.mark.asyncio
-    async def test_detects_mcp_tool_keyword(self, mock_llm_client):
-        """Test that 'mcp tool' triggers MCP type."""
+    async def test_detects_fastmcp_tool_keyword(self, mock_llm_client):
+        """Test that 'mcp tool' triggers tool type."""
         settings = await _generate_build_settings(
-            user_input="build an mcp tool for file operations",
+            user_input="build a fastmcp tool for file operations",
             llm_client=mock_llm_client,
-            llm_action="build_mcp",
+            llm_action="build_tool",
         )
 
-        assert settings.build_type == "mcp"
+        assert settings.build_type == "tool"
 
 
 class TestProjectNameExtraction:

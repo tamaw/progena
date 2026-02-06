@@ -145,8 +145,8 @@ def create_node(
             # Increment iteration at the start of a new cycle when verification did not meet target
             if not state.get("clarification", {}).get("needed", False) and not awaiting_clarification:
                 verification = state.get("verification", {})
-                verification_score = verification.get("current_score", 0.0)
-                target_score = verification.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+                verification_score: float = verification.get("current_score") or 0.0
+                target_score: float = verification.get("target_score") or DEFAULT_VERIFICATION_TARGET_SCORE
                 if verification_score < target_score and not verification.get("current_passed", False):
                     next_iteration = (iteration or 0) + 1
                     # Preserve max from state (LangGraph shallow-merges, so we need to include it)
@@ -273,10 +273,10 @@ def create_node(
                     logger.info(f"Refining ideal state (iteration {iteration})")
 
                     # Handle both dict and VerificationReport objects
-                    if hasattr(last_verification, "model_dump"):
-                        verification_dict = last_verification.model_dump()
-                    elif isinstance(last_verification, dict):
+                    if isinstance(last_verification, dict):
                         verification_dict = last_verification
+                    elif hasattr(last_verification, "model_dump"):
+                        verification_dict = last_verification.model_dump()
                     else:
                         verification_dict = {"gaps": [], "anti_criterion_violations": []}
 

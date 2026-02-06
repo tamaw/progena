@@ -363,15 +363,15 @@ def create_llm_client(
         **kwargs: Passed to LLMClient constructor.
 
     Returns:
-        LLMClientProtocol implementation.
+        LLM client implementation (MockLLMClient or LLMClient).
     """
     if force_mock or is_mock_mode_enabled():
         logger.info("Using MockLLMClient (demo mode)")
-        return MockLLMClient()
+        return MockLLMClient()  # type: ignore[return-value]
 
     # Import real client only when needed
     from .client import LLMClient
-    return LLMClient(*args, **kwargs)
+    return LLMClient(*args, **kwargs)  # type: ignore[return-value]
 
 
 __all__ = [

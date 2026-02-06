@@ -9,6 +9,7 @@ build_state.json that evolves each iteration and is consumed by BUILD.
 """
 
 import logging
+import os
 import time
 import json
 from datetime import datetime
@@ -156,7 +157,7 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
                 span.end()
             return {}
 
-        # NOTE: Build actions (build_agent, build_mcp, upgrade) are handled by
+        # NOTE: Build actions (build_agent, build_tool, upgrade) are handled by
         # the inner loop graph via BackgroundBuildRunner, not by this planner.
         # The decide node starts builds directly and returns ANSWER_DIRECTLY.
 
@@ -415,13 +416,13 @@ async def _plan_from_ideal_state(
     if item_type == WorkItemType.DIRECT_ANSWER and backlog:
         for item in backlog:
             if hasattr(item, "item_type"):
-                if item.item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_MCP, WorkItemType.UPGRADE):
+                if item.item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_TOOL, WorkItemType.UPGRADE):
                     item_type = item.item_type
                     logger.debug(f"PLANNER: Got item_type={item_type} from backlog item")
                     break
             elif isinstance(item, dict) and "item_type" in item:
                 item_type_str = item["item_type"]
-                if item_type_str in ("build_agent", "build_mcp", "upgrade"):
+                if item_type_str in ("build_agent", "build_tool", "upgrade"):
                     try:
                         item_type = WorkItemType(item_type_str)
                         logger.debug(f"PLANNER: Got item_type={item_type} from backlog dict")
@@ -444,8 +445,8 @@ async def _plan_from_ideal_state(
         # Determine work item type based on decision action
         if decision_action == "build_agent":
             item_type = WorkItemType.BUILD_AGENT
-        elif decision_action == "build_mcp":
-            item_type = WorkItemType.BUILD_MCP
+        elif decision_action == "build_tool":
+            item_type = WorkItemType.BUILD_TOOL
         elif decision_action == "upgrade":
             item_type = WorkItemType.UPGRADE
         elif decision_action in ("call_agent", "delegate"):
@@ -469,10 +470,10 @@ async def _plan_from_ideal_state(
 
     # Handle last_verification as either dict or VerificationReport
     if last_verification:
-        if hasattr(last_verification, "model_dump"):
-            verif_dict = last_verification.model_dump()
-        elif isinstance(last_verification, dict):
+        if isinstance(last_verification, dict):
             verif_dict = last_verification
+        elif hasattr(last_verification, "model_dump"):
+            verif_dict = last_verification.model_dump()
         else:
             verif_dict = {"gaps": []}
         gaps = verif_dict.get("gaps", [])
@@ -548,6 +549,7 @@ async def _plan_from_ideal_state(
     # =========================================================================
     # SpecDoc Management: Seed or Update the persistent spec artifact
     # BL-007: Pass project_directory from build_settings for consistent spec location
+    # Supports BUILD_AGENT and BUILD_TOOL item types
     # =========================================================================
     spec_doc = await _ensure_spec_doc(
         state_manager=state_manager,
@@ -560,6 +562,7 @@ async def _plan_from_ideal_state(
         work_item_id=work_item_id,
         project_directory=project_directory,  # BL-007
         lessons_learned=lessons_learned,  # BL-BUG-002
+        item_type=item_type,  # BUILD_TOOL or BUILD_AGENT
     )
 
     # Store spec_doc in state for BUILD to consume
@@ -707,6 +710,7 @@ async def _ensure_spec_doc(
     work_item_id: str | None = None,
     project_directory: str | None = None,  # BL-007: From build_settings
     lessons_learned: list[dict] | None = None,  # BL-BUG-002: From LEARN phase
+    item_type: WorkItemType = WorkItemType.BUILD_AGENT,  # BUILD_TOOL or BUILD_AGENT
 ) -> SpecDoc:
     """
     Ensure a SpecDoc exists for the current build task.
@@ -714,10 +718,9 @@ async def _ensure_spec_doc(
     BL-007: Now supports project_directory from build_settings for consistent spec file location.
     BL-BUG-002: Now includes lessons_learned from LEARN phase.
 
-    - Spec file is dropped into project_directory/spec.md (or fallback to app/agents/<agent_name>/spec.md)
-    - Copilot prompt references the spec file (not embedding content)
-    - On first run: LLM generates BOTH spec content AND copilot prompt
-    - Subsequent iterations: Updates spec and regenerates prompt
+    Supports both agents (app/agents/) and tools (app/tools/) based on item_type:
+    - BUILD_AGENT: Uses agent_structure.md template, saves to app/agents/
+    - BUILD_TOOL: Uses tool_structure.md template, saves to app/tools/
 
     Persists updates back to build_state.json and saves spec file.
     """
@@ -743,12 +746,19 @@ async def _ensure_spec_doc(
             agent_name=agent_name,
             task_description=task_description,
             llm_client=llm_client,
+            item_type=item_type,
         )
         logger.info(f"PLANNER: Seeded new SpecDoc from template with LLM customization, revision {spec_doc.revision}")
 
     # Save spec file to appropriate directory for copilot to reference
     # BL-007: Use project_directory from build_settings if provided
-    spec_file_path = await _save_spec_file(spec_doc, agent_name=agent_name, work_item_id=work_item_id, project_directory=project_directory)
+    spec_file_path = await _save_spec_file(
+        spec_doc,
+        agent_name=agent_name,
+        work_item_id=work_item_id,
+        project_directory=project_directory,
+        item_type=item_type,
+    )
     if spec_file_path:
         spec_doc.spec_file_path = str(spec_file_path)
         logger.info(f"PLANNER: Saved spec file to {spec_file_path}")
@@ -762,6 +772,7 @@ async def _ensure_spec_doc(
         iteration=iteration,
         gaps=gaps,
         llm_client=llm_client,
+        item_type=item_type,
     )
     logger.info(f"PLANNER: Generated copilot prompt ({len(spec_doc.copilot_prompt or '')} chars)")
 
@@ -778,6 +789,7 @@ async def _generate_copilot_prompt(
     iteration: int,
     gaps: list[str],
     llm_client=None,
+    item_type: WorkItemType = WorkItemType.BUILD_AGENT,
 ) -> str:
     """
     Generate the prompt that instructs Copilot to read and build from the spec file.
@@ -786,10 +798,21 @@ async def _generate_copilot_prompt(
     1. Tells Copilot where the spec file is
     2. Provides high-level context about the task
     3. On subsequent iterations, mentions what to fix/improve
-    4. Detects if agent already exists and adjusts instructions accordingly
+    4. Detects if entity already exists and adjusts instructions accordingly
+    5. Handles both agents (app/agents/) and tools (app/tools/)
     """
-    # Sanitize agent name for folder path
+    # Sanitize name for folder path
     safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
+
+    # Determine entity type and directories
+    if item_type == WorkItemType.BUILD_TOOL:
+        entity_type = "FastMCP tool"
+        base_dir = "app/tools"
+        main_file = "server.py"
+    else:
+        entity_type = "AI agent"
+        base_dir = "app/agents"
+        main_file = "agent.py"
 
     # Calculate relative path for the prompt (from project root)
     if spec_file_path:
@@ -800,12 +823,12 @@ async def _generate_copilot_prompt(
         except ValueError:
             rel_path = spec_file_path
     else:
-        rel_path = f"app/agents/{safe_name}/spec.md"
+        rel_path = f"{base_dir}/{safe_name}/spec.md"
 
-    # Check if agent already exists
+    # Check if entity already exists
     project_root = Path(__file__).parent.parent.parent.parent
-    agent_folder = project_root / "app" / "agents" / safe_name
-    existing_agent = (agent_folder / "agent.py").exists()
+    entity_folder = project_root / base_dir.replace("/", os.sep) / safe_name
+    existing_entity = (entity_folder / main_file).exists()
 
     # Build context about what iteration we're on and what to focus on
     iteration_context = ""
@@ -816,25 +839,33 @@ This is iteration {iteration} of the build. Focus on addressing these gaps:
 {chr(10).join(f'- {gap}' for gap in gaps[:5])}
 """
 
-    # Adjust prompt based on whether agent exists
-    if existing_agent:
+    # Adjust prompt based on whether entity exists and type
+    if existing_entity:
         action_verb = "Update"
-        action_details = f"""- This is an EXISTING agent - modify the existing files
-- Review the current implementation in app/agents/{safe_name}/
-- Update agent.py to match the new/updated spec requirements
+        action_details = f"""- This is an EXISTING {entity_type} - modify the existing files
+- Review the current implementation in {base_dir}/{safe_name}/
+- Update {main_file} to match the new/updated spec requirements
 - Preserve existing functionality unless the spec explicitly changes it"""
     else:
         action_verb = "Build"
-        action_details = f"""- Create all required files in app/agents/{safe_name}/
+        if item_type == WorkItemType.BUILD_TOOL:
+            action_details = f"""- Create all required files in {base_dir}/{safe_name}/
+- server.py must use FastMCP with @mcp.tool decorators
+- Include __init__.py with proper exports
+- Create tests/ directory with pytest tests using MCP client
+- Follow the directory structure and file organization in the spec"""
+        else:
+            action_details = f"""- Create all required files in {base_dir}/{safe_name}/
 - Follow the directory structure and file organization in the spec
-- Implement all specified behaviors and responses"""
+- Implement all specified behaviors and responses
+- Include tests/ directory with pytest tests"""
 
     # Base prompt that references the spec file
-    base_prompt = f"""{action_verb} an AI agent based on the specification file.
+    base_prompt = f"""{action_verb} a {entity_type} based on the specification file.
 
 SPEC FILE: {rel_path}
 
-Read the spec file above and implement the agent according to its requirements.
+Read the spec file above and implement the {entity_type} according to its requirements.
 {iteration_context}
 IMPORTANT:
 - Read the spec file FIRST to understand the full requirements
@@ -843,7 +874,21 @@ IMPORTANT:
     # Optionally use LLM to enhance the prompt with task-specific guidance
     if llm_client and iteration == 0:
         try:
-            enhancement_prompt = f"""Given this build task, generate a focused instruction for Copilot.
+            if item_type == WorkItemType.BUILD_TOOL:
+                enhancement_prompt = f"""Given this build task, generate a focused instruction for Copilot to build a FastMCP tool.
+
+TASK: {task_description}
+TOOL NAME: {agent_name}
+SPEC FILE LOCATION: {rel_path}
+
+Generate a concise, actionable prompt (2-4 sentences) that:
+1. References the spec file for details
+2. Emphasizes the key functionality the tool should provide via @mcp.tool decorators
+3. Mentions any critical input/output requirements
+
+Output ONLY the prompt text, nothing else:"""
+            else:
+                enhancement_prompt = f"""Given this build task, generate a focused instruction for Copilot.
 
 TASK: {task_description}
 AGENT NAME: {agent_name}
@@ -874,14 +919,15 @@ TASK FOCUS:
     return base_prompt
 
 
-async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work_item_id: str | None = None, project_directory: str | None = None) -> Path | None:
+async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work_item_id: str | None = None, project_directory: str | None = None, item_type: WorkItemType = WorkItemType.BUILD_AGENT) -> Path | None:
     """
     Save the spec content to a file in the appropriate project directory for copilot CLI to reference.
 
     BL-007: Uses project_directory from build_settings if provided.
 
-    The spec file is placed inside the agent's directory:
+    The spec file is placed inside the agent's or tool's directory:
     - If project_directory provided: Creates {project_directory}/spec.md
+    - BUILD_TOOL: Creates app/tools/{tool_name}/spec.md
     - Otherwise fallback: Creates app/agents/{agent_name}/spec.md
 
     Returns the path to the saved file.
@@ -889,37 +935,45 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
     try:
         # BL-007: Use project_directory from build_settings if available
         if project_directory:
-            agent_folder = Path(project_directory)
-            agent_folder.mkdir(parents=True, exist_ok=True)
-            safe_name = agent_folder.name
+            entity_folder = Path(project_directory)
+            entity_folder.mkdir(parents=True, exist_ok=True)
+            safe_name = entity_folder.name
             logger.info(f"PLANNER: Using project_directory from build_settings: {project_directory}")
         else:
-            # Fallback: Determine project root and agents directory
+            # Fallback: Determine project root and appropriate directory based on item_type
             project_root = Path(__file__).parent.parent.parent.parent
-            agents_dir = project_root / "app" / "agents"
-            agents_dir.mkdir(parents=True, exist_ok=True)
 
-            # Create agent folder based on agent name (preferred) or work_item_id
+            # Select the right base directory based on item type
+            if item_type == WorkItemType.BUILD_TOOL:
+                base_dir = project_root / "app" / "tools"
+                entity_type_name = "tool"
+            else:
+                base_dir = project_root / "app" / "agents"
+                entity_type_name = "agent"
+
+            base_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create entity folder based on agent/tool name (preferred) or work_item_id
             if agent_name:
-                # Sanitize agent name for folder name
+                # Sanitize name for folder name
                 safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
             else:
-                safe_name = f"agent_{work_item_id or 'unknown'}"
+                safe_name = f"{entity_type_name}_{work_item_id or 'unknown'}"
 
-            # Create the agent folder
-            agent_folder = agents_dir / safe_name
-            agent_folder.mkdir(parents=True, exist_ok=True)
+            # Create the entity folder
+            entity_folder = base_dir / safe_name
+            entity_folder.mkdir(parents=True, exist_ok=True)
 
-        # Check if agent already exists (has agent.py)
-        existing_agent = (agent_folder / "agent.py").exists()
-        if existing_agent:
-            logger.info(f"PLANNER: Agent '{safe_name}' already exists, spec will amend existing agent")
+        # Check if entity already exists (has agent.py or server.py)
+        existing_entity = (entity_folder / "agent.py").exists() or (entity_folder / "server.py").exists()
+        if existing_entity:
+            logger.info(f"PLANNER: Entity '{safe_name}' already exists, spec will amend existing files")
 
-        # Save spec.md inside the agent folder
-        spec_file_path = agent_folder / "spec.md"
+        # Save spec.md inside the entity folder
+        spec_file_path = entity_folder / "spec.md"
         spec_file_path.write_text(spec_doc.content, encoding="utf-8")
 
-        logger.info(f"PLANNER: Saved spec file to {spec_file_path} (existing_agent={existing_agent})")
+        logger.info(f"PLANNER: Saved spec file to {spec_file_path} (existing_entity={existing_entity})")
         return spec_file_path
     except Exception as e:
         logger.error(f"Failed to save spec file: {e}")
@@ -930,20 +984,34 @@ async def _seed_spec_doc_from_template(
     agent_name: str,
     task_description: str,
     llm_client=None,
+    item_type: WorkItemType = WorkItemType.BUILD_AGENT,
 ) -> SpecDoc:
     """
-    Seed a new SpecDoc by using LLM to customize the canonical template (agent_structure.md)
-    with the user's specific task requirements.
+    Seed a new SpecDoc by using LLM to customize the canonical template.
+
+    Selects template based on item_type:
+    - BUILD_AGENT: agent_structure.md
+    - BUILD_TOOL: tool_structure.md
     """
+    # Determine which template to use based on item_type
+    if item_type == WorkItemType.BUILD_TOOL:
+        template_name = "tool_structure.md"
+        entity_type = "tool"
+        output_dir = "app/tools"
+    else:
+        template_name = "agent_structure.md"
+        entity_type = "agent"
+        output_dir = "app/agents"
+
     # Determine path to seed template
     # Try project-relative path first
     seed_paths = [
-        Path("data/prompts/agent_structure.md"),
-        Path(__file__).parent.parent.parent.parent / "data/prompts/agent_structure.md",
+        Path(f"data/prompts/{template_name}"),
+        Path(__file__).parent.parent.parent.parent / f"data/prompts/{template_name}",
     ]
 
     template_content = ""
-    seed_path = "prompts/agent_structure.md"  # Default reference path
+    seed_path = f"prompts/{template_name}"  # Default reference path
 
     for path in seed_paths:
         if path.exists():
@@ -953,25 +1021,67 @@ async def _seed_spec_doc_from_template(
 
     if not template_content:
         # Fallback: Create a minimal spec if template not found
-        template_content = """# Agent Structure Specification
+        if item_type == WorkItemType.BUILD_TOOL:
+            template_content = f"""# FastMCP Tool Specification
 
 ## Directory Structure
-Create the agent in `app/agents/{agent_name}/`:
-- `app/agents/{agent_name}/__init__.py`
-- `app/agents/{agent_name}/agent.py` - Main implementation
+Create the tool in `{output_dir}/{{tool_name}}/`:
+- `{output_dir}/{{tool_name}}/__init__.py`
+- `{output_dir}/{{tool_name}}/server.py` - FastMCP server implementation
+
+## Requirements
+- Use FastMCP (@mcp.tool decorator)
+- Python best practices
+- Docstrings and type hints
+"""
+        else:
+            template_content = f"""# Agent Structure Specification
+
+## Directory Structure
+Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
+- `{output_dir}/{{agent_name}}/__init__.py`
+- `{output_dir}/{{agent_name}}/agent.py` - Main implementation
 
 ## Requirements
 - Python best practices
 - Docstrings and type hints
 - Implement required A2A endpoints
 """
-        seed_path = "generated/minimal_spec.md"
-        logger.warning("SpecDoc: Template not found, using minimal fallback spec")
+        seed_path = f"generated/minimal_{entity_type}_spec.md"
+        logger.warning(f"SpecDoc: Template {template_name} not found, using minimal fallback spec")
 
     # Use LLM to customize the template with user's task
     if llm_client:
         try:
-            customization_prompt = f"""You are generating a build specification for an AI agent.
+            # Adjust prompts based on entity type
+            if item_type == WorkItemType.BUILD_TOOL:
+                customization_prompt = f"""You are generating a build specification for a FastMCP tool.
+
+TASK FROM USER: {task_description}
+
+TOOL NAME: {agent_name}
+
+TEMPLATE TO CUSTOMIZE:
+{template_content}
+
+Generate a COMPLETE, DETAILED build specification that:
+1. Replaces {{tool_name}} with "{agent_name}"
+2. Replaces {{tool_class}} with "{agent_name.title().replace('_', '')}"
+3. Replaces {{primary_function}} with the main function name based on the task
+4. Adds specific implementation details based on the user's task
+5. Includes the exact behavior the tool should have
+6. Specifies what each @mcp.tool() function should return
+
+For this task "{task_description}", specify:
+- EXACTLY what the tool should do
+- Input parameters and their types
+- Return value format
+- Error handling behavior
+
+Output the complete customized specification markdown:"""
+                system_prompt = "You are a technical specification writer. Generate detailed, actionable FastMCP tool specifications. Be precise about expected behaviors and outputs."
+            else:
+                customization_prompt = f"""You are generating a build specification for an AI agent.
 
 TASK FROM USER: {task_description}
 
@@ -993,10 +1103,11 @@ For this task "{task_description}", specify:
 - How it should handle various inputs
 
 Output the complete customized specification markdown:"""
+                system_prompt = "You are a technical specification writer. Generate detailed, actionable agent specifications. Be precise about expected behaviors and outputs."
 
             customized_content = await llm_client.generate(
                 prompt=customization_prompt,
-                system_prompt="You are a technical specification writer. Generate detailed, actionable agent specifications. Be precise about expected behaviors and outputs.",
+                system_prompt=system_prompt,
             )
 
             if customized_content and len(customized_content) > 100:
@@ -1006,20 +1117,30 @@ Output the complete customized specification markdown:"""
                 # Fallback to manual replacement
                 logger.warning("PLANNER: LLM customization too short, using manual replacement")
                 seed_content = template_content.replace("{agent_name}", agent_name)
+                seed_content = seed_content.replace("{tool_name}", agent_name)
                 seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
+                seed_content = seed_content.replace("{tool_class}", agent_name.title().replace("_", ""))
+                seed_content = seed_content.replace("{primary_function}", agent_name.replace("_tool", ""))
         except Exception as e:
             logger.error(f"PLANNER: LLM customization failed: {e}, using manual replacement")
             seed_content = template_content.replace("{agent_name}", agent_name)
+            seed_content = seed_content.replace("{tool_name}", agent_name)
             seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
+            seed_content = seed_content.replace("{tool_class}", agent_name.title().replace("_", ""))
+            seed_content = seed_content.replace("{primary_function}", agent_name.replace("_tool", ""))
     else:
         # No LLM client - do manual replacement
         seed_content = template_content.replace("{agent_name}", agent_name)
+        seed_content = seed_content.replace("{tool_name}", agent_name)
         seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
+        seed_content = seed_content.replace("{tool_class}", agent_name.title().replace("_", ""))
+        seed_content = seed_content.replace("{primary_function}", agent_name.replace("_tool", ""))
 
     # Add task-specific header
     header = f"""# Build Spec: {agent_name}
 
 > Task: {task_description}
+> Type: {entity_type}
 > Generated at: {utcnow_isoformat()}
 
 ---

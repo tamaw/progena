@@ -115,10 +115,10 @@ def create_node(
                     # Get task description for context
                     task_description = ""
                     if ideal_state:
-                        if hasattr(ideal_state, "task_description"):
-                            task_description = ideal_state.task_description
-                        elif isinstance(ideal_state, dict):
+                        if isinstance(ideal_state, dict):
                             task_description = ideal_state.get("task_description", "")
+                        elif hasattr(ideal_state, "task_description"):
+                            task_description = ideal_state.task_description
 
                     # Detect if clarification is needed
                     clarification_result = await clarification_detector.detect(

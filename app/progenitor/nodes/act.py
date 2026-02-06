@@ -16,6 +16,7 @@ from typing import Callable, Coroutine, Any, Optional, TYPE_CHECKING
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
 from ..state.helpers import normalize_work_item
 from ..tools.copilot import CopilotCLI
+from ..runtime.copilot_acp import CopilotACPManager
 from ..tools.mcp import MCPClient, A2AClient
 from ..tools.user_communication import UserCommunicationTools, USER_COMMUNICATION_TOOLS
 from ..runtime.time_utils import utcnow_isoformat
@@ -37,6 +38,7 @@ def create_node(
     worktrees_dir: Path,
     state_manager=None,
     event_pusher: Optional[EventPusher] = None,
+    copilot_acp_manager: Optional[CopilotACPManager] = None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the act node function.
 
@@ -47,10 +49,19 @@ def create_node(
         worktrees_dir: Path to worktrees directory.
         state_manager: Optional state manager for logging.
         event_pusher: Optional callback to push events to clients via IPC.
+        copilot_acp_manager: CopilotACPManager for ACP communication.
     """
+    if copilot_acp_manager is None:
+        raise RuntimeError(
+            "copilot_acp_manager is required for CopilotCLI. "
+            "Ensure CopilotACPManager is initialized."
+        )
+
     copilot_cli = CopilotCLI(
         config_path=config.copilot.config_path,
+        acp_manager=copilot_acp_manager,
         timeout=config.copilot.timeout_seconds,
+        logs_dir=config.storage.log_dir,
     )
     mcp_client = MCPClient()
     a2a_client = A2AClient()
@@ -171,7 +182,7 @@ async def _execute_work_item(
     elif item_type == WorkItemType.MCP_CALL:
         return await _execute_mcp_call(work_item, tool_registry, mcp_client)
 
-    elif item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_MCP):
+    elif item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_TOOL):
         return await _execute_build(work_item, llm_client, copilot_cli, worktrees_dir)
 
     elif item_type == WorkItemType.UPGRADE:

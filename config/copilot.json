@@ -4,5 +4,5 @@
   "timeout": 300,
   "model": "gpt-5-mini",
   "max_tokens": 8192,
-  "allowed_dirs": ["app/agents"]
+  "allowed_dirs": ["app/agents", "app/tools"]
 }

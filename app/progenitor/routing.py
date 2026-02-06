@@ -85,7 +85,7 @@ def should_iterate(
 
     # Check stop conditions from ideal state
     if ideal_state and verification.get("current_report"):
-        verification_score = verification.get("current_score", 0.0)
+        verification_score: float = verification.get("current_score") or 0.0
         actions_count = state.get("actions_this_cycle", 0)
         iteration_start = iter_info.get("start_time", time.time())
         elapsed_time = time.time() - iteration_start
@@ -154,8 +154,8 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
 
     # Check verification score
     verification = state.get("verification", {})
-    verification_score = verification.get("current_score", 0.0)
-    target_score = verification.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+    verification_score: float = verification.get("current_score") or 0.0
+    target_score: float = verification.get("target_score") or DEFAULT_VERIFICATION_TARGET_SCORE
 
     if verification_score >= target_score:
         logger.info(
@@ -180,8 +180,8 @@ def _count_pending_backlog_items(backlog: list) -> int:
 def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:
     """Route after verification - learn if continuing, done if complete."""
     verification = state.get("verification", {})
-    verification_score = verification.get("current_score", 0.0)
-    target_score = verification.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE)
+    verification_score: float = verification.get("current_score") or 0.0
+    target_score: float = verification.get("target_score") or DEFAULT_VERIFICATION_TARGET_SCORE
 
     iter_info = state.get("iteration", {})
     current_iteration = iter_info.get("current", 0)
@@ -264,7 +264,7 @@ def route_after_decide(state: ProgenitorState) -> Literal["pick_next", "respond"
 def route_after_act(state: ProgenitorState) -> Literal["validate", "commit_core"]:
     """Route after action - validate if code was changed.
 
-    Build operations (build_agent, build_mcp, upgrade) require validation
+    Build operations (build_agent, build_tool, upgrade) require validation
     before commit. Other operations skip directly to commit.
     """
     from .state.models import WorkItem
@@ -279,7 +279,7 @@ def route_after_act(state: ProgenitorState) -> Literal["validate", "commit_core"
         else:
             item_type = ""
 
-        if item_type in ("build_agent", "build_mcp", "upgrade"):
+        if item_type in ("build_agent", "build_tool", "upgrade"):
             return "validate"
 
     return "commit_core"

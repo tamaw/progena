@@ -89,12 +89,14 @@ class ProgenitorLoop:
         config: "ProgenitorConfig",
         llm_client=None,
         worktrees_dir: Optional[Path] = None,
+        copilot_acp_manager=None,
     ):
         self.graph = graph
         self.state_manager = state_manager
         self.config = config
         self.llm_client = llm_client
         self.worktrees_dir = worktrees_dir or config.storage.worktree_dir
+        self.copilot_acp_manager = copilot_acp_manager
         self.running = False
 
         # Bounded queues to prevent memory exhaustion
@@ -161,6 +163,7 @@ class ProgenitorLoop:
                 config=self.config,
                 llm_client=self.llm_client,
                 worktrees_dir=self.worktrees_dir,
+                copilot_acp_manager=self.copilot_acp_manager,
             )
             set_background_runner(self._background_runner)
             self._background_runner.set_completion_callback(self._handle_build_completion)

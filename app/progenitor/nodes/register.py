@@ -118,7 +118,7 @@ def create_node(
                 "timestamp": utcnow_isoformat(),
             })
 
-        elif item_type == "build_mcp":
+        elif item_type == "build_tool":
             # Register new MCP tool
             tool_entry = {
                 "name": spec.get("name", "unnamed_tool"),
