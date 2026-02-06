@@ -135,8 +135,11 @@ def create_node(
         logger.info(f"BUILD: spec_file_path={spec_file_path}")
         logger.info(f"BUILD: copilot_prompt length={len(copilot_prompt)}")
 
-        # Run Copilot CLI
+        # Run Copilot CLI - resolve to absolute path (ACP requires absolute cwd)
         working_dir = Path(project_directory)
+        if not working_dir.is_absolute():
+            working_dir = working_dir.resolve()
+            logger.info(f"BUILD: Resolved relative path to absolute: {working_dir}")
         working_dir.mkdir(parents=True, exist_ok=True)
 
         build_id = state.get("build_id") or "unknown"

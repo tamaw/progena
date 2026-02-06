@@ -32,7 +32,8 @@ def is_port_available(port: int, host: str = "localhost") -> bool:
     """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Do NOT set SO_REUSEADDR: on Windows it allows binding to ports
+            # already in active use, giving false "available" results.
             sock.settimeout(1)
             sock.bind((host, port))
             return True
@@ -172,7 +173,7 @@ async def find_available_port_async(
 DEFAULT_AGENT_PORT_START = 8080
 DEFAULT_AGENT_PORT_END = 8199
 
-# Port range for test harness agents (avoids conflicts with backend on 8000 and agents on 8080+)
-# Using 9500-9599 range to be well separated from the application and other services
-TEST_HARNESS_PORT_START = 9500
-TEST_HARNESS_PORT_END = 9599
+# Port range for test harness agents (avoids conflicts with backend on 8000, agents on 8080+,
+# and the IPC server on 9500)
+TEST_HARNESS_PORT_START = 9550
+TEST_HARNESS_PORT_END = 9649

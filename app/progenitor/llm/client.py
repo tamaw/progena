@@ -76,6 +76,11 @@ def _build_json_schema_format(model_class: type, name: str) -> dict[str, Any]:
 
         result = dict(obj)
 
+        # OpenAI strict mode: $ref cannot coexist with other keywords like
+        # "description", "default", etc. Strip everything except $ref itself.
+        if "$ref" in result:
+            return {"$ref": result["$ref"]}
+
         # For object types, add additionalProperties: false and make all required
         if result.get("type") == "object":
             # Always set additionalProperties to false for strict mode
