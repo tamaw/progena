@@ -686,21 +686,106 @@ class ValidationFinding(BaseModel):
     file_path: Optional[str] = Field(default=None, description="File where issue was found")
     line_number: Optional[int] = Field(default=None, description="Line number")
 
-    # Severity
+    # Severity (may be set by LLM structured output)
     severity: str = Field(default="medium", description="low, medium, high, critical")
 
     # Evidence
-    evidence: Optional[str] = Field(default=None, description="Supporting evidence")
+    evidence: Optional[str] = Field(default=None, description="Supporting evidence (full text)")
+
+    # Stack trace (parsed from Python tracebacks)
+    stack_trace: Optional[list[str]] = Field(
+        default=None,
+        description="Parsed stack trace frames from Python errors"
+    )
+
+    # Suggested fix
+    suggested_fix: Optional[str] = Field(
+        default=None,
+        description="Suggested remediation from LLM or heuristic"
+    )
+
+    # Relationships
+    related_finding_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs of related findings"
+    )
+    is_root_cause: bool = Field(
+        default=False,
+        description="Whether this finding is identified as a root cause"
+    )
+    duplicate_of: Optional[str] = Field(
+        default=None,
+        description="If this is a duplicate, the ID of the original"
+    )
+    duplicate_count: int = Field(
+        default=0,
+        description="Number of duplicates suppressed"
+    )
+
+
+class ValidationAction(BaseModel):
+    """A recorded validation action (external command invocation).
+
+    Records Python tool invocations (pytest, pyright, mypy, ruff)
+    for auditability and result capture.
+    """
+
+    action_id: str = Field(description="Unique action identifier")
+    tool: str = Field(description="Tool name: pytest, pyright, mypy, ruff")
+    command: str = Field(description="Full command that was executed")
+    project_directory: str = Field(description="Directory the command ran in")
+
+    # Results
+    exit_code: Optional[int] = Field(default=None, description="Process exit code")
+    stdout: Optional[str] = Field(default=None, description="Standard output (truncated)")
+    stderr: Optional[str] = Field(default=None, description="Standard error (truncated)")
+    duration_ms: Optional[float] = Field(default=None, description="Execution time in ms")
+
+    # Timing
+    started_at: datetime = Field(default_factory=utcnow)
+    completed_at: Optional[datetime] = Field(default=None)
+
+    # Status
+    success: bool = Field(default=False, description="Whether the tool succeeded")
+    error_count: int = Field(default=0, description="Number of errors found by tool")
+    warning_count: int = Field(default=0, description="Number of warnings found by tool")
+
+
+class ValidationStatistics(BaseModel):
+    """Extended validation statistics."""
+
+    total_findings: int = Field(default=0)
+    by_category: dict[str, int] = Field(default_factory=dict)
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    by_source: dict[str, int] = Field(default_factory=dict)
+
+    # Quality indicators
+    smoke_test_passed: bool = Field(default=False)
+    all_critical_passed: bool = Field(default=True)
+
+    # Trend (compared to previous iteration)
+    previous_error_count: Optional[int] = Field(
+        default=None,
+        description="Error count from previous validation"
+    )
+    trend: Optional[str] = Field(
+        default=None,
+        description="improving, stable, or degrading"
+    )
+
+    # Deduplication stats
+    duplicates_suppressed: int = Field(default=0)
+    patterns_detected: int = Field(default=0)
 
 
 class ValidationResultV2(BaseModel):
-    """Data-only validation result (BL-005).
+    """Validation result with Python tool actions, LLM severity, and analytics.
 
-    VALIDATE reads ExecutionResult and produces ValidationResult that is
-    purely findings (no lint/tests, no code changes).
+    VALIDATE analyzes execution results, invokes Python validation tools
+    (pytest, pyright, mypy, ruff), and uses LLM structured output for
+    severity assessment.
 
-    VALIDATE does not invoke external commands; if it must (future),
-    it records it explicitly as a "validation action" in the result.
+    Records all external actions for auditability.
     """
 
     iteration: int = Field(description="Iteration number")
@@ -712,7 +797,7 @@ class ValidationResultV2(BaseModel):
         description="Reference to the ExecutionResult being validated"
     )
 
-    # Findings (purely observational)
+    # Findings (from analysis + tool output)
     findings: list[ValidationFinding] = Field(
         default_factory=list,
         description="All validation findings"
@@ -729,10 +814,22 @@ class ValidationResultV2(BaseModel):
         description="Are there issues that block progress?"
     )
 
-    # Validation actions (for auditability if external commands needed in future)
-    validation_actions: list[dict[str, Any]] = Field(
+    # Validation actions (recorded Python tool invocations)
+    validation_actions: list[ValidationAction] = Field(
         default_factory=list,
-        description="Any external actions taken (should be empty per BL-005)"
+        description="Recorded external tool invocations (pytest, pyright, etc.)"
+    )
+
+    # Extended statistics
+    statistics: Optional[ValidationStatistics] = Field(
+        default=None,
+        description="Extended validation statistics and trend data"
+    )
+
+    # LLM severity assessment
+    llm_severity_assessed: bool = Field(
+        default=False,
+        description="Whether LLM was used for severity assessment"
     )
 
     def compute_counts(self) -> "ValidationResultV2":
@@ -741,6 +838,51 @@ class ValidationResultV2(BaseModel):
         self.warning_count = sum(1 for f in self.findings if f.category == "warning")
         self.info_count = sum(1 for f in self.findings if f.category == "info")
         self.has_blocking_issues = self.error_count > 0
+        return self
+
+    def compute_statistics(
+        self,
+        previous_error_count: Optional[int] = None,
+        duplicates_suppressed: int = 0,
+        patterns_detected: int = 0,
+        smoke_test_passed: bool = False,
+    ) -> "ValidationResultV2":
+        """Compute extended statistics."""
+        by_category: dict[str, int] = {}
+        by_severity: dict[str, int] = {}
+        by_source: dict[str, int] = {}
+
+        for f in self.findings:
+            by_category[f.category] = by_category.get(f.category, 0) + 1
+            by_severity[f.severity] = by_severity.get(f.severity, 0) + 1
+            by_source[f.source] = by_source.get(f.source, 0) + 1
+
+        all_critical_passed = not any(
+            f.severity == "critical" and f.category == "error"
+            for f in self.findings
+        )
+
+        trend = None
+        if previous_error_count is not None:
+            if self.error_count < previous_error_count:
+                trend = "improving"
+            elif self.error_count == previous_error_count:
+                trend = "stable"
+            else:
+                trend = "degrading"
+
+        self.statistics = ValidationStatistics(
+            total_findings=len(self.findings),
+            by_category=by_category,
+            by_severity=by_severity,
+            by_source=by_source,
+            smoke_test_passed=smoke_test_passed,
+            all_critical_passed=all_critical_passed,
+            previous_error_count=previous_error_count,
+            trend=trend,
+            duplicates_suppressed=duplicates_suppressed,
+            patterns_detected=patterns_detected,
+        )
         return self
 
 

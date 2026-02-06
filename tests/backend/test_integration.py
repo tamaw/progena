@@ -43,15 +43,15 @@ def test_endpoints():
     assert len(data["data"]) > 0
     print("✓ PASSED\n")
 
-    # Test 3: Chat completions endpoint (no Progenitor)
+    # Test 3: Responses endpoint (no Progenitor)
     print("=" * 60)
-    print("TEST 3: Chat Completions (no Progenitor - will fail)")
+    print("TEST 3: Responses API (no Progenitor - will fail)")
     print("=" * 60)
     response = client.post(
-        "/v1/chat/completions",
+        "/v1/responses",
         json={
             "model": "progenitor-v1",
-            "messages": [{"role": "user", "content": "Hello!"}],
+            "input": "Hello!",
         },
     )
     print(f"Status: {response.status_code}")

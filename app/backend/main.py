@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from .config import ChatServerConfig
-from .client import ProgenitorClient, get_client
+from .client import ProgenitorClient
 from .ipc_client import IPCProgenitorClient, get_ipc_client
 from .models import (
     Usage,
@@ -488,9 +488,13 @@ async def lifespan(app: FastAPI):
 
     # Register client shutdown callback
     if client:
+        async def shutdown_progenitor_client() -> None:
+            """Wrapper to ensure callback returns None."""
+            await stop_client_safely(client, timeout=10.0, name="Progenitor")
+
         graceful_shutdown.register_callback(
             "stop_progenitor_client",
-            lambda: stop_client_safely(client, timeout=10.0, name="Progenitor"),
+            shutdown_progenitor_client,
             priority=30,
             timeout=15.0,
         )
@@ -521,6 +525,9 @@ async def lifespan(app: FastAPI):
                         attempt + 1,
                         message[:50] + "..." if len(message) > 50 else message
                     )
+
+                    # Ensure client is available
+                    assert client is not None, "Client should be available in this context"
 
                     # Ensure client is started/connected
                     if not client.is_running:
@@ -554,6 +561,7 @@ async def lifespan(app: FastAPI):
                     if attempt < max_retries:
                         # Try to reconnect
                         try:
+                            assert client is not None
                             await client.stop()
                         except Exception:
                             pass
@@ -1015,6 +1023,7 @@ async def stream_response_unified(
     request_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events using the Responses API shape."""
+    assert client is not None, "Client must be initialized"
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
     try:

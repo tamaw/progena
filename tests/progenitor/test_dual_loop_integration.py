@@ -15,7 +15,7 @@ from app.progenitor.state.models import ProgenitorState
 from app.progenitor.config import ProgenitorConfig
 
 
-def _create_mock_copilot_acp_client():
+def _create_mock_copilot_acp_manager():
     """Create a mock ProgenitorACPClient for testing."""
     from app.progenitor.runtime.copilot_acp import ProgenitorACPClient
     client = MagicMock(spec=ProgenitorACPClient)
@@ -47,7 +47,7 @@ def test_outer_loop_graph_compiles():
         tool_registry=tool_registry,
         config=config,
         worktrees_dir=worktrees_dir,
-        copilot_acp_client=_create_mock_copilot_acp_client(),
+        copilot_acp_manager=_create_mock_copilot_acp_manager(),
     )
 
     assert graph is not None
@@ -94,7 +94,7 @@ def test_inner_loop_graph_compiles():
         llm_client=llm_client,
         config=config,
         worktrees_dir=worktrees_dir,
-        copilot_acp_client=_create_mock_copilot_acp_client(),
+        copilot_acp_manager=_create_mock_copilot_acp_manager(),
     )
 
     assert graph is not None
@@ -128,7 +128,7 @@ def test_inner_loop_phases_connected():
         llm_client=llm_client,
         config=config,
         worktrees_dir=worktrees_dir,
-        copilot_acp_client=_create_mock_copilot_acp_client(),
+        copilot_acp_manager=_create_mock_copilot_acp_manager(),
     )
 
     # Get edges to verify flow

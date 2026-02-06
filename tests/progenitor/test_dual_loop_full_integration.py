@@ -122,7 +122,7 @@ def worktrees_dir(tmp_path):
 
 
 @pytest.fixture
-def mock_copilot_acp_client():
+def mock_copilot_acp_manager():
     """Create a mock ProgenitorACPClient for testing."""
     from app.progenitor.runtime.copilot_acp import ProgenitorACPClient
     client = MagicMock(spec=ProgenitorACPClient)
@@ -140,7 +140,7 @@ class TestDualLoopGraphCreation:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -151,7 +151,7 @@ class TestDualLoopGraphCreation:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         assert graph is not None
@@ -161,7 +161,7 @@ class TestDualLoopGraphCreation:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -172,7 +172,7 @@ class TestDualLoopGraphCreation:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         nodes = graph.get_graph().nodes
@@ -203,7 +203,7 @@ class TestDualLoopGraphCreation:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -214,7 +214,7 @@ class TestDualLoopGraphCreation:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         edges = graph.get_graph().edges
@@ -282,7 +282,7 @@ class TestDualLoopIntegration:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -293,7 +293,7 @@ class TestDualLoopIntegration:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         initial_state: ProgenitorState = {
@@ -319,7 +319,7 @@ class TestDualLoopIntegration:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -338,7 +338,7 @@ class TestDualLoopIntegration:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         initial_state: ProgenitorState = {
@@ -365,7 +365,7 @@ class TestDualLoopIntegration:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -393,7 +393,7 @@ class TestDualLoopIntegration:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         initial_state: ProgenitorState = {
@@ -423,7 +423,7 @@ class TestStateTransitions:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -434,7 +434,7 @@ class TestStateTransitions:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         initial_state: ProgenitorState = {
@@ -459,7 +459,7 @@ class TestStateTransitions:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         config,
         worktrees_dir,
     ):
@@ -470,7 +470,7 @@ class TestStateTransitions:
             tool_registry=mock_tool_registry,
             config=config,
             worktrees_dir=worktrees_dir,
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         initial_state: ProgenitorState = {

@@ -93,7 +93,7 @@ def test_config():
 
 
 @pytest.fixture
-def mock_copilot_acp_client():
+def mock_copilot_acp_manager():
     """Create a mock ProgenitorACPClient for testing."""
     from app.progenitor.runtime.copilot_acp import ProgenitorACPClient
     client = MagicMock(spec=ProgenitorACPClient)
@@ -123,7 +123,7 @@ class TestDualLoopEndToEnd:
         mock_state_manager,
         mock_llm_client,
         mock_tool_registry,
-        mock_copilot_acp_client,
+        mock_copilot_acp_manager,
         test_config,
     ):
         """Test that the graph can be created without errors."""
@@ -133,7 +133,7 @@ class TestDualLoopEndToEnd:
             tool_registry=mock_tool_registry,
             config=test_config,
             worktrees_dir=Path("./worktrees"),
-            copilot_acp_client=mock_copilot_acp_client,
+            copilot_acp_manager=mock_copilot_acp_manager,
         )
 
         assert graph is not None

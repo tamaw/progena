@@ -412,15 +412,13 @@ class TestChatFlowFeedback:
         # Should have at least one model
         assert len(data["data"]) >= 1
 
-    def test_chat_completions_endpoint(self, client):
-        """Test chat completions endpoint handles requests."""
+    def test_responses_endpoint(self, client):
+        """Test responses endpoint handles requests."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {"role": "user", "content": "Greetings from the Galactic Federation"}
-                ],
+                "input": "Greetings from the Galactic Federation",
                 "stream": False,
             },
         )

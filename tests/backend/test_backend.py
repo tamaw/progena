@@ -188,13 +188,13 @@ class TestChatServerAPI:
         assert data["object"] == "list"
         assert len(data["data"]) >= 1
 
-    def test_chat_completions_no_messages(self, test_client):
-        """Test chat completions with no messages."""
+    def test_responses_no_input(self, test_client):
+        """Test responses endpoint with empty input."""
         response = test_client.post(
-            "/v1/chat/completions",
-            json={"model": "test", "messages": []},
+            "/v1/responses",
+            json={"model": "test", "input": ""},
         )
-        # Returns 503 if client not initialized, or 400 if messages empty
+        # Returns 503 if client not initialized, or 400 if input empty
         assert response.status_code in (400, 503)
 
     def test_responses_endpoint(self, test_client):

@@ -320,7 +320,6 @@ class TestSubscriberTracking:
         counts = get_subscriber_counts()
         assert "chat" in counts
         assert "status" in counts
-        assert "legacy" in counts
         assert "total" in counts
 
 

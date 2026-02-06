@@ -48,10 +48,10 @@ class TestUserMessageEvents:
     def test_simple_user_message_accepted(self, client):
         """Test that simple user messages are accepted."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "Hello!"}],
+                "input": "Hello!",
                 "stream": False,
             },
         )
@@ -61,10 +61,10 @@ class TestUserMessageEvents:
     def test_empty_user_message_rejected(self, client):
         """Test that empty user messages are rejected."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": ""}],
+                "input": "",
                 "stream": False,
             },
         )
@@ -74,12 +74,10 @@ class TestUserMessageEvents:
     def test_multiline_user_message(self, client):
         """Test multiline user messages are handled."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {"role": "user", "content": "Line 1\nLine 2\nLine 3"}
-                ],
+                "input": "Line 1\nLine 2\nLine 3",
                 "stream": False,
             },
         )
@@ -88,15 +86,10 @@ class TestUserMessageEvents:
     def test_unicode_user_message(self, client):
         """Test Unicode characters in user messages."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "Hello 世界! 🌍 Привет мир! مرحبا",
-                    }
-                ],
+                "input": "Hello 世界! 🌍 Привет мир! مرحبا",
                 "stream": False,
             },
         )
@@ -105,15 +98,10 @@ class TestUserMessageEvents:
     def test_special_characters_in_message(self, client):
         """Test special characters don't break message handling."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": '<script>alert("xss")</script> `code` **bold**',
-                    }
-                ],
+                "input": '<script>alert("xss")</script> `code` **bold**',
                 "stream": False,
             },
         )
@@ -122,15 +110,10 @@ class TestUserMessageEvents:
     def test_json_in_user_message(self, client):
         """Test JSON content in user messages."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": '{"key": "value", "array": [1, 2, 3]}',
-                    }
-                ],
+                "input": '{"key": "value", "array": [1, 2, 3]}',
                 "stream": False,
             },
         )
@@ -143,14 +126,10 @@ class TestConversationHistory:
     def test_multi_turn_conversation(self, client):
         """Test multi-turn conversation is handled."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {"role": "user", "content": "Hi, I'm Bob."},
-                    {"role": "assistant", "content": "Hello Bob! Nice to meet you."},
-                    {"role": "user", "content": "What's my name?"},
-                ],
+                "input": "What's my name?",
                 "stream": False,
             },
         )
@@ -159,13 +138,10 @@ class TestConversationHistory:
     def test_system_message_handling(self, client):
         """Test system messages in conversation."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": "Hello!"},
-                ],
+                "input": "Hello!",
                 "stream": False,
             },
         )
@@ -173,17 +149,11 @@ class TestConversationHistory:
 
     def test_long_conversation_history(self, client):
         """Test handling of long conversation history."""
-        messages = []
-        for i in range(20):
-            messages.append({"role": "user", "content": f"Message {i}"})
-            messages.append({"role": "assistant", "content": f"Response {i}"})
-        messages.append({"role": "user", "content": "Final message"})
-
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": messages,
+                "input": "Final message",
                 "stream": False,
             },
         )
@@ -196,10 +166,10 @@ class TestStreamingEvents:
     def test_streaming_request_format(self, client):
         """Test streaming request is properly formatted."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "Test"}],
+                "input": "Test",
                 "stream": True,
             },
         )
@@ -376,13 +346,13 @@ class TestSSEEventDelivery:
 class TestEventPayloadValidation:
     """Tests for event payload structure and validation."""
 
-    def test_chat_completion_response_structure(self, client):
-        """Test chat completion response has correct structure."""
+    def test_response_payload_structure(self, client):
+        """Test response payload has correct structure."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [{"role": "user", "content": "Test"}],
+                "input": "Test",
                 "stream": False,
             },
         )
@@ -391,13 +361,9 @@ class TestEventPayloadValidation:
             data = response.json()
             assert "id" in data
             assert "object" in data
-            assert "model" in data
-            assert "choices" in data
-            assert isinstance(data["choices"], list)
-            if data["choices"]:
-                choice = data["choices"][0]
-                assert "message" in choice
-                assert "finish_reason" in choice
+            assert data["object"] == "response"
+            assert "output" in data
+            assert isinstance(data["output"], list)
 
     def test_responses_api_response_structure(self, client):
         """Test Responses API response has correct structure."""
@@ -447,7 +413,7 @@ class TestErrorEvents:
     def test_invalid_json_returns_error(self, client):
         """Test invalid JSON returns proper error."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             content="not valid json",
             headers={"Content-Type": "application/json"},
         )
@@ -456,18 +422,18 @@ class TestErrorEvents:
     def test_missing_required_fields_error(self, client):
         """Test missing required fields returns error."""
         response = client.post(
-            "/v1/chat/completions",
-            json={"model": "test"},  # Missing messages
+            "/v1/responses",
+            json={"model": "test"},  # Missing input
         )
         assert response.status_code == 422
 
     def test_invalid_model_handled(self, client):
         """Test invalid model name is handled."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "nonexistent-model",
-                "messages": [{"role": "user", "content": "Test"}],
+                "input": "Test",
             },
         )
         # Should accept any model name but may fail on processing
@@ -683,15 +649,10 @@ class TestMessageContentTypes:
     def test_code_block_in_message(self, client):
         """Test code blocks in messages are handled."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "```python\ndef hello():\n    print('Hello')\n```",
-                    }
-                ],
+                "input": "```python\ndef hello():\n    print('Hello')\n```",
             },
         )
         assert response.status_code in [200, 500, 503]
@@ -699,15 +660,10 @@ class TestMessageContentTypes:
     def test_markdown_formatting(self, client):
         """Test markdown formatting in messages."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "# Heading\n\n- Item 1\n- Item 2\n\n**Bold** and *italic*",
-                    }
-                ],
+                "input": "# Heading\n\n- Item 1\n- Item 2\n\n**Bold** and *italic*",
             },
         )
         assert response.status_code in [200, 500, 503]
@@ -715,15 +671,10 @@ class TestMessageContentTypes:
     def test_url_in_message(self, client):
         """Test URLs in messages."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "Check out https://github.com/example/repo",
-                    }
-                ],
+                "input": "Check out https://github.com/example/repo",
             },
         )
         assert response.status_code in [200, 500, 503]
@@ -731,15 +682,10 @@ class TestMessageContentTypes:
     def test_table_in_message(self, client):
         """Test tables in messages."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "| Col1 | Col2 |\n|------|------|\n| A    | B    |",
-                    }
-                ],
+                "input": "| Col1 | Col2 |\n|------|------|\n| A    | B    |",
             },
         )
         assert response.status_code in [200, 500, 503]

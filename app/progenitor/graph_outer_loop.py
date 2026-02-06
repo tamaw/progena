@@ -84,7 +84,7 @@ def create_progenitor_graph(
             llm_client, tool_registry, config, worktrees_dir, state_manager,
             event_pusher, copilot_acp_manager
         ),
-        "validate": validate.create_node(config),
+        "validate": validate.create_node(config, llm_client, state_manager),
         "commit_core": commit_core.create_node(state_manager),
         "respond": respond.create_node(state_manager),
         "idle": idle.create_node(config, state_manager),

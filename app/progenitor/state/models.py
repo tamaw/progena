@@ -530,6 +530,9 @@ class InnerLoopState(TypedDict, total=False):
     should_iterate: bool  # Whether to continue iterating
     iteration_stop_reason: Optional[str]  # Why iteration stopped (use IterationStopReason enum values)
 
+    # Learning summary (from LEARN phase, consumed by OBSERVE for ideal state refinement)
+    learning_summary: Optional[dict[str, Any]]  # Latest learning summary for observe node
+
 
 class ExecutionState(TypedDict, total=False):
     """Execution phase state."""

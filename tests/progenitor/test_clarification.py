@@ -194,15 +194,26 @@ class TestIdealStateBuilderWithClarification:
     @pytest.mark.asyncio
     async def test_refine_with_clarification(self):
         """Test incorporating clarification into ideal state."""
-        mock_llm = AsyncMock()
-        mock_llm.generate.return_value = """UPDATED_TASK: Build an agent that processes JSON data and outputs CSV
-NEW_CRITERIA:
-- Must handle nested JSON structures
-- Must preserve data types during conversion
-NEW_ANTI_CRITERIA:
-- Avoid losing data during conversion
-TIGHTENED:
-- Output format must be RFC 4180 compliant CSV"""
+        import json
+
+        class _MockLLM:
+            def __init__(self, rv):
+                self.chat = AsyncMock(return_value=rv)
+
+        mock_llm = _MockLLM(json.dumps({
+            "updated_task_description": "Build an agent that processes JSON data and outputs CSV",
+            "new_success_criteria": [
+                {"id": "criterion_clarified_1", "description": "Must handle nested JSON structures",
+                 "criterion_type": "functional", "rank": 2, "measurement": "Test with nested input",
+                 "target_score": 0.8, "weight": 1.0},
+            ],
+            "new_anti_criteria": [
+                {"id": "anti_clarified_1", "description": "Avoid losing data during conversion",
+                 "severity": 1.0, "detection": "Compare input/output field counts"},
+            ],
+            "additional_constraints": ["Output must be RFC 4180 compliant CSV"],
+            "reasoning": "User clarified JSON to CSV conversion requirement",
+        }))
 
         builder = IdealStateBuilder(mock_llm)
 
@@ -232,8 +243,11 @@ TIGHTENED:
     @pytest.mark.asyncio
     async def test_refine_with_clarification_fallback(self):
         """Test fallback when LLM fails."""
-        mock_llm = AsyncMock()
-        mock_llm.generate.side_effect = Exception("LLM error")
+        class _FailingMockLLM:
+            def __init__(self):
+                self.chat = AsyncMock(side_effect=Exception("LLM error"))
+
+        mock_llm = _FailingMockLLM()
 
         builder = IdealStateBuilder(mock_llm)
 

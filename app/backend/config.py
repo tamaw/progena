@@ -33,8 +33,7 @@ class ChatServerConfig:
     progenitor_stop_timeout: int = 5  # seconds to wait for graceful shutdown (CR-001)
     progenitor_python: str = field(default_factory=lambda: sys.executable)  # Use same Python as backend
 
-    # Progenitor IPC settings (socket-based communication - recommended)
-    progenitor_ipc_enabled: bool = True  # Use socket IPC instead of subprocess
+    # Progenitor IPC settings (socket-based communication)
     progenitor_ipc_host: str = "127.0.0.1"  # IPC server host
     progenitor_ipc_port: int = 9500  # IPC server port
 
@@ -84,7 +83,6 @@ class ChatServerConfig:
             progenitor_stop_timeout=env_int("CHAT_SERVER_PROGENITOR_STOP_TIMEOUT", 5),
             progenitor_python=os.getenv("CHAT_SERVER_PYTHON", sys.executable),
             # IPC settings
-            progenitor_ipc_enabled=env_bool("CHAT_SERVER_IPC_ENABLED", True),
             progenitor_ipc_host=os.getenv("CHAT_SERVER_IPC_HOST", "127.0.0.1"),
             progenitor_ipc_port=env_int("CHAT_SERVER_IPC_PORT", 9500),
             # API settings

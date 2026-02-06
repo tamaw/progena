@@ -5,8 +5,9 @@ Loads prompts from data/prompts/ directory.
 All prompts are stored as markdown files for easy editing.
 """
 
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Default prompts directory (relative to project root)
 # Path: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
@@ -116,4 +117,186 @@ The following specification has evolved through planning iterations and should g
             "{implementation_notes}", spec.get('implementation_notes', 'None provided')
         ).replace(
             "{structure_guidance}", structure_guidance
+        )
+
+    # ================================================================
+    # Ideal State prompts
+    # ================================================================
+
+    def get_ideal_state_extraction_prompt(
+        self,
+        task: str,
+        context: dict[str, Any],
+    ) -> str:
+        """Get prompt for extracting ideal state from a task description."""
+        template = self._load_prompt("ideal_state_extract.md")
+        context_str = json.dumps(context, indent=2, default=str) if context else "{}"
+        return template.replace("{task}", task).replace("{context}", context_str)
+
+    def get_ideal_state_refinement_prompt(
+        self,
+        current_state_json: str,
+        results_str: str,
+    ) -> str:
+        """Get prompt for refining ideal state after an iteration."""
+        template = self._load_prompt("ideal_state_refine.md")
+        return (
+            template
+            .replace("{current_state}", current_state_json)
+            .replace("{results}", results_str)
+        )
+
+    def get_ideal_state_clarification_prompt(
+        self,
+        original_task: str,
+        trigger: str,
+        clarification: str,
+        current_state_json: str,
+    ) -> str:
+        """Get prompt for incorporating user clarification."""
+        template = self._load_prompt("ideal_state_clarify.md")
+        return (
+            template
+            .replace("{original_task}", original_task)
+            .replace("{trigger}", trigger)
+            .replace("{clarification}", clarification)
+            .replace("{current_state}", current_state_json)
+        )
+
+    def get_ideal_state_anti_criteria_prompt(
+        self,
+        violations_str: str,
+        existing_anti_criteria_str: str,
+        task_description: str,
+    ) -> str:
+        """Get prompt for extracting anti-criteria from violations."""
+        template = self._load_prompt("ideal_state_anti_criteria.md")
+        return (
+            template
+            .replace("{violations}", violations_str)
+            .replace("{existing_anti_criteria}", existing_anti_criteria_str)
+            .replace("{task_description}", task_description)
+        )
+
+    def get_ideal_state_validation_prompt(
+        self,
+        criteria_str: str,
+        anti_criteria_str: str,
+        task_description: str,
+    ) -> str:
+        """Get prompt for validating criteria quality."""
+        template = self._load_prompt("ideal_state_validate.md")
+        return (
+            template
+            .replace("{criteria}", criteria_str)
+            .replace("{anti_criteria}", anti_criteria_str)
+            .replace("{task_description}", task_description)
+        )
+
+    def get_ideal_state_verification_prompt(
+        self,
+        criteria_str: str,
+        task_description: str,
+        context_str: str,
+    ) -> str:
+        """Get prompt for suggesting verification methods."""
+        template = self._load_prompt("ideal_state_verification.md")
+        return (
+            template
+            .replace("{criteria}", criteria_str)
+            .replace("{task_description}", task_description)
+            .replace("{context}", context_str)
+        )
+
+    # ================================================================
+    # Think phase prompts
+    # ================================================================
+
+    def get_think_prompt(
+        self,
+        task_description: str,
+        criteria: str,
+        anti_criteria: str,
+        iteration_context: str,
+        lessons_context: str,
+        focus_items: str,
+        tools_context: str = "",
+        constraints_context: str = "",
+        dependencies_context: str = "",
+    ) -> str:
+        """Get prompt for the THINK phase approach generation.
+
+        Args:
+            task_description: The ideal state task description.
+            criteria: Formatted success criteria text.
+            anti_criteria: Formatted anti-criteria text.
+            iteration_context: Previous iteration context (empty string if first iteration).
+            lessons_context: Lessons from previous iterations (empty string if none).
+            focus_items: Dynamic focus items based on current state.
+            tools_context: Available tools context (empty string if none).
+            constraints_context: Resource constraints (empty string if none).
+            dependencies_context: Dependencies information (empty string if none).
+        """
+        template = self._load_prompt("think.md")
+        return (
+            template
+            .replace("{task_description}", task_description)
+            .replace("{criteria}", criteria)
+            .replace("{anti_criteria}", anti_criteria)
+            .replace("{iteration_context}", iteration_context)
+            .replace("{lessons_context}", lessons_context)
+            .replace("{focus_items}", focus_items)
+            .replace("{tools_context}", tools_context)
+            .replace("{constraints_context}", constraints_context)
+            .replace("{dependencies_context}", dependencies_context)
+        )
+
+    # ================================================================
+    # Learn phase prompts
+    # ================================================================
+
+    def get_learn_prompt(
+        self,
+        iteration: int,
+        user_request: str,
+        ideal_state: str,
+        experiment_plan: str,
+        think_phase: str,
+        execution_result: str,
+        verification_report: str,
+        previous_lessons: str,
+        best_result: str,
+    ) -> str:
+        """Get prompt for the LEARN phase iteration analysis."""
+        template = self._load_prompt("learn.md")
+        return (
+            template
+            .replace("{iteration}", str(iteration))
+            .replace("{user_request}", user_request)
+            .replace("{ideal_state}", ideal_state)
+            .replace("{experiment_plan}", experiment_plan)
+            .replace("{think_phase}", think_phase)
+            .replace("{execution_result}", execution_result)
+            .replace("{verification_report}", verification_report)
+            .replace("{previous_lessons}", previous_lessons)
+            .replace("{best_result}", best_result)
+        )
+
+    # ================================================================
+    # Validation prompts
+    # ================================================================
+
+    def get_validation_severity_prompt(
+        self,
+        findings_json: str,
+        project_directory: str,
+        iteration: int,
+    ) -> str:
+        """Get prompt for LLM-based severity assessment of validation findings."""
+        template = self._load_prompt("validation_severity.md")
+        return (
+            template
+            .replace("{findings_json}", findings_json)
+            .replace("{project_directory}", project_directory)
+            .replace("{iteration}", str(iteration))
         )

@@ -27,7 +27,7 @@ class MockRuntimeConfig:
 class MockTelemetryConfig:
     """Mock telemetry config."""
     enabled: bool = False
-    output_dir: Path = None
+    output_dir: Path | None = None
     console_export: bool = False
     metrics_interval_seconds: int = 60
 
@@ -35,7 +35,7 @@ class MockTelemetryConfig:
 @dataclass
 class MockStorageConfig:
     """Mock storage config for testing."""
-    worktree_dir: Path = None
+    worktree_dir: Path | None = None
 
     def __post_init__(self):
         if self.worktree_dir is None:
@@ -45,9 +45,9 @@ class MockStorageConfig:
 @dataclass
 class MockConfig:
     """Mock config for testing."""
-    runtime: MockRuntimeConfig = None
-    telemetry: MockTelemetryConfig = None
-    storage: MockStorageConfig = None
+    runtime: MockRuntimeConfig | None = None
+    telemetry: MockTelemetryConfig | None = None
+    storage: MockStorageConfig | None = None
 
     def __post_init__(self):
         if self.runtime is None:
@@ -67,8 +67,8 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         self.config = MockConfig()
         self.state_manager = MagicMock()
-        self.state_manager.get_state = AsyncMock(return_value={})
-        self.state_manager.save_state = AsyncMock()
+        self.state_manager.get_build_state = AsyncMock(return_value={})
+        self.state_manager.save_build_state = AsyncMock()
         self.state_manager.state_dir = Path(tempfile.mkdtemp())
 
         self.graph = MagicMock()
@@ -77,7 +77,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
             graph=self.graph,
             state_manager=self.state_manager,
             config=self.config,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
     async def test_input_queue_is_bounded(self):
@@ -227,7 +227,7 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
             graph=MagicMock(),
             state_manager=state_manager,
             config=config,
-            copilot_acp_client=None,
+            copilot_acp_manager=None,
         )
 
         assert loop._input_queue.maxsize == 50

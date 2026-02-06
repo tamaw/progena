@@ -3,6 +3,10 @@ LEARN Node - Learning phase of inner loop (loop.spec.md).
 
 Analyzes whether the plan was achieved and whether we're progressing
 toward the ideal state. Feeds all context to the LLM for holistic assessment.
+
+Uses structured LLM output (LearningResult) for validated responses,
+PromptTemplates for maintainable prompts, and local pattern detection
+as a fallback for cross-iteration analysis.
 """
 
 import json
@@ -10,6 +14,8 @@ import logging
 import time
 from typing import Any
 
+from ..llm.prompts import PromptTemplates
+from ..llm.response_models import LearningResult
 from ..state.models import ProgenitorState
 from ..runtime.time_utils import utcnow_isoformat
 from . import NodeFunction, NodeStateUpdate
@@ -106,7 +112,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
         else:
             context["verification_report"] = verification_report
 
-    # History - previous iterations
+    # History - previous iterations (full list for pattern detection)
     history = state.get("history", {})
     context["previous_lessons"] = history.get("lessons_learned", [])
     context["previous_artefacts"] = history.get("artefacts", [])
@@ -119,6 +125,70 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
     return context
 
 
+def _detect_local_patterns(all_lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Detect patterns from lesson history (non-LLM fallback).
+
+    Scans accumulated lessons for recurring failures and stagnation signals
+    that may not be visible in a single-iteration LLM analysis.
+    """
+    patterns: list[dict[str, Any]] = []
+    if len(all_lessons) < 2:
+        return patterns
+
+    # Check for recurring failures across iterations
+    failure_counts: dict[str, list[int]] = {}
+    for lesson in all_lessons:
+        for failure in lesson.get("what_failed", []):
+            # Normalize to detect similar failures
+            failure_key = failure[:80].lower().strip()
+            failure_counts.setdefault(failure_key, []).append(
+                lesson.get("iteration", 0)
+            )
+
+    for failure, iterations in failure_counts.items():
+        if len(iterations) >= 2:
+            patterns.append({
+                "pattern_type": "recurring_issue",
+                "description": f"Recurring failure: {failure}",
+                "affected_iterations": iterations,
+                "recommended_action": "Address root cause rather than symptoms",
+            })
+
+    # Check for stagnation (same progress status across recent iterations)
+    recent = all_lessons[-3:]
+    if len(recent) >= 3:
+        progress_values = [l.get("ideal_state_progress", "unknown") for l in recent]
+        if all(p == "stagnating" for p in progress_values):
+            patterns.append({
+                "pattern_type": "stagnation_signal",
+                "description": "Progress stagnating for 3+ iterations",
+                "affected_iterations": [l.get("iteration", 0) for l in recent],
+                "recommended_action": "Consider fundamentally different approach",
+            })
+
+    # Check for regression pattern
+    if len(recent) >= 2:
+        progress_values = [l.get("ideal_state_progress", "unknown") for l in recent]
+        if all(p == "regressing" for p in progress_values):
+            patterns.append({
+                "pattern_type": "regression_pattern",
+                "description": "Regression detected across recent iterations",
+                "affected_iterations": [l.get("iteration", 0) for l in recent],
+                "recommended_action": "Revert to best known approach and investigate cause",
+            })
+
+    return patterns
+
+
+def _get_response_format(llm_client) -> dict[str, Any]:
+    """Get structured output response format for LearningResult."""
+    if hasattr(llm_client, '_get_json_response_format'):
+        return llm_client._get_json_response_format(LearningResult, "learning_result")
+    # Fallback: import the builder from the client module
+    from ..llm.client import _build_json_schema_format
+    return _build_json_schema_format(LearningResult, "learning_result")
+
+
 def create_node(
     llm_client,
     state_manager=None,
@@ -128,6 +198,8 @@ def create_node(
     CQ-006: Returns NodeFunction type - async function that takes
     ProgenitorState and returns NodeStateUpdate (partial dict).
     """
+
+    prompts = PromptTemplates()
 
     async def learn_node(state: ProgenitorState) -> NodeStateUpdate:
         """
@@ -155,13 +227,28 @@ def create_node(
         # Gather ALL context for LLM analysis
         context = _gather_full_context(state)
 
-        # Generate lessons via LLM
-        lessons = await _generate_lessons_via_llm(llm_client, context)
+        # Generate lessons via structured LLM call
+        lessons_result = await _generate_lessons_via_llm(llm_client, context, prompts)
+
+        # Convert to dict for state storage
+        lessons = lessons_result.model_dump()
         lessons["iteration"] = iteration
 
-        # Store lessons
+        # Merge local pattern detection with LLM-detected patterns
         history = state.get("history", {})
         all_lessons = list(history.get("lessons_learned", []))
+
+        local_patterns = _detect_local_patterns(all_lessons)
+        if local_patterns:
+            # Merge: add local patterns not already detected by LLM
+            llm_pattern_descs = {
+                p.get("description", "").lower()
+                for p in lessons.get("patterns_detected", [])
+            }
+            for pattern in local_patterns:
+                if pattern["description"].lower() not in llm_pattern_descs:
+                    lessons.setdefault("patterns_detected", []).append(pattern)
+
         all_lessons.append(lessons)
 
         # Log learning
@@ -173,6 +260,7 @@ def create_node(
                 "ideal_state_progress": lessons.get("ideal_state_progress", "unknown"),
                 "worked_count": len(lessons.get("what_worked", [])),
                 "failed_count": len(lessons.get("what_failed", [])),
+                "patterns_count": len(lessons.get("patterns_detected", [])),
                 "timestamp": utcnow_isoformat(),
             })
 
@@ -185,6 +273,7 @@ def create_node(
         if span:
             span.set_attribute("plan_achieved", lessons.get("plan_achieved", False))
             span.set_attribute("ideal_state_progress", lessons.get("ideal_state_progress", "unknown"))
+            span.set_attribute("patterns_detected", len(lessons.get("patterns_detected", [])))
             span.set_attribute("duration_seconds", duration)
             span.end()
 
@@ -201,120 +290,93 @@ def create_node(
             "messages": history.get("messages", []),
         }
 
+        # Build learning summary for observe node consumption (Phase 5)
+        learning_summary = {
+            "iteration": iteration,
+            "plan_achieved": lessons.get("plan_achieved", False),
+            "ideal_state_progress": lessons.get("ideal_state_progress", "unknown"),
+            "what_worked": lessons.get("what_worked", []),
+            "what_failed": lessons.get("what_failed", []),
+            "adjustments": lessons.get("adjustments", []),
+            "insights": lessons.get("insights", []),
+            "root_cause": lessons.get("root_cause", ""),
+            "patterns_detected": lessons.get("patterns_detected", []),
+            "prioritized_adjustments": lessons.get("prioritized_adjustments", []),
+            "action_outcome_correlations": lessons.get("action_outcome_correlations", []),
+        }
+
         return {
             "history": full_history,
             "build_phase": "learn",
+            "learning_summary": learning_summary,
         }
 
     return learn_node
 
 
-async def _generate_lessons_via_llm(llm_client, context: dict[str, Any]) -> dict[str, Any]:
+async def _generate_lessons_via_llm(
+    llm_client,
+    context: dict[str, Any],
+    prompts: PromptTemplates,
+) -> LearningResult:
     """Use LLM to analyze all context and generate comprehensive lessons.
 
-    Feeds the full context (ideal state, plan, execution, verification)
-    to the LLM for holistic assessment.
+    Uses structured output (LearningResult) for validated responses and
+    PromptTemplates for maintainable prompts. Falls back gracefully on error.
     """
 
-    # Build the comprehensive prompt
-    prompt = f"""Analyze this iteration and determine:
-1. Was the EXPERIMENT PLAN achieved?
-2. Are we progressing toward the IDEAL STATE?
-3. What worked, what failed, and what adjustments to make?
+    # Build prompt from template
+    prompt = prompts.get_learn_prompt(
+        iteration=context.get("iteration", 0),
+        user_request=context.get("user_request", "Not provided"),
+        ideal_state=_serialize_for_prompt(context.get("ideal_state")),
+        experiment_plan=_serialize_for_prompt(context.get("experiment_plan")),
+        think_phase=_serialize_for_prompt(context.get("think_phase")),
+        execution_result=_serialize_for_prompt(context.get("execution_result")),
+        verification_report=_serialize_for_prompt(context.get("verification_report")),
+        previous_lessons=_serialize_for_prompt(context.get("previous_lessons", [])[-3:]),
+        best_result=_serialize_for_prompt(context.get("best_result")),
+    )
 
-=== FULL CONTEXT ===
-
-ITERATION: {context.get('iteration', 0)}
-
-USER REQUEST:
-{context.get('user_request', 'Not provided')}
-
-IDEAL STATE (our target):
-{_serialize_for_prompt(context.get('ideal_state'))}
-
-EXPERIMENT PLAN (what we planned this iteration):
-{_serialize_for_prompt(context.get('experiment_plan'))}
-
-THINK PHASE (reasoning and approaches):
-{_serialize_for_prompt(context.get('think_phase'))}
-
-EXECUTION RESULT (what actually happened):
-{_serialize_for_prompt(context.get('execution_result'))}
-
-VERIFICATION REPORT (how well we did):
-{_serialize_for_prompt(context.get('verification_report'))}
-
-PREVIOUS LESSONS (from earlier iterations):
-{_serialize_for_prompt(context.get('previous_lessons', [])[-3:])}
-
-BEST RESULT SO FAR:
-{_serialize_for_prompt(context.get('best_result'))}
-
-=== YOUR ANALYSIS ===
-
-Provide your analysis in the following JSON format:
-{{
-    "plan_achieved": true/false,
-    "plan_achievement_reasoning": "Why the plan was/wasn't achieved",
-    "ideal_state_progress": "improving/stagnating/regressing",
-    "ideal_state_reasoning": "Assessment of progress toward ideal state",
-    "what_worked": ["List of things that worked well"],
-    "what_failed": ["List of things that failed or need improvement"],
-    "root_cause": "The primary root cause if there was a failure",
-    "adjustments": ["Specific actionable adjustments for next iteration"],
-    "insights": ["Key insights and learnings from this iteration"]
-}}
-
-Be SPECIFIC and ACTIONABLE. Focus on root causes, not symptoms.
-If there was a build/test failure, identify it clearly.
-If we're making progress, acknowledge what's working."""
+    system_prompt = (
+        "You are an expert at analyzing software development iterations. "
+        "Assess whether the plan was achieved, whether we're progressing toward "
+        "the ideal state, and extract actionable lessons. Be specific and honest."
+    )
 
     try:
-        response = await llm_client.generate(
-            prompt=prompt,
-            system_prompt=(
-                "You are an expert at analyzing software development iterations. "
-                "Assess whether the plan was achieved, whether we're progressing toward "
-                "the ideal state, and extract actionable lessons. Be specific and honest. "
-                "Return valid JSON."
-            ),
+        # Use structured output via response_format
+        response_format = _get_response_format(llm_client)
+
+        # If using json_object fallback (older Azure), add json instruction
+        if response_format.get("type") == "json_object":
+            system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
+
+        response = await llm_client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt=system_prompt,
+            temperature=0.3,
+            response_format=response_format,
         )
 
-        # Try to parse JSON from response
-        import re
-        json_match = re.search(r'\{[\s\S]*\}', response)
-        if json_match:
-            lessons = json.loads(json_match.group())
-            # Ensure required fields exist
-            lessons.setdefault("plan_achieved", False)
-            lessons.setdefault("ideal_state_progress", "unknown")
-            lessons.setdefault("what_worked", [])
-            lessons.setdefault("what_failed", [])
-            lessons.setdefault("adjustments", [])
-            lessons.setdefault("insights", [])
-            return lessons
-        else:
-            # Fallback if JSON parsing fails
-            logger.warning("Could not parse JSON from LLM response, using fallback")
-            return {
-                "plan_achieved": False,
-                "plan_achievement_reasoning": "Could not parse LLM analysis",
-                "ideal_state_progress": "unknown",
-                "what_worked": [],
-                "what_failed": ["LLM analysis parsing failed"],
-                "adjustments": [],
-                "insights": [response[:500]],  # Include raw response as insight
-            }
+        raw_data = json.loads(response)
+        return LearningResult.model_validate(raw_data)
+
+    except json.JSONDecodeError:
+        logger.warning("Could not parse JSON from LLM response, using fallback")
+        return LearningResult(
+            plan_achieved=False,
+            plan_achievement_reasoning="Could not parse LLM analysis",
+            ideal_state_progress="unknown",
+            what_failed=["LLM analysis parsing failed"],
+        )
 
     except Exception as e:
         logger.warning(f"LLM analysis failed: {e}")
-        # Return minimal lessons on error
-        return {
-            "plan_achieved": False,
-            "plan_achievement_reasoning": f"Analysis error: {e}",
-            "ideal_state_progress": "unknown",
-            "what_worked": [],
-            "what_failed": [f"LLM analysis error: {str(e)}"],
-            "adjustments": ["Retry analysis next iteration"],
-            "insights": [],
-        }
+        return LearningResult(
+            plan_achieved=False,
+            plan_achievement_reasoning=f"Analysis error: {e}",
+            ideal_state_progress="unknown",
+            what_failed=[f"LLM analysis error: {str(e)}"],
+            adjustments=["Retry analysis next iteration"],
+        )

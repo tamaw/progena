@@ -96,7 +96,7 @@ class HelloWorldAgent:
                 status=500,
             )
 
-    async def process(self, request: str = "", context: dict = None) -> str:
+    async def process(self, request: str = "", context: dict | None = None) -> str:
         """Process a request and return response.
 
         Always returns 'Hello World!' regardless of input.

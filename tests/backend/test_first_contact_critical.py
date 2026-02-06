@@ -674,15 +674,13 @@ class TestCriticalChatFlow:
             assert "id" in model
             assert "object" in model
 
-    def test_chat_completions_endpoint_accepts_requests(self, client):
-        """Chat completions must accept requests (may error if agent not running)."""
+    def test_responses_endpoint_accepts_requests(self, client):
+        """Responses endpoint must accept requests (may error if agent not running)."""
         response = client.post(
-            "/v1/chat/completions",
+            "/v1/responses",
             json={
                 "model": "progenitor-v1",
-                "messages": [
-                    {"role": "user", "content": "Greetings, we come in peace."}
-                ],
+                "input": "Greetings, we come in peace.",
                 "stream": False,
             },
         )
@@ -690,7 +688,7 @@ class TestCriticalChatFlow:
         # Should not be 404 or 405 - endpoint exists
         assert response.status_code in [200, 500, 503]
 
-    def test_responses_endpoint_accepts_requests(self, client):
+    def test_responses_api_endpoint_accepts_requests(self, client):
         """Responses endpoint must accept requests."""
         response = client.post(
             "/v1/responses",

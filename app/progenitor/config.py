@@ -276,6 +276,49 @@ class TelemetryConfig:
 
 
 @dataclass
+class ValidationConfig:
+    """Validation configuration loaded from .env."""
+
+    # Thresholds
+    execution_warning_ms: int = 60000
+    response_warning_ms: int = 10000
+    max_errors_to_show: int = 10
+    max_failed_prompts_to_show: int = 5
+
+    # Feature flags
+    enable_pattern_detection: bool = True
+    enable_deduplication: bool = True
+    enable_historical_comparison: bool = True
+    enable_llm_severity: bool = True
+    enable_python_tool_actions: bool = True
+
+    # Python tool settings
+    pytest_timeout_seconds: int = 120
+    pyright_timeout_seconds: int = 60
+    mypy_timeout_seconds: int = 60
+    ruff_timeout_seconds: int = 30
+
+    @classmethod
+    def from_env(cls) -> "ValidationConfig":
+        """Load validation config from environment variables."""
+        return cls(
+            execution_warning_ms=env_int("PROGENITOR_VALIDATION_EXECUTION_WARNING_MS", 60000),
+            response_warning_ms=env_int("PROGENITOR_VALIDATION_RESPONSE_WARNING_MS", 10000),
+            max_errors_to_show=env_int("PROGENITOR_VALIDATION_MAX_ERRORS", 10),
+            max_failed_prompts_to_show=env_int("PROGENITOR_VALIDATION_MAX_FAILED_PROMPTS", 5),
+            enable_pattern_detection=env_bool("PROGENITOR_VALIDATION_PATTERN_DETECTION", True),
+            enable_deduplication=env_bool("PROGENITOR_VALIDATION_DEDUPLICATION", True),
+            enable_historical_comparison=env_bool("PROGENITOR_VALIDATION_HISTORICAL_COMPARISON", True),
+            enable_llm_severity=env_bool("PROGENITOR_VALIDATION_LLM_SEVERITY", True),
+            enable_python_tool_actions=env_bool("PROGENITOR_VALIDATION_PYTHON_TOOLS", True),
+            pytest_timeout_seconds=env_int("PROGENITOR_VALIDATION_PYTEST_TIMEOUT", 120),
+            pyright_timeout_seconds=env_int("PROGENITOR_VALIDATION_PYRIGHT_TIMEOUT", 60),
+            mypy_timeout_seconds=env_int("PROGENITOR_VALIDATION_MYPY_TIMEOUT", 60),
+            ruff_timeout_seconds=env_int("PROGENITOR_VALIDATION_RUFF_TIMEOUT", 30),
+        )
+
+
+@dataclass
 class SchedulerConfig:
     """Scheduler configuration."""
 
@@ -301,6 +344,7 @@ class ProgenitorConfig:
     copilot: CopilotConfig = field(default_factory=CopilotConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    validation: ValidationConfig = field(default_factory=ValidationConfig)
 
     @classmethod
     def load(cls, project_root: Path | None = None, config_dir: Path | None = None) -> "ProgenitorConfig":
@@ -338,6 +382,7 @@ class ProgenitorConfig:
             copilot=CopilotConfig.from_env(copilot_config, project_root),
             scheduler=SchedulerConfig.from_env(),
             telemetry=TelemetryConfig.from_env(storage_config),
+            validation=ValidationConfig.from_env(),
         )
 
         # Validate configuration

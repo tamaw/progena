@@ -285,6 +285,7 @@ def create_node(
                         "output": last_output,
                         "gaps": verification_dict.get("gaps", []),
                         "violations": verification_dict.get("anti_criterion_violations", []),
+                        "learning_summary": state.get("learning_summary"),
                     }
 
                     ideal_state = await ideal_state_builder.refine_from_iteration(
@@ -333,6 +334,7 @@ def create_node(
                 **clarification_updates,
                 "ideal_state": ideal_state,
                 "build_phase": "observe",
+                "learning_summary": None,  # Clear after consumption
             }
 
         except Exception as e:

@@ -188,7 +188,7 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         # CQ-012: cycle_limit expects full config object
         "cycle_limit": cycle_limit.create_node(deps.config),
         # CQ-012: validate expects full config object
-        "validate": validate.create_node(deps.config),
+        "validate": validate.create_node(deps.config, deps.llm_client, deps.state_manager),
         "respond": respond.create_node(deps.state_manager),
         "idle": idle.create_node(
             deps.config,
