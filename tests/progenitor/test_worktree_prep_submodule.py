@@ -11,6 +11,7 @@ Tests cover:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
+from typing import Any, cast
 
 from app.progenitor.nodes.worktree_prep import create_node
 from app.progenitor.state.models import WorkItem, WorkItemType, WorkItemStatus
@@ -29,7 +30,7 @@ def worktree_prep_node(tmp_path, mock_git_manager):
     """Create worktree_prep node with mocked git manager."""
     with patch('app.progenitor.nodes.worktree_prep.GitWorktreeManager', return_value=mock_git_manager):
         node = create_node(tmp_path / "worktrees")
-        node._git_manager = mock_git_manager  # Expose for testing
+        setattr(node, "_git_manager", mock_git_manager)  # Expose for testing
         return node, mock_git_manager
 
 
@@ -46,18 +47,20 @@ class TestWorktreePrepWithBuildSettings:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": "build_agent",
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType.BUILD_AGENT,
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
                 "build_settings": {
                     "project_name": "weather_agent",
                     "project_directory": "app/agents/weather_agent",
                 },
             }
 
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             # Should have called init_submodule
             mock_git.init_submodule.assert_called_once()
@@ -65,9 +68,11 @@ class TestWorktreePrepWithBuildSettings:
 
             assert call_args.kwargs["submodule_name"] == "weather_agent"
             # Check work item was updated (normalize path separators for cross-platform)
-            submodule_path = result["current_work_item"]["submodule_path"].replace("\\", "/")
+            current_item = result.get("current_work_item")
+            assert isinstance(current_item, WorkItem)
+            submodule_path = (current_item.submodule_path or "").replace("\\", "/")
             assert submodule_path == "app/agents/weather_agent"
-            assert result["current_work_item"]["context"]["submodule_initialized"] is True
+            assert current_item.context["submodule_initialized"] is True
 
     @pytest.mark.asyncio
     async def test_skips_non_build_items(self, tmp_path):
@@ -79,14 +84,16 @@ class TestWorktreePrepWithBuildSettings:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": "direct_answer",  # Not a build type
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType.DIRECT_ANSWER,
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
             }
 
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             # Should NOT have called init_submodule
             mock_git.init_submodule.assert_not_called()
@@ -103,20 +110,24 @@ class TestWorktreePrepWithBuildSettings:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": "build_agent",
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType.BUILD_AGENT,
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
                 # No build_settings
             }
 
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             # Should NOT have called init_submodule (no project_directory)
             mock_git.init_submodule.assert_not_called()
             # Should mark as skipped
-            assert result["current_work_item"]["context"]["submodule_skipped"] is True
+            current_item = result.get("current_work_item")
+            assert isinstance(current_item, WorkItem)
+            assert current_item.context["submodule_skipped"] is True
 
     @pytest.mark.asyncio
     async def test_handles_missing_project_directory(self, tmp_path):
@@ -128,22 +139,26 @@ class TestWorktreePrepWithBuildSettings:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": "build_agent",
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType.BUILD_AGENT,
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
                 "build_settings": {
                     "project_name": "test",
                     # No project_directory
                 },
             }
 
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             # Should NOT have called init_submodule
             mock_git.init_submodule.assert_not_called()
-            assert result["current_work_item"]["context"]["submodule_skipped"] is True
+            current_item = result.get("current_work_item")
+            assert isinstance(current_item, WorkItem)
+            assert current_item.context["submodule_skipped"] is True
 
 
 class TestWorktreePrepErrorHandling:
@@ -159,23 +174,27 @@ class TestWorktreePrepErrorHandling:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": "build_agent",
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType.BUILD_AGENT,
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
                 "build_settings": {
                     "project_name": "test_agent",
                     "project_directory": "app/agents/test_agent",
                 },
             }
 
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             # Should have attempted init_submodule
             mock_git.init_submodule.assert_called_once()
             # Should record failure
-            assert result["current_work_item"]["context"]["submodule_initialized"] is False
+            current_item = result.get("current_work_item")
+            assert isinstance(current_item, WorkItem)
+            assert current_item.context["submodule_initialized"] is False
 
     @pytest.mark.asyncio
     async def test_handles_exception_gracefully(self, tmp_path):
@@ -187,11 +206,13 @@ class TestWorktreePrepErrorHandling:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": "build_agent",
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType.BUILD_AGENT,
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
                 "build_settings": {
                     "project_name": "test_agent",
                     "project_directory": "app/agents/test_agent",
@@ -199,10 +220,12 @@ class TestWorktreePrepErrorHandling:
             }
 
             # Should not raise
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             # Should record error
-            assert "submodule_error" in result["current_work_item"]["context"]
+            current_item = result.get("current_work_item")
+            assert isinstance(current_item, WorkItem)
+            assert "submodule_error" in current_item.context
 
 
 class TestWorktreePrepBuildTypes:
@@ -219,18 +242,20 @@ class TestWorktreePrepBuildTypes:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": item_type,
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType(item_type),
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
                 "build_settings": {
                     "project_name": "test",
                     "project_directory": "app/agents/test",
                 },
             }
 
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             mock_git.init_submodule.assert_called_once()
 
@@ -245,13 +270,15 @@ class TestWorktreePrepBuildTypes:
             node = create_node(tmp_path / "worktrees")
 
             state = {
-                "current_work_item": {
-                    "id": "work_123",
-                    "item_type": item_type,
-                    "context": {},
-                },
+                "current_work_item": WorkItem(
+                    id="work_123",
+                    item_type=WorkItemType(item_type),
+                    status=WorkItemStatus.PENDING,
+                    description="Test",
+                    context={},
+                ),
             }
 
-            result = await node(state)
+            result = await node(cast(Any, state))
 
             mock_git.init_submodule.assert_not_called()

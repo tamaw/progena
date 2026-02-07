@@ -1,5 +1,7 @@
 """Tools module - Copilot CLI, git/worktree helpers, MCP client, agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
 
+from typing import TYPE_CHECKING
+
 from .registry import ToolRegistry
 from .copilot import CopilotCLI
 from .git import GitWorktreeManager
@@ -20,6 +22,18 @@ from .user_communication import (
     UserCommunicationTools,
     USER_COMMUNICATION_TOOLS,
 )
+
+if TYPE_CHECKING:
+    from .list_tools import ListToolsTool
+    from .rediscover_agents import RediscoverAgentsTool
+    from .list_agents import ListAgentsTool
+    from .new_conversation import NewConversationTool
+    from .build_status import BuildStatusTool
+    from .current_time import CurrentTimeTool
+    from .list_schedule import ListScheduleTool
+    from .self_reflect_tool import SelfReflectTool
+    from .schedule_task import ScheduleTaskTool
+    from .compress_conversation import CompressConversationTool
 
 
 def __getattr__(name: str):

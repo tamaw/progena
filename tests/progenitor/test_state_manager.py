@@ -214,3 +214,80 @@ class TestStateManager:
         # Verify state persisted
         state = await manager.get_build_state()
         assert state.get("cycle_count") == 5
+
+
+class TestStateManagerCacheReads:
+    """Tests that get_build_state/get_current_state return from cache."""
+
+    @pytest.fixture
+    def temp_dirs(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            with tempfile.TemporaryDirectory() as logs_dir:
+                yield Path(state_dir), Path(logs_dir)
+
+    @pytest.mark.asyncio
+    async def test_get_build_state_returns_from_cache(self, temp_dirs):
+        """After init, get_build_state returns cached data without hitting disk."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        # Save state to populate cache
+        await manager.save_build_state({"build_in_progress": True, "custom_key": 42})
+
+        # Corrupt the file on disk - cache should still return correct data
+        with open(state_dir / "build_state.json", "w") as f:
+            f.write('{"build_in_progress": false, "custom_key": 0}')
+
+        state = await manager.get_build_state()
+        assert state["custom_key"] == 42
+        assert state["build_in_progress"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_current_state_returns_from_cache(self, temp_dirs):
+        """After init, get_current_state returns cached data without hitting disk."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        # Save state to populate cache
+        await manager.save_current_state({"run_id": "cached-run", "cycle_count": 7})
+
+        # Corrupt the file on disk - cache should still return correct data
+        with open(state_dir / "current_state.json", "w") as f:
+            f.write('{"run_id": "disk-run", "cycle_count": 0}')
+
+        state = await manager.get_current_state()
+        assert state["run_id"] == "cached-run"
+        assert state["cycle_count"] == 7
+
+    @pytest.mark.asyncio
+    async def test_get_build_state_falls_back_to_disk_when_no_cache(self, temp_dirs):
+        """If cache is empty, get_build_state reads from disk and populates cache."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        # Clear the cache manually to simulate missing cache entry
+        manager._state_cache.pop("build_state", None)
+
+        state = await manager.get_build_state()
+        # Should have loaded from disk (defaults from init)
+        assert isinstance(state, dict)
+        # Should now be in cache
+        assert "build_state" in manager._state_cache
+
+    @pytest.mark.asyncio
+    async def test_save_build_state_updates_cache(self, temp_dirs):
+        """save_build_state updates the cache so subsequent reads are consistent."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        await manager.save_build_state({"build_in_progress": True, "task_id": "t1"})
+        state = await manager.get_build_state()
+        assert state["task_id"] == "t1"
+
+        await manager.save_build_state({"build_in_progress": False, "task_id": "t2"})
+        state = await manager.get_build_state()
+        assert state["task_id"] == "t2"

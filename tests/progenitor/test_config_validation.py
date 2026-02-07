@@ -140,7 +140,6 @@ class TestRuntimeConfigValidation:
                 max_output_queue_size=100,
                 max_stream_queue_size=1000,
                 health_stale_seconds=120,
-                health_stale_seconds=120,
                 max_inner_iterations=5,
                 min_verification_score=0.8,
                 iteration_time_limit_seconds=600,

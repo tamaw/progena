@@ -7,7 +7,7 @@ partially with dicts.
 """
 
 import logging
-from typing import Any, Optional, TypeVar, Type, TYPE_CHECKING, Mapping
+from typing import Any, Optional, TypeVar, Type, TYPE_CHECKING, Mapping, cast
 from .models import (
     WorkItem,
     WorkItemType,
@@ -230,7 +230,7 @@ def set_ideal_state(phases: BuildPhases | dict[str, Any] | None, ideal_state: An
     observe_phase: dict[str, Any] = dict(updated_phases.get("observe") or {})
     observe_phase["ideal_state"] = ideal_state
     updated_phases["observe"] = observe_phase
-    return updated_phases
+    return cast(BuildPhases, updated_phases)
 
 
 def is_actionable(item: Any) -> bool:

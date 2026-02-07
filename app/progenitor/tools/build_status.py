@@ -81,20 +81,8 @@ class BuildStatusTool(BaseSystemTool):
 
                 return ToolResult.ok(result)
 
-        # Read from persisted state files via state_manager
-        persisted_state = None
-        if context.state_manager:
-            try:
-                persisted_state = await context.state_manager.get_build_state()
-            except Exception as e:
-                logger.warning("Failed to read persisted state: %s", e)
-
-        # Merge in-memory state with persisted state
-        effective_state: dict[str, Any] = {}
-        if persisted_state:
-            effective_state.update(persisted_state)
-        if context.state:
-            effective_state.update(context.state)
+        # Use in-memory state (context.state is the authoritative source)
+        effective_state: dict[str, Any] = dict(context.state) if context.state else {}
 
         if not effective_state:
             return ToolResult.ok({

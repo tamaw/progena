@@ -37,9 +37,11 @@ class TestIntakeNode:
         mock_state_manager.log_conversation.assert_called_once()
 
         # Should have added message to state
-        assert len(result["messages"]) == 1
-        assert result["messages"][0].content == "Hello, Progenitor!"
-        assert result["messages"][0].role == "user"
+        messages = result.get("messages")
+        assert messages is not None
+        assert len(messages) == 1
+        assert messages[0].content == "Hello, Progenitor!"
+        assert messages[0].role == "user"
 
     @pytest.mark.asyncio
     async def test_intake_no_input_passthrough(self):
@@ -90,8 +92,8 @@ class TestDecideNode:
 
         result = await node(state)
 
-        assert result["current_decision"] is not None
-        decision = result["current_decision"]
+        decision = result.get("current_decision")
+        assert decision is not None
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
 
     @pytest.mark.asyncio
@@ -128,8 +130,8 @@ class TestDecideNode:
 
         result = await node(state)
 
-        assert result["current_decision"] is not None
-        decision = result["current_decision"]
+        decision = result.get("current_decision")
+        assert decision is not None
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
         assert decision.requires_planning is False
         # Without a background runner, we should get the "unavailable" message
@@ -165,8 +167,8 @@ class TestDecideNode:
 
         result = await node(state)
 
-        assert result["current_decision"] is not None
-        decision = result["current_decision"]
+        decision = result.get("current_decision")
+        assert decision is not None
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
         # Should explain that confidence was too low
         assert "not certain" in (decision.direct_response or "").lower() or "confidence" in (decision.direct_response or "").lower()
@@ -220,8 +222,9 @@ class TestPickNextNode:
 
         result = await node(state)
 
-        assert result["current_work_item"] is not None
-        assert result["current_work_item"].id == "item-2"
+        current_item = result.get("current_work_item")
+        assert current_item is not None
+        assert current_item.id == "item-2"
 
     @pytest.mark.asyncio
     async def test_pick_next_no_pending(self):
@@ -243,7 +246,7 @@ class TestPickNextNode:
 
         result = await node(state)
 
-        assert result["current_work_item"] is None
+        assert result.get("current_work_item") is None
 
 
 class TestRespondNode:
@@ -268,7 +271,7 @@ class TestRespondNode:
 
         result = await node(state)
 
-        assert result["pending_response"] == "Hello there!"
+        assert result.get("pending_response") == "Hello there!"
         mock_state_manager.log_conversation.assert_called_once()
 
     @pytest.mark.asyncio

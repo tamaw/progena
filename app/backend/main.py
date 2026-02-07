@@ -121,7 +121,7 @@ class RateLimiter:
     Memory bounded: limits maximum tracked clients and performs periodic cleanup.
     """
 
-    MAX_TRACKED_CLIENTS = 10000  # Maximum clients to track (memory protection)
+    MAX_TRACKED_CLIENTS: int = 10000  # Maximum clients to track (memory protection)
 
     def __init__(
         self,

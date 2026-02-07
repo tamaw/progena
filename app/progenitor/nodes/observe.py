@@ -10,9 +10,9 @@ Refines ideal state, adds anti-criteria, tightens criteria based on:
 
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
-from ..state.models import ProgenitorState
+from ..state.models import ProgenitorState, ObservePhase
 from ..state.ideal_state import IdealStateBuilder, IdealState
 from ..state.helpers import get_ideal_state, set_ideal_state
 from ..constants import DEFAULT_VERIFICATION_TARGET_SCORE, DEFAULT_MAX_INNER_ITERATIONS
@@ -334,7 +334,7 @@ def create_node(
             else:
                 ideal_state_dict = None
             phases = set_ideal_state(state.get("phases"), ideal_state_dict)
-            observe_phase = dict(phases.get("observe") or {})
+            observe_phase = cast(ObservePhase, dict(phases.get("observe") or {}))
             observe_phase["completed_at"] = utcnow_isoformat()
             phases["observe"] = observe_phase
 

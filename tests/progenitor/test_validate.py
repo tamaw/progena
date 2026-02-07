@@ -21,6 +21,7 @@ import os
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
+from typing import Any, cast
 
 from app.progenitor.nodes.validate import (
     _extract_file_location,
@@ -711,9 +712,9 @@ class TestValidateNodeIntegration:
             },
         }
 
-        result = await node(state)
-        assert "validation_result_v2" in result
-        vr = result["validation_result_v2"]
+        result = await node(cast(Any, state))
+        vr = result.get("validation_result_v2")
+        assert vr is not None
         assert vr["error_count"] >= 2  # status + error + smoke
         assert vr["has_blocking_issues"] is True
         stats = vr["statistics"]
@@ -739,28 +740,21 @@ class TestValidateNodeIntegration:
             },
         }
 
-        result = await node(state)
-        vr = result["validation_result_v2"]
+        result = await node(cast(Any, state))
+        vr = result.get("validation_result_v2")
+        assert vr is not None
         # Should have fewer findings than 5 duplicate errors due to dedup
         error_findings = [f for f in vr["findings"] if f["source"] == "execution_error"]
         assert len(error_findings) < 5
 
     async def test_with_state_manager(self):
-        """Validate persists to build_state.json via state_manager."""
+        """Validate reads history from in-memory state and returns updated history."""
         config = _make_config(
             enable_python_tool_actions=False,
             enable_llm_severity=False,
             enable_historical_comparison=True,
         )
         mock_sm = AsyncMock()
-        mock_sm.get_build_state.return_value = {
-            "history": {
-                "verification_reports": [
-                    {"error_count": 5}
-                ]
-            }
-        }
-        mock_sm.save_build_state = AsyncMock()
 
         node = create_node(config, state_manager=mock_sm)
 
@@ -772,10 +766,16 @@ class TestValidateNodeIntegration:
                 "all_errors": [],
                 "smoke_test_passed": True,
             },
+            "history": {
+                "verification_reports": [
+                    {"error_count": 5}
+                ]
+            },
         }
 
-        result = await node(state)
-        vr = result["validation_result_v2"]
+        result = await node(cast(Any, state))
+        vr = result.get("validation_result_v2")
+        assert vr is not None
 
         # Should show improving trend (0 errors vs 5 previous)
         stats = vr["statistics"]
@@ -783,8 +783,9 @@ class TestValidateNodeIntegration:
         assert stats["trend"] == "improving"
         assert stats["previous_error_count"] == 5
 
-        # Should have called save
-        mock_sm.save_build_state.assert_called_once()
+        # Should return updated history in-memory (no state_manager.save_build_state)
+        assert "history" in result
+        assert len(result["history"]["verification_reports"]) == 2
 
     async def test_prioritization_order(self):
         """Findings are returned in severity order."""
@@ -808,8 +809,9 @@ class TestValidateNodeIntegration:
             },
         }
 
-        result = await node(state)
-        vr = result["validation_result_v2"]
+        result = await node(cast(Any, state))
+        vr = result.get("validation_result_v2")
+        assert vr is not None
         findings = vr["findings"]
 
         # First finding should be critical (smoke test), then high, etc.
@@ -817,3 +819,86 @@ class TestValidateNodeIntegration:
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         sorted_severities = sorted(severities, key=lambda s: severity_order.get(s, 4))
         assert severities == sorted_severities
+
+    async def test_history_returned_in_output_without_state_manager(self):
+        """Validate returns updated history even with no state_manager."""
+        config = _make_config(
+            enable_python_tool_actions=False,
+            enable_llm_severity=False,
+            enable_historical_comparison=False,
+        )
+        node = create_node(config)
+
+        state = {
+            "current_work_item": {"id": "work_hist"},
+            "iteration": {"current": 1},
+            "execution_result": {
+                "status": "success",
+                "all_errors": [],
+                "smoke_test_passed": True,
+            },
+        }
+
+        result = await node(cast(Any, state))
+        # history should always be returned for in-memory propagation
+        assert "history" in result
+        reports = result["history"]["verification_reports"]
+        assert len(reports) == 1
+        assert reports[0]["iteration"] == 1
+
+    async def test_no_previous_history_still_works(self):
+        """Historical comparison works when state has no prior history."""
+        config = _make_config(
+            enable_python_tool_actions=False,
+            enable_llm_severity=False,
+            enable_historical_comparison=True,
+        )
+        node = create_node(config)
+
+        state = {
+            "current_work_item": {"id": "work_no_hist"},
+            "iteration": {"current": 0},
+            "execution_result": {
+                "status": "success",
+                "all_errors": [],
+                "smoke_test_passed": True,
+            },
+            # No "history" key at all
+        }
+
+        result = await node(cast(Any, state))
+        vr = result.get("validation_result_v2")
+        assert vr is not None
+        # Should not crash, trend should be None (no previous data)
+        stats = vr.get("statistics")
+        if stats:
+            assert stats.get("previous_error_count") is None
+
+    async def test_history_caps_at_10(self):
+        """History caps at 10 verification reports."""
+        config = _make_config(
+            enable_python_tool_actions=False,
+            enable_llm_severity=False,
+            enable_historical_comparison=True,
+        )
+        node = create_node(config)
+
+        # Pre-populate with 10 reports
+        existing_reports = [{"error_count": i, "iteration": i} for i in range(10)]
+        state = {
+            "current_work_item": {"id": "work_cap"},
+            "iteration": {"current": 11},
+            "execution_result": {
+                "status": "success",
+                "all_errors": [],
+                "smoke_test_passed": True,
+            },
+            "history": {"verification_reports": existing_reports},
+        }
+
+        result = await node(cast(Any, state))
+        reports = result["history"]["verification_reports"]
+        # Should still be 10 (oldest dropped, newest appended)
+        assert len(reports) == 10
+        # Last entry should be from current iteration
+        assert reports[-1]["iteration"] == 11

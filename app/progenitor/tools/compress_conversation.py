@@ -4,8 +4,8 @@ Compress Conversation - Compress conversation history to reduce context window s
 
 import logging
 
+from ..env_utils import env_bool, env_int
 from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
-from ..env_utils import env_int, env_bool
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +48,8 @@ class CompressConversationTool(BaseSystemTool):
 
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..llm.conversation_compressor import ConversationCompressor
-        from ..state.models import ConversationMessage
         from ..llm.tokenizer import count_message_tokens
+        from ..state.models import ConversationMessage
 
         # ── Load config from env with sane defaults ──────────────────────
         keep_recent = env_int("PROGENITOR_COMPRESS_KEEP_RECENT", 10)
@@ -57,18 +57,11 @@ class CompressConversationTool(BaseSystemTool):
         threshold = env_int("PROGENITOR_COMPRESS_THRESHOLD", 30)
         persist = env_bool("PROGENITOR_COMPRESS_PERSIST", True)
 
-        # ── Gather messages ──────────────────────────────────────────────
+        # ── Gather messages (prefer in-memory state) ────────────────────
         messages: list[ConversationMessage] = []
 
-        # Prefer state_manager for the persisted source of truth
-        if context.state_manager:
-            try:
-                messages = await context.state_manager.get_messages()
-            except Exception as e:
-                logger.warning("compress_conversation: failed to read via state_manager: %s", e)
-
-        # Fall back to in-memory state
-        if not messages and context.state:
+        # Use in-memory state as the authoritative source
+        if context.state:
             raw = context.state.get("messages", [])
             for m in raw:
                 if isinstance(m, ConversationMessage):

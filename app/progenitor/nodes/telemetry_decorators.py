@@ -90,7 +90,7 @@ def traced_node(node_name: str) -> Callable[[Callable[..., NodeFunc]], Callable[
             original_node = create_fn(*args, **kwargs)
 
             @functools.wraps(original_node)
-            async def instrumented_node(state: ProgenitorState) -> ProgenitorState:
+            async def instrumented_node(state: ProgenitorState) -> dict[str, Any]:
                 tracer, metrics = _get_telemetry()
                 start_time = time.perf_counter()
                 success = False

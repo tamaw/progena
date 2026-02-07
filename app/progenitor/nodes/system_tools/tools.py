@@ -5,15 +5,14 @@ Concrete implementations of system tools that can be executed inline.
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
-from .protocol import BaseSystemTool, ToolContext, ToolResult
+from ...env_utils import env_bool, env_int
 from ...runtime.time_utils import utcnow_isoformat
 from ...state.helpers import get_ideal_state
-from ...state.models import generate_run_id, ProgenitorState
-from ...env_utils import env_int, env_bool
+from ...state.models import generate_run_id
+from ..node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ class ListToolsTool(BaseSystemTool):
         return "List all available tools and their capabilities"
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        from .registry import get_all_system_tools
+        from ..node_helpers.registry import get_all_system_tools
 
         system_tools = [tool.to_dict() for tool in get_all_system_tools()]
 
@@ -127,14 +126,10 @@ class NewConversationTool(BaseSystemTool):
         return "Start a new conversation (fresh run_id, clear chat history)"
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        if not context.state_manager and context.state is None:
-            return ToolResult.fail("No state manager or in-memory state available.")
+        if context.state is None:
+            return ToolResult.fail("No in-memory state available.")
 
-        previous_state = {}
-        if context.state is not None:
-            previous_state = context.state
-        elif context.state_manager:
-            previous_state = await context.state_manager.get_current_state()
+        previous_state = context.state
 
         previous_run_id = previous_state.get("run_id") if isinstance(previous_state, dict) else None
         previous_messages = previous_state.get("messages", []) if isinstance(previous_state, dict) else []
@@ -142,7 +137,7 @@ class NewConversationTool(BaseSystemTool):
 
         new_run_id = generate_run_id()
 
-        reset_state: ProgenitorState = {
+        reset_state: dict[str, Any] = {
             "run_id": new_run_id,
             "cycle_count": 0,
             "actions_this_cycle": 0,
@@ -157,11 +152,9 @@ class NewConversationTool(BaseSystemTool):
             "current_build_request": None,
         }
 
-        if context.state_manager:
-            await context.state_manager.update_current_state(reset_state)
-
+        # Update in-memory state directly (will be persisted by checkpoint)
         if context.state is not None:
-            context.state.update(reset_state)
+            context.state.update(reset_state)  # type: ignore[arg-type]
 
         logger.info(
             "New conversation started (previous_run_id=%s, new_run_id=%s, messages_cleared=%d)",
@@ -170,13 +163,17 @@ class NewConversationTool(BaseSystemTool):
             messages_cleared,
         )
 
-        return ToolResult.ok({
-            "reset": True,
-            "run_id": new_run_id,
-            "new_run_id": new_run_id,
-            "previous_run_id": previous_run_id,
-            "messages_cleared": messages_cleared,
-        })
+        # Return state_updates so the calling node can merge them properly
+        return ToolResult.ok(
+            {
+                "reset": True,
+                "run_id": new_run_id,
+                "new_run_id": new_run_id,
+                "previous_run_id": previous_run_id,
+                "messages_cleared": messages_cleared,
+            },
+            state_updates=reset_state
+        )
 
 
 class BuildStatusTool(BaseSystemTool):
@@ -229,20 +226,8 @@ class BuildStatusTool(BaseSystemTool):
 
                 return ToolResult.ok(result)
 
-        # Read from persisted state files via state_manager
-        persisted_state = None
-        if context.state_manager:
-            try:
-                persisted_state = await context.state_manager.get_build_state()
-            except Exception as e:
-                logger.warning("Failed to read persisted state: %s", e)
-
-        # Merge in-memory state with persisted state
-        effective_state: dict[str, Any] = {}
-        if persisted_state:
-            effective_state.update(persisted_state)
-        if context.state:
-            effective_state.update(context.state)
+        # Use in-memory state (context.state is the authoritative source)
+        effective_state: dict[str, Any] = dict(context.state) if context.state else {}
 
         if not effective_state:
             return ToolResult.ok({
@@ -435,8 +420,8 @@ class CompressConversationTool(BaseSystemTool):
 
     async def execute(self, context: ToolContext) -> ToolResult:
         from ...llm.conversation_compressor import ConversationCompressor
-        from ...state.models import ConversationMessage
         from ...llm.tokenizer import count_message_tokens
+        from ...state.models import ConversationMessage
 
         # ── Load config from env with sane defaults ──────────────────────
         keep_recent = env_int("PROGENITOR_COMPRESS_KEEP_RECENT", 10)
@@ -444,18 +429,11 @@ class CompressConversationTool(BaseSystemTool):
         threshold = env_int("PROGENITOR_COMPRESS_THRESHOLD", 30)
         persist = env_bool("PROGENITOR_COMPRESS_PERSIST", True)
 
-        # ── Gather messages ──────────────────────────────────────────────
+        # ── Gather messages (prefer in-memory state) ────────────────────
         messages: list[ConversationMessage] = []
 
-        # Prefer state_manager for the persisted source of truth
-        if context.state_manager:
-            try:
-                messages = await context.state_manager.get_messages()
-            except Exception as e:
-                logger.warning("compress_conversation: failed to read via state_manager: %s", e)
-
-        # Fall back to in-memory state
-        if not messages and context.state:
+        # Use in-memory state as the authoritative source
+        if context.state:
             raw = context.state.get("messages", [])
             for m in raw:
                 if isinstance(m, ConversationMessage):

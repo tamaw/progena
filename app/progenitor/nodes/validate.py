@@ -14,22 +14,22 @@ import logging
 import re
 import time
 from collections import Counter
-from typing import Any, Callable, Coroutine, Optional, TYPE_CHECKING, Mapping
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
-from ..state.models import ProgenitorState
-from ..state.execution_schemas import (
-    ExecutionResult,
-    ExecutionStatus,
-    ValidationResultV2,
-    ValidationFinding,
-    ValidationAction,
-)
 from ..runtime.time_utils import utcnow
+from ..state.execution_schemas import (
+    ExecutionStatus,
+    ValidationAction,
+    ValidationFinding,
+    ValidationResultV2,
+)
+from ..state.models import ProgenitorState
+from . import NodeFunction, NodeStateUpdate
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
     from ..llm.client import LLMClient
-    from ..state.manager import StateManager
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ _TRACEBACK_FILE_RE = re.compile(r'File "([^"]+\.py)", line (\d+)')
 _PYTHON_ERROR_RE = re.compile(r"([^\s:]+\.py):(\d+)")
 
 
-def _extract_file_location(text: str) -> tuple[Optional[str], Optional[int]]:
+def _extract_file_location(text: str) -> tuple[str | None, int | None]:
     """Extract file path and line number from Python error text."""
     for pattern in [_PYTEST_LOCATION_RE, _MYPY_LOCATION_RE, _PYRIGHT_LOCATION_RE, _TRACEBACK_FILE_RE, _PYTHON_ERROR_RE]:
         match = pattern.search(text)
@@ -69,7 +69,7 @@ def _extract_file_location(text: str) -> tuple[Optional[str], Optional[int]]:
     return None, None
 
 
-def _parse_python_traceback(text: str) -> Optional[list[str]]:
+def _parse_python_traceback(text: str) -> list[str] | None:
     """Parse a Python traceback into structured frames."""
     if "Traceback (most recent call last):" not in text:
         return None
@@ -433,7 +433,7 @@ async def _run_python_tool(
 
         return action, findings
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         action.duration_ms = elapsed_ms
         action.completed_at = utcnow()
@@ -557,38 +557,38 @@ async def _assess_severity_with_llm(
 # Historical comparison
 # =============================================================================
 
-async def _get_previous_validation(state_manager: "StateManager") -> Optional[dict[str, Any]]:
-    """Get the previous validation result from build_state.json history."""
+def _get_previous_validation(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Get the previous validation result from in-memory state history."""
     try:
-        build_state = await state_manager.get_build_state()
-        history = build_state.get("history", {})
-        verification_reports = history.get("verification_reports", [])
-        if verification_reports:
-            return verification_reports[-1]
+        history = state.get("history", {})
+        if isinstance(history, dict):
+            verification_reports = history.get("verification_reports", [])
+            if verification_reports:
+                return verification_reports[-1]
     except Exception as e:
         logger.debug(f"Could not load previous validation: {e}")
     return None
 
 
-async def _save_validation_to_history(
-    state_manager: "StateManager",
+def _build_history_update(
+    state: Mapping[str, Any],
     validation_result: dict[str, Any],
-) -> None:
-    """Persist validation result to build_state.json history."""
-    try:
-        build_state = await state_manager.get_build_state()
-        history = build_state.setdefault("history", {})
-        reports = history.setdefault("verification_reports", [])
+) -> dict[str, Any]:
+    """Build a history update dict with the new validation appended.
 
-        # Keep last 10 validation results
-        reports.append(validation_result)
-        if len(reports) > 10:
-            reports[:] = reports[-10:]
+    Returns the updated history dict to be merged into node output so
+    LangGraph propagates it in-memory (no file I/O needed).
+    """
+    history = dict(state.get("history") or {})
+    reports = list(history.get("verification_reports") or [])
 
-        await state_manager.save_build_state(build_state)
-        logger.debug("Saved validation result to build_state.json history")
-    except Exception as e:
-        logger.warning(f"Failed to save validation to history: {e}")
+    reports.append(validation_result)
+    # Keep last 10 validation results
+    if len(reports) > 10:
+        reports = reports[-10:]
+
+    history["verification_reports"] = reports
+    return history
 
 
 # =============================================================================
@@ -793,7 +793,7 @@ def create_node(
     config: "ProgenitorConfig",
     llm_client: Any = None,  # Accept protocol type
     state_manager: Any = None,  # Accept protocol type
-) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
+) -> NodeFunction:
     """Create the validate node function.
 
     Args:
@@ -802,7 +802,7 @@ def create_node(
         state_manager: State manager for historical comparison and persistence (accepts protocol).
     """
 
-    async def validate_node(state: ProgenitorState) -> ProgenitorState:
+    async def validate_node(state: ProgenitorState) -> NodeStateUpdate:
         """Comprehensive Python validation with LLM severity assessment."""
         logger.info("VALIDATE: Starting validate phase")
         current_item = state.get("current_work_item")
@@ -906,10 +906,10 @@ def create_node(
         # === Phase 8: Compute counts and statistics ===
         validation_result.compute_counts()
 
-        # Historical comparison
+        # Historical comparison (reads from in-memory state)
         previous_error_count = None
-        if config.validation.enable_historical_comparison and state_manager:
-            prev = await _get_previous_validation(state_manager)
+        if config.validation.enable_historical_comparison:
+            prev = _get_previous_validation(state)
             if prev:
                 previous_error_count = prev.get("error_count")
 
@@ -920,12 +920,8 @@ def create_node(
             smoke_test_passed=smoke_test_passed,
         )
 
-        # === Phase 9: Persist to history ===
-        if state_manager:
-            await _save_validation_to_history(
-                state_manager,
-                validation_result.model_dump(),
-            )
+        # Build history update for in-memory state propagation
+        updated_history = _build_history_update(state, validation_result.model_dump())
 
         # Log results
         trend_str = ""
@@ -942,12 +938,13 @@ def create_node(
 
         return {
             "validation_result_v2": validation_result.model_dump(),
+            "history": updated_history,
         }
 
     return validate_node
 
 
-def _get_project_directory(current_item: Any, state: Mapping[str, Any]) -> Optional[str]:
+def _get_project_directory(current_item: Any, state: Mapping[str, Any]) -> str | None:
     """Extract project directory from work item or build settings."""
     # Try build settings in state
     build_settings = state.get("build_settings")

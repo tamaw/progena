@@ -2,6 +2,7 @@
 
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, cast
 
 
 class TestTracedNodeDecorator(unittest.IsolatedAsyncioTestCase):
@@ -62,7 +63,7 @@ class TestTracedNodeDecorator(unittest.IsolatedAsyncioTestCase):
 
         node = create_node()
         input_state = {"current_input": "hello", "cycle_count": 5}
-        await node(input_state)
+        await node(cast(Any, input_state))
 
         assert received_state == input_state
 
@@ -79,7 +80,7 @@ class TestTracedNodeDecorator(unittest.IsolatedAsyncioTestCase):
         node = create_node()
 
         with self.assertRaises(ValueError) as ctx:
-            await node({})
+            await node(cast(Any, {}))
 
         assert "Test error" in str(ctx.exception)
 
@@ -94,7 +95,7 @@ class TestTracedNodeDecorator(unittest.IsolatedAsyncioTestCase):
             return node
 
         node = create_node(multiplier=3)
-        result = await node({"input": 5})
+        result = await node(cast(Any, {"input": 5}))
 
         assert result["value"] == 15
 
@@ -257,7 +258,7 @@ class TestTelemetryIntegration(unittest.IsolatedAsyncioTestCase):
             node = create_node()
 
             with self.assertRaises(RuntimeError):
-                await node({})
+                await node(cast(Any, {}))
 
             # Verify error metric was recorded
             calls = mock_metrics.increment.call_args_list
@@ -280,6 +281,7 @@ class TestDecoratorPreservation(unittest.IsolatedAsyncioTestCase):
                 return {}
             return node
 
+        assert create_node.__doc__ is not None
         assert "Create a documented node" in create_node.__doc__
 
     async def test_preserves_function_name(self):

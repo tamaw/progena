@@ -27,8 +27,19 @@ def create_node(timezone: str = "Australia/Melbourne", state_manager=None) -> Ca
         1. Get current time
         2. Find due scheduled items
         3. Create work items for due schedules and add to backlog
+
+        Optimization: Skip scheduling checks for user input cycles - background loop handles this.
         """
         current_time = utcnow()
+
+        # Skip scheduling checks for user input - background loop handles scheduled tasks
+        # User cycles should be fast and focused on responding to the user
+        if state.get("current_input"):
+            return {
+                "current_time": current_time,
+                "due_items": [],
+            }
+
         schedule = state.get("schedule", [])
 
         # Convert schedule entries to dicts if needed

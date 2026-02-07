@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import json
+from typing import Any, Callable, Optional
 
 import pytest
 from unittest.mock import AsyncMock
@@ -162,7 +163,7 @@ class SimpleMockLLM:
 
     def __init__(self, chat_return_value: str):
         self.chat = AsyncMock(return_value=chat_return_value)
-        self._get_json_response_format = None
+        self._get_json_response_format: Optional[Callable[[Any, Any], dict[str, Any]]] = None
 
 
 class FailingMockLLM:
@@ -170,7 +171,7 @@ class FailingMockLLM:
 
     def __init__(self, error: Exception):
         self.chat = AsyncMock(side_effect=error)
-        self._get_json_response_format = None
+        self._get_json_response_format: Optional[Callable[[Any, Any], dict[str, Any]]] = None
 
 
 def _make_mock_llm(return_value: dict) -> SimpleMockLLM:
