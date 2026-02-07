@@ -214,6 +214,24 @@ def to_dict(item: Any) -> dict[str, Any]:
     return {}
 
 
+def get_ideal_state(state: dict[str, Any]) -> Any:
+    """Get ideal_state from phases.observe in state."""
+    phases = state.get("phases") or {}
+    observe_phase = phases.get("observe") or {}
+    return observe_phase.get("ideal_state")
+
+
+def set_ideal_state(phases: dict[str, Any] | None, ideal_state: Any) -> dict[str, Any]:
+    """Return phases with observe.ideal_state set, preserving other phases."""
+    if hasattr(ideal_state, "model_dump"):
+        ideal_state = ideal_state.model_dump()
+    updated_phases = dict(phases or {})
+    observe_phase = dict(updated_phases.get("observe") or {})
+    observe_phase["ideal_state"] = ideal_state
+    updated_phases["observe"] = observe_phase
+    return updated_phases
+
+
 def is_actionable(item: Any) -> bool:
     """Check if a work item is actionable (pending or in_progress).
 

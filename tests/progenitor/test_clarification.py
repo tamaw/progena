@@ -286,7 +286,7 @@ class TestClarificationIntegration:
 
         # State with build output that needs clarification
         state = cast(ProgenitorState, {
-            "ideal_state": IdealState(task_description="Build an agent").model_dump(),
+            "phases": {"observe": {"ideal_state": IdealState(task_description="Build an agent").model_dump()}},
             "iteration": {"current": 1},
             "iteration_start_time": 0,
             "last_iteration_output": {
@@ -347,7 +347,7 @@ NEW_ANTI_CRITERIA:
 
         state = cast(ProgenitorState, {
             "iteration": {"current": 1},
-            "ideal_state": initial_ideal_state,
+            "phases": {"observe": {"ideal_state": initial_ideal_state}},
             "awaiting_clarification": True,
             "clarification_response": "Use OAuth2 for authentication",
             "clarification_context": "Auth method unclear",
@@ -362,7 +362,8 @@ NEW_ANTI_CRITERIA:
         assert result.get("clarification_response") is None
 
         # Should update ideal state
-        assert result.get("ideal_state") is not None
+        from app.progenitor.state.helpers import get_ideal_state
+        assert get_ideal_state(result) is not None
 
     def test_graph_routes_clarification_response(self):
         """Test that graph correctly routes clarification responses.
@@ -380,7 +381,7 @@ NEW_ANTI_CRITERIA:
         state = cast(ProgenitorState, {
             "awaiting_clarification": True,
             "clarification_response": "Use REST API",
-            "ideal_state": IdealState(task_description="test").model_dump(),
+            "phases": {"observe": {"ideal_state": IdealState(task_description="test").model_dump()}},
             "current_decision": Decision(
                 action=DecisionAction.ANSWER_DIRECTLY,  # Builds return this
                 reasoning="Started async build based on clarification",

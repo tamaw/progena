@@ -204,7 +204,7 @@ class ProgenitorLoop:
 
         # Merge build-specific fields from build_state (nested structure)
         for key in ["build_in_progress", "build_phase", "build_started_at",
-                    "ideal_state", "task", "iteration", "spec", "phases",
+                "task", "iteration", "spec", "phases",
                     "history", "best", "clarification"]:
             if key in build_state:
                 self._state[key] = build_state[key]
@@ -828,11 +828,9 @@ class ProgenitorLoop:
             # Full checkpoint when actively building
             build_checkpoint = {
                 "build_in_progress": state.get("build_in_progress", False),
-                "build_id": state.get("build_id"),
                 "build_started_at": state.get("build_started_at"),
                 "build_phase": state.get("build_phase"),
                 "task_id": state.get("task_id"),
-                "ideal_state": None,
                 "should_iterate": state.get("should_iterate", True),
                 "iteration_stop_reason": state.get("iteration_stop_reason"),
                 "backlog": self._serialize_backlog(state.get("backlog", [])),
@@ -855,12 +853,12 @@ class ProgenitorLoop:
                     build_checkpoint["build_settings"] = build_settings
 
             # Only include ideal_state if it exists and is serializable
-            ideal_state = state.get("ideal_state")
+            from ..state.helpers import get_ideal_state, set_ideal_state
+
+            ideal_state = get_ideal_state(state)
             if ideal_state:
-                if hasattr(ideal_state, "model_dump"):
-                    build_checkpoint["ideal_state"] = ideal_state.model_dump()
-                elif isinstance(ideal_state, dict):
-                    build_checkpoint["ideal_state"] = ideal_state
+                phases = set_ideal_state(build_checkpoint.get("phases"), ideal_state)
+                build_checkpoint["phases"] = phases
 
             await self.state_manager.save_build_state(build_checkpoint)
 
@@ -879,7 +877,7 @@ class ProgenitorLoop:
             "current_input": state.get("current_input"),
             "pending_response": state.get("pending_response"),
             "current_decision": self._serialize_decision(state.get("current_decision")),
-            "current_build_request": state.get("build_id") if state.get("build_in_progress") else None,
+            "current_build_request": (state.get("build_settings") or {}).get("build_id") if state.get("build_in_progress") else None,
         }
 
         await self.state_manager.save_current_state(current_checkpoint)
@@ -1102,7 +1100,7 @@ class ProgenitorLoop:
                 description=f"Build Error: {error_message}",
                 context={
                     "error_type": "build_error",
-                    "build_id": build_id or self._state.get("build_id"),
+                    "build_id": build_id or (self._state.get("build_settings") or {}).get("build_id"),
                     "notify_user": True,
                 },
                 result={"error": error_message, "notify": True},
@@ -1118,7 +1116,7 @@ class ProgenitorLoop:
                 "build_error",
                 f"❌ Build error: {error_message}",
                 {
-                    "build_id": build_id or self._state.get("build_id"),
+                    "build_id": build_id or (self._state.get("build_settings") or {}).get("build_id"),
                     "error": error_message,
                 }
             )
@@ -1198,7 +1196,7 @@ class ProgenitorLoop:
             "build_suspended",
             f"⏸️ Build suspended: {reason}",
             {
-                "build_id": self._state.get("build_id"),
+                "build_id": (self._state.get("build_settings") or {}).get("build_id"),
                 "reason": reason,
             }
         )

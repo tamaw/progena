@@ -17,6 +17,7 @@ from .tools import (
     ListScheduleTool,
     SelfReflectTool,
     ScheduleTaskTool,
+    CompressConversationTool,
 )
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ def _init_registry() -> dict[str, SystemTool]:
         ListScheduleTool(),
         SelfReflectTool(),
         ScheduleTaskTool(),
+        CompressConversationTool(),
     ]
     return {tool.name: tool for tool in tools}
 

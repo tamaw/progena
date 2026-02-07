@@ -47,11 +47,9 @@ class TestBuildStateIsolation:
         # Required core fields (top-level)
         core_fields = {
             "build_in_progress",
-            "build_id",
             "build_started_at",
             "build_phase",
             "task_id",
-            "ideal_state",
             "should_iterate",
             "iteration_stop_reason",
             "backlog",
@@ -336,17 +334,17 @@ class TestStateUpdateMethods:
         """Test save_build_state replaces entire state."""
         new_state = {
             "build_in_progress": True,
-            "build_id": "build-123",
             "build_phase": "observe",
             "build_messages": [{"role": "system", "content": "Building..."}],
             "iteration": {"current": 1},
+            "build_settings": {"build_id": "build-123"},
         }
 
         await state_manager.save_build_state(new_state)
 
         retrieved = await state_manager.get_build_state()
         assert retrieved["build_in_progress"] is True
-        assert retrieved["build_id"] == "build-123"
+        assert retrieved["build_settings"]["build_id"] == "build-123"
 
 
 class TestStateSeparationIntegrity:
@@ -357,7 +355,7 @@ class TestStateSeparationIntegrity:
         # Modify build state
         await state_manager.save_build_state({
             "build_in_progress": True,
-            "build_id": "test-build",
+            "build_settings": {"build_id": "test-build"},
         })
 
         # Modify current state
@@ -410,7 +408,7 @@ class TestBuildMessagesTracking:
         """Build messages should be in build_state, not current_state."""
         build_state = {
             "build_in_progress": True,
-            "build_id": "test-build",
+            "build_settings": {"build_id": "test-build"},
             "build_messages": [
                 {"role": "system", "content": "You are building an agent."},
                 {"role": "user", "content": "Build me a calculator."},

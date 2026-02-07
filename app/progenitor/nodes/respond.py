@@ -11,7 +11,7 @@ from typing import Callable, Coroutine, Any, cast
 import uuid
 
 from ..state.models import ProgenitorState, ConversationMessage, WorkItem
-from ..state.helpers import trim_conversation_history
+from ..state.helpers import trim_conversation_history, get_ideal_state
 from ..runtime.time_utils import utcnow
 
 
@@ -155,7 +155,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         # Clear build state if we were building (inner loop completed)
         build_clear_updates: dict[str, Any] = {}
-        if state.get("build_in_progress") and state.get("ideal_state"):
+        if state.get("build_in_progress") and get_ideal_state(state):
             # Build has completed - clear build state
             build_clear_updates = {
                 "build_in_progress": False,
@@ -186,7 +186,6 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
     - Final output must include compact verification summary
     """
     verification_report = state.get("verification", {}).get("current_report")
-    ideal_state = state.get("ideal_state")
     stop_reason = state.get("iteration_stop_reason")
 
     if not verification_report:

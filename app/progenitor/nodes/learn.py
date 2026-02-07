@@ -17,6 +17,7 @@ from typing import Any
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import LearningResult
 from ..state.models import ProgenitorState
+from ..state.helpers import get_ideal_state
 from ..runtime.time_utils import utcnow_isoformat
 from . import NodeFunction, NodeStateUpdate
 
@@ -53,10 +54,10 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
 
     # Iteration info
     context["iteration"] = state.get("iteration", {}).get("current", 0)
-    context["user_request"] = state.get("user_request", "")
+    context["user_request"] = (state.get("build_settings") or {}).get("user_request", "")
 
     # Ideal state - the target we're trying to reach
-    ideal_state = state.get("ideal_state")
+    ideal_state = get_ideal_state(state)
     if ideal_state:
         if isinstance(ideal_state, dict):
             context["ideal_state"] = ideal_state

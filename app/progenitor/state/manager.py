@@ -160,7 +160,6 @@ class StateManager:
             "build_state": {
                 # Build control (top-level for quick access)
                 "build_in_progress": False,
-                "build_id": None,
                 "build_started_at": None,
                 "build_phase": None,
                 "task_id": None,
@@ -168,7 +167,6 @@ class StateManager:
                 # Nested objects for organization
                 "task": {
                     "description": None,
-                    "user_request": None,
                     "target_capabilities": [],
                 },
                 "iteration": {
@@ -183,6 +181,9 @@ class StateManager:
                     "updated_at": None,
                 },
                 "phases": {
+                    "observe": {
+                        "ideal_state": None,
+                    },
                     "think": {
                         "approaches": [],
                         "recommended_id": None,
@@ -222,7 +223,6 @@ class StateManager:
                 },
 
                 # Complex objects at top level
-                "ideal_state": None,
                 "should_iterate": True,
                 "iteration_stop_reason": None,
 
@@ -565,7 +565,6 @@ class StateManager:
     def _ensure_nested_structure(self, state: dict[str, Any]) -> dict[str, Any]:
         """Ensure all nested objects exist in build state."""
         if "task" not in state:
-            # NOTE: user_request is at top-level, not in task (to avoid duplication)
             state["task"] = {"description": None, "target_capabilities": []}
         if "iteration" not in state:
             state["iteration"] = {"current": 0, "max": 20, "start_time": None}

@@ -14,6 +14,7 @@ from typing import Any
 
 from ..state.models import ProgenitorState
 from ..state.ideal_state import IdealStateBuilder, IdealState
+from ..state.helpers import get_ideal_state, set_ideal_state
 from ..constants import DEFAULT_VERIFICATION_TARGET_SCORE, DEFAULT_MAX_INNER_ITERATIONS
 from ..state.clarification import create_clarification_history_entry
 from ..runtime.time_utils import utcnow_isoformat
@@ -57,7 +58,7 @@ def create_node(
         span = None
 
         iteration = state.get("iteration", {}).get("current", 0)
-        ideal_state = state.get("ideal_state")
+        ideal_state = get_ideal_state(state)
 
         # Convert ideal_state from dict to IdealState object if necessary
         # (LangGraph may serialize/deserialize state as dicts)
@@ -93,13 +94,10 @@ def create_node(
                 "build_phase": "observe",
                 "task_id": task_id,
                 "should_iterate": True,
-                # Single source of truth for user request (not duplicated in task)
-                "user_request": task_description,
 
-                # Nested task info (summary only - use user_request for full text)
+                # Nested task info (description + capabilities)
                 "task": {
                     "description": task_description[:200],
-                    # NOTE: user_request moved to top-level to avoid duplication
                     "target_capabilities": [],
                     "created_at": now_iso,
                 },
@@ -329,10 +327,18 @@ def create_node(
 
             # Merge state updates with ideal_state and clarification updates
             # Always update build_phase to show current phase
+            ideal_state_dict = (
+                ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
+            )
+            phases = set_ideal_state(state.get("phases"), ideal_state_dict)
+            observe_phase = dict(phases.get("observe") or {})
+            observe_phase["completed_at"] = utcnow_isoformat()
+            phases["observe"] = observe_phase
+
             return {
                 **state_updates,
                 **clarification_updates,
-                "ideal_state": ideal_state,
+                "phases": phases,
                 "build_phase": "observe",
                 "learning_summary": None,  # Clear after consumption
             }

@@ -20,7 +20,7 @@ from .constants import (
     DEFAULT_VERIFICATION_TARGET_SCORE,
     RouteTarget,
 )
-from .state.helpers import get_actionable_items
+from .state.helpers import get_actionable_items, get_ideal_state
 from .state.models import ProgenitorState, BuildPhase, IterationStopReason
 from .state.ideal_state import IdealState
 
@@ -66,7 +66,7 @@ def should_iterate(
     iter_info = state.get("iteration", {})
     iteration = iter_info.get("current", 0)
     verification = state.get("verification", {})
-    ideal_state = ensure_ideal_state(state.get("ideal_state"))
+    ideal_state = ensure_ideal_state(get_ideal_state(state))
 
     # First iteration - always continue
     if iteration == 0:
