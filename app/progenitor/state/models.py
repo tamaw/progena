@@ -400,6 +400,12 @@ class ThinkPhase(TypedDict, total=False):
     completed_at: Optional[str]  # ISO timestamp when thinking completed
 
 
+class ObservePhase(TypedDict, total=False):
+    """OBSERVE phase results."""
+    ideal_state: Optional[dict[str, Any]]  # IdealState as dict for JSON serialization
+    completed_at: Optional[str]  # ISO timestamp when observe completed
+
+
 class PlanPhase(TypedDict, total=False):
     """PLAN phase results."""
     experiment_plan: Optional[dict[str, Any]]  # ExperimentPlan
@@ -427,6 +433,8 @@ class BuildPhases(TypedDict, total=False):
 
     Each phase includes optional completion timestamps for traceability.
     """
+    observe: ObservePhase
+    observe_completed_at: Optional[str]  # ISO timestamp
     think: ThinkPhase
     think_completed_at: Optional[str]  # ISO timestamp
     plan: PlanPhase
@@ -493,8 +501,7 @@ class InnerLoopState(TypedDict, total=False):
 
     Structure:
     - build_*: Top-level build control (uses BuildPhase enum)
-    - user_request: Original user request (single source of truth)
-    - task: What we're building (summary only)
+    - task: What we're building (description, user_request, target_capabilities)
     - iteration: Iteration tracking (single source of truth for iteration number)
     - spec: Spec document reference (content read from file)
     - phases: Phase-grouped outputs with timestamps
@@ -502,26 +509,26 @@ class InnerLoopState(TypedDict, total=False):
     - history: Accumulated data across iterations
     - best: Best result tracking with timestamps
     - clarification: User interaction state with history
+
+    Canonical locations for build metadata:
+    - build_id: build_settings["build_id"] (BuildSettings is single source of truth)
+    - user_request: build_settings["user_request"] (BuildSettings is single source of truth)
+    - target_capabilities: task["target_capabilities"] (TaskInfo is single source of truth)
     """
     # Build control (top-level for quick access)
     build_in_progress: bool  # True while building, blocks new builds
-    build_id: Optional[str]  # Unique identifier for the current build
     build_started_at: Optional[str]  # ISO timestamp when build started
     build_phase: Optional[str]  # Current phase (use BuildPhase enum values)
     task_id: Optional[str]  # Unique task identifier
-    user_request: Optional[str]  # Original user request (single source of truth)
 
     # Nested objects for organization
-    task: TaskInfo  # What we're building (summary description)
+    task: TaskInfo  # What we're building (description + target_capabilities)
     iteration: IterationInfo  # Iteration tracking (iteration.current is the source of truth)
     spec: SpecInfo  # Spec document reference
     phases: BuildPhases  # Phase-grouped outputs with timestamps
     history: BuildHistory  # Historical data
     best: BestResult  # Best result tracking with timestamps
     clarification: ClarificationState  # User interaction with history
-
-    # Ideal state (from IdealState model or dict representation)
-    ideal_state: Optional[dict[str, Any]]  # IdealState as dict for JSON serialization
 
     # Consolidated verification state (single source of truth)
     verification: VerificationState  # All verification data in one place
@@ -559,7 +566,7 @@ class ProgenitorState(
     - WorkState: backlog, work items, decisions
     - SchedulingState: schedule, agents, registry
     - LoopControlState: cycle control, metadata
-    - InnerLoopState: ideal state, verification, learning
+    - InnerLoopState: observe/think/plan/build phases, verification, learning
     - ExecutionState: tool execution, completion
 
     All fields are optional (total=False) to allow partial updates.

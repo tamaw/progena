@@ -40,8 +40,8 @@ class TestBuildTypeDetection:
             llm_action="build_tool",
         )
 
-        assert settings.build_type == "tool"
-        assert settings.project_directory.startswith("app/tools/")
+        assert settings.build_type == "mcp"
+        assert settings.project_directory.startswith("app/mcp/")
 
     @pytest.mark.asyncio
     async def test_detects_agent_type_by_default(self, mock_llm_client):
@@ -64,7 +64,7 @@ class TestBuildTypeDetection:
             llm_action="build_tool",
         )
 
-        assert settings.build_type == "tool"
+        assert settings.build_type == "mcp"
 
 
 class TestProjectNameExtraction:

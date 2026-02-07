@@ -233,7 +233,7 @@ def _parse_criterion_type(value: str) -> CriterionType:
     """Safely parse a criterion type string to enum."""
     try:
         return CriterionType(value)
-    except ValueError:
+    except (ValueError, KeyError, TypeError):
         return CriterionType.FUNCTIONAL
 
 

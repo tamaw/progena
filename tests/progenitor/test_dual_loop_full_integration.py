@@ -234,7 +234,7 @@ class TestShouldIterateLogic:
         """First iteration should always continue."""
         state: ProgenitorState = {
             "iteration": {"current": 0},
-            "ideal_state": None,
+            "phases": {"observe": {"ideal_state": None}},
         }
 
         result = should_iterate(state, max_iterations=5)
@@ -266,7 +266,7 @@ class TestShouldIterateLogic:
         state: ProgenitorState = {
             "iteration": {"current": 2},
             "verification": {"current_passed": False},
-            "ideal_state": None,
+            "phases": {"observe": {"ideal_state": None}},
         }
 
         result = should_iterate(state, max_iterations=5)
@@ -355,8 +355,10 @@ class TestDualLoopIntegration:
         result = await graph.ainvoke(initial_state, config_dict)
 
         # Should have processed the complex task
+        from app.progenitor.state.helpers import get_ideal_state
+
         decision = result.get("current_decision")
-        assert decision is not None or result.get("ideal_state") is not None
+        assert decision is not None or get_ideal_state(result) is not None
 
     @pytest.mark.asyncio
     @pytest.mark.skip(reason="Complex async graph test - requires full mock setup")

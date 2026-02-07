@@ -90,7 +90,7 @@ class TestIterationBounds:
         state: ProgenitorState = {
             "iteration": {"current": current_iteration},
             "verification_passed": False,
-            "ideal_state": None,
+            "phases": {"observe": {"ideal_state": None}},
         }
 
         result = should_iterate(state, max_iterations=max_iterations)

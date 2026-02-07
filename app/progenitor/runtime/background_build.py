@@ -341,22 +341,19 @@ class BackgroundBuildRunner:
 
             build_state: dict[str, Any] = {
                 # Build identification
-                "build_id": build_id,
                 "build_in_progress": True,
                 "build_started_at": utcnow_isoformat(),
 
                 # User input for context
                 "current_input": current_build.user_input,
-                "user_request": current_build.user_input,
-                "target_capabilities": current_build.target_capabilities,
 
                 # Build settings (from decide phase) with status set to in_progress
+                # Canonical source for build_id and user_request
                 "build_settings": build_settings,
 
                 # Nested structure
                 "task": {
                     "description": current_build.task_description,
-                    "user_request": current_build.user_input,
                     "target_capabilities": current_build.target_capabilities,
                 },
                 "iteration": {
@@ -373,14 +370,13 @@ class BackgroundBuildRunner:
                 },
 
                 "spec": initial_state.get("spec", {}),
-                "phases": {"think": {}, "plan": {}, "execute": {}, "verify": {"target_score": 0.8}},
+                "phases": {"observe": {"ideal_state": None}, "think": {}, "plan": {}, "execute": {}, "verify": {"target_score": 0.8}},
                 "history": {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []},
                 "best": {"iteration": None, "score": 0.0, "passed": False},
                 "clarification": {"needed": False, "question": None, "context": None, "awaiting": False, "response": None},
 
                 # Phase tracking
                 "build_phase": "starting",
-                "ideal_state": None,  # Set by OBSERVE
             }
 
             # Save initial build state

@@ -13,7 +13,7 @@ from openai import APIConnectionError, RateLimitError
 from pydantic import BaseModel, Field
 
 from ..state.models import ProgenitorState, Decision, DecisionAction, WorkItem
-from ..state.helpers import is_work_item_actionable
+from ..state.helpers import is_work_item_actionable, get_ideal_state
 from ..runtime.time_utils import utcnow_isoformat
 from .errors import RecoverableError, LLMError, ValidationError
 from ..tools.mcp import A2AClient
@@ -944,11 +944,11 @@ async def _execute_system_tool_inline(
         build_phase = effective_state.get("build_phase")
         build_task = effective_state.get("build_task_description")
         build_started = effective_state.get("build_started_at")
-        build_id = effective_state.get("build_id")
+        build_id = (effective_state.get("build_settings") or {}).get("build_id")
         current_iteration = effective_state.get("iteration", {}).get("current", 0)
         verification_score = effective_state.get("verification_score", 0)
         build_messages = effective_state.get("build_messages", [])
-        ideal_state = effective_state.get("ideal_state")
+        ideal_state = get_ideal_state(effective_state)
 
         # Check for last build result (completed async builds store this)
         last_result = effective_state.get("last_build_result")
@@ -968,10 +968,17 @@ async def _execute_system_tool_inline(
             "recent_messages": recent_messages,
         }
 
-        if ideal_state and isinstance(ideal_state, dict):
-            result["target_score"] = ideal_state.get("stop_conditions", [{}])[0].get("threshold", 0.8)
+        ideal_state_dict = None
+        if ideal_state:
+            if isinstance(ideal_state, dict):
+                ideal_state_dict = ideal_state
+            elif hasattr(ideal_state, "model_dump"):
+                ideal_state_dict = ideal_state.model_dump()
+
+        if ideal_state_dict:
+            result["target_score"] = ideal_state_dict.get("stop_conditions", [{}])[0].get("threshold", 0.8)
             result["success_criteria"] = [
-                c.get("description") for c in ideal_state.get("success_criteria", [])
+                c.get("description") for c in ideal_state_dict.get("success_criteria", [])
             ]
 
         return result, None
@@ -1809,14 +1816,12 @@ def create_node(
                         return {
                             "current_decision": decision,
                             "build_in_progress": True,
-                            "build_id": build_id,
-                            "user_request": task_description,  # Top-level, not in task
                             "task": {
                                 "description": task_description,
-                                "target_capabilities": [],
+                                "target_capabilities": target_capabilities,
                             },
                             "build_started_at": utcnow_isoformat(),
-                            "build_settings": build_settings.model_dump(),  # BL-007: Serialize to dict
+                            "build_settings": build_settings.model_dump(),  # BL-007: Serialize to dict (canonical source for build_id and user_request)
                         }
 
                     except RuntimeError as e:

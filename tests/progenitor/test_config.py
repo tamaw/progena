@@ -271,6 +271,8 @@ class TestProgenitorConfig:
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("PROGENITOR_TIMEZONE", None)
                 os.environ.pop("PROGENITOR_IDLE_BACKOFF_SECONDS", None)
+                os.environ.pop("PROGENITOR_COPILOT_MODEL", None)
+                os.environ.pop("PROGENITOR_COPILOT_TIMEOUT_SECONDS", None)
 
                 config = ProgenitorConfig.load(project_root, config_dir)
 

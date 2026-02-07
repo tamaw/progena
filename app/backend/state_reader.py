@@ -324,7 +324,10 @@ class StateReader:
             return []
 
         current = self.get_progenitor_state()
+        build = self.get_build_state()
         actions = current.get("actions_this_cycle", 0)
+        build_actions = build.get("actions_this_cycle", 0) if isinstance(build, dict) else 0
+        actions = max(actions, build_actions)
 
         # Determine loop states based on activity
         planner_status = "active" if actions == 0 else "idle"

@@ -107,7 +107,7 @@ class TestHandleBuildError:
 
         loop._state = {
             "build_in_progress": True,
-            "build_id": "build_123",
+            "build_settings": {"build_id": "build_123"},
             "backlog": [],
         }
 
@@ -138,7 +138,7 @@ class TestHandleBuildError:
 
         loop._state = {
             "build_in_progress": True,
-            "build_id": "build_test",
+            "build_settings": {"build_id": "build_test"},
         }
 
         await loop.handle_build_error("Test error message")

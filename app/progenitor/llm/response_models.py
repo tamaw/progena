@@ -277,10 +277,10 @@ class BuildSpec(BaseModel):
 
         kind_mapping = {
             "build_agent": "agent",
-            "build_tool": "tool",
-            "mcp_server": "tool",
-            "tool": "tool",
-            "mcp": "tool",
+            "build_tool": "mcp",
+            "mcp_server": "mcp",
+            "tool": "mcp",
+            "mcp": "mcp",
             "upgrade": "upgrade",
         }
 

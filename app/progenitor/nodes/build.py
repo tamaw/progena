@@ -142,7 +142,7 @@ def create_node(
             logger.info(f"BUILD: Resolved relative path to absolute: {working_dir}")
         working_dir.mkdir(parents=True, exist_ok=True)
 
-        build_id = state.get("build_id") or "unknown"
+        build_id = (state.get("build_settings") or {}).get("build_id") or "unknown"
 
         try:
             build_result = await copilot_cli.build(

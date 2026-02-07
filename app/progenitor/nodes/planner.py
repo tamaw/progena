@@ -24,6 +24,7 @@ from ..state.models import (
     WorkItemStatus,
     DecisionAction,
 )
+from ..state.helpers import get_ideal_state
 from ..state.execution_schemas import (
     ExperimentPlan,
     PromptSpec,
@@ -65,7 +66,7 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
 
         decision = state.get("current_decision")
         user_input = state.get("current_input")
-        ideal_state = state.get("ideal_state")
+        ideal_state = get_ideal_state(state)
         # Read approaches from nested structure (phases.think.approaches)
         current_approaches = state.get("phases", {}).get("think", {}).get("approaches", [])
 

@@ -18,6 +18,7 @@ from ..state.models import ProgenitorState
 from ..state.verifier import Verifier
 from ..state.clarification import ClarificationDetector, create_clarification_history_entry
 from ..state.execution_schemas import ExecutionResult, ValidationResultV2, VerificationReportV2
+from ..state.helpers import get_ideal_state
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ def create_node(
         tracer, metrics = _get_telemetry()
         span = None
 
-        ideal_state = state.get("ideal_state")
+        ideal_state = get_ideal_state(state)
         iteration = state.get("iteration", {}).get("current", 0)
 
         if tracer:

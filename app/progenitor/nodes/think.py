@@ -27,6 +27,7 @@ from typing import Any
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import ThinkResponse
 from ..state.models import ProgenitorState
+from ..state.helpers import get_ideal_state
 from ..state.execution_schemas import (
     StructuredApproach,
     ThinkOutput,
@@ -676,7 +677,7 @@ def create_node(
         tracer, metrics = _get_telemetry()
         span = None
 
-        ideal_state = state.get("ideal_state")
+        ideal_state = get_ideal_state(state)
         iteration_state = state.get("iteration", {})
         iteration = (
             iteration_state.get("current", 0)

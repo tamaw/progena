@@ -77,7 +77,6 @@ class TestComposableSubstates(unittest.TestCase):
         annotations = InnerLoopState.__annotations__
 
         # Key inner loop fields - now nested
-        assert 'ideal_state' in annotations
         assert 'iteration' in annotations  # Nested object with current, max, start_time
         assert 'phases' in annotations  # Contains verify.score, verify.passed
         assert 'history' in annotations  # Contains lessons_learned, artefacts
