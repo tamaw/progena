@@ -1,7 +1,7 @@
 """
-System Tools Protocol and Base Types.
+Node Helpers Protocol and Base Types.
 
-Defines the interface for system tools that can be executed inline.
+Defines the interface for tools that can be executed inline by nodes.
 """
 
 from abc import ABC, abstractmethod
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class ToolContext:
-    """Context provided to system tools during execution."""
+    """Context provided to tools during execution."""
     tool_registry: Any
     llm_client: Any
     state: Optional["ProgenitorState"] = None
@@ -23,7 +23,7 @@ class ToolContext:
 
 @dataclass
 class ToolResult:
-    """Result from a system tool execution."""
+    """Result from a tool execution."""
     success: bool
     data: Optional[dict[str, Any]] = None
     error: Optional[str] = None
@@ -40,7 +40,7 @@ class ToolResult:
 
 
 class SystemTool(Protocol):
-    """Protocol for system tools that can be executed inline."""
+    """Protocol for tools that can be executed inline."""
 
     @property
     def name(self) -> str:
@@ -62,7 +62,7 @@ class SystemTool(Protocol):
 
 
 class BaseSystemTool(ABC):
-    """Base class for system tools with common functionality."""
+    """Base class for tools with common functionality."""
 
     @property
     @abstractmethod

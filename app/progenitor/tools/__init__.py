@@ -1,4 +1,4 @@
-"""Tools module - Copilot CLI, git/worktree helpers, MCP client, agent discovery, schedule, self-reflection, user communication."""
+"""Tools module - Copilot CLI, git/worktree helpers, MCP client, agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
 
 from .registry import ToolRegistry
 from .copilot import CopilotCLI
@@ -21,6 +21,28 @@ from .user_communication import (
     USER_COMMUNICATION_TOOLS,
 )
 
+
+def __getattr__(name: str):
+    """Lazy-load LLM-invoked tool classes to avoid circular imports with node_helpers."""
+    _tool_modules = {
+        "ListToolsTool": "list_tools",
+        "RediscoverAgentsTool": "rediscover_agents",
+        "ListAgentsTool": "list_agents",
+        "NewConversationTool": "new_conversation",
+        "BuildStatusTool": "build_status",
+        "CurrentTimeTool": "current_time",
+        "ListScheduleTool": "list_schedule",
+        "SelfReflectTool": "self_reflect_tool",
+        "ScheduleTaskTool": "schedule_task",
+        "CompressConversationTool": "compress_conversation",
+    }
+    if name in _tool_modules:
+        import importlib
+        mod = importlib.import_module(f".{_tool_modules[name]}", __package__)
+        return getattr(mod, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "ToolRegistry",
     "CopilotCLI",
@@ -37,4 +59,15 @@ __all__ = [
     "SELF_REFLECT_TOOL_SPEC",
     "UserCommunicationTools",
     "USER_COMMUNICATION_TOOLS",
+    # LLM-invoked system tools (lazy-loaded)
+    "ListToolsTool",
+    "RediscoverAgentsTool",
+    "ListAgentsTool",
+    "NewConversationTool",
+    "BuildStatusTool",
+    "CurrentTimeTool",
+    "ListScheduleTool",
+    "SelfReflectTool",
+    "ScheduleTaskTool",
+    "CompressConversationTool",
 ]

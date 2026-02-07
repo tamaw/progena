@@ -12,22 +12,24 @@ import json
 import logging
 import random
 import time
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
+
 from openai import APIConnectionError, APIError, RateLimitError
 
-# Import clients from observability module (Langfuse-wrapped if configured)
-from ..observability import get_openai_client, get_azure_openai_client, get_langfuse_config
+from ..config import LLMConfig
 
+# Import clients from observability module (Langfuse-wrapped if configured)
+from ..observability import get_azure_openai_client, get_langfuse_config, get_openai_client
 from .prompts import PromptTemplates
 from .response_models import (
-    validate_decision_response,
-    validate_planner_response,
-    validate_build_spec,
+    BuildSpec,
     DecisionResponse,
     PlannerResponse,
-    BuildSpec,
+    validate_build_spec,
+    validate_decision_response,
+    validate_planner_response,
 )
-from ..config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +134,7 @@ def _build_json_schema_format(model_class: type, name: str) -> dict[str, Any]:
 def _get_telemetry():
     """Get telemetry components if available."""
     try:
-        from ..telemetry import get_metrics, get_tracer, SpanKind
+        from ..telemetry import SpanKind, get_metrics, get_tracer
         return get_metrics(), get_tracer(), SpanKind
     except ImportError:
         return None, None, None
@@ -148,9 +150,9 @@ class LLMClient:
 
     def __init__(
         self,
-        config: Optional[LLMConfig] = None,
+        config: LLMConfig | None = None,
         max_retries: int = DEFAULT_RETRIES,
-        role: Optional[str] = None,
+        role: str | None = None,
     ):
         """Initialize the LLM client.
 
@@ -265,7 +267,7 @@ class LLMClient:
         Uses jitter to prevent thundering herd when multiple instances
         hit rate limits simultaneously.
         """
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         delay = self.RETRY_DELAY
 
         for attempt in range(self.max_retries):
@@ -306,10 +308,10 @@ class LLMClient:
     async def chat(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        response_format: Optional[dict[str, Any]] = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         """Make a chat completion request with retry."""
         full_messages = self._build_messages(messages, system_prompt)
@@ -377,7 +379,7 @@ class LLMClient:
     def _build_messages(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> list[dict[str, str]]:
         """Build full message list with optional system prompt."""
         full_messages = []
@@ -393,7 +395,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         temperature: float,
         max_tokens: int,
-        response_format: Optional[dict[str, Any]] = None,
+        response_format: dict[str, Any] | None = None,
         stream: bool = False,
     ) -> dict[str, Any]:
         """Build kwargs for chat completion API call."""
@@ -426,7 +428,7 @@ class LLMClient:
     async def chat_stream(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
@@ -504,14 +506,14 @@ class LLMClient:
         self,
         user_input: str,
         conversation_history: list[dict[str, str]],
-        available_capabilities: list[str],
+        tool_context: str,
     ) -> dict[str, Any]:
         """Make a routing decision for user input.
 
         Returns validated decision response with guaranteed schema.
         Uses structured outputs (json_schema) when supported, falls back to json_object.
         """
-        system_prompt = self.prompts.get_decide_prompt(available_capabilities)
+        system_prompt = self.prompts.get_decide_prompt(tool_context)
 
         messages = conversation_history[-10:]  # Last 10 messages for context
         messages.append({"role": "user", "content": user_input})
@@ -609,7 +611,7 @@ Generate a list of work items to fulfill this request.
         self,
         user_input: str,
         conversation_history: list[dict[str, str]],
-        action_results: Optional[list[dict[str, Any]]] = None,
+        action_results: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate a response to the user."""
         system_prompt = self.prompts.get_genesis_prompt()
@@ -635,7 +637,7 @@ Generate a list of work items to fulfill this request.
     async def generate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
@@ -731,7 +733,7 @@ Generate a detailed specification for building this component.
     async def complete(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:

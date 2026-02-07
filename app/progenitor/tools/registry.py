@@ -9,11 +9,11 @@ Tracks runtime status of HTTP-based A2A agents.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 
-from ..state.models import AgentRegistryEntry, AgentStatus
+from ..runtime.port_utils import find_available_port
 from ..runtime.time_utils import utcnow
-from ..runtime.port_utils import find_available_port, is_port_available
+from ..state.models import AgentRegistryEntry, AgentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +47,14 @@ class ToolRegistry:
         """Load registry from disk."""
         if self.registry_path.exists():
             try:
-                with open(self.registry_path, 'r') as f:
+                with open(self.registry_path) as f:
                     self._registry = json.load(f)
                 logger.info(
                     "Loaded registry with %d agents and %d tools",
                     len(self._registry.get('agents', [])),
                     len(self._registry.get('tools', []))
                 )
-            except (json.JSONDecodeError, IOError) as e:
+            except (OSError, json.JSONDecodeError) as e:
                 logger.error("Failed to load registry: %s. Starting fresh.", e)
                 self._registry = {"agents": [], "tools": []}
         else:
@@ -85,21 +85,69 @@ class ToolRegistry:
 
         return list(set(capabilities))
 
-    def find_agent_by_capability(self, capability: str) -> Optional[dict[str, Any]]:
+    def get_tool_context(self) -> str:
+        """Get formatted tool and agent descriptions for the LLM context window.
+
+        Returns a structured string describing all available system tools, A2A
+        agents, and MCP tools so the LLM can make informed routing decisions.
+        """
+        sections: list[str] = []
+
+        # System tools (always available)
+        from ..nodes.node_helpers.registry import get_all_system_tools
+
+        system_tools = [tool.to_dict() for tool in get_all_system_tools()]
+        lines = ["### System Tools"]
+        for tool in system_tools:
+            name = tool.get("name", "unknown")
+            desc = tool.get("description", "No description")
+            lines.append(f"- **{name}**: {desc}")
+        sections.append("\n".join(lines))
+
+        # A2A agents from registry
+        agents = self._registry.get("agents", [])
+        if agents:
+            lines = ["### A2A Agents"]
+            for agent in agents:
+                name = agent.get("name", "unknown")
+                desc = agent.get("description", "No description")
+                status = agent.get("status", "unknown")
+                caps = agent.get("capabilities", [])
+                lines.append(f"- **{name}** [{status}]: {desc}")
+                if caps:
+                    lines.append(f"  Capabilities: {', '.join(caps)}")
+            sections.append("\n".join(lines))
+
+        # MCP tools from registry
+        tools = self._registry.get("tools", [])
+        if tools:
+            lines = ["### MCP Tools"]
+            for tool in tools:
+                name = tool.get("name", "unknown")
+                desc = tool.get("description", "No description")
+                caps = tool.get("capabilities", [])
+                lines.append(f"- **{name}**: {desc}")
+                if caps:
+                    lines.append(f"  Capabilities: {', '.join(caps)}")
+            sections.append("\n".join(lines))
+
+        return "\n\n".join(sections)
+
+    def find_agent_by_capability(self, capability: str) -> dict[str, Any] | None:
         """Find an agent that provides a capability."""
         for agent in self._registry.get("agents", []):
             if capability in agent.get("capabilities", []):
                 return agent
         return None
 
-    def find_tool_by_capability(self, capability: str) -> Optional[dict[str, Any]]:
+    def find_tool_by_capability(self, capability: str) -> dict[str, Any] | None:
         """Find an MCP tool that provides a capability."""
         for tool in self._registry.get("tools", []):
             if capability in tool.get("capabilities", []):
                 return tool
         return None
 
-    def find_by_name(self, name: str) -> Optional[dict[str, Any]]:
+    def find_by_name(self, name: str) -> dict[str, Any] | None:
         """Find an agent or tool by name."""
         for agent in self._registry.get("agents", []):
             if agent.get("name") == name:
@@ -210,10 +258,10 @@ class ToolRegistry:
         name: str,
         status: AgentStatus,
         *,
-        status_message: Optional[str] = None,
-        pid: Optional[int] = None,
-        port: Optional[int] = None,
-        last_error: Optional[str] = None,
+        status_message: str | None = None,
+        pid: int | None = None,
+        port: int | None = None,
+        last_error: str | None = None,
         update_heartbeat: bool = False,
     ) -> bool:
         """Update runtime status of an agent.
@@ -339,7 +387,7 @@ class ToolRegistry:
             )
         ]
 
-    def get_agent_endpoint(self, name: str) -> Optional[str]:
+    def get_agent_endpoint(self, name: str) -> str | None:
         """Get the HTTP endpoint for an agent."""
         agent = self.find_by_name(name)
         if agent:

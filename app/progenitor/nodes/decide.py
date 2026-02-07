@@ -4,18 +4,16 @@ Decide Node - Routes user input to appropriate action path.
 
 import json
 import logging
-from datetime import datetime
-from typing import Callable, Coroutine, Any, Optional, cast, TYPE_CHECKING
-
 import re
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any, cast
 
 from openai import APIConnectionError, RateLimitError
 from pydantic import BaseModel, Field
 
-from ..state.models import ProgenitorState, Decision, DecisionAction, WorkItem
-from ..state.helpers import is_work_item_actionable, get_ideal_state
 from ..runtime.time_utils import utcnow_isoformat
-from .errors import RecoverableError, LLMError, ValidationError
+from ..state.helpers import get_ideal_state, is_work_item_actionable
+from ..state.models import Decision, DecisionAction, ProgenitorState
 from ..tools.mcp import A2AClient
 
 if TYPE_CHECKING:
@@ -290,6 +288,29 @@ def _looks_like_list_tools_request(user_input: str) -> bool:
     ]
 
     return has_list_intent or any(pattern in text for pattern in direct_patterns)
+
+
+def _looks_like_new_conversation_request(user_input: str) -> bool:
+    """Heuristic: detect requests to start a new conversation/run."""
+    text = (user_input or "").lower()
+    if not text.strip():
+        return False
+
+    direct_patterns = [
+        "new conversation",
+        "start a new conversation",
+        "start new conversation",
+        "reset conversation",
+        "clear conversation",
+        "clear chat",
+        "reset chat",
+        "fresh run",
+        "new run id",
+        "new run",
+        "start over",
+    ]
+
+    return any(pattern in text for pattern in direct_patterns)
 
 
 def _looks_like_build_status_request(user_input: str) -> bool:
@@ -594,8 +615,9 @@ async def _generate_build_settings(
     Returns:
         BuildSettings with all derived fields populated
     """
-    from ..state.execution_schemas import BuildSettings, BuildType
     import uuid
+
+    from ..state.execution_schemas import BuildSettings, BuildType
 
     build_id = f"build_{uuid.uuid4().hex[:12]}"
 
@@ -627,7 +649,6 @@ async def _generate_build_settings(
     # Fallback: Use LLM structured output if decision didn't provide project_name
     if not project_name and llm_client:
         try:
-            from ..llm.client import _build_json_schema_format
 
             system_prompt = """You are an expert at extracting project names from user requests.
 
@@ -838,8 +859,9 @@ async def _execute_system_tool_inline(
         }, None
 
     elif tool_name == "rediscover_agents":
-        from ..tools.agent_discovery import discover_agents
         from pathlib import Path
+
+        from ..tools.agent_discovery import discover_agents
 
         # Get agents directory
         project_root = Path(__file__).parent.parent.parent.parent
@@ -1182,30 +1204,6 @@ Examples:
         return None, f"Error scheduling task: {e}", None
 
 
-async def _format_schedule_result(result: dict, llm_client) -> str:
-    """Format a schedule task result as a short, plain-English response."""
-    instruction = result.get("instruction", "complete your scheduled request")
-    prompt = (
-        "Create a short, friendly confirmation for a scheduled task. "
-        "Do not include IDs or exact timestamps. Do not use markdown. "
-        "Focus on what will happen.\n\n"
-        f"Task details: {json.dumps(result, ensure_ascii=False)}"
-    )
-
-    try:
-        response = await llm_client.complete(
-            prompt=prompt,
-            system_prompt="You write concise confirmations for scheduled tasks.",
-            temperature=0.2,
-        )
-        if response:
-            return response.strip()
-    except Exception:
-        pass
-
-    return f"Got it. I'll {instruction}."
-
-
 def _format_a2a_response(result: dict, agent_name: str) -> str:
     """Format an A2A agent response for display.
 
@@ -1413,6 +1411,111 @@ def _format_tool_result(tool_name: str, result: dict) -> str:
     return f"**Result:**\n```json\n{json.dumps(result, indent=2)}\n```"
 
 
+async def _respond_with_context(
+    user_input: str,
+    context_label: str,
+    context_data: str,
+    state: "ProgenitorState",
+    llm_client,
+) -> tuple[str, bool]:
+    """Generate LLM response incorporating tool/agent call results.
+
+    Fast path: execute tool by word match, feed result + user message to LLM,
+    LLM generates a natural response to the user.
+
+    Slow path (A2A/MCP): after the decide LLM call routes to a tool/agent,
+    execute it, then call the LLM again with context to respond to the user.
+
+    Returns:
+        Tuple of (response_text, was_streamed).
+    """
+    from ..runtime.loop import get_current_loop
+    loop = get_current_loop()
+
+    history = _extract_history(state.get("messages", []), limit=10)
+
+    system_prompt = (
+        "You are Progenitor, an AI assistant. A tool was invoked to help answer "
+        "the user's request. Use the tool result below to provide a helpful, "
+        "natural response to the user. Do not mention internal tool names.\n\n"
+        f"--- Tool '{context_label}' result ---\n{context_data}\n--- End tool result ---"
+    )
+
+    messages = history + [{"role": "user", "content": user_input}]
+
+    can_stream = loop is not None and getattr(loop, '_streaming_enabled', False)
+
+    if can_stream:
+        assert loop is not None  # Type narrowing for pyright
+        streamed = ""
+        async for token in llm_client.chat_stream(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=0.7,
+        ):
+            streamed += token
+            await loop.stream_token(token)
+        loop._streamed_response_content = streamed
+        loop._response_was_streamed = True
+        return streamed, True
+    else:
+        response = await llm_client.chat(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=0.7,
+        )
+        return response, False
+
+
+async def _execute_and_respond(
+    tool_name: str,
+    user_input: str,
+    state: "ProgenitorState",
+    llm_client,
+    tool_registry,
+    state_manager,
+) -> "ProgenitorState":
+    """Execute a system tool and generate an LLM-enriched response.
+
+    This is the fast path: word match detects a tool, execute it inline,
+    feed the result back to the LLM for a natural response to the user.
+    """
+    result, error = await _execute_system_tool_inline(
+        tool_name, tool_registry, llm_client, state, state_manager
+    )
+
+    if error or result is None:
+        context_data = f"Error: {error or 'No result'}"
+    else:
+        context_data = _format_tool_result(tool_name, result)
+
+    try:
+        response_text, was_streamed = await _respond_with_context(
+            user_input, tool_name, context_data, state, llm_client
+        )
+    except Exception as e:
+        logger.warning("LLM enrichment failed for %s, using raw result: %s", tool_name, e)
+        response_text = context_data
+        was_streamed = False
+
+    decision = Decision(
+        action=DecisionAction.ANSWER_DIRECTLY,
+        reasoning=f"Fast-path: {tool_name} with LLM-enriched response",
+        requires_planning=False,
+        direct_response=None if was_streamed else response_text,
+    )
+
+    if state_manager:
+        await state_manager.log_decision({
+            "event": "system_tool_executed_fast_path",
+            "tool_name": tool_name,
+            "llm_enriched": True,
+            "timestamp": utcnow_isoformat(),
+        })
+
+    return cast(ProgenitorState, {"current_decision": decision})
+
+
 # Default confidence threshold (used when config not provided)
 DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
 
@@ -1457,142 +1560,35 @@ def create_node(
             return {"current_decision": None}
 
         # ============================================================
-        # FAST-PATH: Handle system tools without LLM call
-        # These heuristics are very specific and avoid false positives
+        # FAST-PATH: Handle system tools without routing LLM call
+        # Word-match heuristics detect tool -> execute -> LLM responds
         # ============================================================
 
-        # Check for list tools request (fast-path - no LLM needed)
+        # Check for list tools request
         if _looks_like_list_tools_request(user_input):
-            tool_name = "list_tools"
-            result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client)
-            if error or result is None:
-                response_text = f"Error executing {tool_name}: {error or 'No result'}"
-            else:
-                response_text = _format_tool_result(tool_name, result)
+            return await _execute_and_respond("list_tools", user_input, state, llm_client, tool_registry, state_manager)
 
-            decision = Decision(
-                action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: list_tools system tool (no LLM needed).",
-                requires_planning=False,
-                direct_response=response_text,
-            )
+        # Check for new conversation request
+        if _looks_like_new_conversation_request(user_input):
+            return await _execute_and_respond("new_conversation", user_input, state, llm_client, tool_registry, state_manager)
 
-            if state_manager:
-                await state_manager.log_decision({
-                    "event": "system_tool_executed_fast_path",
-                    "tool_name": tool_name,
-                    "timestamp": utcnow_isoformat(),
-                })
-
-            return {"current_decision": decision}
-
-        # Check for list schedule requests (fast-path - no LLM needed)
+        # Check for list schedule requests
         if _looks_like_list_schedule_request(user_input):
-            tool_name = "list_schedule"
-            result, error = await _execute_system_tool_inline(
-                tool_name, tool_registry, llm_client, state, state_manager
-            )
-            if error or result is None:
-                response_text = f"Error executing {tool_name}: {error or 'No result'}"
-            else:
-                response_text = _format_tool_result(tool_name, result)
+            return await _execute_and_respond("list_schedule", user_input, state, llm_client, tool_registry, state_manager)
 
-            decision = Decision(
-                action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: list_schedule system tool (no LLM needed).",
-                requires_planning=False,
-                direct_response=response_text,
-            )
-
-            if state_manager:
-                await state_manager.log_decision({
-                    "event": "system_tool_executed_fast_path",
-                    "tool_name": tool_name,
-                    "timestamp": utcnow_isoformat(),
-                })
-
-            return {"current_decision": decision}
-
-        # Check for current time requests (fast-path - no LLM needed)
+        # Check for current time requests
         if _looks_like_current_time_request(user_input):
-            tool_name = "current_time"
-            result, error = await _execute_system_tool_inline(
-                tool_name, tool_registry, llm_client, state, state_manager
-            )
-            if error or result is None:
-                response_text = f"Error executing {tool_name}: {error or 'No result'}"
-            else:
-                response_text = _format_tool_result(tool_name, result)
+            return await _execute_and_respond("current_time", user_input, state, llm_client, tool_registry, state_manager)
 
-            decision = Decision(
-                action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: current_time system tool (no LLM needed).",
-                requires_planning=False,
-                direct_response=response_text,
-            )
-
-            if state_manager:
-                await state_manager.log_decision({
-                    "event": "system_tool_executed_fast_path",
-                    "tool_name": tool_name,
-                    "timestamp": utcnow_isoformat(),
-                })
-
-            return {"current_decision": decision}
-
-        # Check for build status requests (fast-path - no LLM needed)
+        # Check for build status requests
         if _looks_like_build_status_request(user_input):
-            tool_name = "build_status"
-            result, error = await _execute_system_tool_inline(
-                tool_name, tool_registry, llm_client, state, state_manager
-            )
-            if error or result is None:
-                response_text = f"Error executing {tool_name}: {error or 'No result'}"
-            else:
-                response_text = _format_tool_result(tool_name, result)
+            return await _execute_and_respond("build_status", user_input, state, llm_client, tool_registry, state_manager)
 
-            decision = Decision(
-                action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: build_status system tool (no LLM needed).",
-                requires_planning=False,
-                direct_response=response_text,
-            )
-
-            if state_manager:
-                await state_manager.log_decision({
-                    "event": "system_tool_executed_fast_path",
-                    "tool_name": tool_name,
-                    "timestamp": utcnow_isoformat(),
-                })
-
-            return {"current_decision": decision}
-
-        # Check for agent discovery requests (fast-path - no LLM needed)
+        # Check for agent discovery requests
         if _looks_like_agent_discovery_request(user_input):
-            tool_name = "rediscover_agents"
-            result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client)
-            if error or result is None:
-                response_text = f"Error executing {tool_name}: {error or 'No result'}"
-            else:
-                response_text = _format_tool_result(tool_name, result)
+            return await _execute_and_respond("rediscover_agents", user_input, state, llm_client, tool_registry, state_manager)
 
-            decision = Decision(
-                action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: rediscover_agents system tool (no LLM needed).",
-                requires_planning=False,
-                direct_response=response_text,
-            )
-
-            if state_manager:
-                await state_manager.log_decision({
-                    "event": "system_tool_executed_fast_path",
-                    "tool_name": tool_name,
-                    "timestamp": utcnow_isoformat(),
-                })
-
-            return {"current_decision": decision}
-
-        # Check for schedule requests (fast-path - uses LLM for parsing but no routing decision)
+        # Check for schedule requests (uses LLM for parsing, then LLM for response)
         if _looks_like_schedule_request(user_input):
             schedule_params = _extract_schedule_params(user_input)
 
@@ -1601,15 +1597,24 @@ def create_node(
             )
 
             if error or result is None:
-                response_text = f"⚠️ **Scheduling Failed**\n\n{error or 'No result'}"
+                context_data = f"Scheduling failed: {error or 'No result'}"
             else:
-                response_text = await _format_schedule_result(result, llm_client)
+                context_data = json.dumps(result, indent=2)
+
+            try:
+                response_text, was_streamed = await _respond_with_context(
+                    user_input, "schedule_task", context_data, state, llm_client
+                )
+            except Exception as e:
+                logger.warning("LLM enrichment failed for schedule, using fallback: %s", e)
+                response_text = context_data
+                was_streamed = False
 
             decision = Decision(
                 action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: schedule_task (no routing LLM needed).",
+                reasoning="Fast-path: schedule_task with LLM-enriched response",
                 requires_planning=False,
-                direct_response=response_text,
+                direct_response=None if was_streamed else response_text,
             )
 
             if state_manager:
@@ -1636,48 +1641,29 @@ def create_node(
 
             return cast(ProgenitorState, result_state)
 
-        # Check for self-reflection requests (fast-path - no LLM needed for routing)
+        # Check for self-reflection requests
         if _looks_like_self_reflect_request(user_input):
-            tool_name = "self_reflect"
-            result, error = await _execute_system_tool_inline(tool_name, tool_registry, llm_client, state)
-            if error or result is None:
-                response_text = f"Error executing {tool_name}: {error or 'No result'}"
-            else:
-                response_text = _format_tool_result(tool_name, result)
-
-            decision = Decision(
-                action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: self_reflect system tool (no LLM routing needed).",
-                requires_planning=False,
-                direct_response=response_text,
-            )
-
-            if state_manager:
-                await state_manager.log_decision({
-                    "event": "system_tool_executed_fast_path",
-                    "tool_name": tool_name,
-                    "timestamp": utcnow_isoformat(),
-                })
-
-            return {"current_decision": decision}
+            return await _execute_and_respond("self_reflect", user_input, state, llm_client, tool_registry, state_manager)
 
         # ============================================================
         # STANDARD PATH: Use LLM for routing decision
+        # Tool context fills the context window so the LLM knows
+        # available tools/agents to call
         # ============================================================
 
-        # Get available capabilities
-        capabilities = tool_registry.get_all_capabilities()
+        # Build rich tool context for the LLM
+        tool_context = tool_registry.get_tool_context()
 
         # Get conversation history for context
         messages = state.get("messages", [])
         history = _extract_history(messages, limit=10)
 
         try:
-            # Ask LLM for decision
+            # Ask LLM for decision (structured output with confidence)
             decision_data = await llm_client.decide(
                 user_input=user_input,
                 conversation_history=history,
-                available_capabilities=capabilities,
+                tool_context=tool_context,
             )
 
             action_str = decision_data.get("action", "answer_directly")
@@ -1860,7 +1846,8 @@ def create_node(
                 action = DecisionAction.ANSWER_DIRECTLY
 
             # ============================================================
-            # FAST-PATH: Handle delegate_a2a without backlog
+            # SLOW-PATH: Handle delegate_a2a with LLM-enriched response
+            # Execute agent -> feed result to LLM -> respond to user
             # ============================================================
             if action == DecisionAction.DELEGATE_A2A:
                 target_capabilities = decision_data.get("target_capabilities", [])
@@ -1875,16 +1862,9 @@ def create_node(
                     )
                     return {"current_decision": decision}
 
-                # Get loop for streaming status
-                from ..runtime.loop import get_current_loop
-                loop = get_current_loop()
                 capability = target_capabilities[0]
                 agent_config = tool_registry.find_agent_by_capability(capability)
                 agent_name = agent_config.get("name", capability) if agent_config else capability
-
-                # Stream status message if streaming is enabled
-                if loop and loop._streaming_enabled:
-                    await loop.stream_token(f"Calling {agent_name}...")
 
                 # Execute agent call
                 result, error = await _execute_a2a_agent_inline(
@@ -1894,36 +1874,111 @@ def create_node(
                 )
 
                 if error:
-                    response_text = f"Agent unavailable: {error}"
-                    if loop and loop._streaming_enabled:
-                        await loop.stream_token(f"\n{response_text}")
-                        loop._streamed_response_content = f"Calling {agent_name}...\n{response_text}"
-                        loop._response_was_streamed = True
+                    context_data = f"Agent error: {error}"
                 else:
-                    # Format successful response using helper
-                    assert result is not None, "result must not be None when error is None"
-                    response_text = _format_a2a_response(result, agent_name)
+                    assert result is not None
+                    context_data = _format_a2a_response(result, agent_name)
 
-                    if loop and loop._streaming_enabled:
-                        await loop.stream_token(f"\n\n{response_text}")
-                        loop._streamed_response_content = f"Calling {agent_name}...\n\n{response_text}"
-                        loop._response_was_streamed = True
+                # Feed agent result through LLM for natural response
+                try:
+                    response_text, was_streamed = await _respond_with_context(
+                        user_input, f"agent:{agent_name}", context_data, state, llm_client
+                    )
+                except Exception as e:
+                    logger.warning("LLM enrichment failed for A2A call to %s: %s", agent_name, e)
+                    response_text = context_data
+                    was_streamed = False
 
                 decision = Decision(
                     action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning=f"Fast-path: A2A call to {agent_name} (capability: {capability})",
+                    reasoning=f"A2A call to {agent_name} (capability: {capability}) with LLM-enriched response",
                     requires_planning=False,
                     target_capabilities=target_capabilities,
-                    direct_response=None if (loop and loop._streaming_enabled) else response_text,
+                    direct_response=None if was_streamed else response_text,
                 )
 
                 if state_manager:
                     await state_manager.log_decision({
-                        "event": "a2a_agent_call_fast_path",
+                        "event": "a2a_agent_call",
                         "agent_name": agent_name,
                         "capability": capability,
                         "success": error is None,
+                        "llm_enriched": True,
                         "error": error,
+                        "timestamp": utcnow_isoformat(),
+                    })
+
+                return {"current_decision": decision}
+
+            # ============================================================
+            # SLOW-PATH: Handle use_mcp inline with LLM-enriched response
+            # Find tool -> execute -> feed result to LLM -> respond
+            # ============================================================
+            if action == DecisionAction.USE_MCP:
+                target_capabilities = decision_data.get("target_capabilities", [])
+
+                if not target_capabilities:
+                    decision = Decision(
+                        action=DecisionAction.ANSWER_DIRECTLY,
+                        reasoning="use_mcp without target_capabilities - responding directly",
+                        requires_planning=False,
+                        direct_response="I wasn't able to determine which tool to use. Could you please clarify your request?",
+                    )
+                    return {"current_decision": decision}
+
+                # Try to find and execute the MCP tool
+                capability = target_capabilities[0]
+                tool_config = tool_registry.find_tool_by_capability(capability)
+
+                if not tool_config:
+                    # No tool found - fall back to direct answer
+                    context_data = f"No MCP tool found for capability: {capability}"
+                    try:
+                        response_text, was_streamed = await _respond_with_context(
+                            user_input, "mcp_lookup", context_data, state, llm_client
+                        )
+                    except Exception:
+                        response_text = context_data
+                        was_streamed = False
+                else:
+                    tool_name = tool_config.get("name", capability)
+                    # Execute MCP tool inline via MCPClient
+                    from ..tools.mcp import MCPClient
+
+                    mcp_client = MCPClient()
+                    try:
+                        mcp_result = await mcp_client.call_tool(
+                            tool_config,
+                            method="execute",
+                            params={"input": user_input},
+                        )
+                        context_data = json.dumps(mcp_result, indent=2) if isinstance(mcp_result, dict) else str(mcp_result)
+                    except Exception as e:
+                        logger.warning("MCP tool execution failed for %s: %s", tool_name, e)
+                        context_data = f"MCP tool '{tool_name}' execution error: {e}"
+
+                    try:
+                        response_text, was_streamed = await _respond_with_context(
+                            user_input, f"mcp:{tool_name}", context_data, state, llm_client
+                        )
+                    except Exception as e:
+                        logger.warning("LLM enrichment failed for MCP call to %s: %s", tool_name, e)
+                        response_text = context_data
+                        was_streamed = False
+
+                decision = Decision(
+                    action=DecisionAction.ANSWER_DIRECTLY,
+                    reasoning=f"MCP tool call (capability: {capability}) with LLM-enriched response",
+                    requires_planning=False,
+                    target_capabilities=target_capabilities,
+                    direct_response=None if was_streamed else response_text,
+                )
+
+                if state_manager:
+                    await state_manager.log_decision({
+                        "event": "mcp_tool_call",
+                        "capability": capability,
+                        "llm_enriched": True,
                         "timestamp": utcnow_isoformat(),
                     })
 
@@ -2053,8 +2108,6 @@ def create_node(
                     "recoverable": False,
                     "timestamp": utcnow_isoformat(),
                 })
-
-            return {"current_decision": decision}
 
             return {"current_decision": decision}
 

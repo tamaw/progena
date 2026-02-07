@@ -13,10 +13,8 @@ Protocols use structural subtyping (duck typing) so implementations
 don't need to explicitly inherit from them.
 """
 
-from typing import Any, AsyncIterator, Optional, Protocol, TypeVar, runtime_checkable
-from pathlib import Path
-from datetime import datetime
-
+from collections.abc import AsyncIterator
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 # ============================================================================
 # LLM Client Protocols
@@ -37,7 +35,7 @@ class LLMClientProtocol(Protocol):
     async def generate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> str:
         """Generate text completion.
 
@@ -54,14 +52,14 @@ class LLMClientProtocol(Protocol):
         self,
         user_input: str,
         conversation_history: list[dict[str, Any]],
-        available_capabilities: list[str],
+        tool_context: str,
     ) -> dict[str, Any]:
         """Make a routing decision.
 
         Args:
             user_input: The user's input.
             conversation_history: Recent conversation messages.
-            available_capabilities: List of available capabilities.
+            tool_context: Formatted string describing available tools and agents.
 
         Returns:
             Decision dict with action, reasoning, etc.
@@ -105,7 +103,7 @@ class LLMClientProtocol(Protocol):
     async def stream(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream text generation.
 
@@ -126,7 +124,7 @@ class StreamingLLMProtocol(Protocol):
     async def stream(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream text generation."""
         ...
@@ -228,7 +226,7 @@ class BacklogManagerProtocol(Protocol):
         """Update a work item."""
         ...
 
-    def find_by_id(self, item_id: str) -> Optional[Any]:
+    def find_by_id(self, item_id: str) -> Any | None:
         """Find an item by ID."""
         ...
 
@@ -270,21 +268,21 @@ class ToolRegistryProtocol(Protocol):
         """Get all registered capabilities."""
         ...
 
-    def find_by_name(self, name: str) -> Optional[dict[str, Any]]:
+    def find_by_name(self, name: str) -> dict[str, Any] | None:
         """Find a tool or agent by name."""
         ...
 
     def find_agent_by_capability(
         self,
         capability: str
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Find an agent providing a capability."""
         ...
 
     def find_tool_by_capability(
         self,
         capability: str
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Find a tool providing a capability."""
         ...
 
@@ -341,7 +339,7 @@ class TracerProtocol(Protocol):
     def start_span(
         self,
         name: str,
-        attributes: Optional[dict[str, Any]] = None,
+        attributes: dict[str, Any] | None = None,
     ) -> Any:
         """Start a new span."""
         ...
@@ -354,7 +352,7 @@ class TracerProtocol(Protocol):
         self,
         span: Any,
         name: str,
-        attributes: Optional[dict[str, Any]] = None,
+        attributes: dict[str, Any] | None = None,
     ) -> None:
         """Add an event to a span."""
         ...
@@ -371,7 +369,7 @@ class MetricsProtocol(Protocol):
     def increment(
         self,
         name: str,
-        labels: Optional[dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
         value: int = 1,
     ) -> None:
         """Increment a counter."""
@@ -381,7 +379,7 @@ class MetricsProtocol(Protocol):
         self,
         name: str,
         value: float,
-        labels: Optional[dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
     ) -> None:
         """Record a histogram value."""
         ...
@@ -390,7 +388,7 @@ class MetricsProtocol(Protocol):
         self,
         name: str,
         value: float,
-        labels: Optional[dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
     ) -> None:
         """Set a gauge value."""
         ...
@@ -411,7 +409,7 @@ class ProgenitorServiceProtocol(Protocol):
     async def handle_message(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> str:
         """Handle a user message."""
         ...
@@ -419,7 +417,7 @@ class ProgenitorServiceProtocol(Protocol):
     async def handle_message_stream(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Handle a message with streaming."""
         ...

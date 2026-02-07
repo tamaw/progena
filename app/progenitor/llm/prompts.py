@@ -7,7 +7,7 @@ All prompts are stored as markdown files for easy editing.
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Default prompts directory (relative to project root)
 # Path: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
@@ -22,7 +22,7 @@ class PromptTemplates:
 
     VERSION = "1.0.0"
 
-    def __init__(self, prompts_dir: Optional[Path] = None):
+    def __init__(self, prompts_dir: Path | None = None):
         """Initialize with optional custom prompts directory."""
         self.prompts_dir = Path(prompts_dir) if prompts_dir else DEFAULT_PROMPTS_DIR
 
@@ -50,11 +50,10 @@ class PromptTemplates:
         """Get the system genesis prompt (loaded on startup)."""
         return self._load_prompt("genesis.md")
 
-    def get_decide_prompt(self, available_capabilities: list[str]) -> str:
-        """Get the decision routing prompt."""
-        caps_list = "\n".join([f"- {cap}" for cap in available_capabilities]) if available_capabilities else "- None registered yet"
+    def get_decide_prompt(self, tool_context: str) -> str:
+        """Get the decision routing prompt with full tool/agent context."""
         template = self._load_prompt("decide.md")
-        return template.replace("{capabilities}", caps_list)
+        return template.replace("{tool_context}", tool_context)
 
     def get_planner_prompt(self) -> str:
         """Get the planning prompt for work item generation."""
