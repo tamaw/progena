@@ -20,6 +20,9 @@ from ..runtime.copilot_acp import CopilotACPManager
 from ..tools.mcp import MCPClient, A2AClient
 from ..tools.user_communication import UserCommunicationTools, USER_COMMUNICATION_TOOLS
 from ..runtime.time_utils import utcnow_isoformat
+from ..llm.prompts import PromptTemplates
+
+_prompts = PromptTemplates()
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -360,14 +363,12 @@ async def _execute_upgrade(
     if not existing:
         return None, f"Component not found for upgrade: {target}"
 
-    prompt = f"""Upgrade the following component:
-Name: {existing.get('name')}
-Current capabilities: {existing.get('capabilities')}
-
-Requested changes: {work_item.description}
-
-Keep changes minimal and focused.
-"""
+    prompt = _prompts.get(
+        "act.upgrade.md",
+        name=existing.get('name', ''),
+        capabilities=existing.get('capabilities', ''),
+        description=work_item.description,
+    )
 
     build_result = await copilot_cli.build(
         work_item_id=work_item.id,
@@ -410,23 +411,12 @@ async def _execute_scheduled(
             # Build a system prompt that includes tool instructions if available
             tool_instructions = ""
             if user_comm_tools:
-                tool_instructions = """
-You have access to user communication tools. When you need to send a message to the user,
-include in your response:
-- To send a message: Start with "SAY:" followed by the message
-- To ask a question: Start with "ASK:" followed by the question
-- To send a notification: Start with "NOTIFY:" followed by level (info/warning/error/success), then "|", then the message
+                tool_instructions = _prompts.get("act.scheduled_tool_instructions.md")
 
-Example: "SAY: Hello! This is your scheduled reminder."
-Example: "ASK: Would you like me to continue with the next task?"
-Example: "NOTIFY: success | Your scheduled task completed successfully."
-"""
-
-            system_prompt = f"""You are Progenitor, an AI assistant executing a scheduled task.
-The following is an instruction that was scheduled to run at this time.
-Execute the instruction and provide the response.
-If the instruction requires calling another agent or tool, indicate that in your response.
-{tool_instructions}"""
+            system_prompt = _prompts.get(
+                "act.scheduled_system.md",
+                tool_instructions=tool_instructions,
+            )
 
             # Generate a response to the instruction as if it were a user request
             response = await llm_client.complete(

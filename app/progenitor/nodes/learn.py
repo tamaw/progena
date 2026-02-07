@@ -23,6 +23,8 @@ from . import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 
+_prompts = PromptTemplates()
+
 
 def _get_telemetry():
     """Get telemetry components if available."""
@@ -339,11 +341,7 @@ async def _generate_lessons_via_llm(
         best_result=_serialize_for_prompt(context.get("best_result")),
     )
 
-    system_prompt = (
-        "You are an expert at analyzing software development iterations. "
-        "Assess whether the plan was achieved, whether we're progressing toward "
-        "the ideal state, and extract actionable lessons. Be specific and honest."
-    )
+    system_prompt = _prompts.get("learn.system.md")
 
     try:
         # Use structured output via response_format

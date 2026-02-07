@@ -337,10 +337,7 @@ class IdealStateBuilder:
         try:
             extraction = await self._structured_call(
                 prompt=prompt,
-                system_prompt=(
-                    "You are an expert at analyzing tasks and defining measurable "
-                    "success criteria. Extract a structured ideal state."
-                ),
+                system_prompt=self.prompts.get("ideal_state.extraction_system.md"),
                 response_model=IdealStateExtractionResponse,
                 schema_name="ideal_state_extraction",
             )
@@ -375,10 +372,7 @@ class IdealStateBuilder:
         try:
             refinement = await self._structured_call(
                 prompt=prompt,
-                system_prompt=(
-                    "You refine success criteria based on observed outcomes. "
-                    "Be specific about what to tighten or add."
-                ),
+                system_prompt=self.prompts.get("ideal_state.refinement_system.md"),
                 response_model=IdealStateRefinementResponse,
                 schema_name="ideal_state_refinement",
             )
@@ -414,10 +408,7 @@ class IdealStateBuilder:
         try:
             response = await self._structured_call(
                 prompt=prompt,
-                system_prompt=(
-                    "You incorporate user clarifications into task specifications. "
-                    "Be specific and actionable."
-                ),
+                system_prompt=self.prompts.get("ideal_state.clarification_system.md"),
                 response_model=IdealStateClarificationResponse,
                 schema_name="ideal_state_clarification",
             )
@@ -463,10 +454,7 @@ class IdealStateBuilder:
         try:
             response = await self._structured_call(
                 prompt=prompt,
-                system_prompt=(
-                    "You analyze violations and extract generalized anti-criteria "
-                    "to prevent recurrence. Focus on patterns, not individual violations."
-                ),
+                system_prompt=self.prompts.get("ideal_state.anti_criteria_system.md"),
                 response_model=AntiCriteriaExtractionResponse,
                 schema_name="anti_criteria_extraction",
             )
@@ -510,10 +498,7 @@ class IdealStateBuilder:
         try:
             return await self._structured_call(
                 prompt=prompt,
-                system_prompt=(
-                    "You validate success criteria for quality, measurability, "
-                    "and completeness. Be honest about issues."
-                ),
+                system_prompt=self.prompts.get("ideal_state.validation_system.md"),
                 response_model=CriteriaValidationResponse,
                 schema_name="criteria_validation",
             )
@@ -552,10 +537,7 @@ class IdealStateBuilder:
         try:
             response = await self._structured_call(
                 prompt=prompt,
-                system_prompt=(
-                    "You suggest verification methods for success criteria. "
-                    "Prefer automated methods where possible."
-                ),
+                system_prompt=self.prompts.get("ideal_state.verification_system.md"),
                 response_model=VerificationMethodSuggestionResponse,
                 schema_name="verification_method_suggestion",
             )

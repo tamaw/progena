@@ -33,8 +33,11 @@ from ..state.execution_schemas import (
     SpecDoc,
 )
 from ..runtime.time_utils import utcnow_isoformat
+from ..llm.prompts import PromptTemplates
 
 logger = logging.getLogger(__name__)
+
+_prompts = PromptTemplates()
 
 
 def _get_telemetry():
@@ -272,29 +275,15 @@ async def _plan_schedule_task(
 
     try:
         # Use LLM to generate the instruction that will run at scheduled time
-        instruction_prompt = f"""The user wants to schedule a task. Convert their request into an instruction that will be executed at the scheduled time.
-
-User request: "{user_input}"
-Scheduled time: {time_expression}
-
-Generate a clear instruction that:
-1. Captures what the user wants done at that time
-2. Is written as if it's a new request to an AI assistant
-3. Includes any context needed to fulfill the request
-
-Example:
-- User: "say hello world to me at 9am"
-- Instruction: "Say 'Hello World!' to the user. This is a scheduled greeting they requested."
-
-Another example:
-- User: "check the weather every morning at 8am"
-- Instruction: "Check and report the current weather conditions for the user's location."
-
-Generate ONLY the instruction, nothing else:"""
+        instruction_prompt = _prompts.get(
+            "planner.schedule_instruction.md",
+            user_input=user_input,
+            time_expression=time_expression,
+        )
 
         instruction = await llm_client.complete(
             prompt=instruction_prompt,
-            system_prompt="You generate clear instructions for scheduled tasks. Output only the instruction text.",
+            system_prompt=_prompts.get("planner.schedule_instruction_system.md"),
         )
 
         instruction = instruction.strip()
@@ -334,13 +323,11 @@ Generate ONLY the instruction, nothing else:"""
 
             try:
                 pending_response = await llm_client.complete(
-                    prompt=(
-                        "Create a short, friendly confirmation for a scheduled task. "
-                        "Do not include IDs or exact timestamps. Do not use markdown. "
-                        "Focus on what will happen.\n\n"
-                        f"Task details: {json.dumps(schedule_result_payload, ensure_ascii=False)}"
+                    prompt=_prompts.get(
+                        "planner.schedule_confirmation.md",
+                        task_details=json.dumps(schedule_result_payload, ensure_ascii=False),
                     ),
-                    system_prompt="You write concise confirmations for scheduled tasks.",
+                    system_prompt=_prompts.get("planner.schedule_confirmation_system.md"),
                     temperature=0.2,
                 )
                 pending_response = pending_response.strip() if pending_response else None
@@ -876,35 +863,23 @@ IMPORTANT:
     if llm_client and iteration == 0:
         try:
             if item_type == WorkItemType.BUILD_TOOL:
-                enhancement_prompt = f"""Given this build task, generate a focused instruction for Copilot to build a FastMCP tool.
-
-TASK: {task_description}
-TOOL NAME: {agent_name}
-SPEC FILE LOCATION: {rel_path}
-
-Generate a concise, actionable prompt (2-4 sentences) that:
-1. References the spec file for details
-2. Emphasizes the key functionality the tool should provide via @mcp.tool decorators
-3. Mentions any critical input/output requirements
-
-Output ONLY the prompt text, nothing else:"""
+                enhancement_prompt = _prompts.get(
+                    "planner.copilot_enhancement_tool.md",
+                    task_description=task_description,
+                    entity_name=agent_name,
+                    spec_rel_path=rel_path,
+                )
             else:
-                enhancement_prompt = f"""Given this build task, generate a focused instruction for Copilot.
-
-TASK: {task_description}
-AGENT NAME: {agent_name}
-SPEC FILE LOCATION: {rel_path}
-
-Generate a concise, actionable prompt (2-4 sentences) that:
-1. References the spec file for details
-2. Emphasizes the key behavior/capability the agent should have
-3. Mentions any critical implementation details
-
-Output ONLY the prompt text, nothing else:"""
+                enhancement_prompt = _prompts.get(
+                    "planner.copilot_enhancement_agent.md",
+                    task_description=task_description,
+                    entity_name=agent_name,
+                    spec_rel_path=rel_path,
+                )
 
             enhanced_guidance = await llm_client.generate(
                 prompt=enhancement_prompt,
-                system_prompt="You generate focused build instructions. Be concise and actionable.",
+                system_prompt=_prompts.get("planner.copilot_enhancement_system.md"),
             )
 
             if enhanced_guidance and len(enhanced_guidance.strip()) > 20:
@@ -1056,55 +1031,21 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
         try:
             # Adjust prompts based on entity type
             if item_type == WorkItemType.BUILD_TOOL:
-                customization_prompt = f"""You are generating a build specification for a FastMCP tool.
-
-TASK FROM USER: {task_description}
-
-TOOL NAME: {agent_name}
-
-TEMPLATE TO CUSTOMIZE:
-{template_content}
-
-Generate a COMPLETE, DETAILED build specification that:
-1. Replaces {{tool_name}} with "{agent_name}"
-2. Replaces {{tool_class}} with "{agent_name.title().replace('_', '')}"
-3. Replaces {{primary_function}} with the main function name based on the task
-4. Adds specific implementation details based on the user's task
-5. Includes the exact behavior the tool should have
-6. Specifies what each @mcp.tool() function should return
-
-For this task "{task_description}", specify:
-- EXACTLY what the tool should do
-- Input parameters and their types
-- Return value format
-- Error handling behavior
-
-Output the complete customized specification markdown:"""
-                system_prompt = "You are a technical specification writer. Generate detailed, actionable FastMCP tool specifications. Be precise about expected behaviors and outputs."
+                customization_prompt = _prompts.get(
+                    "planner.spec_customization_tool.md",
+                    task_description=task_description,
+                    entity_name=agent_name,
+                    template_content=template_content,
+                )
+                system_prompt = _prompts.get("planner.spec_customization_tool_system.md")
             else:
-                customization_prompt = f"""You are generating a build specification for an AI agent.
-
-TASK FROM USER: {task_description}
-
-AGENT NAME: {agent_name}
-
-TEMPLATE TO CUSTOMIZE:
-{template_content}
-
-Generate a COMPLETE, DETAILED build specification that:
-1. Replaces {{agent_name}} with "{agent_name}"
-2. Replaces {{agent_class}} with "{agent_name.title().replace('_', '')}"
-3. Adds specific implementation details based on the user's task
-4. Includes the exact behavior the agent should have
-5. Specifies what the agent's invoke() method should return for different inputs
-
-For this task "{task_description}", specify:
-- EXACTLY what the agent should respond with
-- Any specific text/format requirements
-- How it should handle various inputs
-
-Output the complete customized specification markdown:"""
-                system_prompt = "You are a technical specification writer. Generate detailed, actionable agent specifications. Be precise about expected behaviors and outputs."
+                customization_prompt = _prompts.get(
+                    "planner.spec_customization_agent.md",
+                    task_description=task_description,
+                    entity_name=agent_name,
+                    template_content=template_content,
+                )
+                system_prompt = _prompts.get("planner.spec_customization_agent_system.md")
 
             customized_content = await llm_client.generate(
                 prompt=customization_prompt,
@@ -1170,32 +1111,19 @@ async def _generate_experiment_plan(
     scoring hooks, number of trials, and stop-early rules.
     """
     # Build prompt for LLM to generate experiment details
-    prompt = f"""Generate an experiment plan to test this approach:
-
-APPROACH: {chosen_approach.get('name', 'primary')}
-{chosen_approach.get('description', '')}
-
-GOAL: {task_description}
-
-SUCCESS CRITERIA:
-{chr(10).join([f"- {c.get('description', '')} (target: {c.get('target_score', 0.8)})" for c in success_criteria[:3]])}
-
-{"GAPS TO ADDRESS:" + chr(10) + chr(10).join([f"- {gap}" for gap in gaps[:3]]) if gaps else ""}
-
-Generate:
-1. 2-4 test prompts to send to the agent (first should be a smoke test)
-2. Expected responses or patterns for each prompt
-3. How to score responses (what to check for)
-4. Expected measurable outcome
-
-Format each prompt as:
-PROMPT [n]: <the prompt text>
-EXPECT: <what the response should contain or be like>
-SCORE_BY: <how to score: contains "X", matches pattern, etc.>"""
+    gaps_section = "GAPS TO ADDRESS:\n" + chr(10).join([f"- {gap}" for gap in gaps[:3]]) if gaps else ""
+    prompt = _prompts.get(
+        "planner.experiment_plan.md",
+        approach_name=chosen_approach.get('name', 'primary'),
+        approach_description=chosen_approach.get('description', ''),
+        task_description=task_description,
+        success_criteria=chr(10).join([f"- {c.get('description', '')} (target: {c.get('target_score', 0.8)})" for c in success_criteria[:3]]),
+        gaps_section=gaps_section,
+    )
 
     response = await llm_client.generate(
         prompt=prompt,
-        system_prompt="Generate detailed experiment plans with specific test prompts. Be concrete and measurable.",
+        system_prompt=_prompts.get("planner.experiment_plan_system.md"),
     )
 
     # Parse the response into structured PromptSpecs

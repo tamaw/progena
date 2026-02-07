@@ -20,12 +20,14 @@ from ..runtime.time_utils import utcnow_isoformat
 from ..state.helpers import get_ideal_state, is_work_item_actionable
 from ..state.models import Decision, DecisionAction, ProgenitorState, generate_run_id
 from ..tools.mcp import A2AClient
+from ..llm.prompts import PromptTemplates
 
 if TYPE_CHECKING:
     from ..state.execution_schemas import BuildSettings
 
 logger = logging.getLogger(__name__)
 
+_prompts = PromptTemplates()
 
 # ---------------------------------------------------------------------------
 # Build-related helpers (kept here as they are decide-node concerns, not tools)
@@ -127,29 +129,12 @@ async def _generate_build_settings(
     # Fallback: Use LLM structured output if decision didn't provide project_name
     if not project_name and llm_client:
         try:
-            system_prompt = """You are an expert at extracting project names from user requests.
+            system_prompt = _prompts.get("decide.project_name_system.md")
 
-When a user asks to build an agent or MCP server, extract a clean, descriptive name.
-
-RULES:
-1. Extract the CORE PURPOSE/TOPIC, not filler words
-2. Use snake_case format (lowercase with underscores)
-3. Keep names concise but descriptive (2-4 words max)
-4. NEVER include: 'for_me', 'please', 'a', 'an', 'the', 'new', 'build', 'create'
-
-EXAMPLES:
-- "Build for me a weather agent" -> weather_agent
-- "Create an agent that tracks stocks" -> stock_tracker
-- "Build me a new email assistant agent please" -> email_assistant
-- "I want an agent to help with calendar scheduling" -> calendar_scheduler
-- "Make a simple todo list agent" -> todo_list
-- "Build an MCP server for GitHub integration" -> github_integration"""
-
-            prompt = f"""Extract the project name from this user request:
-
-"{user_input}"
-
-Return the extracted name and build type."""
+            prompt = _prompts.get(
+                "decide.project_name.md",
+                user_input=user_input,
+            )
 
             response_format = llm_client._get_json_response_format(
                 BuildNameExtraction, "build_name_extraction"
@@ -267,11 +252,10 @@ async def _respond_with_context(
 
     history = _extract_history(state.get("messages", []), limit=10)
 
-    system_prompt = (
-        "You are Progenitor, an AI assistant. A tool was invoked to help answer "
-        "the user's request. Use the tool result below to provide a helpful, "
-        "natural response to the user. Do not mention internal tool names.\n\n"
-        f"--- Tool '{context_label}' result ---\n{context_data}\n--- End tool result ---"
+    system_prompt = _prompts.get(
+        "decide.tool_response_system.md",
+        context_label=context_label,
+        context_data=context_data,
     )
 
     messages = history + [{"role": "user", "content": user_input}]

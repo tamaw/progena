@@ -7,6 +7,10 @@ Format tool results as human-readable responses.
 import json
 from typing import Any
 
+from ...llm.prompts import PromptTemplates
+
+_prompts = PromptTemplates()
+
 
 def format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     """Format a tool result as a human-readable response."""
@@ -265,17 +269,15 @@ def _format_compress_conversation(result: dict[str, Any]) -> str:
 async def format_schedule_result(result: dict[str, Any], llm_client) -> str:
     """Format a schedule task result as a short, plain-English response."""
     instruction = result.get("instruction", "complete your scheduled request")
-    prompt = (
-        "Create a short, friendly confirmation for a scheduled task. "
-        "Do not include IDs or exact timestamps. Do not use markdown. "
-        "Focus on what will happen.\n\n"
-        f"Task details: {json.dumps(result, ensure_ascii=False)}"
+    prompt = _prompts.get(
+        "formatters.schedule_confirmation.md",
+        task_details=json.dumps(result, ensure_ascii=False),
     )
 
     try:
         response = await llm_client.complete(
             prompt=prompt,
-            system_prompt="You write concise confirmations for scheduled tasks.",
+            system_prompt=_prompts.get("formatters.schedule_confirmation_system.md"),
             temperature=0.2,
         )
         if response:
