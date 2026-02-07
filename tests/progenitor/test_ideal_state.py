@@ -162,6 +162,7 @@ class SimpleMockLLM:
 
     def __init__(self, chat_return_value: str):
         self.chat = AsyncMock(return_value=chat_return_value)
+        self._get_json_response_format = None
 
 
 class FailingMockLLM:
@@ -169,6 +170,7 @@ class FailingMockLLM:
 
     def __init__(self, error: Exception):
         self.chat = AsyncMock(side_effect=error)
+        self._get_json_response_format = None
 
 
 def _make_mock_llm(return_value: dict) -> SimpleMockLLM:

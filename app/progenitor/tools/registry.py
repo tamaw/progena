@@ -85,6 +85,53 @@ class ToolRegistry:
 
         return list(set(capabilities))
 
+    def get_local_mcp_tools(self) -> list[dict[str, Any]]:
+        """Discover local FastMCP tools under app/tools/.
+
+        These are HTTP MCP tools that may not be registered in registry.json.
+        """
+        tools_dir = Path(__file__).resolve().parents[2] / "tools"
+        if not tools_dir.exists():
+            return []
+
+        local_tools: list[dict[str, Any]] = []
+        for entry in tools_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            if entry.name.startswith(".") or entry.name == "__pycache__":
+                continue
+
+            server_path = entry / "server.py"
+            if not server_path.exists():
+                continue
+
+            spec_path = entry / "spec.md"
+            description = "Local FastMCP tool (HTTP). Start with: python -m app.tools.%s.server" % entry.name
+
+            if spec_path.exists():
+                try:
+                    with open(spec_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            if line.startswith("#"):
+                                description = line.lstrip("#").strip()
+                            else:
+                                description = line
+                            break
+                except OSError:
+                    pass
+
+            local_tools.append({
+                "name": entry.name,
+                "description": description,
+                "type": "mcp_tool",
+                "source": "local",
+            })
+
+        return local_tools
+
     def get_tool_context(self) -> str:
         """Get formatted tool and agent descriptions for the LLM context window.
 
@@ -118,8 +165,14 @@ class ToolRegistry:
                     lines.append(f"  Capabilities: {', '.join(caps)}")
             sections.append("\n".join(lines))
 
-        # MCP tools from registry
+        # MCP tools from registry + local FastMCP tools from app/tools
         tools = self._registry.get("tools", [])
+        local_tools = self.get_local_mcp_tools()
+        seen_names = {tool.get("name") for tool in tools}
+        for local_tool in local_tools:
+            if local_tool.get("name") not in seen_names:
+                tools.append(local_tool)
+
         if tools:
             lines = ["### MCP Tools"]
             for tool in tools:

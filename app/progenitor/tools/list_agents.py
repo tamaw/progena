@@ -20,6 +20,20 @@ class ListAgentsTool(BaseSystemTool):
     def description(self) -> str:
         return "List all registered agents with their status"
 
+    @property
+    def keywords(self) -> list[str]:
+        return [
+            "list agents",
+            "show agents",
+            "what agents",
+            "which agents",
+            "available agents",
+            "running agents",
+            "active agents",
+            "agent status",
+            "agent list",
+        ]
+
     async def execute(self, context: ToolContext) -> ToolResult:
         agents = context.tool_registry.get_agents()
         all_agents = [

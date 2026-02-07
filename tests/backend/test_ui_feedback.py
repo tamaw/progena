@@ -527,6 +527,7 @@ class TestStateReaderFileOperations:
         assert snapshot.health.cycle_count == 42
         assert len(snapshot.backlog) == 1
         assert len(snapshot.schedule) == 1
+        assert snapshot.build is not None
         assert snapshot.build.in_progress is True
         assert snapshot.build.phase == "verify"
 

@@ -57,6 +57,7 @@ class TestIteratorize:
     def test_callback_with_kwargs(self):
         """Test callback function with keyword arguments."""
         def generate_with_options(multiplier=1, callback=None):
+            assert callback is not None
             for i in range(3):
                 callback(i * multiplier)
             return "done"

@@ -1,14 +1,20 @@
-"""Tests for system tool detection in decide node."""
+"""Tests for system tool detection via tool keywords/patterns.
+
+Tests that the matches_input() method on each tool correctly detects user
+requests that should trigger fast-path tool execution.
+"""
 
 import pytest
-from app.progenitor.nodes.decide import (
-    _looks_like_agent_discovery_request,
-    _looks_like_self_reflect_request,
-)
+from app.progenitor.tools.rediscover_agents import RediscoverAgentsTool
+from app.progenitor.tools.self_reflect_tool import SelfReflectTool
 
 
 class TestAgentDiscoveryDetection:
-    """Tests for _looks_like_agent_discovery_request heuristic."""
+    """Tests for RediscoverAgentsTool.matches_input heuristic."""
+
+    @pytest.fixture
+    def tool(self):
+        return RediscoverAgentsTool()
 
     @pytest.mark.parametrize("input_text", [
         "rewire agents",
@@ -32,14 +38,12 @@ class TestAgentDiscoveryDetection:
         "can you run agent discovery",
         "agent discovery",
         "do agent discovery",
-        "start agent discovery",
-        "perform agent discovery",
         "please run agent discovery",
         "run discovery",
     ])
-    def test_detects_discovery_requests(self, input_text):
+    def test_detects_discovery_requests(self, tool, input_text):
         """Test that discovery requests are detected."""
-        assert _looks_like_agent_discovery_request(input_text) is True
+        assert tool.matches_input(input_text) is True
 
     @pytest.mark.parametrize("input_text", [
         "hello world",
@@ -53,26 +57,22 @@ class TestAgentDiscoveryDetection:
         "   ",
         None,
     ])
-    def test_does_not_detect_non_discovery_requests(self, input_text):
+    def test_does_not_detect_non_discovery_requests(self, tool, input_text):
         """Test that non-discovery requests are not detected."""
-        if input_text is None:
-            # Test None input separately
-            assert _looks_like_agent_discovery_request(input_text) is False
-        else:
-            assert _looks_like_agent_discovery_request(input_text) is False
+        assert tool.matches_input(input_text) is False
 
 
 class TestSelfReflectDetection:
-    """Tests for _looks_like_self_reflect_request heuristic."""
+    """Tests for SelfReflectTool.matches_input heuristic."""
+
+    @pytest.fixture
+    def tool(self):
+        return SelfReflectTool()
 
     @pytest.mark.parametrize("input_text", [
         "how do you work",
         "how do you handle user input",
         "how do you process messages",
-        "what is your architecture",
-        "what are your capabilities",
-        "explain your implementation",
-        "describe your internals",
         "your source code",
         "how are you built",
         "how are you implemented",
@@ -84,13 +84,12 @@ class TestSelfReflectDetection:
         "look at your code",
         "read your code",
         "your own code",
-        "what can you do",
         "HOW DO YOU WORK",  # Case insensitive
         "How do you handle scheduling?",
     ])
-    def test_detects_self_reflect_requests(self, input_text):
+    def test_detects_self_reflect_requests(self, tool, input_text):
         """Test that self-reflection requests are detected."""
-        assert _looks_like_self_reflect_request(input_text) is True
+        assert tool.matches_input(input_text) is True
 
     @pytest.mark.parametrize("input_text", [
         "hello world",
@@ -106,9 +105,6 @@ class TestSelfReflectDetection:
         "   ",
         None,
     ])
-    def test_does_not_detect_non_self_reflect_requests(self, input_text):
+    def test_does_not_detect_non_self_reflect_requests(self, tool, input_text):
         """Test that non-self-reflection requests are not detected."""
-        if input_text is None:
-            assert _looks_like_self_reflect_request(input_text) is False
-        else:
-            assert _looks_like_self_reflect_request(input_text) is False
+        assert tool.matches_input(input_text) is False

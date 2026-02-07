@@ -144,6 +144,26 @@ class MockLLMClient(LLMClientProtocol):
 
         return self._generate_contextual_response(prompt, system_prompt)
 
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+    ) -> str:
+        """Alias for completion to satisfy LLMClientProtocol."""
+        return await self.complete(prompt, system_prompt=system_prompt)
+
+    async def stream(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream response chunks to satisfy LLMClientProtocol."""
+        async for chunk in self.stream_chat(
+            [{"role": "user", "content": prompt}],
+            system_prompt=system_prompt,
+        ):
+            yield chunk
+
     async def decide(
         self,
         user_input: str,

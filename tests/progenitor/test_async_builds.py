@@ -26,11 +26,8 @@ from app.progenitor.runtime.background_build import (
     set_background_runner,
 )
 from app.progenitor.runtime.time_utils import utcnow
-from app.progenitor.nodes.decide import (
-    _looks_like_list_schedule_request,
-    _looks_like_agent_build_request,
-    _looks_like_build_status_request,
-)
+from app.progenitor.tools.list_schedule import ListScheduleTool
+from app.progenitor.tools.build_status import BuildStatusTool
 
 
 # ============================================================================
@@ -247,7 +244,11 @@ class TestBackgroundRunnerGlobalAccess:
 
 
 class TestListScheduleDetection:
-    """Test _looks_like_list_schedule_request heuristic."""
+    """Test ListScheduleTool.matches_input heuristic."""
+
+    @pytest.fixture
+    def tool(self):
+        return ListScheduleTool()
 
     @pytest.mark.parametrize("prompt", [
         "what is your schedule",
@@ -273,9 +274,9 @@ class TestListScheduleDetection:
         "list reminders",
         "what reminders",
     ])
-    def test_detects_schedule_requests(self, prompt):
+    def test_detects_schedule_requests(self, tool, prompt):
         """Should detect schedule list requests."""
-        assert _looks_like_list_schedule_request(prompt) is True
+        assert tool.matches_input(prompt) is True
 
     @pytest.mark.parametrize("prompt", [
         "schedule a task for tomorrow",
@@ -291,69 +292,17 @@ class TestListScheduleDetection:
         "current schedule",  # Not in pattern list
         "my schedules",  # Not in pattern list (different from "list schedules")
     ])
-    def test_does_not_detect_non_schedule_requests(self, prompt):
+    def test_does_not_detect_non_schedule_requests(self, tool, prompt):
         """Should not detect non-schedule-list requests."""
-        assert _looks_like_list_schedule_request(prompt) is False
-
-
-class TestAgentBuildDetection:
-    """Test _looks_like_agent_build_request heuristic."""
-
-    @pytest.mark.parametrize("prompt", [
-        "build an agent",
-        "Build an agent for me",
-        "create a new agent",
-        "Create a new agent that does X",
-        "make an agent",
-        "Make an agent to handle this",
-        "I want to build an agent",
-        "please build an agent",
-        "can you build an agent",
-        "build a new agent",
-        "create an agent",
-        "build me an agent",
-        "create me an agent",
-        "scaffold an agent",
-        "generate an agent",
-        "implement an agent",
-        "build a hello world agent",
-        "create a weather agent",
-        "build an a2a agent",
-    ])
-    def test_detects_agent_build_requests(self, prompt):
-        """Should detect explicit agent build requests."""
-        assert _looks_like_agent_build_request(prompt) is True
-
-    @pytest.mark.parametrize("prompt", [
-        # Should NOT trigger build
-        "what is an agent",
-        "tell me about agents",
-        "how do agents work",
-        "agent status",
-        "list agents",
-        "show agents",
-        "the agent is running",
-        "build a house",
-        "create a file",
-        "make something",
-        "I need help with code",
-        "build the project",
-        "create a schedule",
-        "what is your schedule",
-        "hello",
-        "help",
-        "build a docker image",
-        "create a container",
-        "build the plan",
-        "develop a plan",  # No explicit agent build pattern
-    ])
-    def test_does_not_falsely_trigger_build(self, prompt):
-        """Should NOT trigger build for non-build requests."""
-        assert _looks_like_agent_build_request(prompt) is False
+        assert tool.matches_input(prompt) is False
 
 
 class TestBuildStatusDetection:
-    """Test _looks_like_build_status_request heuristic."""
+    """Test BuildStatusTool.matches_input heuristic."""
+
+    @pytest.fixture
+    def tool(self):
+        return BuildStatusTool()
 
     @pytest.mark.parametrize("prompt", [
         "build status",
@@ -370,9 +319,9 @@ class TestBuildStatusDetection:
         "current build",
         "update on build",
     ])
-    def test_detects_build_status_requests(self, prompt):
+    def test_detects_build_status_requests(self, tool, prompt):
         """Should detect build status requests."""
-        assert _looks_like_build_status_request(prompt) is True
+        assert tool.matches_input(prompt) is True
 
     @pytest.mark.parametrize("prompt", [
         "build an agent",
@@ -382,9 +331,9 @@ class TestBuildStatusDetection:
         "build something",
         "is the build done",  # Not exact pattern
     ])
-    def test_does_not_detect_non_status_requests(self, prompt):
+    def test_does_not_detect_non_status_requests(self, tool, prompt):
         """Should not detect non-build-status requests."""
-        assert _looks_like_build_status_request(prompt) is False
+        assert tool.matches_input(prompt) is False
 
 
 # ============================================================================

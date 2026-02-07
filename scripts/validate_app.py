@@ -84,7 +84,8 @@ def test_fastapi_app():
         print(f"✓ Routes: {len(app.routes)} endpoints")
 
         # Check for key endpoints
-        paths = [r.path for r in app.routes if hasattr(r, 'path')]
+        paths = [getattr(r, "path", None) for r in app.routes]
+        paths = [p for p in paths if isinstance(p, str)]
         required_endpoints = ['/health', '/v1/models', '/v1/chat/completions']
 
         for endpoint in required_endpoints:

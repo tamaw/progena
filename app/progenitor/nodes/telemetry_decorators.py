@@ -15,8 +15,8 @@ from ..state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
 
-# Type for node functions
-NodeFunc = Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]
+# Type for node functions (nodes return partial state updates)
+NodeFunc = Callable[[ProgenitorState], Coroutine[Any, Any, dict[str, Any]]]
 T = TypeVar('T', bound=Callable)
 
 

@@ -34,6 +34,18 @@ class CompressConversationTool(BaseSystemTool):
             "to reduce context window usage"
         )
 
+    @property
+    def keywords(self) -> list[str]:
+        return [
+            "compress conversation",
+            "compress chat",
+            "compress history",
+            "summarize conversation",
+            "summarise conversation",
+            "compact conversation",
+            "reduce context",
+        ]
+
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..llm.conversation_compressor import ConversationCompressor
         from ..state.models import ConversationMessage

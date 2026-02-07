@@ -7,7 +7,7 @@ Verifies system tool protocol, implementations, and registry.
 import pytest
 from typing import cast
 from unittest.mock import MagicMock, AsyncMock, patch
-from app.progenitor.nodes.system_tools import (
+from app.progenitor.nodes.node_helpers import (
     ToolContext,
     ToolResult,
     SystemTool,
@@ -328,8 +328,8 @@ class TestExecuteSystemTool:
         mock_llm = MagicMock()
         state_manager = AsyncMock()
 
-        # execute_system_tool returns (result_dict, error)
-        result, error = await execute_system_tool(
+        # execute_system_tool returns (result_dict, error, state_updates)
+        result, error, state_updates = await execute_system_tool(
             "current_time",
             mock_registry,
             mock_llm,
@@ -345,7 +345,7 @@ class TestExecuteSystemTool:
         mock_llm = MagicMock()
         state_manager = AsyncMock()
 
-        result, error = await execute_system_tool(
+        result, error, state_updates = await execute_system_tool(
             "unknown_tool_xyz",
             mock_registry,
             mock_llm,
@@ -363,7 +363,7 @@ class TestExecuteSystemTool:
         mock_llm = MagicMock()
         state_manager = AsyncMock()
 
-        result, error = await execute_system_tool(
+        result, error, state_updates = await execute_system_tool(
             "list_tools",
             mock_registry,
             mock_llm,

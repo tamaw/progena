@@ -126,6 +126,7 @@ class TestValidationFinding:
         )
         assert f.file_path == "app/main.py"
         assert f.line_number == 42
+        assert f.stack_trace is not None
         assert len(f.stack_trace) == 2
         assert f.suggested_fix == "Add type annotation"
         assert f.is_root_cause is True
@@ -230,6 +231,7 @@ class TestValidationResultV2:
         )
         result.compute_counts()
         result.compute_statistics(previous_error_count=1)
+        assert result.statistics is not None
         assert result.statistics.trend == "degrading"
 
     def test_trend_stable(self):
@@ -241,6 +243,7 @@ class TestValidationResultV2:
         )
         result.compute_counts()
         result.compute_statistics(previous_error_count=1)
+        assert result.statistics is not None
         assert result.statistics.trend == "stable"
 
 
@@ -713,8 +716,9 @@ class TestValidateNodeIntegration:
         vr = result["validation_result_v2"]
         assert vr["error_count"] >= 2  # status + error + smoke
         assert vr["has_blocking_issues"] is True
-        assert vr["statistics"] is not None
-        assert vr["statistics"]["smoke_test_passed"] is False
+        stats = vr["statistics"]
+        assert stats is not None
+        assert stats["smoke_test_passed"] is False
 
     async def test_with_deduplication(self):
         """Deduplication removes exact duplicates."""
@@ -774,8 +778,10 @@ class TestValidateNodeIntegration:
         vr = result["validation_result_v2"]
 
         # Should show improving trend (0 errors vs 5 previous)
-        assert vr["statistics"]["trend"] == "improving"
-        assert vr["statistics"]["previous_error_count"] == 5
+        stats = vr["statistics"]
+        assert stats is not None
+        assert stats["trend"] == "improving"
+        assert stats["previous_error_count"] == 5
 
         # Should have called save
         mock_sm.save_build_state.assert_called_once()

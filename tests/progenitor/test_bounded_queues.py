@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
+from typing import Any, cast
 
 import pytest
 
@@ -76,7 +77,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.loop = ProgenitorLoop(
             graph=self.graph,
             state_manager=self.state_manager,
-            config=self.config,
+            config=cast(Any, self.config),
             copilot_acp_manager=None,
         )
 
@@ -226,7 +227,7 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
         loop = ProgenitorLoop(
             graph=MagicMock(),
             state_manager=state_manager,
-            config=config,
+            config=cast(Any, config),
             copilot_acp_manager=None,
         )
 

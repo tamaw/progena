@@ -27,8 +27,8 @@ class TestNodeDependencies(unittest.TestCase):
 
     def test_create_dependencies_with_mocks(self):
         """Test creating dependencies with mocked components."""
-        from app.progenitor.nodes import NodeDependencies
         from app.progenitor.config import ProgenitorConfig
+        from app.progenitor.nodes import NodeDependencies
 
         llm_client = MagicMock()
         llm_client.decide = AsyncMock()
@@ -55,8 +55,8 @@ class TestNodeDependencies(unittest.TestCase):
 
     def test_default_paths_from_config(self):
         """Test that paths default from config."""
-        from app.progenitor.nodes import NodeDependencies
         from app.progenitor.config import ProgenitorConfig
+        from app.progenitor.nodes import NodeDependencies
 
         config = ProgenitorConfig()
 
@@ -72,8 +72,8 @@ class TestNodeDependencies(unittest.TestCase):
 
     def test_custom_paths_override_config(self):
         """Test that explicit paths override config defaults."""
-        from app.progenitor.nodes import NodeDependencies
         from app.progenitor.config import ProgenitorConfig
+        from app.progenitor.nodes import NodeDependencies
 
         custom_worktrees = Path("/custom/worktrees")
         custom_copilot = Path("/custom/copilot.json")
@@ -155,7 +155,7 @@ class TestProtocolConformance(unittest.TestCase):
         from app.progenitor.nodes import LLMClientProtocol
 
         class MockLLM:
-            async def decide(self, user_input, conversation_history, available_capabilities):
+            async def decide(self, user_input, conversation_history, tool_context):
                 return {}
 
             async def plan(self, user_input, decision, current_backlog):
@@ -217,8 +217,8 @@ class TestCustomNodesOverride(unittest.TestCase):
 
     def test_custom_nodes_can_be_provided(self):
         """Test providing custom nodes."""
-        from app.progenitor.nodes import NodeDependencies
         from app.progenitor.config import ProgenitorConfig
+        from app.progenitor.nodes import NodeDependencies
 
         async def custom_node(state):
             return {"custom": True}

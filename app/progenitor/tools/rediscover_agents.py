@@ -21,6 +21,29 @@ class RediscoverAgentsTool(BaseSystemTool):
     def description(self) -> str:
         return "Scan the agents folder, analyze with LLM, and update registry.json"
 
+    @property
+    def keywords(self) -> list[str]:
+        return [
+            "rewire agents",
+            "rewire the agents",
+            "rediscover agents",
+            "rescan agents",
+            "refresh agents",
+            "reload agents",
+            "scan agents",
+            "discover agents",
+            "update registry",
+            "refresh registry",
+            "sync agents",
+            "re-scan agents",
+            "re-discover agents",
+            "agent discovery",
+            "run agent discovery",
+            "run discovery",
+            "do agent discovery",
+            "agent registry",
+        ]
+
     async def execute(self, context: ToolContext) -> ToolResult:
         from .agent_discovery import discover_agents
 

@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections import Counter
-from typing import Any, Callable, Coroutine, Optional, TYPE_CHECKING
+from typing import Any, Callable, Coroutine, Optional, TYPE_CHECKING, Mapping
 
 from ..state.models import ProgenitorState
 from ..state.execution_schemas import (
@@ -947,7 +947,7 @@ def create_node(
     return validate_node
 
 
-def _get_project_directory(current_item: Any, state: ProgenitorState) -> Optional[str]:
+def _get_project_directory(current_item: Any, state: Mapping[str, Any]) -> Optional[str]:
     """Extract project directory from work item or build settings."""
     # Try build settings in state
     build_settings = state.get("build_settings")

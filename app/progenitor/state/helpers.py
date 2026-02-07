@@ -7,7 +7,7 @@ partially with dicts.
 """
 
 import logging
-from typing import Any, Optional, TypeVar, Type, TYPE_CHECKING
+from typing import Any, Optional, TypeVar, Type, TYPE_CHECKING, Mapping
 from .models import (
     WorkItem,
     WorkItemType,
@@ -17,6 +17,7 @@ from .models import (
     ScheduleEntry,
     AgentRegistryEntry,
     ConversationMessage,
+    BuildPhases,
 )
 
 if TYPE_CHECKING:
@@ -214,19 +215,19 @@ def to_dict(item: Any) -> dict[str, Any]:
     return {}
 
 
-def get_ideal_state(state: dict[str, Any]) -> Any:
+def get_ideal_state(state: Mapping[str, Any]) -> Any:
     """Get ideal_state from phases.observe in state."""
     phases = state.get("phases") or {}
     observe_phase = phases.get("observe") or {}
     return observe_phase.get("ideal_state")
 
 
-def set_ideal_state(phases: dict[str, Any] | None, ideal_state: Any) -> dict[str, Any]:
+def set_ideal_state(phases: BuildPhases | dict[str, Any] | None, ideal_state: Any) -> BuildPhases:
     """Return phases with observe.ideal_state set, preserving other phases."""
     if hasattr(ideal_state, "model_dump"):
         ideal_state = ideal_state.model_dump()
-    updated_phases = dict(phases or {})
-    observe_phase = dict(updated_phases.get("observe") or {})
+    updated_phases: dict[str, Any] = dict(phases or {})
+    observe_phase: dict[str, Any] = dict(updated_phases.get("observe") or {})
     observe_phase["ideal_state"] = ideal_state
     updated_phases["observe"] = observe_phase
     return updated_phases

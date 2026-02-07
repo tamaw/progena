@@ -244,8 +244,10 @@ class TestShouldIterateLogic:
         """Should stop when verification passes."""
         state: ProgenitorState = {
             "iteration": {"current": 2},
-            "verification": {"current_passed": True},
-            "last_verification_report": {"overall_score": 0.95},
+            "verification": {
+                "current_passed": True,
+                "current_report": {"overall_score": 0.95},
+            },
         }
 
         result = should_iterate(state, max_iterations=5)
