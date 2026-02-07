@@ -1,0 +1,43 @@
+"""
+List Agents - List all registered agents with their status.
+"""
+
+import logging
+
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+
+logger = logging.getLogger(__name__)
+
+
+class ListAgentsTool(BaseSystemTool):
+    """List all registered agents with their status."""
+
+    @property
+    def name(self) -> str:
+        return "list_agents"
+
+    @property
+    def description(self) -> str:
+        return "List all registered agents with their status"
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        agents = context.tool_registry.get_agents()
+        all_agents = [
+            {
+                "name": agent.get("name"),
+                "description": agent.get("description"),
+                "status": agent.get("status", "unknown"),
+                "transport": agent.get("transport"),
+                "port": agent.get("port"),
+                "endpoint": agent.get("endpoint"),
+            }
+            for agent in agents
+        ]
+
+        running = [a for a in agents if a.get("status") == "running"]
+
+        return ToolResult.ok({
+            "agents": all_agents,
+            "running_count": len(running),
+            "total_count": len(all_agents),
+        })

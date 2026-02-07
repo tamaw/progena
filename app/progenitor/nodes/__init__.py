@@ -43,7 +43,7 @@ from . import (
 
 # Submodules
 from . import heuristics
-from . import system_tools
+from . import node_helpers
 
 # Error types for consistent error handling across nodes
 from .errors import (
@@ -103,7 +103,7 @@ __all__ = [
     "build",  # Extracted from graph_inner_loop.py
     # Submodules
     "heuristics",
-    "system_tools",
+    "node_helpers",
     # Error types
     "NodeError",
     "RecoverableError",

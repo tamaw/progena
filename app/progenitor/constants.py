@@ -58,6 +58,8 @@ class SystemToolName(str, Enum):
     LIST_SCHEDULE = "list_schedule"
     CURRENT_TIME = "current_time"
     SELF_REFLECT = "self_reflect"
+    NEW_CONVERSATION = "new_conversation"
+    COMPRESS_CONVERSATION = "compress_conversation"
 
 
 # Default thresholds and limits

@@ -25,6 +25,10 @@ def format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
         return _format_current_time(result)
     elif tool_name == "list_schedule":
         return _format_list_schedule(result)
+    elif tool_name == "new_conversation":
+        return _format_new_conversation(result)
+    elif tool_name == "compress_conversation":
+        return _format_compress_conversation(result)
     else:
         # Default: return JSON-like representation
         return f"**Result:**\n```json\n{json.dumps(result, indent=2)}\n```"
@@ -225,6 +229,36 @@ def _format_list_schedule(result: dict[str, Any]) -> str:
         lines.append("")  # Blank line between tasks
 
     lines.append(f"**Total:** {result.get('total_count', 0)} scheduled task(s)")
+    return "\n".join(lines)
+
+
+def _format_new_conversation(result: dict[str, Any]) -> str:
+    """Format new_conversation result."""
+    new_run_id = result.get("new_run_id", "unknown")
+    previous_run_id = result.get("previous_run_id", "unknown")
+    messages_cleared = result.get("messages_cleared", 0)
+
+    lines = ["**🔄 New Conversation Started**"]
+    lines.append(f"  • **New Run ID:** `{new_run_id}`")
+    if previous_run_id and previous_run_id != "unknown":
+        lines.append(f"  • **Previous Run ID:** `{previous_run_id}`")
+    if messages_cleared:
+        lines.append(f"  • **Messages cleared:** {messages_cleared}")
+    lines.append("\nFresh conversation ready. How can I help?")
+    return "\n".join(lines)
+
+
+def _format_compress_conversation(result: dict[str, Any]) -> str:
+    """Format compress_conversation result."""
+    original = result.get("original_message_count", 0)
+    compressed = result.get("compressed_message_count", 0)
+    summary_length = result.get("summary_length", 0)
+
+    lines = ["**📦 Conversation Compressed**"]
+    lines.append(f"  • **Before:** {original} messages")
+    lines.append(f"  • **After:** {compressed} messages")
+    if summary_length:
+        lines.append(f"  • **Summary:** {summary_length} characters")
     return "\n".join(lines)
 
 

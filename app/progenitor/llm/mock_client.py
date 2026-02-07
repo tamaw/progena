@@ -20,15 +20,13 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import random
-import time
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 from ..protocols import LLMClientProtocol
-from ..state.models import ConversationMessage
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +82,10 @@ class MockLLMClient(LLMClientProtocol):
     async def chat(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        response_format: Optional[dict[str, Any]] = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         """Return a mock chat response."""
         self._call_count += 1
@@ -110,7 +108,7 @@ class MockLLMClient(LLMClientProtocol):
     async def stream_chat(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
@@ -137,7 +135,7 @@ class MockLLMClient(LLMClientProtocol):
     async def complete(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> str:
         """Return a mock completion response."""
         self._call_count += 1
@@ -150,7 +148,7 @@ class MockLLMClient(LLMClientProtocol):
         self,
         user_input: str,
         conversation_history: list[dict[str, Any]],
-        available_capabilities: list[str],
+        tool_context: str,
     ) -> dict[str, Any]:
         """Return a mock decision."""
         self._call_count += 1
@@ -182,7 +180,7 @@ class MockLLMClient(LLMClientProtocol):
             "reasoning": reasoning,
             "confidence": round(random.uniform(0.75, 0.95), 2),
             "requires_tools": action == "execute",
-            "suggested_capabilities": available_capabilities[:2] if available_capabilities else [],
+            "suggested_capabilities": [],
         }
 
     async def plan(
@@ -284,7 +282,7 @@ class MockLLMClient(LLMClientProtocol):
     def _generate_contextual_response(
         self,
         user_input: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> str:
         """Generate a contextually appropriate mock response."""
         input_lower = user_input.lower() if user_input else ""

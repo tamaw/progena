@@ -12,6 +12,7 @@ from typing import Any
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ...runtime.time_utils import utcnow_isoformat
 from ...state.helpers import get_ideal_state
+from ...state.models import generate_run_id
 from ...env_utils import env_int, env_bool
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,50 @@ class ListAgentsTool(BaseSystemTool):
             "agents": all_agents,
             "running_count": len(running),
             "total_count": len(all_agents),
+        })
+
+
+class NewConversationTool(BaseSystemTool):
+    """Start a new conversation by resetting run_id and clearing session state."""
+
+    @property
+    def name(self) -> str:
+        return "new_conversation"
+
+    @property
+    def description(self) -> str:
+        return "Start a new conversation (fresh run_id, clear chat history)"
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        if not context.state_manager and context.state is None:
+            return ToolResult.fail("No state manager or in-memory state available.")
+
+        new_run_id = generate_run_id()
+
+        reset_state = {
+            "run_id": new_run_id,
+            "cycle_count": 0,
+            "actions_this_cycle": 0,
+            "shutdown_requested": False,
+            "last_checkpoint": None,
+            "messages": [],
+            "attachments": [],
+            "tool_calls": [],
+            "current_input": None,
+            "pending_response": None,
+            "current_decision": None,
+            "current_build_request": None,
+        }
+
+        if context.state_manager:
+            await context.state_manager.update_current_state(reset_state)
+
+        if context.state is not None:
+            context.state.update(reset_state)
+
+        return ToolResult.ok({
+            "reset": True,
+            "run_id": new_run_id,
         })
 
 
