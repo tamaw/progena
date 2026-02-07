@@ -5,6 +5,7 @@ Provides protocol types, a tool registry, and result formatters
 used by the LangGraph nodes to execute and present tool results.
 """
 
+from typing import TYPE_CHECKING
 from .protocol import ToolContext, ToolResult, SystemTool, BaseSystemTool
 from .registry import (
     execute_system_tool,
@@ -14,6 +15,18 @@ from .registry import (
     match_tool_by_input,
 )
 from .formatters import format_tool_result, format_schedule_result
+
+if TYPE_CHECKING:
+    from ...tools.list_tools import ListToolsTool
+    from ...tools.rediscover_agents import RediscoverAgentsTool
+    from ...tools.list_agents import ListAgentsTool
+    from ...tools.build_status import BuildStatusTool
+    from ...tools.current_time import CurrentTimeTool
+    from ...tools.list_schedule import ListScheduleTool
+    from ...tools.self_reflect_tool import SelfReflectTool
+    from ...tools.schedule_task import ScheduleTaskTool
+    from ...tools.new_conversation import NewConversationTool
+    from ...tools.compress_conversation import CompressConversationTool
 
 
 def __getattr__(name: str):

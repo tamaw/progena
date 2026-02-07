@@ -251,7 +251,8 @@ class TestStateConsistency:
             assert state["actions_this_cycle"] >= 0
 
         if "iteration" in state:
-            assert state["iteration"]["current"] >= 0
+            iteration = state.get("iteration", {})
+            assert iteration.get("current", 0) >= 0
 
     @given(
         st.integers(min_value=0, max_value=100),

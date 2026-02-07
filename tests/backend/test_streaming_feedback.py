@@ -163,6 +163,7 @@ class TestStreamChunk:
             index=5,
             metadata={"tokens": 100, "model": "gpt-4"}
         )
+        assert chunk.metadata is not None
         assert chunk.metadata["tokens"] == 100
 
 

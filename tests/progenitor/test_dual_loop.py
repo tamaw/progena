@@ -228,7 +228,7 @@ class TestArtefactTracking:
 
     def test_state_has_artefact_fields(self):
         """Test that ProgenitorState has artefact tracking fields."""
-        from app.progenitor.state.models import ProgenitorState
+        from app.progenitor.state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
         import typing
 
         # Check TypedDict has required fields (now nested)
@@ -400,6 +400,7 @@ class TestExecutePhase:
     async def test_execute_node_no_tools(self):
         """Test execute node when no tools are pending."""
         from app.progenitor.nodes import execute
+        from app.progenitor.state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
 
         # Mock tool registry
         class MockRegistry:
@@ -408,21 +409,29 @@ class TestExecutePhase:
 
         node_fn = execute.create_node(MockRegistry())
 
-        state = {
-            "current_work_item": {"id": "test", "status": "pending"},
+        state: ProgenitorState = {
+            "current_work_item": WorkItem(
+                id="test",
+                item_type=WorkItemType.DIRECT_ANSWER,
+                status=WorkItemStatus.PENDING,
+                description="Test",
+            ),
             "phases": {"execute": {"result": {"output": "some output"}}},
             "work_item_completed": True,
         }
 
         result = await node_fn(state)
 
-        assert result.get("phases", {}).get("execute", {}).get("completed") is True
-        assert result.get("phases", {}).get("execute", {}).get("result") is not None
+        phases = result.get("phases") or {}
+        execute_phase = phases.get("execute") or {}
+        assert execute_phase.get("completed") is True
+        assert execute_phase.get("result") is not None
 
     @pytest.mark.asyncio
     async def test_execute_node_with_pending_tools(self):
         """Test execute node with pending tool calls."""
         from app.progenitor.nodes import execute
+        from app.progenitor.state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
 
         # Mock tool registry
         class MockRegistry:
@@ -431,8 +440,13 @@ class TestExecutePhase:
 
         node_fn = execute.create_node(MockRegistry())
 
-        state = {
-            "current_work_item": {"id": "test", "status": "in_progress"},
+        state: ProgenitorState = {
+            "current_work_item": WorkItem(
+                id="test",
+                item_type=WorkItemType.SYSTEM_TOOL,
+                status=WorkItemStatus.IN_PROGRESS,
+                description="Test",
+            ),
             "phases": {"execute": {"result": {"output": "build output"}}},
             "work_item_completed": False,
             "pending_tool_calls": [
@@ -442,9 +456,11 @@ class TestExecutePhase:
 
         result = await node_fn(state)
 
-        assert result.get("phases", {}).get("execute", {}).get("completed") is True
+        phases = result.get("phases") or {}
+        execute_phase = phases.get("execute") or {}
+        assert execute_phase.get("completed") is True
         # Should report error for unknown tool - check in result
-        exec_result = result.get("phases", {}).get("execute", {}).get("result", {})
+        exec_result = execute_phase.get("result") or {}
         build_output = exec_result.get("build_output", {})
         assert build_output.get("all_succeeded") is False
 
@@ -570,7 +586,7 @@ class TestLoopSpecConformance:
                 "lessons_learned": [],
             },
             "best": {
-                "iteration": None,
+                "iteration": 0,
                 "score": 0.0,
                 "passed": False,
             },

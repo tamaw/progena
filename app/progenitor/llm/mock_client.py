@@ -158,11 +158,14 @@ class MockLLMClient(LLMClientProtocol):
         system_prompt: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream response chunks to satisfy LLMClientProtocol."""
-        async for chunk in self.stream_chat(
-            [{"role": "user", "content": prompt}],
-            system_prompt=system_prompt,
-        ):
-            yield chunk
+        async def _generator() -> AsyncIterator[str]:
+            async for chunk in self.stream_chat(
+                [{"role": "user", "content": prompt}],
+                system_prompt=system_prompt,
+            ):
+                yield chunk
+
+        return _generator()
 
     async def decide(
         self,

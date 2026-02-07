@@ -844,8 +844,9 @@ class TestInnerLoopIntegration:
 
         # Should produce skipped execution result
         assert "phases" in result
-        execute_phase = result.get("phases", {}).get("execute", {})
-        exec_result = execute_phase.get("result", {})
+        phases = result.get("phases") or {}
+        execute_phase = phases.get("execute") or {}
+        exec_result = execute_phase.get("result") or {}
         assert exec_result.get("status") == "skipped"
 
     @pytest.mark.asyncio

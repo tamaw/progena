@@ -16,9 +16,9 @@ import os
 import sys
 import tempfile
 import time
-from pathlib import Path
-from typing import Any, Optional
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 import aiofiles
 
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def _get_telemetry():
     """Get telemetry components if available."""
     try:
-        from ..telemetry import get_tracer, get_metrics
+        from ..telemetry import get_metrics, get_tracer
         return get_tracer(), get_metrics()
     except ImportError:
         return None, None
@@ -47,15 +47,13 @@ else:
     def unlock_file(f):
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
+from ..runtime.time_utils import utcnow_isoformat
 from .models import (
-    ProgenitorState,
-    WorkItem,
-    ScheduleEntry,
-    AgentRegistryEntry,
     ConversationMessage,
+    ScheduleEntry,
+    WorkItem,
     redact_secrets,
 )
-from ..runtime.time_utils import utcnow_isoformat
 
 
 class StateManager:
@@ -369,7 +367,7 @@ class StateManager:
         if not filepath.exists():
             return None
 
-        async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding='utf-8') as f:
             content = await f.read()
             # Handle empty files gracefully
             if not content or not content.strip():
@@ -545,11 +543,19 @@ class StateManager:
     # ==========================================================================
 
     async def get_build_state(self) -> dict[str, Any]:
-        """Get build state (agent builds only)."""
+        """Get build state (agent builds only).
+
+        Returns cached in-memory state when available, only falls back
+        to disk when the cache is empty (e.g. first access before init).
+        """
+        if "build_state" in self._state_cache:
+            return self._state_cache["build_state"]
         async with self._file_lock("build_state"):
-            return await self._read_json(
+            data = await self._read_json(
                 self.state_dir / self.CORE_FILES["build_state"]
             ) or {}
+            self._state_cache["build_state"] = data
+            return data
 
     async def save_build_state(self, state: dict[str, Any]) -> None:
         """Save build state (agent builds only)."""
@@ -628,11 +634,19 @@ class StateManager:
     # ==========================================================================
 
     async def get_current_state(self) -> dict[str, Any]:
-        """Get current progenitor agent state (chat, schedule, tool calls)."""
+        """Get current progenitor agent state (chat, schedule, tool calls).
+
+        Returns cached in-memory state when available, only falls back
+        to disk when the cache is empty (e.g. first access before init).
+        """
+        if "current_state" in self._state_cache:
+            return self._state_cache["current_state"]
         async with self._file_lock("current_state"):
-            return await self._read_json(
+            data = await self._read_json(
                 self.state_dir / self.CORE_FILES["current_state"]
             ) or {}
+            self._state_cache["current_state"] = data
+            return data
 
     async def save_current_state(self, state: dict[str, Any]) -> None:
         """Save current progenitor agent state."""
@@ -817,7 +831,7 @@ class StateManager:
             return []
 
         entries = []
-        async with aiofiles.open(filepath, 'r') as f:
+        async with aiofiles.open(filepath) as f:
             async for line in f:
                 if line.strip():
                     entries.append(json.loads(line))
@@ -845,7 +859,7 @@ class StateManager:
         self,
         iteration: int,
         verification_report: Any,
-        stop_reason: Optional[str] = None
+        stop_reason: str | None = None
     ) -> None:
         """Log the end of an inner loop iteration."""
         from ..runtime.time_utils import utcnow_isoformat
@@ -870,7 +884,7 @@ class StateManager:
             return []
 
         iterations = []
-        async with aiofiles.open(decisions_path, 'r') as f:
+        async with aiofiles.open(decisions_path) as f:
             async for line in f:
                 if line.strip():
                     entry = json.loads(line)

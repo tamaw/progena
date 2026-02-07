@@ -75,6 +75,7 @@ def create_node(
         """Execute the current work item."""
         current_item = state.get("current_work_item")
         backlog = list(state.get("backlog", []))
+        schedule_updated = None
 
         if not current_item:
             return {}
@@ -131,6 +132,26 @@ def create_node(
 
                         await state_manager.update_schedule_entry(schedule_id, updates)
                         logger.info(f"Updated schedule entry {schedule_id}")
+
+                        # Update in-memory schedule to prevent immediate re-trigger
+                        schedule = list(state.get("schedule", []))
+                        for i, entry in enumerate(schedule):
+                            if hasattr(entry, "model_dump"):
+                                entry_dict = entry.model_dump()
+                            elif isinstance(entry, dict):
+                                entry_dict = dict(entry)
+                            else:
+                                continue
+
+                            if entry_dict.get("id") != schedule_id:
+                                continue
+
+                            entry_dict.update(updates)
+                            from ..state.models import ScheduleEntry
+
+                            schedule[i] = ScheduleEntry(**entry_dict)
+                            schedule_updated = schedule
+                            break
                     except Exception as e:
                         logger.warning(f"Failed to update schedule entry: {e}")
 
@@ -155,6 +176,7 @@ def create_node(
             "actions_this_cycle": state.get("actions_this_cycle", 0) + 1,
             "execution_result": output_for_verify,  # BL-006: ExecutionState field
             "work_item_completed": error is None,
+            **({"schedule": schedule_updated} if schedule_updated is not None else {}),
         }
 
     return act_node

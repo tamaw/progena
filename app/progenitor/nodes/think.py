@@ -22,19 +22,20 @@ import logging
 import random
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import ThinkResponse
-from ..state.models import ProgenitorState
-from ..state.helpers import get_ideal_state
+from ..runtime.time_utils import utcnow_isoformat
 from ..state.execution_schemas import (
+    Risk,
     StructuredApproach,
     ThinkOutput,
     TradeOff,
-    Risk,
 )
-from ..runtime.time_utils import utcnow_isoformat
+from ..state.helpers import get_ideal_state
+from ..state.models import ProgenitorState
 from . import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ _TRADEOFF_PENALTY = {"low": 0.0, "medium": 0.03, "high": 0.08}
 def _get_telemetry():
     """Get telemetry components if available."""
     try:
-        from ..telemetry import get_tracer, get_metrics
+        from ..telemetry import get_metrics, get_tracer
         return get_tracer(), get_metrics()
     except ImportError:
         return None, None
@@ -599,47 +600,44 @@ def _handle_error(
 
 
 # ---------------------------------------------------------------------------
-# Approach history (stored in build_state.json)
+# Approach history (read from in-memory state)
 # ---------------------------------------------------------------------------
 
-async def _load_approach_history(state_manager) -> list[dict[str, Any]]:
-    """Load approach history from build_state.json."""
-    if not state_manager:
-        return []
+def _load_approach_history(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Load approach history from in-memory state."""
     try:
-        build_state = await state_manager.get_build_state()
-        return build_state.get("history", {}).get("approach_history", [])
+        history = state.get("history", {})
+        if isinstance(history, dict):
+            return list(history.get("approach_history") or [])
     except Exception:
-        return []
+        pass
+    return []
 
 
-async def _save_approach_history(
-    state_manager,
+def _build_approach_history_update(
+    state: Mapping[str, Any],
     approach_history: list[dict[str, Any]],
     selected_approach: StructuredApproach,
     iteration: int,
     quality_score: float,
-) -> None:
-    """Append the selected approach to history in build_state.json."""
-    if not state_manager:
-        return
-    try:
-        approach_history.append({
-            "iteration": iteration,
-            "approach_name": selected_approach.name,
-            "approach_id": selected_approach.id,
-            "strategy_preview": selected_approach.strategy[:200],
-            "success_probability": selected_approach.expected_success_probability,
-            "quality_score": quality_score,
-            "timestamp": utcnow_isoformat(),
-        })
-        await state_manager.update_build_state({
-            "history": {
-                "approach_history": approach_history,
-            }
-        })
-    except Exception as e:
-        logger.warning("THINK: Failed to save approach history: %s", e)
+) -> dict[str, Any]:
+    """Build an updated history dict with the new approach appended.
+
+    Returns the history dict to be merged into the node output so
+    LangGraph propagates it in-memory (no file I/O needed).
+    """
+    approach_history.append({
+        "iteration": iteration,
+        "approach_name": selected_approach.name,
+        "approach_id": selected_approach.id,
+        "strategy_preview": selected_approach.strategy[:200],
+        "success_probability": selected_approach.expected_success_probability,
+        "quality_score": quality_score,
+        "timestamp": utcnow_isoformat(),
+    })
+    history = dict(state.get("history") or {})
+    history["approach_history"] = approach_history
+    return history
 
 
 # ---------------------------------------------------------------------------
@@ -723,8 +721,8 @@ def create_node(
                 "\n\nReturn a single JSON object and nothing else (valid json)."
             )
 
-        # Load approach history for exploration/novelty scoring
-        approach_history = await _load_approach_history(state_manager)
+        # Load approach history from in-memory state for exploration/novelty scoring
+        approach_history = _load_approach_history(state)
         previous_names = [h.get("approach_name", "") for h in approach_history]
 
         gaps_analyzed = _extract_gaps(last_verification)
@@ -815,9 +813,7 @@ def create_node(
                     "approach_names": [a.name for a in think_output.approaches],
                     "recommended_approach": think_output.recommended_approach_id,
                     "recommendation_reasoning": rec_reasoning,
-                    "validation_issues": {
-                        k: v for k, v in all_issues.items()
-                    } if all_issues else None,
+                    "validation_issues": dict(all_issues) if all_issues else None,
                     "timestamp": utcnow_isoformat(),
                 })
                 response_preview = (
@@ -834,15 +830,16 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
-            # Store approach history
+            # Store approach history in-memory via state update
+            updated_history = None
             selected = next(
                 (a for a in valid_approaches if a.id == rec_id), None,
             )
             if selected:
                 # Compute quality score for the selected approach
                 _, quality, _ = _validate_approach(selected, gaps_analyzed)
-                await _save_approach_history(
-                    state_manager, approach_history, selected,
+                updated_history = _build_approach_history_update(
+                    state, approach_history, selected,
                     iteration or 0, quality,
                 )
 
@@ -863,7 +860,7 @@ def create_node(
 
             approaches_dicts = [a.model_dump() for a in think_output.approaches]
 
-            return {
+            result: dict[str, Any] = {
                 "phases": {
                     "think": {
                         "approaches": approaches_dicts,
@@ -872,13 +869,18 @@ def create_node(
                         "gaps_analyzed": gaps_analyzed,
                         "comparison": comparison,
                         "validation_issues": (
-                            {k: v for k, v in all_issues.items()}
+                            dict(all_issues)
                             if all_issues else {}
                         ),
                     },
                 },
                 "build_phase": "think",
             }
+
+            if updated_history is not None:
+                result["history"] = updated_history
+
+            return result
 
         except json.JSONDecodeError as e:
             logger.warning(
