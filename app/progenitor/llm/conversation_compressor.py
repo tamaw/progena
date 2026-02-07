@@ -18,8 +18,11 @@ from typing import Any, Optional
 from ..state.models import ConversationMessage
 from ..runtime.time_utils import utcnow
 from .tokenizer import count_tokens, count_message_tokens, is_tiktoken_available
+from .prompts import PromptTemplates
 
 logger = logging.getLogger(__name__)
+
+_prompts = PromptTemplates()
 
 
 class ConversationCompressor:
@@ -108,21 +111,16 @@ class ConversationCompressor:
         conversation_text = "\n".join(formatted)
 
         # Generate summary
-        prompt = f"""Summarize the following conversation concisely, preserving:
-- Key topics discussed
-- Important decisions made
-- Action items or requests
-- Any context needed for future messages
-
-Conversation:
-{conversation_text}
-
-Summary (be concise, max ~{self._max_summary_tokens} tokens):"""
+        prompt = _prompts.get(
+            "conversation_compressor.summarize.md",
+            conversation_text=conversation_text,
+            max_summary_tokens=str(self._max_summary_tokens),
+        )
 
         try:
             summary = await self._llm_client.generate(
                 prompt,
-                system_prompt="You are a conversation summarizer. Be concise and preserve key context.",
+                system_prompt=_prompts.get("conversation_compressor.summarize_system.md"),
             )
             return summary.strip()
         except Exception as e:
@@ -291,21 +289,17 @@ class IncrementalCompressor(ConversationCompressor):
             for m in new_messages[-10:]  # Last 10 new messages
         )
 
-        prompt = f"""Update this conversation summary with the new messages.
-Keep it concise (~{self._max_summary_tokens} tokens max).
-
-Current Summary:
-{current_summary}
-
-New Messages:
-{new_text}
-
-Updated Summary:"""
+        prompt = _prompts.get(
+            "conversation_compressor.update_summary.md",
+            max_summary_tokens=str(self._max_summary_tokens),
+            current_summary=current_summary,
+            new_text=new_text,
+        )
 
         try:
             return await self._llm_client.generate(
                 prompt,
-                system_prompt="You are updating a conversation summary. Be concise.",
+                system_prompt=_prompts.get("conversation_compressor.update_summary_system.md"),
             )
         except Exception as e:
             logger.warning("Failed to update summary: %s", e)

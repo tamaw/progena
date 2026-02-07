@@ -9,8 +9,11 @@ import json
 import logging
 
 from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from ..llm.prompts import PromptTemplates
 
 logger = logging.getLogger(__name__)
+
+_prompts = PromptTemplates()
 
 
 class ScheduleTaskTool(BaseSystemTool):
@@ -51,23 +54,7 @@ class ScheduleTaskTool(BaseSystemTool):
             return ToolResult.fail("No user input provided for scheduling.")
 
         # Use LLM to extract and process schedule parameters
-        system_prompt = (
-            "You are a scheduling assistant. Extract and format a scheduled task "
-            "from the user's request.\n\n"
-            "Return JSON with:\n"
-            "{\n"
-            '    "time_expression": "<when to run, e.g. \'in 5 minutes\', \'at 9am\', \'every day at 10am\'>",\n'
-            '    "instruction": "<clear instruction for what to do at that time>",\n'
-            '    "description": "<brief human-readable description of the task>"\n'
-            "}\n\n"
-            "Examples:\n"
-            '- "remind me to call John in 30 minutes" -> time: "in 30 minutes", '
-            'instruction: "Remind the user to call John", description: "Reminder: Call John"\n'
-            '- "say hello world at 9am" -> time: "at 9am", '
-            'instruction: "Say \'Hello World!\' to the user", description: "Say hello world"\n'
-            '- "every day at 5pm tell me a joke" -> time: "every day at 5pm", '
-            'instruction: "Tell the user a joke", description: "Daily joke"'
-        )
+        system_prompt = _prompts.get("schedule_task.extraction_system.md")
 
         messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
 

@@ -15,8 +15,11 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from ..runtime.time_utils import utcnow_isoformat
+from ..llm.prompts import PromptTemplates
 
 logger = logging.getLogger(__name__)
+
+_prompts = PromptTemplates()
 
 
 class ClarificationRequest(BaseModel):
@@ -246,44 +249,22 @@ class ClarificationDetector:
             elif isinstance(ideal_state, dict):
                 ideal_state_summary = f"Task: {ideal_state.get('task_description', '')}"
 
-        prompt = f"""Analyze this Copilot CLI output and determine if clarification from the user is needed.
-
-## Original Task
-{task_description}
-
-{ideal_state_summary}
-
-## Copilot Output (last 2000 chars)
-{output[-2000:]}
-
-## Heuristic Detection
-Detected need: {heuristic_result.needs_clarification}
-Confidence: {heuristic_result.confidence}
-Context: {heuristic_result.context}
-
-## Your Analysis
-
-Determine:
-1. Does the output indicate Copilot needs more information from the user? (yes/no)
-2. If yes, what specific information is needed?
-3. How should we ask the user? (Format a clear, concise question)
-4. Category of clarification: requirements, technical, design, scope, or other
-5. Confidence level (0.0-1.0)
-
-Respond in this exact format:
-NEEDS_CLARIFICATION: yes/no
-CONFIDENCE: 0.X
-CATEGORY: category_name
-CONTEXT: Brief description of what triggered this
-QUESTION: The question to ask the user (if clarification needed)
-"""
+        prompt = _prompts.get(
+            "clarification.detection.md",
+            task_description=task_description,
+            ideal_state_summary=ideal_state_summary,
+            output_tail=output[-2000:],
+            heuristic_needs=str(heuristic_result.needs_clarification),
+            heuristic_confidence=str(heuristic_result.confidence),
+            heuristic_context=str(heuristic_result.context),
+        )
 
         try:
             # llm_client is guaranteed to be not None here due to the check above
             assert self.llm_client is not None
             response = await self.llm_client.generate(
                 prompt=prompt,
-                system_prompt="You analyze build outputs to detect when user clarification is needed. Be conservative - only flag true ambiguity or explicit requests for information.",
+                system_prompt=_prompts.get("clarification.detection_system.md"),
             )
 
             return self._parse_llm_response(response, output)

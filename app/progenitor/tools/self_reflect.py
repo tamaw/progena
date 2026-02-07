@@ -18,7 +18,11 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from ..llm.client import LLMClient
 
+from ..llm.prompts import PromptTemplates
+
 logger = logging.getLogger(__name__)
+
+_prompts = PromptTemplates()
 
 # Root of the progenitor source code
 PROGENITOR_ROOT = Path(__file__).parent.parent  # app/progenitor/
@@ -469,20 +473,12 @@ class SelfReflection:
 
         file_content = self.read_file(relative_path, max_lines=300)
 
-        prompt = f"""Analyze this Python source file from an AI agent system called "Progenitor".
-Provide a concise summary of:
-1. The main purpose of this file
-2. Key components (classes, functions, important variables)
-3. What capabilities this provides to the agent
-4. Related files it might interact with (based on imports and references)
-
-File: {relative_path}
-
-```{file_content.language}
-{file_content.content}
-```
-
-Provide your analysis in a structured format."""
+        prompt = _prompts.get(
+            "self_reflect.file_analysis.md",
+            relative_path=relative_path,
+            language=file_content.language,
+            content=file_content.content,
+        )
 
         response = await self.llm_client.chat(
             messages=[{"role": "user", "content": prompt}],

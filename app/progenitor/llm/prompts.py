@@ -46,6 +46,25 @@ class PromptTemplates:
             )
         return prompt_file.read_text(encoding="utf-8")
 
+    def get(self, filename: str, **replacements: str) -> str:
+        """Load a prompt template and apply optional replacements.
+
+        Generic loader for any prompt file in data/prompts/.
+        Template variables use {placeholder} syntax.
+
+        Args:
+            filename: Name of the prompt file (e.g., 'act.upgrade.md')
+            **replacements: Key-value pairs for template variable substitution.
+                           Keys should match {placeholder} names in the template.
+
+        Returns:
+            The prompt content with replacements applied.
+        """
+        content = self._load_prompt(filename)
+        for key, value in replacements.items():
+            content = content.replace(f"{{{key}}}", str(value))
+        return content
+
     def get_genesis_prompt(self) -> str:
         """Get the system genesis prompt (loaded on startup)."""
         return self._load_prompt("genesis.md")

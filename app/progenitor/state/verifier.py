@@ -29,8 +29,11 @@ from .execution_schemas import (
     CriterionEvidence,
 )
 from ..runtime.time_utils import utcnow
+from ..llm.prompts import PromptTemplates
 
 logger = logging.getLogger(__name__)
+
+_prompts = PromptTemplates()
 
 
 def _get_telemetry():
@@ -715,31 +718,15 @@ class Verifier:
             exec_data.get('build_output', {}).get('startup_failed', False)
         )
 
-        prompt = f"""Score this criterion from 0.00 to 1.00 based on the evidence:
-
-{chr(10).join(context_parts)}
-
-Provide a precise score (0.00-1.00 with two decimal places) and brief explanation.
-
-IMPORTANT SCORING RULES:
-1. If there is a BUILD FAILURE or STARTUP FAILURE, the score MUST be 0.00 - the agent never ran!
-2. If the agent started but tests failed, score based on how many tests passed.
-3. If tests passed and responses look good, score accordingly.
-4. Use the full decimal precision (0.00-1.00) - don't just use round numbers like 0.5 or 1.0.
-
-Consider:
-- Did the agent even start? (Check for startup failures first!)
-- Did tests actually run and pass?
-- Are there real responses from the agent?
-- Do the responses demonstrate the criterion is met?
-
-Format: SCORE: X.XX | EXPLANATION: <text>"""
+        prompt = _prompts.get(
+            "verifier.criterion_scoring.md",
+            context_parts=chr(10).join(context_parts),
+        )
 
         try:
             response = await self.llm_client.generate(
                 prompt=prompt,
-                system_prompt="You are evaluating software quality criteria. Be objective. "
-                            "Pay attention to actual test results and agent responses.",
+                system_prompt=_prompts.get("verifier.criterion_scoring_system.md"),
             )
 
             # Parse response
@@ -1030,19 +1017,13 @@ Format: SCORE: X.XX | EXPLANATION: <text>"""
         self, criterion: SuccessCriterion, output: Any, context: dict
     ) -> tuple[float, str]:
         """Use LLM to judge quality."""
-        prompt = f"""Score this output against the criterion:
-
-CRITERION: {criterion.description}
-MEASUREMENT: {criterion.measurement}
-
-OUTPUT:
-{output}
-
-CONTEXT:
-{context}
-
-Rate from 0.0 to 1.0 and explain your reasoning.
-Format: SCORE: X.XX | EVIDENCE: explanation"""
+        prompt = _prompts.get(
+            "verifier.llm_verification.md",
+            criterion_description=criterion.description,
+            measurement=criterion.measurement,
+            output=str(output),
+            context=str(context),
+        )
 
         try:
             if not self.uses_llm:
@@ -1051,7 +1032,7 @@ Format: SCORE: X.XX | EVIDENCE: explanation"""
             assert self.llm_client is not None, "llm_client must be available when uses_llm is True"
             response = await self.llm_client.generate(
                 prompt=prompt,
-                system_prompt="You are an objective quality evaluator.",
+                system_prompt=_prompts.get("verifier.llm_verification_system.md"),
             )
 
             # Parse response (simplified)
