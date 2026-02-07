@@ -691,7 +691,8 @@ class TestInnerLoopIntegration:
 
         # Should complete execution phase
         assert "phases" in result
-        assert result["phases"]["execute"]["completed"] is True
+        execute_phase = result.get("phases", {}).get("execute", {})
+        assert execute_phase.get("completed") is True
 
     @pytest.mark.asyncio
     async def test_execute_node_detects_agent_from_build_settings(self, mock_state_manager):
@@ -843,7 +844,9 @@ class TestInnerLoopIntegration:
 
         # Should produce skipped execution result
         assert "phases" in result
-        assert result["phases"]["execute"]["result"]["status"] == "skipped"
+        execute_phase = result.get("phases", {}).get("execute", {})
+        exec_result = execute_phase.get("result", {})
+        assert exec_result.get("status") == "skipped"
 
     @pytest.mark.asyncio
     async def test_execute_node_with_pending_tools(self, mock_state_manager):

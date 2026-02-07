@@ -148,6 +148,7 @@ def check_compose_installed():
         except Exception as e:
             print(f"✗ docker-compose not found: {e}")
             return False
+    return False
 
 
 def main():

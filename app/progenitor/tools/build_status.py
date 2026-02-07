@@ -22,6 +22,26 @@ class BuildStatusTool(BaseSystemTool):
     def description(self) -> str:
         return "Check the current build status, progress, and messages"
 
+    @property
+    def keywords(self) -> list[str]:
+        return [
+            "build status",
+            "build progress",
+            "build state",
+            "what are you building",
+            "what's being built",
+            "current build",
+            "is there a build",
+            "check build",
+            "building status",
+            "how is the build",
+            "how's the build",
+            "build update",
+            "update on build",
+            "building progress",
+            "are you building",
+        ]
+
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..runtime.background_build import get_background_runner
 

@@ -111,7 +111,7 @@ def test_work_item():
         item_type=WorkItemType.DIRECT_ANSWER,
         status=WorkItemStatus.PENDING,
         description="Create a simple hello world script",
-        prompt="Create a Python script that prints 'Hello World'",
+        context={"prompt": "Create a Python script that prints 'Hello World'"},
     )
 
 
@@ -240,7 +240,9 @@ class TestIterationControl:
         state["should_iterate"] = False
 
         assert not state["should_iterate"]
-        assert state["verification"]["current_score"] >= 0.8
+        current_score = state.get("verification", {}).get("current_score")
+        assert current_score is not None
+        assert current_score >= 0.8
 
     def test_max_iterations_stops_loop(self, test_config):
         """Test that max iterations setting is respected."""
@@ -258,7 +260,7 @@ class TestIterationControl:
             state["iteration_stop_reason"] = "max_iterations_reached"
 
         assert not state["should_iterate"]
-        assert state["iteration_stop_reason"] == "max_iterations_reached"
+        assert state.get("iteration_stop_reason") == "max_iterations_reached"
 
 
 if __name__ == "__main__":

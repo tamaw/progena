@@ -52,6 +52,7 @@ class TestNormalizeWorkItem:
             "status": "pending",
         }
         result = normalize_work_item(data)
+        assert result is not None
         assert isinstance(result, WorkItem)
         assert result.id == "test-2"
         assert result.item_type_value == "a2a_call"
@@ -65,6 +66,7 @@ class TestNormalizeWorkItem:
             "description": "Invalid type",
         }
         result = normalize_work_item(data)
+        assert result is not None
         assert result.item_type_value == "direct_answer"
 
     def test_normalize_dict_with_context(self):
@@ -77,6 +79,7 @@ class TestNormalizeWorkItem:
             "target_tool": "my_tool",
         }
         result = normalize_work_item(data)
+        assert result is not None
         assert result.context == {"method": "execute", "params": {"x": 1}}
         assert result.target_tool == "my_tool"
 

@@ -223,7 +223,7 @@ class TestAsyncFileIOIntegration:
     async def test_full_state_lifecycle(self, temp_dir):
         """Test a full state lifecycle with async I/O."""
         from app.progenitor.state.manager import StateManager
-        from app.progenitor.state.models import WorkItem
+        from app.progenitor.state.models import WorkItem, WorkItemStatus
 
         state_dir, logs_dir = temp_dir
         manager = StateManager(state_dir, logs_dir)
@@ -233,7 +233,7 @@ class TestAsyncFileIOIntegration:
         item = WorkItem(
             id="test-1",
             description="Test Task",
-            status="pending",
+            status=WorkItemStatus.PENDING,
         )
 
         # Add to backlog
@@ -248,7 +248,7 @@ class TestAsyncFileIOIntegration:
     async def test_state_persistence_across_instances(self, temp_dir):
         """Test that state persists across manager instances."""
         from app.progenitor.state.manager import StateManager
-        from app.progenitor.state.models import WorkItem
+        from app.progenitor.state.models import WorkItem, WorkItemStatus
 
         state_dir, logs_dir = temp_dir
 
@@ -259,7 +259,7 @@ class TestAsyncFileIOIntegration:
         item = WorkItem(
             id="persist-test",
             description="Persistence Test",
-            status="pending",
+            status=WorkItemStatus.PENDING,
         )
         await manager1.add_work_item(item)
 

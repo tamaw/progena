@@ -78,6 +78,7 @@ def test_backend_with_mock_progenitor():
 
     async def run_test():
         await mock_client.start()
+        assert mock_client._process is not None
         print(f"Mock Progenitor Started (PID: {mock_client._process.pid})")
         print(f"Running: {mock_client.is_running}")
 

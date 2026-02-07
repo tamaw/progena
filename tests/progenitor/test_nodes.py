@@ -159,7 +159,7 @@ class TestDecideNode:
         node = decide.create_node(mock_llm, mock_registry, mock_state_manager)
 
         state: ProgenitorState = {
-            "current_input": "say hello world in 5 minutes",
+            "current_input": "I wonder if you could construct something for me",
             "messages": [],
         }
 
@@ -295,7 +295,9 @@ class TestRespondNode:
 
         result = await node(state)
 
-        assert "Email sent successfully" in result["pending_response"]
+        pending = result.get("pending_response")
+        assert pending is not None
+        assert "Email sent successfully" in pending
 
 
 class TestCommitCoreNode:

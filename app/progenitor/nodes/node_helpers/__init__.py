@@ -11,6 +11,7 @@ from .registry import (
     get_system_tool,
     get_all_system_tools,
     get_system_tool_names,
+    match_tool_by_input,
 )
 from .formatters import format_tool_result, format_schedule_result
 
@@ -60,6 +61,7 @@ __all__ = [
     "get_system_tool",
     "get_all_system_tools",
     "get_system_tool_names",
+    "match_tool_by_input",
     # Formatters
     "format_tool_result",
     "format_schedule_result",

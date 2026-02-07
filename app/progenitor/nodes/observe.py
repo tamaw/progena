@@ -327,9 +327,12 @@ def create_node(
 
             # Merge state updates with ideal_state and clarification updates
             # Always update build_phase to show current phase
-            ideal_state_dict = (
-                ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
-            )
+            if isinstance(ideal_state, IdealState):
+                ideal_state_dict = ideal_state.model_dump()
+            elif isinstance(ideal_state, dict):
+                ideal_state_dict = ideal_state
+            else:
+                ideal_state_dict = None
             phases = set_ideal_state(state.get("phases"), ideal_state_dict)
             observe_phase = dict(phases.get("observe") or {})
             observe_phase["completed_at"] = utcnow_isoformat()

@@ -505,6 +505,7 @@ class TestDataIntegrityUnderAllConditions:
 
             reader._cache.clear()
             snapshot = reader.get_snapshot()
+            assert snapshot.build is not None
             assert snapshot.build.phase == phase
 
     def test_agent_status_values(self, complete_state_files):

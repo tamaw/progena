@@ -12,7 +12,7 @@ from typing import Any
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ...runtime.time_utils import utcnow_isoformat
 from ...state.helpers import get_ideal_state
-from ...state.models import generate_run_id
+from ...state.models import generate_run_id, ProgenitorState
 from ...env_utils import env_int, env_bool
 
 logger = logging.getLogger(__name__)
@@ -130,9 +130,19 @@ class NewConversationTool(BaseSystemTool):
         if not context.state_manager and context.state is None:
             return ToolResult.fail("No state manager or in-memory state available.")
 
+        previous_state = {}
+        if context.state is not None:
+            previous_state = context.state
+        elif context.state_manager:
+            previous_state = await context.state_manager.get_current_state()
+
+        previous_run_id = previous_state.get("run_id") if isinstance(previous_state, dict) else None
+        previous_messages = previous_state.get("messages", []) if isinstance(previous_state, dict) else []
+        messages_cleared = len(previous_messages or [])
+
         new_run_id = generate_run_id()
 
-        reset_state = {
+        reset_state: ProgenitorState = {
             "run_id": new_run_id,
             "cycle_count": 0,
             "actions_this_cycle": 0,
@@ -153,9 +163,19 @@ class NewConversationTool(BaseSystemTool):
         if context.state is not None:
             context.state.update(reset_state)
 
+        logger.info(
+            "New conversation started (previous_run_id=%s, new_run_id=%s, messages_cleared=%d)",
+            previous_run_id,
+            new_run_id,
+            messages_cleared,
+        )
+
         return ToolResult.ok({
             "reset": True,
             "run_id": new_run_id,
+            "new_run_id": new_run_id,
+            "previous_run_id": previous_run_id,
+            "messages_cleared": messages_cleared,
         })
 
 

@@ -340,6 +340,8 @@ class ConversationState(TypedDict, total=False):
     messages: list[ConversationMessage]
     current_input: Optional[str]
     pending_response: Optional[str]
+    attachments: list[dict[str, Any]]
+    tool_calls: list[dict[str, Any]]
 
 
 class WorkState(TypedDict, total=False):
@@ -348,6 +350,7 @@ class WorkState(TypedDict, total=False):
     current_work_item: Optional[WorkItem]
     current_decision: Optional[Decision]
     build_settings: Optional[dict[str, Any]]  # BL-007: BuildSettings from structured LLM output
+    current_build_request: Optional[str]
 
 
 class SchedulingState(TypedDict, total=False):
@@ -368,6 +371,7 @@ class LoopControlState(TypedDict, total=False):
     run_id: str
     last_validation_result: Optional[dict[str, Any]]
     validation_result_v2: Optional[dict[str, Any]]  # ValidationResultV2 as dict
+    last_checkpoint: Optional[str]
 
 
 class TaskInfo(TypedDict, total=False):
@@ -520,6 +524,8 @@ class InnerLoopState(TypedDict, total=False):
     build_started_at: Optional[str]  # ISO timestamp when build started
     build_phase: Optional[str]  # Current phase (use BuildPhase enum values)
     task_id: Optional[str]  # Unique task identifier
+    build_task_description: Optional[str]  # Backward-compatible top-level build description
+    build_messages: list[dict[str, Any]]  # Build progress messages
 
     # Nested objects for organization
     task: TaskInfo  # What we're building (description + target_capabilities)
@@ -529,6 +535,8 @@ class InnerLoopState(TypedDict, total=False):
     history: BuildHistory  # Historical data
     best: BestResult  # Best result tracking with timestamps
     clarification: ClarificationState  # User interaction with history
+    awaiting_clarification: bool  # Top-level compatibility flag
+    clarification_response: Optional[str]  # Top-level compatibility field
 
     # Consolidated verification state (single source of truth)
     verification: VerificationState  # All verification data in one place

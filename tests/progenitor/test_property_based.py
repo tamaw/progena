@@ -89,7 +89,7 @@ class TestIterationBounds:
 
         state: ProgenitorState = {
             "iteration": {"current": current_iteration},
-            "verification_passed": False,
+            "verification": {"current_passed": False},
             "phases": {"observe": {"ideal_state": None}},
         }
 
@@ -112,7 +112,9 @@ class TestIterationBounds:
     def test_verification_score_bounded(self, score: float):
         """Verification score should be between 0 and 1."""
         state: ProgenitorState = {"verification": {"current_score": score}}
-        assert 0.0 <= state["verification"]["current_score"] <= 1.0
+        current_score = state.get("verification", {}).get("current_score")
+        assert current_score is not None
+        assert 0.0 <= current_score <= 1.0
 
 
 # ============================================================================
@@ -233,7 +235,8 @@ class TestStateConsistency:
             assert isinstance(state["cycle_count"], int)
 
         if "verification" in state:
-            assert isinstance(state["verification"]["current_score"], (int, float))
+            current_score = state.get("verification", {}).get("current_score")
+            assert isinstance(current_score, (int, float))
 
         if "shutdown_requested" in state:
             assert isinstance(state["shutdown_requested"], bool)

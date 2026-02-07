@@ -4,8 +4,9 @@ Tests the mock LLM client for demo mode functionality.
 """
 
 import os
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from app.progenitor.llm.mock_client import (
     MockLLMClient,
@@ -109,7 +110,7 @@ class TestMockLLMClient:
         result = await client.decide(
             user_input="Create a new file",
             conversation_history=[],
-            available_capabilities=["file_ops", "code_gen"],
+            tool_context="### System Tools\n- list_tools: List all available tools",
         )
         assert isinstance(result, dict)
         assert "action" in result
@@ -122,7 +123,7 @@ class TestMockLLMClient:
         result = await client.decide(
             user_input="Create a new Python file",
             conversation_history=[],
-            available_capabilities=["file_ops"],
+            tool_context="",
         )
         assert result["action"] == "execute"
 
@@ -132,7 +133,7 @@ class TestMockLLMClient:
         result = await client.decide(
             user_input="What is Python?",
             conversation_history=[],
-            available_capabilities=[],
+            tool_context="",
         )
         assert result["action"] == "respond"
 

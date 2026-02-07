@@ -301,7 +301,8 @@ class TestClarificationIntegration:
         result = await verify_node(state)
 
         # Should detect clarification need
-        assert result.get("clarification", {}).get("needed") is True or result.get("verification", {}).get("current_score", 0) < 1.0
+        current_score = result.get("verification", {}).get("current_score") or 0.0
+        assert result.get("clarification", {}).get("needed") is True or current_score < 1.0
 
     @pytest.mark.asyncio
     async def test_intake_recognizes_clarification_response(self):

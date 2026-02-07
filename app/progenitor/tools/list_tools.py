@@ -20,6 +20,24 @@ class ListToolsTool(BaseSystemTool):
     def description(self) -> str:
         return "List all available tools and their capabilities"
 
+    @property
+    def keywords(self) -> list[str]:
+        return [
+            "list tools",
+            "show tools",
+            "list your tools",
+            "show your tools",
+            "what tools",
+            "which tools",
+            "available tools",
+            "list all tool",
+            "show all tool",
+            "list capabilit",
+            "show capabilit",
+            "what can you do",
+            "your capabilit",
+        ]
+
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..nodes.node_helpers.registry import get_all_system_tools
 
@@ -27,13 +45,23 @@ class ListToolsTool(BaseSystemTool):
 
         # Get registered MCP tools from registry
         mcp_tools = context.tool_registry.get_tools()
+        local_mcp_tools = []
+        if hasattr(context.tool_registry, "get_local_mcp_tools"):
+            local_mcp_tools = context.tool_registry.get_local_mcp_tools()
+
+        seen_names = {tool.get("name") for tool in mcp_tools}
+        combined_mcp_tools = list(mcp_tools)
+        for tool in local_mcp_tools:
+            if tool.get("name") not in seen_names:
+                combined_mcp_tools.append(tool)
+
         mcp_tool_entries = [
             {
                 "name": tool.get("name"),
                 "description": tool.get("description", ""),
                 "type": "mcp_tool",
             }
-            for tool in mcp_tools
+            for tool in combined_mcp_tools
         ]
 
         return ToolResult.ok({

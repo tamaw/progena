@@ -20,6 +20,34 @@ class ListScheduleTool(BaseSystemTool):
     def description(self) -> str:
         return "List all scheduled tasks and reminders"
 
+    @property
+    def keywords(self) -> list[str]:
+        return [
+            "what is your schedule",
+            "what's your schedule",
+            "whats your schedule",
+            "show schedule",
+            "show my schedule",
+            "show the schedule",
+            "list schedule",
+            "list schedules",
+            "list scheduled",
+            "view schedule",
+            "view schedules",
+            "scheduled tasks",
+            "what is scheduled",
+            "what's scheduled",
+            "whats scheduled",
+            "any scheduled",
+            "pending schedule",
+            "upcoming tasks",
+            "upcoming schedule",
+            "my reminders",
+            "show reminders",
+            "list reminders",
+            "what reminders",
+        ]
+
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state is None:
             return ToolResult.ok({

@@ -1,7 +1,7 @@
 """
 Tool Registry.
 
-Central registry for all progenitor tools with lookup and execution.
+Central registry for all progenitor system tools with lookup, matching, and execution.
 """
 
 import logging
@@ -46,28 +46,46 @@ def _init_registry() -> dict[str, SystemTool]:
     return {tool.name: tool for tool in tools}
 
 
-def get_system_tool(name: str) -> Optional[SystemTool]:
-    """Get a tool by name."""
+def _ensure_registry() -> dict[str, SystemTool]:
+    """Ensure registry is initialized and return it."""
     global _SYSTEM_TOOLS
     if not _SYSTEM_TOOLS:
         _SYSTEM_TOOLS = _init_registry()
-    return _SYSTEM_TOOLS.get(name)
+    return _SYSTEM_TOOLS
+
+
+def get_system_tool(name: str) -> Optional[SystemTool]:
+    """Get a tool by name."""
+    return _ensure_registry().get(name)
 
 
 def get_all_system_tools() -> list[SystemTool]:
     """Get all registered tools."""
-    global _SYSTEM_TOOLS
-    if not _SYSTEM_TOOLS:
-        _SYSTEM_TOOLS = _init_registry()
-    return list(_SYSTEM_TOOLS.values())
+    return list(_ensure_registry().values())
 
 
 def get_system_tool_names() -> list[str]:
     """Get names of all registered tools."""
-    global _SYSTEM_TOOLS
-    if not _SYSTEM_TOOLS:
-        _SYSTEM_TOOLS = _init_registry()
-    return list(_SYSTEM_TOOLS.keys())
+    return list(_ensure_registry().keys())
+
+
+def match_tool_by_input(user_input: str) -> Optional[str]:
+    """Fast-path: find a system tool matching user input by keywords/patterns.
+
+    Iterates over all registered system tools and checks each tool's
+    keywords and trigger_patterns against the user input.
+
+    Returns:
+        The tool name if a match is found, otherwise None.
+    """
+    if not user_input or not user_input.strip():
+        return None
+
+    for tool in _ensure_registry().values():
+        if tool.matches_input(user_input):
+            return tool.name
+
+    return None
 
 
 async def execute_system_tool(
@@ -76,8 +94,9 @@ async def execute_system_tool(
     llm_client: Any,
     state: Optional["ProgenitorState"] = None,
     state_manager: Any = None,
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Execute a tool by name and return (result, error).
+    user_input: str = "",
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+    """Execute a tool by name and return (result, error, state_updates).
 
     This is the main entry point for executing tools from nodes.
 
@@ -87,29 +106,32 @@ async def execute_system_tool(
         llm_client: LLM client for tools that need AI capabilities.
         state: Current graph state (in-memory).
         state_manager: StateManager for reading persisted state files.
+        user_input: The user's original input (needed by some tools).
 
     Returns:
-        Tuple of (result_dict, error_string). One will always be None.
+        Tuple of (result_dict, error_string, state_updates).
+        state_updates is a dict of state keys to merge, or None.
     """
     tool = get_system_tool(tool_name)
 
     if tool is None:
-        return None, f"Unknown system tool: {tool_name}"
+        return None, f"Unknown system tool: {tool_name}", None
 
     context = ToolContext(
         tool_registry=tool_registry,
         llm_client=llm_client,
         state=state,
         state_manager=state_manager,
+        user_input=user_input,
     )
 
     try:
         result = await tool.execute(context)
 
         if result.success:
-            return result.data, None
+            return result.data, None, result.state_updates
         else:
-            return None, result.error
+            return None, result.error, None
     except Exception as e:
         logger.error("Error executing tool %s: %s", tool_name, e, exc_info=True)
-        return None, f"Error executing {tool_name}: {str(e)}"
+        return None, f"Error executing {tool_name}: {str(e)}", None

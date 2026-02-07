@@ -1,5 +1,8 @@
 """
 Decide Node - Routes user input to appropriate action path.
+
+Fast path: keyword match on registered tools -> execute tool -> LLM responds.
+Slow path: LLM decides (with full tool context) -> route to system_tool/a2a/mcp/build -> execute -> LLM responds.
 """
 
 import json
@@ -11,9 +14,11 @@ from typing import TYPE_CHECKING, Any, cast
 from openai import APIConnectionError, RateLimitError
 from pydantic import BaseModel, Field
 
+from ..nodes.node_helpers.registry import match_tool_by_input, execute_system_tool
+from ..nodes.node_helpers.formatters import format_tool_result
 from ..runtime.time_utils import utcnow_isoformat
 from ..state.helpers import get_ideal_state, is_work_item_actionable
-from ..state.models import Decision, DecisionAction, ProgenitorState
+from ..state.models import Decision, DecisionAction, ProgenitorState, generate_run_id
 from ..tools.mcp import A2AClient
 
 if TYPE_CHECKING:
@@ -21,6 +26,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Build-related helpers (kept here as they are decide-node concerns, not tools)
+# ---------------------------------------------------------------------------
 
 class BuildNameExtraction(BaseModel):
     """Structured output for extracting build/agent name from user request."""
@@ -39,509 +48,6 @@ class BuildNameExtraction(BaseModel):
     )
 
 
-def _looks_like_agent_build_request(user_input: str) -> bool:
-    """Heuristic: detect explicit requests to build/create a new agent.
-
-    This should only trigger for very explicit agent creation requests.
-    The user must clearly express intent to BUILD/CREATE an AGENT.
-    Questions about agents, general mentions, or ambiguous requests should NOT trigger this.
-    """
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    # Explicit combined phrases that clearly indicate agent building intent
-    # These are very specific to avoid false positives
-    explicit_build_phrases = [
-        "build an agent",
-        "build a new agent",
-        "build me an agent",
-        "build an a2a agent",
-        "build a2a agent",
-        "build me an a2a agent",
-        "create an agent",
-        "create a new agent",
-        "create me an agent",
-        "create an a2a agent",
-        "create a2a agent",
-        "create me an a2a agent",
-        "scaffold an agent",
-        "scaffold a new agent",
-        "scaffold an a2a agent",
-        "generate an agent",
-        "generate a new agent",
-        "generate an a2a agent",
-        "make an agent",
-        "make a new agent",
-        "make me an agent",
-        "make an a2a agent",
-        "implement an agent",
-        "implement a new agent",
-        "implement an a2a agent",
-        # With specific agent names
-        "build a hello world agent",
-        "create a hello world agent",
-        "build a weather agent",
-        "create a weather agent",
-    ]
-
-    # Check for explicit phrases first
-    if any(phrase in text for phrase in explicit_build_phrases):
-        return True
-
-    # Fallback: require BOTH strong build verb AND agent noun in close proximity
-    # This is more strict than before
-    import re
-
-    # Pattern: build/create/scaffold + optional words + agent (but not just "agent" alone)
-    build_agent_pattern = r'\b(build|create|scaffold|generate|implement)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:[a-z]+\s+){0,3}agent\b'
-
-    if re.search(build_agent_pattern, text):
-        # Exclude false positives
-        false_positives = [
-            "build a plan",
-            "build the plan",
-            "build a docker",
-            "build an image",
-            "build the image",
-            "build a container",
-            "build the container",
-            "what agent",
-            "which agent",
-            "about agent",
-            "the agent",  # Referring to existing agent
-            "your agent",
-            "this agent",
-        ]
-        if any(fp in text for fp in false_positives):
-            return False
-        return True
-
-    return False
-
-
-def _looks_like_tool_build_request(user_input: str) -> bool:
-    """Heuristic: detect explicit requests to build/create a new FastMCP tool.
-
-    This should only trigger for very explicit tool creation requests.
-    The user must clearly express intent to BUILD/CREATE a TOOL.
-    """
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    # Explicit combined phrases that clearly indicate tool building intent
-    explicit_build_phrases = [
-        "build a tool",
-        "build a new tool",
-        "build me a tool",
-        "build an mcp tool",
-        "build a mcp tool",
-        "build a fastmcp tool",
-        "build an fastmcp tool",
-        "create a tool",
-        "create a new tool",
-        "create me a tool",
-        "create an mcp tool",
-        "create a mcp tool",
-        "create a fastmcp tool",
-        "scaffold a tool",
-        "scaffold a new tool",
-        "generate a tool",
-        "generate a new tool",
-        "make a tool",
-        "make a new tool",
-        "make me a tool",
-        "implement a tool",
-        "implement a new tool",
-    ]
-
-    # Check for explicit phrases first
-    if any(phrase in text for phrase in explicit_build_phrases):
-        return True
-
-    # Pattern: build/create/scaffold + optional words + tool
-    import re
-    build_tool_pattern = r'\b(build|create|scaffold|generate|implement)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:[a-z]+\s+){0,3}(?:mcp\s+)?tool\b'
-
-    if re.search(build_tool_pattern, text):
-        # Exclude false positives
-        false_positives = [
-            "use a tool",
-            "use the tool",
-            "what tool",
-            "which tool",
-            "about tool",
-            "the tool",  # Referring to existing tool
-            "your tool",
-            "this tool",
-            "list tool",
-        ]
-        if any(fp in text for fp in false_positives):
-            return False
-        return True
-
-    return False
-
-
-def _looks_like_agent_discovery_request(user_input: str) -> bool:
-    """Heuristic: detect requests to rediscover/rewire agents."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    # Direct compound phrases that clearly indicate discovery intent
-    direct_discovery_phrases = (
-        "rewire agents",
-        "rewire the agents",
-        "rediscover agents",
-        "rescan agents",
-        "refresh agents",
-        "reload agents",
-        "scan agents",
-        "discover agents",
-        "update registry",
-        "refresh registry",
-        "sync agents",
-        "re-scan agents",
-        "re-discover agents",
-        # Key pattern: "agent discovery" as a compound noun
-        "agent discovery",
-        "run agent discovery",
-        "run discovery",
-        "do agent discovery",
-        "start agent discovery",
-        "perform agent discovery",
-        "trigger agent discovery",
-        "execute agent discovery",
-    )
-
-    if any(phrase in text for phrase in direct_discovery_phrases):
-        return True
-
-    # Single-word discovery verbs that imply agents when "agent" is present
-    has_discovery_verb = any(
-        verb in text
-        for verb in (
-            "rewire",
-            "rediscover",
-            "rescan",
-            "re-scan",
-            "re-discover",
-            "refresh",
-            "reload",
-        )
-    )
-
-    has_agent_context = any(
-        phrase in text
-        for phrase in (
-            "agent",
-            "registry",
-        )
-    )
-
-    return has_discovery_verb and has_agent_context
-
-
-def _looks_like_list_tools_request(user_input: str) -> bool:
-    """Heuristic: detect requests to list available tools/capabilities."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    has_list_intent = any(
-        phrase in text
-        for phrase in (
-            "list tool",
-            "list all tool",
-            "show tool",
-            "show all tool",
-            "what tool",
-            "available tool",
-            "list capabilit",
-            "show capabilit",
-            "what can you do",
-            "your capabilit",
-            "all available",
-        )
-    )
-
-    has_tool_context = any(
-        phrase in text
-        for phrase in (
-            "tool",
-            "capabilit",
-            "function",
-        )
-    )
-
-    # Direct patterns
-    direct_patterns = [
-        "list tools",
-        "show tools",
-        "list your tools",
-        "show your tools",
-        "what tools",
-        "which tools",
-        "available tools",
-    ]
-
-    return has_list_intent or any(pattern in text for pattern in direct_patterns)
-
-
-def _looks_like_new_conversation_request(user_input: str) -> bool:
-    """Heuristic: detect requests to start a new conversation/run."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    direct_patterns = [
-        "new conversation",
-        "start a new conversation",
-        "start new conversation",
-        "reset conversation",
-        "clear conversation",
-        "clear chat",
-        "reset chat",
-        "fresh run",
-        "new run id",
-        "new run",
-        "start over",
-    ]
-
-    return any(pattern in text for pattern in direct_patterns)
-
-
-def _looks_like_build_status_request(user_input: str) -> bool:
-    """Heuristic: detect requests to check build status/progress."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    # Direct patterns for build status
-    direct_patterns = [
-        "build status",
-        "build progress",
-        "build state",
-        "what are you building",
-        "what's being built",
-        "current build",
-        "is there a build",
-        "check build",
-        "building status",
-        "how is the build",
-        "how's the build",
-        "build update",
-        "update on build",
-        "building progress",
-        "are you building",
-    ]
-
-    return any(pattern in text for pattern in direct_patterns)
-
-
-def _looks_like_current_time_request(user_input: str) -> bool:
-    """Heuristic: detect requests for the current time (UTC)."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    direct_patterns = [
-        "current time",
-        "utc time",
-        "time now",
-        "what time is it",
-        "tell me the time",
-        "tell me the current time",
-        "what is the time",
-        "whats the time",
-        "what's the time",
-    ]
-
-    return any(pattern in text for pattern in direct_patterns)
-
-def _looks_like_schedule_request(user_input: str) -> bool:
-    """Heuristic: detect requests to schedule/remind/do something at a time."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    # Time indicators
-    has_time_indicator = any(
-        phrase in text
-        for phrase in (
-            " at ",
-            "every day",
-            "every morning",
-            "every evening",
-            "every hour",
-            "every minute",
-            "in the morning",
-            "in the evening",
-            "tomorrow",
-            "next week",
-            "in 5 minutes",
-            "in 10 minutes",
-            "in 15 minutes",
-            "in 30 minutes",
-            "in an hour",
-            "in 1 hour",
-            "in 2 hours",
-            "daily",
-            "weekly",
-        )
-    )
-
-    # Schedule/reminder intent
-    has_schedule_intent = any(
-        phrase in text
-        for phrase in (
-            "remind",
-            "schedule",
-            "set a reminder",
-            "notify me",
-            "tell me at",
-            "say to me at",
-            "alert me",
-            "wake me",
-        )
-    )
-
-    # Time patterns like "9am", "10:30", "3pm"
-    has_time_pattern = bool(re.search(r'\d{1,2}(?::\d{2})?\s*(?:am|pm)', text))
-
-    return (has_time_indicator and has_time_pattern) or has_schedule_intent
-
-
-def _looks_like_list_schedule_request(user_input: str) -> bool:
-    """Heuristic: detect requests to list/view scheduled tasks."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    # Direct patterns for listing schedule
-    direct_patterns = [
-        "what is your schedule",
-        "what's your schedule",
-        "whats your schedule",
-        "show schedule",
-        "show my schedule",
-        "show the schedule",
-        "list schedule",
-        "list schedules",
-        "list scheduled",
-        "view schedule",
-        "view schedules",
-        "scheduled tasks",
-        "what is scheduled",
-        "what's scheduled",
-        "whats scheduled",
-        "any scheduled",
-        "pending schedule",
-        "upcoming tasks",
-        "upcoming schedule",
-        "my reminders",
-        "show reminders",
-        "list reminders",
-        "what reminders",
-    ]
-
-    return any(pattern in text for pattern in direct_patterns)
-
-
-def _looks_like_self_reflect_request(user_input: str) -> bool:
-    """Heuristic: detect requests for self-reflection/introspection."""
-    text = (user_input or "").lower()
-    if not text.strip():
-        return False
-
-    # Direct self-reflection patterns
-    direct_patterns = [
-        "how do you work",
-        "how do you handle",
-        "how do you process",
-        "what is your",
-        "what are your",
-        "explain your",
-        "describe your",
-        "your source code",
-        "your implementation",
-        "your architecture",
-        "how are you built",
-        "how were you built",
-        "how are you implemented",
-        "self reflect",
-        "self-reflect",
-        "introspect",
-        "understand yourself",
-        "examine yourself",
-        "look at your code",
-        "read your code",
-        "your own code",
-        "your capabilities",
-        "what can you do",
-    ]
-
-    # Check for self-referential questions about internals
-    has_self_reference = any(
-        phrase in text
-        for phrase in (
-            "yourself",
-            "your code",
-            "your source",
-            "your implementation",
-            "your internal",
-            "how you ",
-            "what you ",
-        )
-    )
-
-    has_introspection_intent = any(
-        phrase in text
-        for phrase in (
-            "work",
-            "function",
-            "implement",
-            "process",
-            "handle",
-            "built",
-            "design",
-            "architecture",
-        )
-    )
-
-    return any(pattern in text for pattern in direct_patterns) or (
-        has_self_reference and has_introspection_intent
-    )
-
-
-def _extract_schedule_params(user_input: str) -> dict:
-    """Extract schedule parameters from user input."""
-    text = user_input.lower()
-
-    # Try to extract time expression
-    time_patterns = [
-        r'(every day at \d{1,2}(?::\d{2})?\s*(?:am|pm)?)',
-        r'(at \d{1,2}(?::\d{2})?\s*(?:am|pm)?)',
-        r'(in \d+ (?:minute|hour|day)s?)',
-        r'(tomorrow(?: at \d{1,2}(?::\d{2})?\s*(?:am|pm)?)?)',
-        r'(every (?:morning|evening|hour|day|week))',
-    ]
-
-    time_expression = ""
-    for pattern in time_patterns:
-        match = re.search(pattern, text)
-        if match:
-            time_expression = match.group(1)
-            break
-
-    return {
-        "user_request": user_input,
-        "time_expression": time_expression,
-    }
-
-
 def _infer_target_capabilities(user_input: str) -> list[str]:
     """Infer a likely capability name from the user's request."""
     text = (user_input or "").lower()
@@ -549,13 +55,14 @@ def _infer_target_capabilities(user_input: str) -> list[str]:
     if "hello world" in text or "hello-world" in text:
         return ["hello_world_a2a_agent"]
 
-    # Try to extract an agent name: "build/create <name> agent"
-    match = re.search(r"\b(?:build|create|scaffold|generate|make|implement)\s+(?:an?\s+)?([a-z0-9 _\-]{1,64})\s+agent\b", text)
+    match = re.search(
+        r"\b(?:build|create|scaffold|generate|make|implement)\s+(?:an?\s+)?([a-z0-9 _\-]{1,64})\s+agent\b",
+        text,
+    )
     if not match:
         return []
 
     raw_name = match.group(1).strip()
-    # Convert to snake_case-ish.
     slug = re.sub(r"[^a-z0-9]+", "_", raw_name).strip("_")
     if not slug:
         return []
@@ -568,28 +75,16 @@ def _clean_project_name(name: str) -> str:
     if not name:
         return ""
 
-    # Lowercase and replace non-alphanumeric with underscores
     cleaned = re.sub(r'[^a-z0-9_]', '_', name.lower()).strip('_')
 
-    # Remove common filler words that might have slipped through
     filler_patterns = [
-        r'^for_me_',
-        r'^please_',
-        r'^a_',
-        r'^an_',
-        r'^the_',
-        r'^new_',
-        r'^build_',
-        r'^create_',
-        r'_for_me$',
-        r'_please$',
+        r'^for_me_', r'^please_', r'^a_', r'^an_', r'^the_', r'^new_',
+        r'^build_', r'^create_', r'_for_me$', r'_please$',
     ]
     for pattern in filler_patterns:
         cleaned = re.sub(pattern, '', cleaned)
 
-    # Remove double underscores
     cleaned = re.sub(r'_+', '_', cleaned).strip('_')
-
     return cleaned
 
 
@@ -599,22 +94,7 @@ async def _generate_build_settings(
     llm_action: str,
     decision_data: dict | None = None,
 ) -> "BuildSettings":
-    """Generate structured BuildSettings, using decision data if available.
-
-    BL-007: Uses structured output to determine:
-    - build_type: agent or mcp
-    - project_name: derived from user request for repeatability
-    - directories: automatically derived from type + name
-
-    Args:
-        user_input: Original user request
-        llm_client: LLM client for structured generation (fallback)
-        llm_action: The action from initial LLM decision
-        decision_data: The full decision response from the LLM (may contain project_name, build_type, build_description)
-
-    Returns:
-        BuildSettings with all derived fields populated
-    """
+    """Generate structured BuildSettings, using decision data if available."""
     import uuid
 
     from ..state.execution_schemas import BuildSettings, BuildType
@@ -626,7 +106,6 @@ async def _generate_build_settings(
     build_description = None
 
     # Primary: Use values from the decision response if available
-    # This avoids an extra LLM call since decide() already extracted these
     if decision_data:
         decision_project_name = decision_data.get("project_name")
         decision_build_type = decision_data.get("build_type")
@@ -644,12 +123,10 @@ async def _generate_build_settings(
 
         if decision_build_description:
             build_description = decision_build_description
-            logger.info("Using build_description from decision response: %s", build_description[:100] if build_description else "None")
 
     # Fallback: Use LLM structured output if decision didn't provide project_name
     if not project_name and llm_client:
         try:
-
             system_prompt = """You are an expert at extracting project names from user requests.
 
 When a user asks to build an agent or MCP server, extract a clean, descriptive name.
@@ -661,12 +138,12 @@ RULES:
 4. NEVER include: 'for_me', 'please', 'a', 'an', 'the', 'new', 'build', 'create'
 
 EXAMPLES:
-- "Build for me a weather agent" → weather_agent
-- "Create an agent that tracks stocks" → stock_tracker
-- "Build me a new email assistant agent please" → email_assistant
-- "I want an agent to help with calendar scheduling" → calendar_scheduler
-- "Make a simple todo list agent" → todo_list
-- "Build an MCP server for GitHub integration" → github_integration"""
+- "Build for me a weather agent" -> weather_agent
+- "Create an agent that tracks stocks" -> stock_tracker
+- "Build me a new email assistant agent please" -> email_assistant
+- "I want an agent to help with calendar scheduling" -> calendar_scheduler
+- "Make a simple todo list agent" -> todo_list
+- "Build an MCP server for GitHub integration" -> github_integration"""
 
             prompt = f"""Extract the project name from this user request:
 
@@ -674,12 +151,10 @@ EXAMPLES:
 
 Return the extracted name and build type."""
 
-            # Try structured output first
             response_format = llm_client._get_json_response_format(
                 BuildNameExtraction, "build_name_extraction"
             )
 
-            # Add JSON instruction if using json_object format (Azure older API versions)
             actual_prompt = prompt
             if response_format.get("type") == "json_object":
                 actual_prompt = prompt + "\n\nRespond with valid JSON matching this schema: {project_name: string, build_type: 'agent'|'mcp', reasoning: string}"
@@ -693,18 +168,13 @@ Return the extracted name and build type."""
 
             if response:
                 try:
-                    # Parse the structured response
                     parsed = json.loads(response.strip())
                     extracted_name = _clean_project_name(parsed.get("project_name", ""))
                     extracted_type = parsed.get("build_type", "agent").strip().lower()
-                    reasoning = parsed.get("reasoning", "")
 
                     if extracted_name and len(extracted_name) > 1:
                         project_name = extracted_name
-                        logger.info(
-                            "LLM extracted project name: %s (reasoning: %s)",
-                            project_name, reasoning
-                        )
+                        logger.info("LLM extracted project name: %s", project_name)
 
                     if extracted_type == "mcp":
                         build_type = BuildType.MCP
@@ -718,14 +188,9 @@ Return the extracted name and build type."""
     # Fallback: Try regex patterns if LLM failed
     if not project_name:
         text = user_input.lower()
-
-        # Improved patterns that skip filler words
         name_patterns = [
-            # "build/create a <adjective>? <name> agent" - skip "for me", "please" etc.
             r'\b(?:build|create|scaffold|generate|make|implement)\s+(?:for\s+me\s+)?(?:me\s+)?(?:please\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:simple\s+|basic\s+)?([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*)?)\s+(?:a2a\s+)?(?:agent|mcp)',
-            # "agent named/called <name>"
             r'\bagent\s+(?:named?|called?)\s+([a-z0-9_\-]+)',
-            # "named/called <name>"
             r'\b(?:named?|called?)\s+([a-z0-9_\-]+)',
         ]
 
@@ -733,10 +198,8 @@ Return the extracted name and build type."""
             match = re.search(pattern, text)
             if match:
                 raw_name = match.group(1).strip()
-                # Filter out common words that aren't names
                 skip_words = {"a", "an", "the", "new", "simple", "basic", "for", "me", "please"}
                 if raw_name and raw_name not in skip_words:
-                    # Convert to snake_case
                     project_name = re.sub(r'\s+', '_', raw_name)
                     logger.info("Regex extracted project name: %s", project_name)
                     break
@@ -748,7 +211,6 @@ Return the extracted name and build type."""
 
     # Final fallback: extract meaningful words
     if not project_name:
-        # Use meaningful words from request, excluding common filler
         exclude_words = {
             'build', 'create', 'make', 'scaffold', 'generate', 'implement',
             'an', 'a', 'the', 'me', 'for', 'please', 'new', 'simple', 'basic',
@@ -758,15 +220,12 @@ Return the extracted name and build type."""
         words = [w for w in re.findall(r'[a-z]+', text) if w not in exclude_words and len(w) > 2]
         if words:
             project_name = '_'.join(words[:2])
-            logger.info("Fallback extracted project name from words: %s", project_name)
         else:
-            project_name = f"project_{uuid.uuid4().hex[:6]}"
-            logger.info("Using random project name: %s", project_name)
+            import uuid as _uuid
+            project_name = f"project_{_uuid.uuid4().hex[:6]}"
 
-    # Use build_description if available, otherwise generate one
     description = build_description or f"Build {build_type.value}: {project_name}"
 
-    # Create BuildSettings with all derived fields
     return BuildSettings.create_from_llm_output(
         build_id=build_id,
         project_name=project_name,
@@ -776,639 +235,19 @@ Return the extracted name and build type."""
     )
 
 
-async def _execute_system_tool_inline(
-    tool_name: str,
-    tool_registry,
-    llm_client,
-    state: "ProgenitorState | None" = None,
-    state_manager=None,
-) -> tuple[dict[str, Any] | None, str | None]:
-    """
-    Execute a system tool inline and return (result, error).
-
-    Args:
-        tool_name: Name of the system tool to execute.
-        tool_registry: Registry of available tools and agents.
-        llm_client: LLM client for tools that need AI capabilities.
-        state: Current graph state (in-memory).
-        state_manager: StateManager for reading persisted state files.
-
-    System tools are simple operations that should execute immediately
-    in the chat flow, not through the backlog system.
-    """
-    if tool_name == "list_tools":
-        # List all available tools including system tools, agents, and MCP tools
-        system_tools = [
-            {
-                "name": "list_tools",
-                "description": "List all available tools and their capabilities",
-                "type": "system_tool",
-            },
-            {
-                "name": "build_status",
-                "description": "Check the current build status, progress, and messages",
-                "type": "system_tool",
-            },
-            {
-                "name": "rediscover_agents",
-                "description": "Scan the agents folder, analyze with LLM, and update registry.json",
-                "type": "system_tool",
-            },
-            {
-                "name": "list_agents",
-                "description": "List all registered agents with their status",
-                "type": "system_tool",
-            },
-            {
-                "name": "schedule_task",
-                "description": "Schedule a task to run at a specific time",
-                "type": "system_tool",
-            },
-            {
-                "name": "list_schedule",
-                "description": "List all scheduled tasks and reminders",
-                "type": "system_tool",
-            },
-            {
-                "name": "current_time",
-                "description": "Return the current UTC time",
-                "type": "system_tool",
-            },
-            {
-                "name": "self_reflect",
-                "description": "Introspect own source code to understand how Progenitor works",
-                "type": "system_tool",
-            },
-        ]
-
-        # Get registered MCP tools from registry
-        mcp_tools = tool_registry.get_tools()
-        mcp_tool_entries = [
-            {
-                "name": tool.get("name"),
-                "description": tool.get("description", ""),
-                "type": "mcp_tool",
-            }
-            for tool in mcp_tools
-        ]
-
-        return {
-            "system_tools": system_tools,
-            "mcp_tools": mcp_tool_entries,
-            "total_count": len(system_tools) + len(mcp_tool_entries),
-        }, None
-
-    elif tool_name == "rediscover_agents":
-        from pathlib import Path
-
-        from ..tools.agent_discovery import discover_agents
-
-        # Get agents directory
-        project_root = Path(__file__).parent.parent.parent.parent
-        agents_dir = project_root / "app" / "agents"
-
-        logger.info("Executing system tool: rediscover_agents")
-
-        result = await discover_agents(
-            agents_dir=agents_dir,
-            llm_client=llm_client,
-            registry=tool_registry,
-        )
-
-        return result, None
-
-    elif tool_name == "list_agents":
-        # List all registered agents with their status
-        agents = tool_registry.get_agents()
-        all_agents = [
-            {
-                "name": agent.get("name"),
-                "description": agent.get("description"),
-                "status": agent.get("status", "unknown"),
-                "transport": agent.get("transport"),
-                "port": agent.get("port"),
-                "endpoint": agent.get("endpoint"),
-            }
-            for agent in agents
-        ]
-
-        running = [a for a in agents if a.get("status") == "running"]
-
-        return {
-            "agents": all_agents,
-            "running_count": len(running),
-            "total_count": len(all_agents),
-        }, None
-
-    elif tool_name == "build_status":
-        # Return current build status - check background runner first
-        from ..runtime.background_build import get_background_runner
-
-        runner = get_background_runner()
-
-        if runner:
-            # Get status from background runner
-            build_result = runner.get_build_status()
-
-            if build_result:
-                result = {
-                    "build_in_progress": build_result.status.value in ("pending", "running"),
-                    "build_id": build_result.build_id,
-                    "status": build_result.status.value,
-                    "task_description": build_result.task_description,
-                    "started_at": build_result.started_at.isoformat() if build_result.started_at else None,
-                    "completed_at": build_result.completed_at.isoformat() if build_result.completed_at else None,
-                    "iterations": build_result.iterations,
-                    "verification_score": build_result.verification_score,
-                    "output_summary": build_result.output_summary,
-                    "error_message": build_result.error_message,
-                    "agent_name": build_result.agent_name,
-                    "success_criteria_met": build_result.success_criteria_met,
-                    "success_criteria_unmet": build_result.success_criteria_unmet,
-                }
-
-                # Get recent builds
-                recent_builds = runner.get_recent_builds(limit=3)
-                if len(recent_builds) > 1:
-                    result["recent_builds"] = [
-                        {
-                            "build_id": b.build_id,
-                            "status": b.status.value,
-                            "task_description": b.task_description[:50] + "..." if len(b.task_description) > 50 else b.task_description,
-                        }
-                        for b in recent_builds[:-1]  # Exclude current
-                    ]
-
-                return result, None
-
-        # Read from persisted state files via state_manager
-        persisted_state = None
-        if state_manager:
-            try:
-                persisted_state = await state_manager.get_build_state()
-            except Exception as e:
-                logger.warning("Failed to read persisted state: %s", e)
-
-        # Merge in-memory state with persisted state (in-memory takes priority)
-        effective_state = {}
-        if persisted_state:
-            effective_state.update(persisted_state)
-        if state:
-            effective_state.update(state)
-
-        if not effective_state:
-            return {
-                "build_in_progress": False,
-                "message": "No build in progress and no recent builds found.",
-            }, None
-
-        build_in_progress = effective_state.get("build_in_progress", False)
-        build_phase = effective_state.get("build_phase")
-        build_task = effective_state.get("build_task_description")
-        build_started = effective_state.get("build_started_at")
-        build_id = (effective_state.get("build_settings") or {}).get("build_id")
-        current_iteration = effective_state.get("iteration", {}).get("current", 0)
-        verification_score = effective_state.get("verification_score", 0)
-        build_messages = effective_state.get("build_messages", [])
-        ideal_state = get_ideal_state(effective_state)
-
-        # Check for last build result (completed async builds store this)
-        last_result = effective_state.get("last_build_result")
-
-        # Get the last few build messages
-        recent_messages = build_messages[-5:] if build_messages else []
-
-        result = {
-            "build_in_progress": build_in_progress,
-            "build_id": build_id,
-            "phase": build_phase,
-            "task_description": build_task,
-            "started_at": build_started,
-            "current_iteration": current_iteration,
-            "verification_score": verification_score,
-            "message_count": len(build_messages),
-            "recent_messages": recent_messages,
-        }
-
-        ideal_state_dict = None
-        if ideal_state:
-            if isinstance(ideal_state, dict):
-                ideal_state_dict = ideal_state
-            elif hasattr(ideal_state, "model_dump"):
-                ideal_state_dict = ideal_state.model_dump()
-
-        if ideal_state_dict:
-            result["target_score"] = ideal_state_dict.get("stop_conditions", [{}])[0].get("threshold", 0.8)
-            result["success_criteria"] = [
-                c.get("description") for c in ideal_state_dict.get("success_criteria", [])
-            ]
-
-        return result, None
-
-    elif tool_name == "self_reflect":
-        # Self-reflection tool - introspect progenitor's own source code
-        from ..tools.self_reflect import SelfReflection
-
-        logger.info("Executing system tool: self_reflect")
-        reflection = SelfReflection(llm_client=llm_client)
-
-        # For inline execution, return module listing
-        # Full reflection with specific queries should use execute_self_reflect
-        modules = reflection.list_modules()
-
-        return {
-            "description": "Progenitor self-reflection - exploring own source code",
-            "root_path": str(reflection.root),
-            "modules": [
-                {
-                    "name": m.name,
-                    "path": m.path,
-                    "is_directory": m.is_directory,
-                    "description": m.description,
-                }
-                for m in modules
-            ],
-            "module_count": len([m for m in modules if m.is_directory]),
-            "file_count": len([m for m in modules if not m.is_directory]),
-            "tip": "Use follow-up questions to explore specific modules or search for code patterns.",
-        }, None
-
-    elif tool_name == "current_time":
-        # Return current UTC time
-        return {
-            "utc_time": utcnow_isoformat(),
-            "timezone": "UTC",
-        }, None
-
-    elif tool_name == "list_schedule":
-        # List all scheduled tasks
-        if state is None:
-            return {
-                "scheduled_tasks": [],
-                "total_count": 0,
-                "message": "No state available - schedule information unavailable",
-            }, None
-
-        schedule = state.get("schedule", [])
-
-        # Convert schedule entries to readable format
-        tasks = []
-        for item in schedule:
-            if hasattr(item, "model_dump"):
-                item_dict = item.model_dump()
-            elif isinstance(item, dict):
-                item_dict = item
-            else:
-                continue
-
-            tasks.append({
-                "id": item_dict.get("id"),
-                "description": item_dict.get("description", "No description"),
-                "cron_expression": item_dict.get("cron_expression"),
-                "next_run": item_dict.get("next_run"),
-                "action_type": item_dict.get("action_type"),
-                "enabled": item_dict.get("enabled", True),
-            })
-
-        return {
-            "scheduled_tasks": tasks,
-            "total_count": len(tasks),
-        }, None
-
-    return None, f"Unknown system tool: {tool_name}"
-
-
-async def _execute_a2a_agent_inline(
-    target_capabilities: list[str],
-    user_input: str,
-    tool_registry,
-    timeout: float = 60.0,
-) -> tuple[dict | None, str | None]:
-    """Execute an A2A agent call inline without going through backlog.
-
-    Args:
-        target_capabilities: List of capabilities to match agent
-        user_input: The user's request to send to the agent
-        tool_registry: Registry to find agent by capability
-        timeout: Request timeout in seconds
-
-    Returns:
-        Tuple of (result_dict, error_string)
-    """
-    if not target_capabilities:
-        return None, "No target capabilities specified"
-
-    # Find agent by first matching capability
-    capability = target_capabilities[0]
-    agent_config = tool_registry.find_agent_by_capability(capability)
-
-    if not agent_config:
-        return None, f"No agent found for capability: {capability}"
-
-    agent_name = agent_config.get("name", "unknown")
-    status = agent_config.get("status", "stopped")
-
-    # Check agent status
-    if status == "failed":
-        error = agent_config.get("last_error", "Unknown error")
-        return None, f"Agent '{agent_name}' is in failed state: {error}"
-
-    if status not in ("running", "waiting", "executing"):
-        return None, f"Agent '{agent_name}' is not running (status: {status})"
-
-    # Call the agent
-    a2a_client = A2AClient()
-    result = await a2a_client.call_agent(
-        agent_config,
-        request=user_input,
-        timeout=timeout,
-    )
-
-    return result, None
-
-
-async def _execute_schedule_task_inline(
-    user_input: str,
-    schedule_params: dict[str, Any],
-    llm_client,
-    state: "ProgenitorState | None" = None,
-) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
-    """
-    Execute a schedule task inline using the LLM to process the instruction.
-
-    Returns:
-        Tuple of (result_dict, error_string, schedule_entry_data)
-    """
-    from ..tools.schedule import add_scheduled_task
-
-    # Use LLM to extract and process schedule parameters
-    system_prompt = """You are a scheduling assistant. Extract and format a scheduled task from the user's request.
-
-Return JSON with:
-{
-    "time_expression": "<when to run, e.g. 'in 5 minutes', 'at 9am', 'every day at 10am'>",
-    "instruction": "<clear instruction for what to do at that time>",
-    "description": "<brief human-readable description of the task>"
-}
-
-Examples:
-- "remind me to call John in 30 minutes" → time: "in 30 minutes", instruction: "Remind the user to call John", description: "Reminder: Call John"
-- "say hello world at 9am" → time: "at 9am", instruction: "Say 'Hello World!' to the user", description: "Say hello world"
-- "every day at 5pm tell me a joke" → time: "every day at 5pm", instruction: "Tell the user a joke", description: "Daily joke"
-"""
-
-    messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
-
-    try:
-        response = await llm_client.chat(
-            messages=messages,
-            system_prompt=system_prompt,
-            temperature=0.3,
-            response_format={"type": "json_object"},
-        )
-
-        parsed = json.loads(response)
-
-        time_expr = parsed.get("time_expression", schedule_params.get("time_expression", ""))
-        instruction = parsed.get("instruction", user_input)
-        description = parsed.get("description", f"Scheduled: {user_input[:50]}")
-
-        if not time_expr:
-            return None, "Could not extract time from your request. Please specify when (e.g., 'in 5 minutes', 'at 9am').", None
-
-        # Add the scheduled task
-        result, entry_data = await add_scheduled_task(
-            user_request=user_input,
-            time_expression=time_expr,
-            instruction=instruction,
-            description=description,
-        )
-
-        if result.success:
-            return {
-                "success": True,
-                "schedule_id": result.schedule_id,
-                "description": description,
-                "instruction": instruction,
-                "next_run": result.next_run,
-                "recurring": "repeat_minutes" in entry_data if entry_data else False,
-            }, None, entry_data
-        else:
-            return None, result.message, None
-
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse schedule LLM response: %s", e)
-        return None, f"Failed to process schedule request: {e}", None
-    except Exception as e:
-        logger.error("Error executing schedule task: %s", e, exc_info=True)
-        return None, f"Error scheduling task: {e}", None
-
-
-def _format_a2a_response(result: dict, agent_name: str) -> str:
-    """Format an A2A agent response for display.
-
-    Args:
-        result: The result dictionary from A2AClient.call_agent()
-        agent_name: Name of the agent for error messages
-
-    Returns:
-        Human-readable response string
-    """
-    if result.get("success", False):
-        response = result.get("response") or result.get("result") or result.get("data")
-        if isinstance(response, dict):
-            # Format dict as readable text
-            return str(response)
-        return str(response) if response else "Agent completed successfully."
-    else:
-        error = result.get("error", "Unknown error")
-        return f"Agent '{agent_name}' error: {error}"
-
-
-def _format_tool_result(tool_name: str, result: dict) -> str:
-    """Format a tool result as a human-readable response."""
-    if tool_name == "list_tools":
-        lines = ["**Available Tools:**\n"]
-
-        system_tools = result.get("system_tools", [])
-        if system_tools:
-            lines.append("**System Tools:**")
-            for tool in system_tools:
-                lines.append(f"  • `{tool['name']}` - {tool['description']}")
-
-        mcp_tools = result.get("mcp_tools", [])
-        if mcp_tools:
-            lines.append("\n**MCP Tools:**")
-            for tool in mcp_tools:
-                lines.append(f"  • `{tool['name']}` - {tool.get('description', 'No description')}")
-
-        lines.append(f"\n**Total:** {result.get('total_count', 0)} tools available")
-        return "\n".join(lines)
-
-    elif tool_name == "rediscover_agents":
-        found = result.get("agents_found", 0)
-        registered = result.get("agents_registered", 0)
-        skipped = result.get("agents_skipped", 0)
-        errors = result.get("errors", [])
-
-        lines = ["**Agent Discovery Complete:**"]
-        lines.append(f"  • Found: {found} agents")
-        lines.append(f"  • Registered: {registered}")
-        lines.append(f"  • Skipped: {skipped}")
-        if errors:
-            lines.append(f"  • Errors: {', '.join(errors)}")
-        return "\n".join(lines)
-
-    elif tool_name == "list_agents":
-        agents = result.get("agents", [])
-        if not agents:
-            return "**No agents registered.** Use `rediscover agents` to scan for agents."
-
-        lines = ["**Registered Agents:**"]
-        for agent in agents:
-            status = agent.get("status", "unknown")
-            endpoint = agent.get("endpoint", "N/A")
-            lines.append(f"  • `{agent['name']}` [{status}]")
-            lines.append(f"    - {agent.get('description', 'No description')}")
-            lines.append(f"    - Endpoint: {endpoint}")
-
-        lines.append(f"\n**Running:** {result.get('running_count', 0)}/{result.get('total_count', 0)}")
-        return "\n".join(lines)
-
-    elif tool_name == "build_status":
-        build_in_progress = result.get("build_in_progress", False)
-        status = result.get("status", "unknown")
-
-        # Handle completed/failed builds
-        if status in ("completed", "failed", "cancelled"):
-            status_emoji = "✓" if status == "completed" else "✗" if status == "failed" else "○"
-            lines = [f"**{status_emoji} Build {status.title()}**"]
-            lines.append(f"  • **Task:** {result.get('task_description', 'No description')}")
-            lines.append(f"  • **Build ID:** `{result.get('build_id', 'unknown')}`")
-            lines.append(f"  • **Started:** {result.get('started_at', 'unknown')}")
-            lines.append(f"  • **Completed:** {result.get('completed_at', 'unknown')}")
-            lines.append(f"  • **Iterations:** {result.get('iterations', 0)}")
-            lines.append(f"  • **Final Score:** {result.get('verification_score', 0):.2f}")
-
-            if result.get("agent_name"):
-                lines.append(f"  • **Agent Built:** `{result['agent_name']}`")
-
-            if result.get("output_summary"):
-                lines.append(f"\n**Summary:** {result['output_summary']}")
-
-            if result.get("error_message"):
-                lines.append(f"\n**Error:** {result['error_message']}")
-
-            # Show criteria results
-            met = result.get("success_criteria_met", [])
-            unmet = result.get("success_criteria_unmet", [])
-            if met:
-                lines.append(f"\n**✓ Criteria Met ({len(met)}):**")
-                for c in met[:5]:
-                    lines.append(f"  • {c}")
-            if unmet:
-                lines.append(f"\n**○ Criteria Unmet ({len(unmet)}):**")
-                for c in unmet[:5]:
-                    lines.append(f"  • {c}")
-
-            return "\n".join(lines)
-
-        if not build_in_progress:
-            # Check for message indicating no builds
-            message = result.get("message")
-            if message:
-                return f"**📋 Build Status**\n\n{message}"
-            return "**No build in progress.** The system is idle and ready for new build requests."
-
-        # Running build
-        lines = ["**🔨 Build In Progress**"]
-        lines.append(f"  • **Task:** {result.get('task_description', 'No description')}")
-        lines.append(f"  • **Build ID:** `{result.get('build_id', 'unknown')}`")
-        lines.append(f"  • **Status:** {status}")
-        lines.append(f"  • **Started:** {result.get('started_at', 'unknown')}")
-        lines.append(f"  • **Iterations:** {result.get('iterations', 0)}")
-        lines.append(f"  • **Current Score:** {result.get('verification_score', 0):.2f}")
-
-        # Show phase if available (sync builds)
-        phase = result.get("phase")
-        if phase:
-            lines.append(f"  • **Phase:** {phase}")
-
-        criteria = result.get("success_criteria", [])
-        if criteria:
-            lines.append("\n**Success Criteria:**")
-            for c in criteria:
-                lines.append(f"  • {c}")
-
-        recent = result.get("recent_messages", [])
-        if recent:
-            lines.append(f"\n**Recent Activity ({result.get('message_count', 0)} total messages):**")
-            for msg in recent[-3:]:
-                role = msg.get("role", "unknown")
-                content = msg.get("content", "")[:100]
-                if len(msg.get("content", "")) > 100:
-                    content += "..."
-                lines.append(f"  [{role}] {content}")
-
-        return "\n".join(lines)
-
-    elif tool_name == "self_reflect":
-        modules = result.get("modules", [])
-        dirs = [m for m in modules if m.get("is_directory")]
-        files = [m for m in modules if not m.get("is_directory")]
-
-        lines = ["**🔍 Progenitor Self-Reflection**\n"]
-        lines.append(f"Source location: `{result.get('root_path', 'unknown')}`\n")
-
-        if dirs:
-            lines.append("**Modules (directories):**")
-            for d in dirs:
-                lines.append(f"  • `{d['name']}/`")
-
-        if files:
-            lines.append("\n**Root files:**")
-            for f in files:
-                desc = f" - {f['description']}" if f.get('description') else ""
-                lines.append(f"  • `{f['name']}`{desc}")
-
-        lines.append(f"\n**Summary:** {result.get('module_count', 0)} modules, {result.get('file_count', 0)} root files")
-
-        tip = result.get("tip")
-        if tip:
-            lines.append(f"\n💡 *{tip}*")
-
-        return "\n".join(lines)
-
-    elif tool_name == "current_time":
-        utc_time = result.get("utc_time")
-        if not utc_time:
-            return "Unable to determine current UTC time."
-        return f"Current UTC time: {utc_time}"
-
-    elif tool_name == "list_schedule":
-        tasks = result.get("scheduled_tasks", [])
-
-        if not tasks:
-            return "**📅 No Scheduled Tasks**\n\nYou don't have any scheduled tasks or reminders set up.\n\n💡 *You can schedule tasks by saying things like 'remind me at 9am to check emails' or 'every day at 5pm run a status check'.*"
-
-        lines = ["**📅 Scheduled Tasks:**\n"]
-        for task in tasks:
-            enabled = "✓" if task.get("enabled", True) else "○"
-            lines.append(f"  {enabled} **{task.get('description', 'Unnamed task')}**")
-            if task.get("cron_expression"):
-                lines.append(f"      Schedule: `{task['cron_expression']}`")
-            if task.get("next_run"):
-                lines.append(f"      Next run: {task['next_run']}")
-            if task.get("action_type"):
-                lines.append(f"      Action: {task['action_type']}")
-            lines.append("")  # Blank line between tasks
-
-        lines.append(f"**Total:** {result.get('total_count', 0)} scheduled task(s)")
-        return "\n".join(lines)
-
-    # Default: return JSON-like representation
-    import json
-    return f"**Result:**\n```json\n{json.dumps(result, indent=2)}\n```"
+# ---------------------------------------------------------------------------
+# Shared helpers used by both fast and slow paths
+# ---------------------------------------------------------------------------
+
+def _extract_history(messages: list, limit: int = 10) -> list[dict[str, str]]:
+    """Extract conversation history as list of dicts."""
+    history = []
+    for msg in messages[-limit:]:
+        if isinstance(msg, dict):
+            history.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        elif hasattr(msg, "role"):
+            history.append({"role": msg.role, "content": msg.content})
+    return history
 
 
 async def _respond_with_context(
@@ -1419,12 +258,6 @@ async def _respond_with_context(
     llm_client,
 ) -> tuple[str, bool]:
     """Generate LLM response incorporating tool/agent call results.
-
-    Fast path: execute tool by word match, feed result + user message to LLM,
-    LLM generates a natural response to the user.
-
-    Slow path (A2A/MCP): after the decide LLM call routes to a tool/agent,
-    execute it, then call the LLM again with context to respond to the user.
 
     Returns:
         Tuple of (response_text, was_streamed).
@@ -1446,7 +279,7 @@ async def _respond_with_context(
     can_stream = loop is not None and getattr(loop, '_streaming_enabled', False)
 
     if can_stream:
-        assert loop is not None  # Type narrowing for pyright
+        assert loop is not None
         streamed = ""
         async for token in llm_client.chat_stream(
             messages=messages,
@@ -1475,19 +308,23 @@ async def _execute_and_respond(
     tool_registry,
     state_manager,
 ) -> "ProgenitorState":
-    """Execute a system tool and generate an LLM-enriched response.
+    """Execute a system tool via the registry and generate an LLM-enriched response.
 
-    This is the fast path: word match detects a tool, execute it inline,
-    feed the result back to the LLM for a natural response to the user.
+    This is the unified fast/slow path for system tools:
+    1. Execute tool via node_helpers.execute_system_tool (dynamic dispatch)
+    2. Format result via node_helpers.format_tool_result (dynamic dispatch)
+    3. Feed result to LLM for a natural response to the user
+    4. Merge any state_updates from the tool into the returned state
     """
-    result, error = await _execute_system_tool_inline(
-        tool_name, tool_registry, llm_client, state, state_manager
+    result, error, state_updates = await execute_system_tool(
+        tool_name, tool_registry, llm_client, state, state_manager,
+        user_input=user_input,
     )
 
     if error or result is None:
         context_data = f"Error: {error or 'No result'}"
     else:
-        context_data = _format_tool_result(tool_name, result)
+        context_data = format_tool_result(tool_name, result)
 
     try:
         response_text, was_streamed = await _respond_with_context(
@@ -1500,23 +337,43 @@ async def _execute_and_respond(
 
     decision = Decision(
         action=DecisionAction.ANSWER_DIRECTLY,
-        reasoning=f"Fast-path: {tool_name} with LLM-enriched response",
+        reasoning=f"System tool: {tool_name} with LLM-enriched response",
         requires_planning=False,
         direct_response=None if was_streamed else response_text,
     )
 
     if state_manager:
         await state_manager.log_decision({
-            "event": "system_tool_executed_fast_path",
+            "event": "system_tool_executed",
             "tool_name": tool_name,
             "llm_enriched": True,
             "timestamp": utcnow_isoformat(),
         })
 
-    return cast(ProgenitorState, {"current_decision": decision})
+    result_state: dict[str, Any] = {"current_decision": decision}
+
+    # Merge any state_updates from the tool (e.g. schedule entries)
+    if state_updates:
+        result_state.update(state_updates)
+
+    return cast(ProgenitorState, result_state)
 
 
+def _format_a2a_response(result: dict, agent_name: str) -> str:
+    """Format an A2A agent response for display."""
+    if result.get("success", False):
+        response = result.get("response") or result.get("result") or result.get("data")
+        if isinstance(response, dict):
+            return str(response)
+        return str(response) if response else "Agent completed successfully."
+    else:
+        error = result.get("error", "Unknown error")
+        return f"Agent '{agent_name}' error: {error}"
+
+
+# ---------------------------------------------------------------------------
 # Default confidence threshold (used when config not provided)
+# ---------------------------------------------------------------------------
 DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
 
 
@@ -1534,7 +391,6 @@ def create_node(
         state_manager: Optional state manager for logging decisions
         config: Optional ProgenitorConfig for runtime settings
     """
-    # Get build confidence threshold from config or use default
     build_confidence_threshold = DEFAULT_BUILD_CONFIDENCE_THRESHOLD
     if config and hasattr(config, 'runtime'):
         build_confidence_threshold = getattr(
@@ -1546,7 +402,6 @@ def create_node(
         user_input = state.get("current_input")
 
         if not user_input:
-            # No input - check if we have backlog to process
             backlog = state.get("backlog", [])
             pending = [
                 item for item in backlog
@@ -1554,99 +409,22 @@ def create_node(
             ]
 
             if pending:
-                # Continue processing backlog
                 return {"current_decision": None}
 
             return {"current_decision": None}
 
         # ============================================================
-        # FAST-PATH: Handle system tools without routing LLM call
-        # Word-match heuristics detect tool -> execute -> LLM responds
+        # FAST-PATH: Dynamic keyword/pattern match on registered tools
         # ============================================================
-
-        # Check for list tools request
-        if _looks_like_list_tools_request(user_input):
-            return await _execute_and_respond("list_tools", user_input, state, llm_client, tool_registry, state_manager)
-
-        # Check for new conversation request
-        if _looks_like_new_conversation_request(user_input):
-            return await _execute_and_respond("new_conversation", user_input, state, llm_client, tool_registry, state_manager)
-
-        # Check for list schedule requests
-        if _looks_like_list_schedule_request(user_input):
-            return await _execute_and_respond("list_schedule", user_input, state, llm_client, tool_registry, state_manager)
-
-        # Check for current time requests
-        if _looks_like_current_time_request(user_input):
-            return await _execute_and_respond("current_time", user_input, state, llm_client, tool_registry, state_manager)
-
-        # Check for build status requests
-        if _looks_like_build_status_request(user_input):
-            return await _execute_and_respond("build_status", user_input, state, llm_client, tool_registry, state_manager)
-
-        # Check for agent discovery requests
-        if _looks_like_agent_discovery_request(user_input):
-            return await _execute_and_respond("rediscover_agents", user_input, state, llm_client, tool_registry, state_manager)
-
-        # Check for schedule requests (uses LLM for parsing, then LLM for response)
-        if _looks_like_schedule_request(user_input):
-            schedule_params = _extract_schedule_params(user_input)
-
-            result, error, entry_data = await _execute_schedule_task_inline(
-                user_input, schedule_params, llm_client, state
+        matched_tool = match_tool_by_input(user_input)
+        if matched_tool:
+            logger.info("Fast-path match: tool=%s for input=%r", matched_tool, user_input[:80])
+            return await _execute_and_respond(
+                matched_tool, user_input, state, llm_client, tool_registry, state_manager
             )
 
-            if error or result is None:
-                context_data = f"Scheduling failed: {error or 'No result'}"
-            else:
-                context_data = json.dumps(result, indent=2)
-
-            try:
-                response_text, was_streamed = await _respond_with_context(
-                    user_input, "schedule_task", context_data, state, llm_client
-                )
-            except Exception as e:
-                logger.warning("LLM enrichment failed for schedule, using fallback: %s", e)
-                response_text = context_data
-                was_streamed = False
-
-            decision = Decision(
-                action=DecisionAction.ANSWER_DIRECTLY,
-                reasoning="Fast-path: schedule_task with LLM-enriched response",
-                requires_planning=False,
-                direct_response=None if was_streamed else response_text,
-            )
-
-            if state_manager:
-                await state_manager.log_decision({
-                    "event": "system_tool_executed_fast_path",
-                    "tool_name": "schedule_task",
-                    "schedule_id": result.get("schedule_id") if result else None,
-                    "timestamp": utcnow_isoformat(),
-                })
-
-            # Return the decision AND the schedule entry to add to state
-            result_state: dict[str, Any] = {"current_decision": decision}
-            if entry_data:
-                from ..state.models import ScheduleEntry
-                new_entry = ScheduleEntry(**entry_data)
-                current_schedule = state.get("schedule", []) if state else []
-                result_state["schedule"] = list(current_schedule) + [new_entry]
-
-                # Persist the new schedule entry to schedule.json
-                if state_manager:
-                    await state_manager.add_schedule_entry(new_entry)
-
-                logger.info("Added schedule entry %s to state and persisted (fast-path)", entry_data.get("id"))
-
-            return cast(ProgenitorState, result_state)
-
-        # Check for self-reflection requests
-        if _looks_like_self_reflect_request(user_input):
-            return await _execute_and_respond("self_reflect", user_input, state, llm_client, tool_registry, state_manager)
-
         # ============================================================
-        # STANDARD PATH: Use LLM for routing decision
+        # SLOW PATH: Use LLM for routing decision
         # Tool context fills the context window so the LLM knows
         # available tools/agents to call
         # ============================================================
@@ -1667,345 +445,71 @@ def create_node(
             )
 
             action_str = decision_data.get("action", "answer_directly")
-
-            # Get LLM's confidence score (default 0.5 if not provided)
             confidence = decision_data.get("confidence", 0.5)
             user_response = decision_data.get("user_response") or decision_data.get("direct_response")
 
-            # Check if LLM wants a build action
             llm_action = str(action_str).lower().strip()
             is_build_action = llm_action in ("build_agent", "build_tool", "upgrade")
 
-            # For build actions, enforce confidence threshold
+            # --- Handle build actions ---
             if is_build_action:
-                logger.info(
-                    "Build action requested: action=%s, confidence=%.2f, threshold=%.2f",
-                    llm_action, confidence, build_confidence_threshold
+                return await _handle_build_action(
+                    user_input, state, llm_client, tool_registry, state_manager,
+                    decision_data, llm_action, confidence, build_confidence_threshold,
+                    user_response,
                 )
 
-                if confidence < build_confidence_threshold:
-                    # Confidence too low - fall back to answer_directly with explanation
-                    logger.info(
-                        "Build action rejected due to low confidence (%.2f < %.2f)",
-                        confidence, build_confidence_threshold
-                    )
-                    decision = Decision(
-                        action=DecisionAction.ANSWER_DIRECTLY,
-                        reasoning=f"Build action confidence ({confidence:.2f}) below threshold ({build_confidence_threshold})",
-                        requires_planning=False,
-                        direct_response=(
-                            f"I'm not certain you want me to build an agent. "
-                            f"(Confidence: {confidence:.0%})\n\n"
-                            f"If you'd like me to **build a new agent**, please say something like:\n"
-                            f"- \"Build me a hello world agent\"\n"
-                            f"- \"Create a new agent that [does X]\"\n\n"
-                            f"Otherwise, let me know what you'd like me to do and I'll help!"
-                        ),
-                    )
-
-                    if state_manager:
-                        await state_manager.log_decision({
-                            "event": "build_rejected_low_confidence",
-                            "confidence": confidence,
-                            "threshold": build_confidence_threshold,
-                            "llm_action": llm_action,
-                            "timestamp": utcnow_isoformat(),
-                        })
-
-                    return {"current_decision": decision}
-
-                # Check if a build is already in progress
-                if state.get("build_in_progress", False):
-                    current_task = state.get("build_task_description", "unknown task")
-                    phase = state.get("build_phase", "unknown")
-                    decision = Decision(
-                        action=DecisionAction.ANSWER_DIRECTLY,
-                        reasoning="Build already in progress - rejecting new build request.",
-                        requires_planning=False,
-                        direct_response=(
-                            f"⚠️ **Build Already In Progress**\n\n"
-                            f"I'm currently working on: *{current_task}*\n"
-                            f"Current phase: `{phase}`\n\n"
-                            f"Please wait for the current build to complete, or ask me for `build status` to check progress."
-                        ),
-                    )
-
-                    if state_manager:
-                        await state_manager.log_decision({
-                            "event": "build_rejected",
-                            "reason": "build_in_progress",
-                            "current_task": current_task,
-                            "timestamp": utcnow_isoformat(),
-                        })
-
-                    return {"current_decision": decision}
-
-                # BL-007: Generate structured BuildSettings from LLM decision
-                # Pass decision_data so we can use project_name/build_type/build_description if already extracted
-                build_settings = await _generate_build_settings(
-                    user_input=user_input,
-                    llm_client=llm_client,
-                    llm_action=llm_action,
-                    decision_data=decision_data,
-                )
-                logger.info(
-                    "BUILD_SETTINGS: project=%s, type=%s, dir=%s, description=%s",
-                    build_settings.project_name,
-                    build_settings.build_type,
-                    build_settings.project_directory,
-                    build_settings.description[:80] if build_settings.description else "None",
-                )
-
-                # Confidence is high enough - start async build
-                from ..runtime.background_build import get_background_runner
-
-                runner = get_background_runner()
-                task_description = f"Build {build_settings.build_type}: {build_settings.project_name}"
-                target_capabilities = _infer_target_capabilities(user_input)
-
-                if runner:
-                    try:
-                        # Start the build asynchronously
-                        build_id, ack_message = await runner.start_build(
-                            user_input=user_input,
-                            task_description=task_description,
-                            target_capabilities=target_capabilities,
-                            initial_state=dict(state),
-                            build_settings=build_settings,  # BL-007: Pass build settings
-                        )
-
-                        logger.info("Started async build %s for: %s (confidence=%.2f)", build_id, task_description, confidence)
-
-                        # Use user_response if provided, otherwise use default ack
-                        response_msg = user_response or ack_message
-
-                        decision = Decision(
-                            action=DecisionAction.ANSWER_DIRECTLY,
-                            reasoning=f"Started async build {build_id} (confidence={confidence:.2f})",
-                            requires_planning=False,
-                            direct_response=response_msg,
-                        )
-
-                        if state_manager:
-                            await state_manager.log_decision({
-                                "event": "async_build_started",
-                                "build_id": build_id,
-                                "task_description": task_description,
-                                "build_settings": build_settings.model_dump(),
-                                "confidence": confidence,
-                                "timestamp": utcnow_isoformat(),
-                            })
-
-                        # Mark build settings as in progress
-                        build_settings.mark_in_progress()
-
-                        return {
-                            "current_decision": decision,
-                            "build_in_progress": True,
-                            "task": {
-                                "description": task_description,
-                                "target_capabilities": target_capabilities,
-                            },
-                            "build_started_at": utcnow_isoformat(),
-                            "build_settings": build_settings.model_dump(),  # BL-007: Serialize to dict (canonical source for build_id and user_request)
-                        }
-
-                    except RuntimeError as e:
-                        logger.warning("Failed to start async build: %s", e)
-                        decision = Decision(
-                            action=DecisionAction.ANSWER_DIRECTLY,
-                            reasoning="Build already in progress",
-                            requires_planning=False,
-                            direct_response=(
-                                f"⚠️ **Build Already In Progress**\n\n"
-                                f"{str(e)}\n\n"
-                                f"Ask for `build status` to check progress."
-                            ),
-                        )
-                        return {"current_decision": decision}
-                else:
-                    logger.error("No background runner available; build requests must run in background")
-                    decision = Decision(
-                        action=DecisionAction.ANSWER_DIRECTLY,
-                        reasoning="Background build runner unavailable",
-                        requires_planning=False,
-                        direct_response=(
-                            "⚠️ **Background Build Unavailable**\n\n"
-                            "I couldn't start the build because the background runner isn't available. "
-                            "Please try again in a moment."
-                        ),
-                    )
-                    return {"current_decision": decision}
-
-            # Parse decision
-            action_str = decision_data.get("action", "answer_directly")
+            # Parse decision action
             try:
                 action = DecisionAction(action_str)
             except ValueError:
                 logger.warning("Unknown action '%s', falling back to answer_directly", action_str)
                 action = DecisionAction.ANSWER_DIRECTLY
 
-            # ============================================================
-            # SLOW-PATH: Handle delegate_a2a with LLM-enriched response
-            # Execute agent -> feed result to LLM -> respond to user
-            # ============================================================
+            # --- Handle system_tool action from LLM ---
+            if action == DecisionAction.SYSTEM_TOOL:
+                target_capabilities = decision_data.get("target_capabilities", [])
+                tool_name = target_capabilities[0] if target_capabilities else None
+
+                if tool_name:
+                    logger.info("Slow-path: LLM selected system_tool=%s", tool_name)
+                    return await _execute_and_respond(
+                        tool_name, user_input, state, llm_client, tool_registry, state_manager
+                    )
+                else:
+                    logger.warning("system_tool action without target_capabilities")
+
+            # --- Handle delegate_a2a ---
             if action == DecisionAction.DELEGATE_A2A:
-                target_capabilities = decision_data.get("target_capabilities", [])
-
-                if not target_capabilities:
-                    # No capabilities - can't route
-                    decision = Decision(
-                        action=DecisionAction.ANSWER_DIRECTLY,
-                        reasoning="delegate_a2a without target_capabilities - responding directly",
-                        requires_planning=False,
-                        direct_response="I wasn't able to determine which agent to use. Could you please clarify your request?",
-                    )
-                    return {"current_decision": decision}
-
-                capability = target_capabilities[0]
-                agent_config = tool_registry.find_agent_by_capability(capability)
-                agent_name = agent_config.get("name", capability) if agent_config else capability
-
-                # Execute agent call
-                result, error = await _execute_a2a_agent_inline(
-                    target_capabilities=target_capabilities,
-                    user_input=user_input,
-                    tool_registry=tool_registry,
+                return await _handle_a2a(
+                    user_input, state, llm_client, tool_registry, state_manager,
+                    decision_data,
                 )
 
-                if error:
-                    context_data = f"Agent error: {error}"
-                else:
-                    assert result is not None
-                    context_data = _format_a2a_response(result, agent_name)
-
-                # Feed agent result through LLM for natural response
-                try:
-                    response_text, was_streamed = await _respond_with_context(
-                        user_input, f"agent:{agent_name}", context_data, state, llm_client
-                    )
-                except Exception as e:
-                    logger.warning("LLM enrichment failed for A2A call to %s: %s", agent_name, e)
-                    response_text = context_data
-                    was_streamed = False
-
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning=f"A2A call to {agent_name} (capability: {capability}) with LLM-enriched response",
-                    requires_planning=False,
-                    target_capabilities=target_capabilities,
-                    direct_response=None if was_streamed else response_text,
-                )
-
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "a2a_agent_call",
-                        "agent_name": agent_name,
-                        "capability": capability,
-                        "success": error is None,
-                        "llm_enriched": True,
-                        "error": error,
-                        "timestamp": utcnow_isoformat(),
-                    })
-
-                return {"current_decision": decision}
-
-            # ============================================================
-            # SLOW-PATH: Handle use_mcp inline with LLM-enriched response
-            # Find tool -> execute -> feed result to LLM -> respond
-            # ============================================================
+            # --- Handle use_mcp ---
             if action == DecisionAction.USE_MCP:
-                target_capabilities = decision_data.get("target_capabilities", [])
-
-                if not target_capabilities:
-                    decision = Decision(
-                        action=DecisionAction.ANSWER_DIRECTLY,
-                        reasoning="use_mcp without target_capabilities - responding directly",
-                        requires_planning=False,
-                        direct_response="I wasn't able to determine which tool to use. Could you please clarify your request?",
-                    )
-                    return {"current_decision": decision}
-
-                # Try to find and execute the MCP tool
-                capability = target_capabilities[0]
-                tool_config = tool_registry.find_tool_by_capability(capability)
-
-                if not tool_config:
-                    # No tool found - fall back to direct answer
-                    context_data = f"No MCP tool found for capability: {capability}"
-                    try:
-                        response_text, was_streamed = await _respond_with_context(
-                            user_input, "mcp_lookup", context_data, state, llm_client
-                        )
-                    except Exception:
-                        response_text = context_data
-                        was_streamed = False
-                else:
-                    tool_name = tool_config.get("name", capability)
-                    # Execute MCP tool inline via MCPClient
-                    from ..tools.mcp import MCPClient
-
-                    mcp_client = MCPClient()
-                    try:
-                        mcp_result = await mcp_client.call_tool(
-                            tool_config,
-                            method="execute",
-                            params={"input": user_input},
-                        )
-                        context_data = json.dumps(mcp_result, indent=2) if isinstance(mcp_result, dict) else str(mcp_result)
-                    except Exception as e:
-                        logger.warning("MCP tool execution failed for %s: %s", tool_name, e)
-                        context_data = f"MCP tool '{tool_name}' execution error: {e}"
-
-                    try:
-                        response_text, was_streamed = await _respond_with_context(
-                            user_input, f"mcp:{tool_name}", context_data, state, llm_client
-                        )
-                    except Exception as e:
-                        logger.warning("LLM enrichment failed for MCP call to %s: %s", tool_name, e)
-                        response_text = context_data
-                        was_streamed = False
-
-                decision = Decision(
-                    action=DecisionAction.ANSWER_DIRECTLY,
-                    reasoning=f"MCP tool call (capability: {capability}) with LLM-enriched response",
-                    requires_planning=False,
-                    target_capabilities=target_capabilities,
-                    direct_response=None if was_streamed else response_text,
+                return await _handle_mcp(
+                    user_input, state, llm_client, tool_registry, state_manager,
+                    decision_data,
                 )
 
-                if state_manager:
-                    await state_manager.log_decision({
-                        "event": "mcp_tool_call",
-                        "capability": capability,
-                        "llm_enriched": True,
-                        "timestamp": utcnow_isoformat(),
-                    })
-
-                return {"current_decision": decision}
-
-            # For direct answers, ALWAYS stream if streaming is enabled (ignore LLM's direct_response)
+            # --- Handle answer_directly (with streaming if enabled) ---
             direct_resp = None
             response_streamed = False
 
-            # Check if loop has streaming enabled
             from ..runtime.loop import get_current_loop
             loop = get_current_loop()
 
-            logger.info("Streaming check: action=%s, confidence=%.2f, loop=%s, streaming_enabled=%s",
-                        action, confidence, loop is not None, loop._streaming_enabled if loop else "N/A")
-
             if action == DecisionAction.ANSWER_DIRECTLY and loop and loop._streaming_enabled:
-                # Generate a streaming conversational response
                 logger.info("STREAMING: Starting (loop id=%s)", id(loop))
-                messages = _extract_history(state.get("messages", []), limit=10)
-                messages.append({"role": "user", "content": user_input})
+                msgs = _extract_history(state.get("messages", []), limit=10)
+                msgs.append({"role": "user", "content": user_input})
 
                 streamed_text = ""
                 token_count = 0
                 try:
                     async for token in llm_client.chat_stream(
-                        messages=messages,
+                        messages=msgs,
                         temperature=0.7,
                     ):
                         token_count += 1
@@ -2016,17 +520,11 @@ def create_node(
                     logger.error("STREAMING: Error after %d tokens: %s", token_count, e)
                     raise
 
-                # Store streamed content in loop for respond node to save to messages
                 loop._streamed_response_content = streamed_text
-
-                # DON'T set direct_resp here - it was already streamed
-                # Setting direct_resp = None prevents respond node from duplicating
                 direct_resp = None
                 response_streamed = True
                 loop._response_was_streamed = True
-                logger.info("STREAMING: Set _response_was_streamed=True (loop id=%s)", id(loop))
             elif action == DecisionAction.ANSWER_DIRECTLY:
-                # Use user_response first, fall back to direct_response
                 direct_resp = user_response or decision_data.get("direct_response")
 
             decision = Decision(
@@ -2039,7 +537,6 @@ def create_node(
 
             decision_result: dict[str, Any] = {"current_decision": decision}
 
-            # Log decision with confidence
             if state_manager:
                 await state_manager.log_decision({
                     "event": "routing_decision",
@@ -2054,7 +551,6 @@ def create_node(
             return cast(ProgenitorState, decision_result)
 
         except (RateLimitError, APIConnectionError) as e:
-            # Recoverable errors - show to user with helpful message
             logger.warning("Recoverable LLM error in decide node: %s", e)
 
             error_message = (
@@ -2082,7 +578,6 @@ def create_node(
             return {"current_decision": decision}
 
         except Exception as e:
-            # Unexpected errors - show to user with error details
             logger.error("Unexpected error in decide node: %s", e, exc_info=True)
 
             error_message = (
@@ -2099,7 +594,6 @@ def create_node(
                 direct_response=error_message,
             )
 
-            # Log the fallback
             if state_manager:
                 await state_manager.log_decision({
                     "event": "routing_decision_error",
@@ -2114,12 +608,353 @@ def create_node(
     return decide_node
 
 
-def _extract_history(messages: list, limit: int = 10) -> list[dict[str, str]]:
-    """Extract conversation history as list of dicts."""
-    history = []
-    for msg in messages[-limit:]:
-        if isinstance(msg, dict):
-            history.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
-        elif hasattr(msg, "role"):
-            history.append({"role": msg.role, "content": msg.content})
-    return history
+# ---------------------------------------------------------------------------
+# Slow-path action handlers (extracted for readability)
+# ---------------------------------------------------------------------------
+
+async def _handle_build_action(
+    user_input: str,
+    state: "ProgenitorState",
+    llm_client,
+    tool_registry,
+    state_manager,
+    decision_data: dict,
+    llm_action: str,
+    confidence: float,
+    build_confidence_threshold: float,
+    user_response: str | None,
+) -> "ProgenitorState":
+    """Handle build_agent / build_tool / upgrade actions from LLM."""
+
+    logger.info(
+        "Build action requested: action=%s, confidence=%.2f, threshold=%.2f",
+        llm_action, confidence, build_confidence_threshold,
+    )
+
+    if confidence < build_confidence_threshold:
+        logger.info(
+            "Build action rejected due to low confidence (%.2f < %.2f)",
+            confidence, build_confidence_threshold,
+        )
+        decision = Decision(
+            action=DecisionAction.ANSWER_DIRECTLY,
+            reasoning=f"Build action confidence ({confidence:.2f}) below threshold ({build_confidence_threshold})",
+            requires_planning=False,
+            direct_response=(
+                f"I'm not certain you want me to build an agent. "
+                f"(Confidence: {confidence:.0%})\n\n"
+                f"If you'd like me to **build a new agent**, please say something like:\n"
+                f"- \"Build me a hello world agent\"\n"
+                f"- \"Create a new agent that [does X]\"\n\n"
+                f"Otherwise, let me know what you'd like me to do and I'll help!"
+            ),
+        )
+
+        if state_manager:
+            await state_manager.log_decision({
+                "event": "build_rejected_low_confidence",
+                "confidence": confidence,
+                "threshold": build_confidence_threshold,
+                "llm_action": llm_action,
+                "timestamp": utcnow_isoformat(),
+            })
+
+        return {"current_decision": decision}
+
+    # Check if a build is already in progress
+    if state.get("build_in_progress", False):
+        current_task = state.get("build_task_description", "unknown task")
+        phase = state.get("build_phase", "unknown")
+        decision = Decision(
+            action=DecisionAction.ANSWER_DIRECTLY,
+            reasoning="Build already in progress - rejecting new build request.",
+            requires_planning=False,
+            direct_response=(
+                f"⚠️ **Build Already In Progress**\n\n"
+                f"I'm currently working on: *{current_task}*\n"
+                f"Current phase: `{phase}`\n\n"
+                f"Please wait for the current build to complete, or ask me for `build status` to check progress."
+            ),
+        )
+
+        if state_manager:
+            await state_manager.log_decision({
+                "event": "build_rejected",
+                "reason": "build_in_progress",
+                "current_task": current_task,
+                "timestamp": utcnow_isoformat(),
+            })
+
+        return {"current_decision": decision}
+
+    # Generate structured BuildSettings
+    build_settings = await _generate_build_settings(
+        user_input=user_input,
+        llm_client=llm_client,
+        llm_action=llm_action,
+        decision_data=decision_data,
+    )
+    logger.info(
+        "BUILD_SETTINGS: project=%s, type=%s, dir=%s",
+        build_settings.project_name,
+        build_settings.build_type,
+        build_settings.project_directory,
+    )
+
+    # Start async build
+    from ..runtime.background_build import get_background_runner
+
+    runner = get_background_runner()
+    task_description = f"Build {build_settings.build_type}: {build_settings.project_name}"
+    target_capabilities = _infer_target_capabilities(user_input)
+
+    if runner:
+        try:
+            build_id, ack_message = await runner.start_build(
+                user_input=user_input,
+                task_description=task_description,
+                target_capabilities=target_capabilities,
+                initial_state=dict(state),
+                build_settings=build_settings,
+            )
+
+            logger.info("Started async build %s for: %s (confidence=%.2f)", build_id, task_description, confidence)
+
+            response_msg = user_response or ack_message
+
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning=f"Started async build {build_id} (confidence={confidence:.2f})",
+                requires_planning=False,
+                direct_response=response_msg,
+            )
+
+            if state_manager:
+                await state_manager.log_decision({
+                    "event": "async_build_started",
+                    "build_id": build_id,
+                    "task_description": task_description,
+                    "build_settings": build_settings.model_dump(),
+                    "confidence": confidence,
+                    "timestamp": utcnow_isoformat(),
+                })
+
+            build_settings.mark_in_progress()
+
+            return {
+                "current_decision": decision,
+                "build_in_progress": True,
+                "task": {
+                    "description": task_description,
+                    "target_capabilities": target_capabilities,
+                },
+                "build_started_at": utcnow_isoformat(),
+                "build_settings": build_settings.model_dump(),
+            }
+
+        except RuntimeError as e:
+            logger.warning("Failed to start async build: %s", e)
+            decision = Decision(
+                action=DecisionAction.ANSWER_DIRECTLY,
+                reasoning="Build already in progress",
+                requires_planning=False,
+                direct_response=(
+                    f"⚠️ **Build Already In Progress**\n\n"
+                    f"{str(e)}\n\n"
+                    f"Ask for `build status` to check progress."
+                ),
+            )
+            return {"current_decision": decision}
+    else:
+        logger.error("No background runner available; build requests must run in background")
+        decision = Decision(
+            action=DecisionAction.ANSWER_DIRECTLY,
+            reasoning="Background build runner unavailable",
+            requires_planning=False,
+            direct_response=(
+                "⚠️ **Background Build Unavailable**\n\n"
+                "I couldn't start the build because the background runner isn't available. "
+                "Please try again in a moment."
+            ),
+        )
+        return {"current_decision": decision}
+
+
+async def _handle_a2a(
+    user_input: str,
+    state: "ProgenitorState",
+    llm_client,
+    tool_registry,
+    state_manager,
+    decision_data: dict,
+) -> "ProgenitorState":
+    """Handle delegate_a2a action from LLM."""
+    target_capabilities = decision_data.get("target_capabilities", [])
+
+    if not target_capabilities:
+        decision = Decision(
+            action=DecisionAction.ANSWER_DIRECTLY,
+            reasoning="delegate_a2a without target_capabilities - responding directly",
+            requires_planning=False,
+            direct_response="I wasn't able to determine which agent to use. Could you please clarify your request?",
+        )
+        return {"current_decision": decision}
+
+    capability = target_capabilities[0]
+    agent_config = tool_registry.find_agent_by_capability(capability)
+    agent_name = agent_config.get("name", capability) if agent_config else capability
+
+    # Execute agent call
+    result, error = await _execute_a2a_agent_inline(
+        target_capabilities=target_capabilities,
+        user_input=user_input,
+        tool_registry=tool_registry,
+    )
+
+    if error:
+        context_data = f"Agent error: {error}"
+    else:
+        assert result is not None
+        context_data = _format_a2a_response(result, agent_name)
+
+    try:
+        response_text, was_streamed = await _respond_with_context(
+            user_input, f"agent:{agent_name}", context_data, state, llm_client
+        )
+    except Exception as e:
+        logger.warning("LLM enrichment failed for A2A call to %s: %s", agent_name, e)
+        response_text = context_data
+        was_streamed = False
+
+    decision = Decision(
+        action=DecisionAction.ANSWER_DIRECTLY,
+        reasoning=f"A2A call to {agent_name} (capability: {capability}) with LLM-enriched response",
+        requires_planning=False,
+        target_capabilities=target_capabilities,
+        direct_response=None if was_streamed else response_text,
+    )
+
+    if state_manager:
+        await state_manager.log_decision({
+            "event": "a2a_agent_call",
+            "agent_name": agent_name,
+            "capability": capability,
+            "success": error is None,
+            "llm_enriched": True,
+            "error": error,
+            "timestamp": utcnow_isoformat(),
+        })
+
+    return {"current_decision": decision}
+
+
+async def _handle_mcp(
+    user_input: str,
+    state: "ProgenitorState",
+    llm_client,
+    tool_registry,
+    state_manager,
+    decision_data: dict,
+) -> "ProgenitorState":
+    """Handle use_mcp action from LLM."""
+    target_capabilities = decision_data.get("target_capabilities", [])
+
+    if not target_capabilities:
+        decision = Decision(
+            action=DecisionAction.ANSWER_DIRECTLY,
+            reasoning="use_mcp without target_capabilities - responding directly",
+            requires_planning=False,
+            direct_response="I wasn't able to determine which tool to use. Could you please clarify your request?",
+        )
+        return {"current_decision": decision}
+
+    capability = target_capabilities[0]
+    tool_config = tool_registry.find_tool_by_capability(capability)
+
+    if not tool_config:
+        context_data = f"No MCP tool found for capability: {capability}"
+        try:
+            response_text, was_streamed = await _respond_with_context(
+                user_input, "mcp_lookup", context_data, state, llm_client
+            )
+        except Exception:
+            response_text = context_data
+            was_streamed = False
+    else:
+        tool_name = tool_config.get("name", capability)
+        from ..tools.mcp import MCPClient
+
+        mcp_client = MCPClient()
+        try:
+            mcp_result = await mcp_client.call_tool(
+                tool_config,
+                method="execute",
+                params={"input": user_input},
+            )
+            context_data = json.dumps(mcp_result, indent=2) if isinstance(mcp_result, dict) else str(mcp_result)
+        except Exception as e:
+            logger.warning("MCP tool execution failed for %s: %s", tool_name, e)
+            context_data = f"MCP tool '{tool_name}' execution error: {e}"
+
+        try:
+            response_text, was_streamed = await _respond_with_context(
+                user_input, f"mcp:{tool_name}", context_data, state, llm_client
+            )
+        except Exception as e:
+            logger.warning("LLM enrichment failed for MCP call to %s: %s", tool_name, e)
+            response_text = context_data
+            was_streamed = False
+
+    decision = Decision(
+        action=DecisionAction.ANSWER_DIRECTLY,
+        reasoning=f"MCP tool call (capability: {capability}) with LLM-enriched response",
+        requires_planning=False,
+        target_capabilities=target_capabilities,
+        direct_response=None if was_streamed else response_text,
+    )
+
+    if state_manager:
+        await state_manager.log_decision({
+            "event": "mcp_tool_call",
+            "capability": capability,
+            "llm_enriched": True,
+            "timestamp": utcnow_isoformat(),
+        })
+
+    return {"current_decision": decision}
+
+
+async def _execute_a2a_agent_inline(
+    target_capabilities: list[str],
+    user_input: str,
+    tool_registry,
+    timeout: float = 60.0,
+) -> tuple[dict | None, str | None]:
+    """Execute an A2A agent call inline."""
+    if not target_capabilities:
+        return None, "No target capabilities specified"
+
+    capability = target_capabilities[0]
+    agent_config = tool_registry.find_agent_by_capability(capability)
+
+    if not agent_config:
+        return None, f"No agent found for capability: {capability}"
+
+    agent_name = agent_config.get("name", "unknown")
+    status = agent_config.get("status", "stopped")
+
+    if status == "failed":
+        error = agent_config.get("last_error", "Unknown error")
+        return None, f"Agent '{agent_name}' is in failed state: {error}"
+
+    if status not in ("running", "waiting", "executing"):
+        return None, f"Agent '{agent_name}' is not running (status: {status})"
+
+    a2a_client = A2AClient()
+    result = await a2a_client.call_agent(
+        agent_config,
+        request=user_input,
+        timeout=timeout,
+    )
+
+    return result, None

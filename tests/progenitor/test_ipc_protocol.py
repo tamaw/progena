@@ -324,6 +324,7 @@ class TestAsyncProtocol:
 
         # Return client as writer (input), server as reader (output)
         # This simulates sending from client and reading on server
+        assert server_reader is not None
         return server_reader, client_writer
 
 

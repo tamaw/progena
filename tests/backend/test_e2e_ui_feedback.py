@@ -267,6 +267,7 @@ class TestAgentFeedbackVisibility:
 
             # Verify phase is reported correctly
             snapshot = reader.get_snapshot()
+            assert snapshot.build is not None
             assert snapshot.build.phase == phase
 
     def test_backlog_progress_tracking(self, mock_state_files):

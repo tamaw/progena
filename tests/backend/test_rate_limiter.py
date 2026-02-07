@@ -166,6 +166,7 @@ class TestRateLimiterBasicFunctionality(unittest.TestCase):
         # Next should be blocked
         allowed, reason = self.limiter.is_allowed("client1")
         assert not allowed
+        assert reason is not None
         assert "requests/minute" in reason
 
     def test_get_remaining(self):

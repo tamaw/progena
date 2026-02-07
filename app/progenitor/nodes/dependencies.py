@@ -132,8 +132,8 @@ class NodeDependencies:
             self.copilot_config_path = self.config.copilot.config_path
 
 
-# Type alias for node functions
-NodeFunction = Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]
+# Type alias for node functions (partial state updates)
+NodeFunction = Callable[[ProgenitorState], Coroutine[Any, Any, dict[str, Any]]]
 
 
 def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:

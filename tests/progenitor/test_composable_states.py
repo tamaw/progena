@@ -188,14 +188,18 @@ class TestSubstateUsagePatterns(unittest.TestCase):
     def test_node_can_type_hint_specific_substate(self):
         """Test that nodes can type hint specific substates."""
         from app.progenitor.state import ConversationState
+        from app.progenitor.state.models import ConversationMessage
 
         def get_messages(state: ConversationState) -> list:
             """Node can type hint specific substate for clarity."""
             return state.get("messages", [])
 
         # Should work with full state too (due to structural typing)
-        messages = get_messages({"messages": ["hello"], "current_input": "test"})
-        assert messages == ["hello"]
+        messages = get_messages({
+            "messages": [ConversationMessage(id="m1", role="user", content="hello")],
+            "current_input": "test",
+        })
+        assert messages[0].content == "hello"
 
 
 if __name__ == "__main__":
