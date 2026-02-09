@@ -7,11 +7,13 @@ Configuration is read from environment variables. Per SPEC.md.
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
 from dotenv import load_dotenv
 
-from .env_utils import env_bool, env_int, env_float, env_list
+from .env_utils import env_bool, env_float, env_int, env_list
 
 # Auto-load .env file from project root
 load_dotenv()
@@ -28,15 +30,15 @@ class LLMConfig:
 
     # LiteLLM proxy
     base_url: str = "http://localhost:4000"
-    api_key: Optional[str] = None
+    api_key: str | None = None
 
     # Model selection
     model_default: str = "gpt-5.1-codex-max"
 
     # Per-role model overrides (optional)
-    model_planner: Optional[str] = None
-    model_builder: Optional[str] = None
-    model_summary: Optional[str] = None
+    model_planner: str | None = None
+    model_builder: str | None = None
+    model_summary: str | None = None
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -95,6 +97,9 @@ class RuntimeConfig:
 
     # Decision routing settings
     build_confidence_threshold: float = 0.95  # Min confidence for build actions
+
+    # Build concurrency settings
+    max_build_concurrency: int = 3  # Max concurrent builds (adaptive to backlog size)
 
     @classmethod
     def from_env(cls, file_config: dict[str, Any] | None = None) -> "RuntimeConfig":
@@ -162,6 +167,10 @@ class RuntimeConfig:
             # Decision routing settings
             build_confidence_threshold=env_float(
                 "PROGENITOR_BUILD_CONFIDENCE_THRESHOLD", fc.get("build_confidence_threshold", 0.95)
+            ),
+            # Build concurrency settings
+            max_build_concurrency=env_int(
+                "PROGENITOR_MAX_BUILD_CONCURRENCY", fc.get("max_build_concurrency", 3)
             ),
         )
 
@@ -400,7 +409,7 @@ class ProgenitorConfig:
 
 
 # Global configuration instance (loaded lazily)
-_config: Optional[ProgenitorConfig] = None
+_config: ProgenitorConfig | None = None
 
 
 def get_config(
@@ -500,10 +509,10 @@ class JsonLogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON."""
         import json as json_module
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         log_entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

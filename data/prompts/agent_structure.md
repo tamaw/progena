@@ -312,7 +312,7 @@ def agent_url():
 
 ## Integration with FastMCP Tools
 
-Agents can use FastMCP tools from `app/tools/` by:
+Agents can use FastMCP tools from `app/mcp/` by:
 
 ```python
 from mcp import ClientSession, StdioServerParameters
@@ -322,7 +322,7 @@ async def call_tool(tool_name: str, args: dict) -> str:
     """Call a FastMCP tool."""
     params = StdioServerParameters(
         command="python",
-        args=["-m", f"app.tools.{tool_name}.server"],
+        args=["-m", f"app.mcp.{tool_name}.server"],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

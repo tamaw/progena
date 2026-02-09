@@ -10,7 +10,9 @@ Nodes return partial state updates (dicts with subset of keys) rather than
 full ProgenitorState objects. LangGraph merges these into the full state.
 """
 
-from typing import Callable, Coroutine, Any
+from collections.abc import Callable, Coroutine
+from typing import Any
+
 from ..state.models import ProgenitorState
 
 # CQ-006: Standard type aliases for node functions
@@ -19,53 +21,53 @@ NodeStateUpdate = dict[str, Any]  # Partial state update (subset of ProgenitorSt
 NodeFunction = Callable[[ProgenitorState], Coroutine[Any, Any, NodeStateUpdate]]
 NodeFactory = Callable[..., NodeFunction]
 
+# Submodules
 from . import (
-    intake,
-    time_check,
-    decide,
-    planner,
-    pick_next,
-    worktree_prep,
     act,
-    validate,
+    build,  # Extracted from graph_inner_loop.py
     commit_core,
-    respond,
-    idle,
     cycle_limit,
+    decide,
+    execute,
+    heuristics,
+    idle,
+    intake,
+    learn,
+    merge,  # Sequential merge with conflict resolution
+    node_helpers,
     # New nodes for loop.spec.md dual-loop architecture
     observe,
+    pick_next,
+    planner,
+    respond,
     think,
-    execute,
+    time_check,
+    validate,
     verify_loop,
-    learn,
-    build,  # Extracted from graph_inner_loop.py
-)
-
-# Submodules
-from . import heuristics
-from . import node_helpers
-
-# Error types for consistent error handling across nodes
-from .errors import (
-    NodeError,
-    RecoverableError,
-    FatalError,
-    ValidationError,
-    LLMError,
-    ToolError,
-    StateError,
-    ConfigurationError,
+    worktree_prep,
 )
 
 # Dependency injection
 from .dependencies import (
-    NodeDependencies,
     LLMClientProtocol,
+    NodeDependencies,
     StateManagerProtocol,
     ToolRegistryProtocol,
     create_all_nodes,
     create_node_subset,
     create_test_dependencies,
+)
+
+# Error types for consistent error handling across nodes
+from .errors import (
+    ConfigurationError,
+    FatalError,
+    LLMError,
+    NodeError,
+    RecoverableError,
+    StateError,
+    ToolError,
+    ValidationError,
 )
 
 __all__ = [
@@ -93,6 +95,7 @@ __all__ = [
     "verify_loop",
     "learn",
     "build",  # Extracted from graph_inner_loop.py
+    "merge",  # Sequential merge with conflict resolution
     # Submodules
     "heuristics",
     "node_helpers",

@@ -9,18 +9,15 @@ The outer loop continues to handle user interactions while builds run in backgro
 """
 
 import logging
-from typing import Literal, Any
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 
-from .state.models import ProgenitorState
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
 from .routing import (
-    ensure_ideal_state,
-    should_iterate,
-    should_continue_inner_loop,
     route_after_verify,
+    should_continue_inner_loop,
 )
-from .constants import DEFAULT_MAX_INNER_ITERATIONS
+from .state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
 
@@ -45,18 +42,21 @@ def create_inner_loop_graph(
         Compiled StateGraph implementing:
         OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN → (loop)
     """
+    from pathlib import Path
+
     from .nodes import (
-        observe,
-        think,
-        planner,
+        build,
         execute,
         learn,
+        merge,
+        observe,
+        planner,
+        think,
         verify_loop,
-        build,
     )
     from .tools.copilot import CopilotCLI
+    from .tools.git import GitWorktreeManager
     from .tools.registry import ToolRegistry
-    from pathlib import Path
 
     if copilot_acp_manager is None:
         raise RuntimeError(
@@ -79,6 +79,9 @@ def create_inner_loop_graph(
     registry_path = config.storage.state_dir / "registry.json"
     tool_registry = ToolRegistry(registry_path)
 
+    # Git worktree manager for concurrent builds
+    git_manager = GitWorktreeManager(worktrees_dir)
+
     # Get project root (parent of app directory) for agent discovery
     project_root = Path(__file__).parent.parent.parent
 
@@ -88,7 +91,8 @@ def create_inner_loop_graph(
         "observe": observe.create_node(llm_client, state_manager),
         "think": think.create_node(llm_client, state_manager),
         "plan": planner.create_node(llm_client, state_manager),
-        "build": build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager),
+        "build": build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager, git_manager),
+        "merge": merge.create_node(llm_client, git_manager, state_manager),
         "execute": execute.create_node(tool_registry, state_manager, project_root),
         "verify": verify_loop.create_node(llm_client, state_manager),
         "learn": learn.create_node(llm_client, state_manager),
@@ -105,11 +109,12 @@ def create_inner_loop_graph(
     builder.set_entry_point("observe")
 
     # Define edges for the inner loop
-    # OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → [LEARN or DONE]
+    # OBSERVE → THINK → PLAN → BUILD → MERGE → EXECUTE → VERIFY → [LEARN or DONE]
     builder.add_edge("observe", "think")
     builder.add_edge("think", "plan")
     builder.add_edge("plan", "build")
-    builder.add_edge("build", "execute")
+    builder.add_edge("build", "merge")
+    builder.add_edge("merge", "execute")
     builder.add_edge("execute", "verify")
 
     # After verify, either learn (continue) or done (exit)
