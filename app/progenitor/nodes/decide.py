@@ -18,9 +18,11 @@ from ..nodes.node_helpers.registry import match_tool_by_input, execute_system_to
 from ..nodes.node_helpers.formatters import format_tool_result
 from ..runtime.time_utils import utcnow_isoformat
 from ..state.helpers import get_ideal_state, is_work_item_actionable
-from ..state.models import Decision, DecisionAction, ProgenitorState, generate_run_id
+from ..state.models import Decision, DecisionAction, ProgenitorState, ConversationMessage, generate_run_id
 from ..tools.mcp import A2AClient
 from ..llm.prompts import PromptTemplates
+from ..llm.conversation_compressor import ConversationCompressor
+from ..env_utils import env_bool, env_int
 
 if TYPE_CHECKING:
     from ..state.execution_schemas import BuildSettings
@@ -397,15 +399,64 @@ def create_node(
 
             return {"current_decision": None}
 
+        auto_updates: dict[str, Any] = {}
+
+        def _merge_updates(payload: dict[str, Any]) -> ProgenitorState:
+            if auto_updates:
+                payload = {**payload, **auto_updates}
+            return cast(ProgenitorState, payload)
+
+        def _coerce_messages(raw_messages: list[Any]) -> list[ConversationMessage]:
+            messages: list[ConversationMessage] = []
+            for msg in raw_messages:
+                if isinstance(msg, ConversationMessage):
+                    messages.append(msg)
+                elif isinstance(msg, dict):
+                    try:
+                        messages.append(ConversationMessage(**msg))
+                    except Exception:
+                        continue
+            return messages
+
+        if env_bool("PROGENITOR_AUTO_COMPRESS_ENABLED", True):
+            threshold = env_int("PROGENITOR_AUTO_COMPRESS_THRESHOLD", 100)
+            keep_recent = env_int("PROGENITOR_AUTO_COMPRESS_KEEP_RECENT", 50)
+            max_summary_tokens = env_int("PROGENITOR_AUTO_COMPRESS_MAX_SUMMARY_TOKENS", 500)
+            persist = env_bool("PROGENITOR_AUTO_COMPRESS_PERSIST", True)
+
+            raw_messages = state.get("messages", [])
+            messages_for_compress = _coerce_messages(raw_messages)
+
+            if len(messages_for_compress) >= threshold and len(messages_for_compress) > keep_recent:
+                compressor = ConversationCompressor(
+                    llm_client=llm_client,
+                    max_summary_tokens=max_summary_tokens,
+                )
+                try:
+                    compressed = await compressor.compress(messages_for_compress, keep_recent=keep_recent)
+                    auto_updates["messages"] = compressed
+                    state["messages"] = compressed
+
+                    if persist and state_manager:
+                        await state_manager.save_messages(compressed)
+
+                    logger.info(
+                        "Auto-compressed conversation: %d -> %d messages",
+                        len(messages_for_compress), len(compressed),
+                    )
+                except Exception as e:
+                    logger.warning("Auto compression failed: %s", e)
+
         # ============================================================
         # FAST-PATH: Dynamic keyword/pattern match on registered tools
         # ============================================================
         matched_tool = match_tool_by_input(user_input)
         if matched_tool:
             logger.info("Fast-path match: tool=%s for input=%r", matched_tool, user_input[:80])
-            return await _execute_and_respond(
+            result = await _execute_and_respond(
                 matched_tool, user_input, state, llm_client, tool_registry, state_manager
             )
+            return _merge_updates(result)
 
         # ============================================================
         # SLOW PATH: Use LLM for routing decision
@@ -437,11 +488,12 @@ def create_node(
 
             # --- Handle build actions ---
             if is_build_action:
-                return await _handle_build_action(
+                result = await _handle_build_action(
                     user_input, state, llm_client, tool_registry, state_manager,
                     decision_data, llm_action, confidence, build_confidence_threshold,
                     user_response,
                 )
+                return _merge_updates(result)
 
             # Parse decision action
             try:
@@ -457,25 +509,28 @@ def create_node(
 
                 if tool_name:
                     logger.info("Slow-path: LLM selected system_tool=%s", tool_name)
-                    return await _execute_and_respond(
+                    result = await _execute_and_respond(
                         tool_name, user_input, state, llm_client, tool_registry, state_manager
                     )
+                    return _merge_updates(result)
                 else:
                     logger.warning("system_tool action without target_capabilities")
 
             # --- Handle delegate_a2a ---
             if action == DecisionAction.DELEGATE_A2A:
-                return await _handle_a2a(
+                result = await _handle_a2a(
                     user_input, state, llm_client, tool_registry, state_manager,
                     decision_data,
                 )
+                return _merge_updates(result)
 
             # --- Handle use_mcp ---
             if action == DecisionAction.USE_MCP:
-                return await _handle_mcp(
+                result = await _handle_mcp(
                     user_input, state, llm_client, tool_registry, state_manager,
                     decision_data,
                 )
+                return _merge_updates(result)
 
             # --- Handle answer_directly (with streaming if enabled) ---
             direct_resp = None
@@ -532,7 +587,7 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
-            return cast(ProgenitorState, decision_result)
+            return _merge_updates(decision_result)
 
         except (RateLimitError, APIConnectionError) as e:
             logger.warning("Recoverable LLM error in decide node: %s", e)
@@ -559,7 +614,7 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
-            return {"current_decision": decision}
+            return _merge_updates({"current_decision": decision})
 
         except Exception as e:
             logger.error("Unexpected error in decide node: %s", e, exc_info=True)
@@ -587,7 +642,7 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
-            return {"current_decision": decision}
+            return _merge_updates({"current_decision": decision})
 
     return decide_node
 

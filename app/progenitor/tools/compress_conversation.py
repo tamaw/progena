@@ -131,4 +131,4 @@ class CompressConversationTool(BaseSystemTool):
             "keep_recent": keep_recent,
             "threshold": threshold,
             "persisted": persist and context.state_manager is not None,
-        })
+        }, state_updates={"messages": compressed})
