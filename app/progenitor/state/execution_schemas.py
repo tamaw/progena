@@ -502,6 +502,12 @@ class ExperimentPlan(BaseModel):
         description="How to verify success"
     )
 
+    # Optional reasoning trace from the LLM
+    reasoning_trace: Optional[str] = Field(
+        default=None,
+        description="Reasoning trace from the LLM, if available"
+    )
+
     @classmethod
     def create_smoke_test_plan(
         cls,
@@ -667,6 +673,12 @@ class ThinkOutput(BaseModel):
     recommendation_reasoning: str = Field(
         default="",
         description="Why this approach is recommended"
+    )
+
+    # Optional reasoning trace from the LLM
+    reasoning_trace: Optional[str] = Field(
+        default=None,
+        description="Reasoning trace from the LLM, if available"
     )
 
 
@@ -923,6 +935,11 @@ class CriterionEvidence(BaseModel):
     llm_assessment: Optional[str] = Field(
         default=None,
         description="LLM's assessment if used"
+    )
+
+    reasoning_trace: Optional[str] = Field(
+        default=None,
+        description="Reasoning trace from the LLM, if available"
     )
 
 

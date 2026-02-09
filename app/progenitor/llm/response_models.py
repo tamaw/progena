@@ -820,6 +820,11 @@ class LearningResult(BaseModel):
         description="Correlations between planned actions and observed outcomes"
     )
 
+    reasoning_trace: Optional[str] = Field(
+        default=None,
+        description="Reasoning trace from the LLM, if available"
+    )
+
     @field_validator('ideal_state_progress', mode='before')
     @classmethod
     def validate_progress(cls, v):
@@ -956,6 +961,11 @@ class ThinkResponse(BaseModel):
     recommendation_reasoning: str = Field(
         default="",
         description="Why the recommended approach is preferred over others"
+    )
+
+    reasoning_trace: Optional[str] = Field(
+        default=None,
+        description="Reasoning trace from the LLM, if available"
     )
 
     @field_validator('recommended_approach_index', mode='before')

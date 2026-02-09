@@ -88,6 +88,50 @@ class LLMClient:
 
         return "\n\n".join(parts)
 
+    def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
+        """Extract response text and optional reasoning trace from /responses output."""
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+
+        for item in data.get("output", []) or []:
+            item_type = item.get("type")
+            if item_type == "message":
+                for part in item.get("content", []) or []:
+                    part_type = part.get("type")
+                    if part_type in ("output_text", "text"):
+                        text_parts.append(part.get("text", ""))
+                    elif part_type in ("reasoning", "reasoning_text", "reasoning_summary"):
+                        reasoning_parts.append(part.get("text", ""))
+            elif item_type in ("reasoning", "reasoning_text", "reasoning_summary"):
+                if item.get("content"):
+                    reasoning_parts.append(str(item.get("content")))
+                elif item.get("text"):
+                    reasoning_parts.append(str(item.get("text")))
+
+        if data.get("reasoning"):
+            reasoning_parts.append(str(data.get("reasoning")))
+
+        return "".join(text_parts).strip(), "".join(reasoning_parts).strip()
+
+    async def _post_response(
+        self,
+        input_text: str,
+        response_format: dict[str, Any] | None = None,
+        include_reasoning: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": input_text,
+        }
+        if response_format:
+            payload["response_format"] = response_format
+        if include_reasoning:
+            payload["reasoning"] = {"summary": "auto"}
+
+        response = await self.client.post(self.endpoint_url, json=payload)
+        response.raise_for_status()
+        return response.json()
+
     async def chat(
         self,
         messages: list[dict[str, str]],
@@ -99,20 +143,31 @@ class LLMClient:
         """Call /responses endpoint and return text response."""
         input_text = self._format_input(messages, system_prompt)
 
-        response = await self.client.post(
-            self.endpoint_url,
-            json={"model": self.model, "input": input_text}
+        data = await self._post_response(
+            input_text=input_text,
+            response_format=response_format,
+            include_reasoning=False,
         )
-        response.raise_for_status()
-        data = response.json()
+        text, _reasoning = self._extract_text_and_reasoning(data)
+        return text
 
-        # Extract text from response: data["output"][0]["content"][0]["text"]
-        if "output" in data and data["output"]:
-            for item in data["output"]:
-                if item.get("type") == "message" and item.get("content"):
-                    return item["content"][0].get("text", "")
+    async def chat_with_reasoning(
+        self,
+        messages: list[dict[str, str]],
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        response_format: dict[str, Any] | None = None,
+    ) -> tuple[str, str]:
+        """Call /responses endpoint and return text plus reasoning trace."""
+        input_text = self._format_input(messages, system_prompt)
 
-        return ""
+        data = await self._post_response(
+            input_text=input_text,
+            response_format=response_format,
+            include_reasoning=True,
+        )
+        return self._extract_text_and_reasoning(data)
 
     async def chat_stream(
         self,
@@ -212,6 +267,17 @@ Generate a list of work items to fulfill this request.
         """Generate text response for a prompt."""
         messages = [{"role": "user", "content": prompt}]
         return await self.chat(messages, system_prompt, temperature, max_tokens)
+
+    async def generate_with_reasoning(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> tuple[str, str]:
+        """Generate text response and return reasoning trace when available."""
+        messages = [{"role": "user", "content": prompt}]
+        return await self.chat_with_reasoning(messages, system_prompt, temperature, max_tokens)
 
     async def generate_build_spec(
         self,

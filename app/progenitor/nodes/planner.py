@@ -1054,10 +1054,17 @@ async def _generate_experiment_plan(
         gaps_section=gaps_section,
     )
 
-    response = await llm_client.generate(
-        prompt=prompt,
-        system_prompt=_prompts.get("planner.experiment_plan_system.md"),
-    )
+    reasoning_trace = None
+    if hasattr(llm_client, "generate_with_reasoning"):
+        response, reasoning_trace = await llm_client.generate_with_reasoning(
+            prompt=prompt,
+            system_prompt=_prompts.get("planner.experiment_plan_system.md"),
+        )
+    else:
+        response = await llm_client.generate(
+            prompt=prompt,
+            system_prompt=_prompts.get("planner.experiment_plan_system.md"),
+        )
 
     # Parse the response into structured PromptSpecs
     prompts = _parse_prompts_from_response(response)
@@ -1109,6 +1116,7 @@ async def _generate_experiment_plan(
         stop_early_rules=stop_early_rules,
         expected_outcome=expected_outcome,
         verification_method="score_threshold",
+        reasoning_trace=reasoning_trace,
     )
 
 

@@ -105,6 +105,19 @@ class MockLLMClient(LLMClientProtocol):
         logger.debug("Mock chat response (call %d): %s...", self._call_count, response[:100])
         return response
 
+    async def chat_with_reasoning(
+        self,
+        messages: list[dict[str, str]],
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        response_format: dict[str, Any] | None = None,
+    ) -> tuple[str, str]:
+        """Return a mock chat response with a synthetic reasoning trace."""
+        response = await self.chat(messages, system_prompt, temperature, max_tokens, response_format)
+        reasoning = "Mock reasoning trace: generated response based on input context."
+        return response, reasoning
+
     async def stream_chat(
         self,
         messages: list[dict[str, str]],
@@ -151,6 +164,16 @@ class MockLLMClient(LLMClientProtocol):
     ) -> str:
         """Alias for completion to satisfy LLMClientProtocol."""
         return await self.complete(prompt, system_prompt=system_prompt)
+
+    async def generate_with_reasoning(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+    ) -> tuple[str, str]:
+        """Generate a mock response with a synthetic reasoning trace."""
+        response = await self.complete(prompt, system_prompt=system_prompt)
+        reasoning = "Mock reasoning trace: generated response based on prompt."
+        return response, reasoning
 
     async def stream(
         self,
