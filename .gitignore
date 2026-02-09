@@ -78,3 +78,4 @@ tmp/
 *.pem
 
 *-cwd
+.ruff_cache
