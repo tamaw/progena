@@ -1,11 +1,9 @@
 """
 Centralized Configuration for Progenitor.
 
-Configuration is read from environment variables (preferred) with JSON config file fallbacks.
-Environment variables always win. Per SPEC.md.
+Configuration is read from environment variables. Per SPEC.md.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -22,55 +20,44 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LLMConfig:
-    """LLM provider configuration."""
+    """LLM provider configuration.
 
-    provider: str = "azure"  # "openai" | "azure"
+    All LLM calls are routed through a LiteLLM proxy (OpenAI-compatible).
+    The proxy handles provider routing, auth, and observability (Langfuse).
+    """
 
-    # OpenAI (public)
-    openai_api_key: Optional[str] = None
+    # LiteLLM proxy
+    base_url: str = "http://localhost:4000"
+    api_key: Optional[str] = None
+
+    # Model selection
     model_default: str = "gpt-5.1-codex-max"
 
-    # Azure OpenAI
-    azure_endpoint: Optional[str] = None
-    azure_api_key: Optional[str] = None
-    azure_api_version: str = "2024-08-01-preview"
-    azure_deployment_default: Optional[str] = None
-
-    # Per-role deployments (Azure)
-    azure_deployment_planner: Optional[str] = None
-    azure_deployment_builder: Optional[str] = None
-    azure_deployment_summary: Optional[str] = None
+    # Per-role model overrides (optional)
+    model_planner: Optional[str] = None
+    model_builder: Optional[str] = None
+    model_summary: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
-        provider = os.getenv("PROGENITOR_LLM_PROVIDER", "").lower()
-
-        # Auto-detect Azure if endpoint is set
-        if not provider and os.getenv("AZURE_OPENAI_ENDPOINT"):
-            provider = "azure"
-
         return cls(
-            provider=provider or "azure",
-            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
+            api_key=os.getenv("OPENAI_API_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            azure_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            azure_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
-            azure_deployment_default=os.getenv("AZURE_OPENAI_DEPLOYMENT_DEFAULT"),
-            azure_deployment_planner=os.getenv("AZURE_OPENAI_DEPLOYMENT_PLANNER"),
-            azure_deployment_builder=os.getenv("AZURE_OPENAI_DEPLOYMENT_BUILDER"),
-            azure_deployment_summary=os.getenv("AZURE_OPENAI_DEPLOYMENT_SUMMARY"),
+            model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
+            model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
+            model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
         )
 
-    def get_deployment_for_role(self, role: str) -> Optional[str]:
-        """Get deployment name for a specific role."""
-        role_deployments = {
-            "planner": self.azure_deployment_planner,
-            "builder": self.azure_deployment_builder,
-            "summary": self.azure_deployment_summary,
+    def get_model_for_role(self, role: str) -> str:
+        """Get model name for a specific role."""
+        role_models = {
+            "planner": self.model_planner,
+            "builder": self.model_builder,
+            "summary": self.model_summary,
         }
-        return role_deployments.get(role) or self.azure_deployment_default
+        return role_models.get(role) or self.model_default
 
 
 @dataclass
@@ -212,7 +199,6 @@ class CopilotConfig:
     """Copilot CLI configuration."""
 
     bin_path: str = "copilot"
-    config_path: Path = field(default_factory=lambda: Path("/config/copilot.json"))
     timeout_seconds: int = 1200  # 20 minutes per ACP request
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
     model: str = "claude-haiku-4.5"
@@ -223,55 +209,17 @@ class CopilotConfig:
     acp_allowed_dirs: list[str] = field(default_factory=list)  # Restricted directories
 
     @classmethod
-    def from_env(cls, file_config: dict[str, Any] | None = None, project_root: Path | None = None) -> "CopilotConfig":
-        """Load Copilot config from environment with file fallbacks."""
-        fc = file_config or {}
-        default_config_path = "/config/copilot.json" if project_root is None else str(project_root / "config" / "copilot.json")
-
+    def from_env(cls) -> "CopilotConfig":
+        """Load Copilot config from environment variables."""
         return cls(
-            bin_path=os.getenv("PROGENITOR_COPILOT_BIN", fc.get("command", "copilot")),
-            config_path=Path(os.getenv("PROGENITOR_COPILOT_CONFIG", default_config_path)),
-            timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", fc.get("timeout", 1200)),
-            default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", fc.get("default_flags", ["--yolo"])),
-            model=os.getenv("PROGENITOR_COPILOT_MODEL", fc.get("model", "claude-haiku-4.5")),
-            max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", fc.get("max_tokens", 8192)),
+            bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
+            timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
+            default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
+            model=os.getenv("PROGENITOR_COPILOT_MODEL", "claude-haiku-4.5"),
+            max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", 8192),
             # ACP settings
-            acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", fc.get("acp_port", 3000)),
-            acp_allowed_dirs=env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", fc.get("acp_allowed_dirs", [])),
-        )
-
-
-@dataclass
-class TelemetryConfig:
-    """Telemetry and observability configuration."""
-
-    enabled: bool = True
-    output_dir: Optional[Path] = None  # None = use storage.log_dir / "telemetry"
-    console_export: bool = False  # Also print to console (debugging)
-    metrics_interval_seconds: float = 15.0  # How often to snapshot metrics
-    traces_file: str = "traces.jsonl"
-    metrics_file: str = "metrics.jsonl"
-
-    @classmethod
-    def from_env(cls, storage_config: Optional["StorageConfig"] = None) -> "TelemetryConfig":
-        """Load telemetry config from environment."""
-        output_dir_str = os.getenv("PROGENITOR_TELEMETRY_DIR")
-        if output_dir_str:
-            output_dir = Path(output_dir_str)
-        elif storage_config:
-            output_dir = storage_config.log_dir / "telemetry"
-        else:
-            output_dir = None
-
-        return cls(
-            enabled=env_bool("PROGENITOR_TELEMETRY_ENABLED", True),
-            output_dir=output_dir,
-            console_export=env_bool("PROGENITOR_TELEMETRY_CONSOLE", False),
-            metrics_interval_seconds=env_float(
-                "PROGENITOR_TELEMETRY_METRICS_INTERVAL", 15.0
-            ),
-            traces_file=os.getenv("PROGENITOR_TELEMETRY_TRACES_FILE", "traces.jsonl"),
-            metrics_file=os.getenv("PROGENITOR_TELEMETRY_METRICS_FILE", "metrics.jsonl"),
+            acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
+            acp_allowed_dirs=env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", []),
         )
 
 
@@ -343,45 +291,22 @@ class ProgenitorConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     copilot: CopilotConfig = field(default_factory=CopilotConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
-    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
 
     @classmethod
     def load(cls, project_root: Path | None = None, config_dir: Path | None = None) -> "ProgenitorConfig":
         """Load complete configuration from environment and files.
 
-        Environment variables always override file config.
+        Configuration is sourced from environment variables.
         """
-        # Load JSON config files if available
-        progenitor_config: dict[str, Any] = {}
-        copilot_config: dict[str, Any] = {}
-
-        if config_dir:
-            progenitor_json = config_dir / "progenitor.json"
-            if progenitor_json.exists():
-                try:
-                    with open(progenitor_json, "r") as f:
-                        progenitor_config = json.load(f)
-                except (json.JSONDecodeError, IOError) as e:
-                    logger.warning(f"Failed to load {progenitor_json}: {e}")
-
-            copilot_json = config_dir / "copilot.json"
-            if copilot_json.exists():
-                try:
-                    with open(copilot_json, "r") as f:
-                        copilot_config = json.load(f)
-                except (json.JSONDecodeError, IOError) as e:
-                    logger.warning(f"Failed to load {copilot_json}: {e}")
-
         storage_config = StorageConfig.from_env(project_root)
 
         config = cls(
             llm=LLMConfig.from_env(),
-            runtime=RuntimeConfig.from_env(progenitor_config),
+            runtime=RuntimeConfig.from_env(),
             storage=storage_config,
-            copilot=CopilotConfig.from_env(copilot_config, project_root),
+            copilot=CopilotConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
-            telemetry=TelemetryConfig.from_env(storage_config),
             validation=ValidationConfig.from_env(),
         )
 
@@ -399,16 +324,8 @@ class ProgenitorConfig:
         errors = []
 
         # Validate LLM configuration
-        if self.llm.provider == "azure":
-            if not self.llm.azure_endpoint:
-                errors.append("Azure provider requires AZURE_OPENAI_ENDPOINT")
-            if not self.llm.azure_deployment_default:
-                errors.append("Azure provider requires AZURE_OPENAI_DEPLOYMENT_DEFAULT")
-            if not (self.llm.azure_api_key or self.llm.openai_api_key):
-                errors.append("Azure provider requires AZURE_OPENAI_API_KEY or OPENAI_API_KEY")
-        elif self.llm.provider == "openai":
-            if not self.llm.openai_api_key:
-                errors.append("OpenAI provider requires OPENAI_API_KEY")
+        if not self.llm.base_url:
+            errors.append("LITELLM_BASE_URL must be set")
 
         # Validate storage paths are sensible
         for name, path in [
@@ -433,14 +350,11 @@ class ProgenitorConfig:
         """Convert config to dictionary for logging."""
         result = {
             "llm": {
-                "provider": self.llm.provider,
+                "base_url": self.llm.base_url,
                 "model_default": self.llm.model_default,
-                "azure_endpoint": self.llm.azure_endpoint,
-                "azure_api_version": self.llm.azure_api_version,
-                "azure_deployment_default": self.llm.azure_deployment_default,
-                "azure_deployment_planner": self.llm.azure_deployment_planner,
-                "azure_deployment_builder": self.llm.azure_deployment_builder,
-                "azure_deployment_summary": self.llm.azure_deployment_summary,
+                "model_planner": self.llm.model_planner,
+                "model_builder": self.llm.model_builder,
+                "model_summary": self.llm.model_summary,
             },
             "runtime": {
                 "timezone": self.runtime.timezone,
@@ -464,7 +378,6 @@ class ProgenitorConfig:
             },
             "copilot": {
                 "bin_path": self.copilot.bin_path,
-                "config_path": str(self.copilot.config_path),
                 "timeout_seconds": self.copilot.timeout_seconds,
                 "default_flags": self.copilot.default_flags,
                 "model": self.copilot.model,
@@ -476,23 +389,12 @@ class ProgenitorConfig:
                 "enabled": self.scheduler.enabled,
                 "poll_seconds": self.scheduler.poll_seconds,
             },
-            "telemetry": {
-                "enabled": self.telemetry.enabled,
-                "output_dir": str(self.telemetry.output_dir) if self.telemetry.output_dir else None,
-                "console_export": self.telemetry.console_export,
-                "metrics_interval_seconds": self.telemetry.metrics_interval_seconds,
-                "traces_file": self.telemetry.traces_file,
-                "metrics_file": self.telemetry.metrics_file,
-            },
         }
 
         if redact_secrets:
-            # Redact API keys
-            result["llm"]["openai_api_key"] = "***REDACTED***" if self.llm.openai_api_key else None
-            result["llm"]["azure_api_key"] = "***REDACTED***" if self.llm.azure_api_key else None
+            result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
         else:
-            result["llm"]["openai_api_key"] = self.llm.openai_api_key
-            result["llm"]["azure_api_key"] = self.llm.azure_api_key
+            result["llm"]["api_key"] = self.llm.api_key
 
         return result
 

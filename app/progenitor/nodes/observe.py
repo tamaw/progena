@@ -23,15 +23,6 @@ from . import NodeFunction, NodeStateUpdate
 logger = logging.getLogger(__name__)
 
 
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_tracer, get_metrics
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
-
-
 def create_node(
     llm_client,
     state_manager=None,
@@ -53,9 +44,6 @@ def create_node(
         - Otherwise: Refine based on previous verification results
         """
         logger.info("OBSERVE: Starting observe phase")
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
 
         iteration = state.get("iteration", {}).get("current", 0)
         ideal_state = get_ideal_state(state)
@@ -162,17 +150,6 @@ def create_node(
                     logger.info("Incrementing iteration from %d to %d (score=%.2f < target=%.2f)",
                                next_iteration - 1, next_iteration, verification_score, target_score)
 
-        if tracer:
-            span = tracer.start_span(
-                "node_observe",
-                attributes={
-                    "iteration": iteration,
-                    "has_ideal_state": ideal_state is not None,
-                    "is_initial": iteration == 0 or ideal_state is None,
-                    "has_clarification_response": clarification_response is not None,
-                },
-            )
-
         try:
             # Handle clarification response - incorporate user's additional context
             if awaiting_clarification and clarification_response and ideal_state:
@@ -203,11 +180,6 @@ def create_node(
                     "clarification_question": None,
                     "clarification_history": history,
                 }
-
-                if span:
-                    span.add_event("clarification_incorporated", {
-                        "response_length": len(clarification_response),
-                    })
 
                 if state_manager:
                     await state_manager.log_decision({
@@ -247,12 +219,6 @@ def create_node(
                 logger.info("Building initial ideal state")
                 ideal_state = await ideal_state_builder.build_from_task(task, context)
 
-                if span:
-                    span.add_event("ideal_state_created", {
-                        "criteria_count": len(ideal_state.success_criteria),
-                        "anti_criteria_count": len(ideal_state.anti_criteria),
-                    })
-
                 if state_manager:
                     await state_manager.log_decision({
                         "event": "ideal_state_created",
@@ -290,12 +256,6 @@ def create_node(
                         ideal_state, iteration_results
                     )
 
-                    if span:
-                        span.add_event("ideal_state_refined", {
-                            "version": ideal_state.version,
-                            "gaps_processed": len(iteration_results.get("gaps", [])),
-                        })
-
                     if state_manager:
                         await state_manager.log_decision({
                             "event": "ideal_state_refined",
@@ -303,27 +263,6 @@ def create_node(
                             "iteration": iteration,
                             "timestamp": utcnow_isoformat(),
                         })
-
-            # Record metrics
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram("node_duration_seconds", duration, {"node": "observe"})
-                metrics.increment("node_invocations_total", {"node": "observe", "success": "true"})
-
-            if span:
-                span.set_attribute("duration_seconds", duration)
-                # Handle ideal_state being either IdealState object or dict
-                if ideal_state:
-                    if hasattr(ideal_state, "success_criteria"):
-                        criteria_count = len(ideal_state.success_criteria)
-                    elif isinstance(ideal_state, dict):
-                        criteria_count = len(ideal_state.get("success_criteria", []))
-                    else:
-                        criteria_count = 0
-                else:
-                    criteria_count = 0
-                span.set_attribute("criteria_count", criteria_count)
-                span.end()
 
             # Merge state updates with ideal_state and clarification updates
             # Always update build_phase to show current phase
@@ -347,11 +286,6 @@ def create_node(
             }
 
         except Exception as e:
-            if metrics:
-                metrics.increment("node_invocations_total", {"node": "observe", "success": "false"})
-            if span:
-                span.record_exception(e)
-                span.end()
             raise
 
     return observe_node

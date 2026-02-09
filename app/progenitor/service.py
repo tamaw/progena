@@ -332,14 +332,6 @@ class ProgenitorService:
         if self.state_manager:
             await self.state_manager.commit_state()
 
-        # Flush Langfuse
-        try:
-            from .observability import flush_langfuse, shutdown_langfuse
-            flush_langfuse()
-            shutdown_langfuse()
-        except ImportError:
-            pass
-
         self._initialized = False
         logger.info("Progenitor service shutdown complete")
 

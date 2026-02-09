@@ -1,216 +1,37 @@
 # ==============================================================================
 # Shared Configuration (YAML Anchors)
 # ==============================================================================
-x-langfuse-db-env: &langfuse-db-env
-  DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
-  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
-  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
-  CLICKHOUSE_USER: langfuse
-  CLICKHOUSE_PASSWORD: langfuse
-  REDIS_CONNECTION_STRING: redis://:langfuse@langfuse-redis:6379
-
-x-langfuse-s3-env: &langfuse-s3-env
-  LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "true"
-  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
-  LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
-  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
-  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: langfuse123
-  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
-  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
-
-# SECURITY WARNING: For production deployments, use Docker secrets or a secrets manager.
-# The default values below are for local development only and MUST be changed.
-# Generate secrets with: openssl rand -base64 32
-x-langfuse-auth-env: &langfuse-auth-env
-  NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-default-dev-secret-change-in-production}
-  SALT: ${LANGFUSE_SALT:-default-dev-salt-change-in-production}
-
 x-progenitor-llm-env: &progenitor-llm-env
-  OPENAI_API_KEY: ${OPENAI_API_KEY}
-  AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
-  AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
-  AZURE_OPENAI_DEPLOYMENT_DEFAULT: ${AZURE_OPENAI_DEPLOYMENT_DEFAULT}
-
-x-progenitor-langfuse-env: &progenitor-langfuse-env
-  LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-true}
-  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-  LANGFUSE_HOST: http://langfuse-web:3000
-
-x-langfuse-depends-on: &langfuse-depends-on
-  langfuse-postgres:
-    condition: service_healthy
-  langfuse-clickhouse:
-    condition: service_healthy
-  langfuse-redis:
-    condition: service_healthy
-  langfuse-minio:
-    condition: service_healthy
-  langfuse-minio-init:
-    condition: service_completed_successfully
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+  PROGENITOR_MODEL_DEFAULT: ${PROGENITOR_MODEL_DEFAULT:-gpt-5.1-codex-max}
 
 services:
   # =============================================================================
-  # Langfuse Observability Stack (PostgreSQL, ClickHouse, Redis, MinIO, Langfuse)
+  # LiteLLM Proxy (LLM routing + Langfuse observability)
   # =============================================================================
-  langfuse-postgres:
-    image: postgres:16-alpine
-    container_name: langfuse-postgres
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: langfuse
-      POSTGRES_DB: langfuse
     volumes:
-      - langfuse-postgres-data:/var/lib/postgresql/data
-    networks:
-      - progenitor-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U langfuse"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-        reservations:
-          memory: 256M
-
-  langfuse-clickhouse:
-    image: clickhouse/clickhouse-server:24.3
-    container_name: langfuse-clickhouse
-    restart: unless-stopped
-    environment:
-      CLICKHOUSE_DB: langfuse
-      CLICKHOUSE_USER: langfuse
-      CLICKHOUSE_PASSWORD: langfuse
-    volumes:
-      - langfuse-clickhouse-data:/var/lib/clickhouse
-    networks:
-      - progenitor-net
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1.0'
-        reservations:
-          memory: 512M
-
-  langfuse-redis:
-    image: redis:7-alpine
-    container_name: langfuse-redis
-    restart: unless-stopped
-    command: redis-server --requirepass langfuse
-    volumes:
-      - langfuse-redis-data:/data
-    networks:
-      - progenitor-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "langfuse", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.25'
-        reservations:
-          memory: 128M
-
-  langfuse-minio:
-    image: minio/minio:latest
-    container_name: langfuse-minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: langfuse
-      MINIO_ROOT_PASSWORD: langfuse123
-    volumes:
-      - langfuse-minio-data:/data
+      - ./config/litellm_config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
     ports:
-      - "9001:9001"  # MinIO Console (optional, for debugging)
+      - "4000:4000"
     networks:
       - progenitor-net
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-        reservations:
-          memory: 256M
-
-  langfuse-minio-init:
-    image: minio/mc:latest
-    container_name: langfuse-minio-init
-    depends_on:
-      langfuse-minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set myminio http://langfuse-minio:9000 langfuse langfuse123;
-      mc mb myminio/langfuse --ignore-existing;
-      exit 0;
-      "
-    networks:
-      - progenitor-net
-
-  langfuse-web:
-    image: langfuse/langfuse:3
-    container_name: langfuse-web
-    restart: unless-stopped
-    depends_on:
-      <<: *langfuse-depends-on
-    environment:
-      <<: [*langfuse-db-env, *langfuse-s3-env, *langfuse-auth-env]
-      NEXTAUTH_URL: http://localhost:3000
-      TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY_ENABLED:-false}
-      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
-    ports:
-      - "3000:3000"
-    networks:
-      - progenitor-net
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/public/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 30s
     deploy:
       resources:
         limits:
           memory: 1G
           cpus: '1.0'
-        reservations:
-          memory: 512M
-
-  langfuse-worker:
-    image: langfuse/langfuse-worker:3
-    container_name: langfuse-worker
-    restart: unless-stopped
-    depends_on:
-      <<: *langfuse-depends-on
-    environment:
-      <<: [*langfuse-db-env, *langfuse-s3-env, *langfuse-auth-env]
-    networks:
-      - progenitor-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
         reservations:
           memory: 256M
 
@@ -221,20 +42,19 @@ services:
     build: .
     container_name: progenitor
     restart: unless-stopped
-    # Langfuse is optional - remove depends_on to run standalone
-    # depends_on:
-    #   langfuse-web:
-    #     condition: service_healthy
+    depends_on:
+      litellm:
+        condition: service_healthy
     environment:
-      <<: [*progenitor-llm-env, *progenitor-langfuse-env]
+      <<: *progenitor-llm-env
       TZ: UTC
-      LANGFUSE_ENABLED: "false"
     volumes:
       - ./data/state:/app/data/state
       - ./data/prompts:/app/data/prompts:ro
       - ./logs:/app/logs
       - ./worktrees:/app/worktrees
       - ./config:/app/config:ro
+      - ./tmp:/app/tmp
     stdin_open: true
     tty: true
     networks:
@@ -261,21 +81,20 @@ services:
     depends_on:
       progenitor:
         condition: service_started
-      # Langfuse is optional - remove depends_on to run standalone
-      # langfuse-web:
-      #   condition: service_healthy
+      litellm:
+        condition: service_healthy
     environment:
-      <<: [*progenitor-llm-env, *progenitor-langfuse-env]
+      <<: *progenitor-llm-env
       CHAT_SERVER_HOST: 0.0.0.0
       CHAT_SERVER_PORT: 8000
       CHAT_SERVER_PROGENITOR_TIMEOUT: 300
-      LANGFUSE_ENABLED: "false"
     ports:
       - "8000:8000"
     volumes:
       - ./data/state:/app/data/state
       - ./logs:/app/logs
       - ./config:/app/config:ro
+      - ./tmp:/app/tmp
     networks:
       - progenitor-net
     healthcheck:
@@ -295,9 +114,3 @@ services:
 networks:
   progenitor-net:
     driver: bridge
-
-volumes:
-  langfuse-postgres-data:
-  langfuse-clickhouse-data:
-  langfuse-redis-data:
-  langfuse-minio-data:

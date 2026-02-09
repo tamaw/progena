@@ -66,7 +66,7 @@ All 18 graph nodes import successfully:
 
 ### ✓ Config Files
 All required configuration files exist:
-- config/progenitor.json
+- .env.example
 - requirements.txt
 - Dockerfile
 - docker-compose.yml

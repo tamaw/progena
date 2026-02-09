@@ -31,7 +31,6 @@ class ShutdownPhase(str, Enum):
     RUNNING = "running"
     DRAINING = "draining"  # Stopping new requests, waiting for active ones
     STOPPING_SERVICES = "stopping_services"
-    FLUSHING_DATA = "flushing_data"
     CLEANUP = "cleanup"
     COMPLETED = "completed"
 
@@ -300,11 +299,7 @@ class GracefulShutdownManager:
         self._phase = ShutdownPhase.STOPPING_SERVICES
         await self._execute_callbacks()
 
-        # Phase 3: Flush data
-        self._phase = ShutdownPhase.FLUSHING_DATA
-        await self._flush_observability()
-
-        # Phase 4: Cleanup
+        # Phase 3: Cleanup
         self._phase = ShutdownPhase.CLEANUP
         self.restore_signal_handlers()
 
@@ -359,31 +354,6 @@ class GracefulShutdownManager:
             except Exception as e:
                 self._stats.callbacks_failed += 1
                 logger.error("Callback failed: %s - %s", cb.name, e)
-
-    async def _flush_observability(self) -> None:
-        """Flush observability/telemetry data."""
-        # Langfuse
-        try:
-            from ..progenitor.observability import flush_langfuse, shutdown_langfuse
-            logger.debug("Flushing Langfuse...")
-            flush_langfuse()
-            shutdown_langfuse()
-            logger.debug("Langfuse flushed")
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.warning("Error flushing Langfuse: %s", e)
-
-        # Telemetry
-        try:
-            from ..progenitor.telemetry import flush_metrics  # type: ignore[import-not-found]
-            logger.debug("Flushing metrics...")
-            await flush_metrics()
-            logger.debug("Metrics flushed")
-        except (ImportError, AttributeError, ModuleNotFoundError):
-            pass
-        except Exception as e:
-            logger.warning("Error flushing metrics: %s", e)
 
     async def wait_for_shutdown(self) -> None:
         """Wait for shutdown to complete."""

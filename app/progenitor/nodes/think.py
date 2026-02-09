@@ -20,7 +20,6 @@ PLAN can select one approach deterministically (or with a simple policy).
 import json
 import logging
 import random
-import time
 import uuid
 from collections.abc import Mapping
 from typing import Any
@@ -61,19 +60,6 @@ EXPLORATION_PROBABILITY = 0.15
 # Scoring weights for risk/trade-off penalties
 _RISK_PENALTY = {"low": 0.0, "medium": 0.05, "high": 0.15}
 _TRADEOFF_PENALTY = {"low": 0.0, "medium": 0.03, "high": 0.08}
-
-
-# ---------------------------------------------------------------------------
-# Telemetry
-# ---------------------------------------------------------------------------
-
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_metrics, get_tracer
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -551,9 +537,6 @@ def _handle_error(
     error: Exception,
     iteration: int,
     last_verification,
-    start_time: float,
-    metrics,
-    span,
     error_type: str = "unknown",
 ) -> NodeStateUpdate:
     """Handle errors consistently, returning a usable fallback state.
@@ -564,15 +547,6 @@ def _handle_error(
     - llm_error: LLM call itself failed
     - unknown: Unexpected error
     """
-    if metrics:
-        metrics.increment("node_invocations_total", {
-            "node": "think", "success": "false", "error_type": error_type,
-        })
-    if span:
-        span.set_attribute("error_type", error_type)
-        span.record_exception(error)
-        span.end()
-
     gaps_analyzed = _extract_gaps(last_verification)
     think_output = _build_default_output(iteration or 0, gaps_analyzed)
 
@@ -665,9 +639,6 @@ def create_node(
         7. Store approach history in build_state.json
         """
         logger.info("THINK: Starting think phase")
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
 
         ideal_state = get_ideal_state(state)
         iteration_state = state.get("iteration", {})
@@ -677,20 +648,8 @@ def create_node(
             else getattr(iteration_state, "current", 0)
         )
 
-        if tracer:
-            span = tracer.start_span(
-                "node_think",
-                attributes={
-                    "iteration": iteration,
-                    "has_ideal_state": ideal_state is not None,
-                },
-            )
-
         if not ideal_state:
             logger.warning("No ideal state in THINK phase")
-            if span:
-                span.set_attribute("skipped", True)
-                span.end()
             return {}
 
         verification_state = state.get("verification", {})
@@ -789,15 +748,6 @@ def create_node(
                 recommendation_reasoning=rec_reasoning,
             )
 
-            # Telemetry
-            if span:
-                span.add_event("approaches_generated", {
-                    "count": len(think_output.approaches),
-                    "prompt_length": len(prompt),
-                    "structured_output": True,
-                    "validation_issues": len(all_issues),
-                })
-
             # Audit trail + build messages
             if state_manager:
                 await state_manager.log_decision({
@@ -837,21 +787,6 @@ def create_node(
                     iteration or 0, quality,
                 )
 
-            # Record metrics
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram(
-                    "node_duration_seconds", duration, {"node": "think"},
-                )
-                metrics.increment(
-                    "node_invocations_total", {"node": "think", "success": "true"},
-                )
-
-            if span:
-                span.set_attribute("duration_seconds", duration)
-                span.set_attribute("approaches_count", len(think_output.approaches))
-                span.end()
-
             approaches_dicts = [a.model_dump() for a in think_output.approaches]
 
             result: dict[str, Any] = {
@@ -882,7 +817,7 @@ def create_node(
             )
             return _handle_error(
                 e, iteration, last_verification,
-                start_time, metrics, span, error_type="json_parse",
+                error_type="json_parse",
             )
 
         except ValueError as e:
@@ -891,14 +826,14 @@ def create_node(
             )
             return _handle_error(
                 e, iteration, last_verification,
-                start_time, metrics, span, error_type="validation",
+                error_type="validation",
             )
 
         except Exception as e:
             logger.error("THINK phase error: %s", e, exc_info=True)
             return _handle_error(
                 e, iteration, last_verification,
-                start_time, metrics, span, error_type="llm_error",
+                error_type="llm_error",
             )
 
     return think_node

@@ -1,8 +1,0 @@
-{
-  "command": "C:\\Users\\me\\AppData\\Roaming\\npm\\copilot.cmd",
-  "default_flags": ["--allow-all-tools", "--no-ask-user", "--no-color", "--yolo"],
-  "timeout": 300,
-  "model": "gpt-4o-mini",
-  "max_tokens": 8192,
-  "allowed_dirs": ["app/agents", "app/tools"]
-}

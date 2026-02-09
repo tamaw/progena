@@ -11,8 +11,7 @@ const defaultConfig = {
       health: '/health',
       healthDetailed: '/health/detailed',
       events: '/api/ui/events',
-      models: '/v1/models',
-      metrics: '/metrics/json'
+      models: '/v1/models'
     },
     timeout: 120000,
     retryAttempts: 3,

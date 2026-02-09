@@ -155,7 +155,6 @@ Notes:
 ### Copilot
 
 * `PROGENITOR_COPILOT_BIN` (default: `copilot`)
-* `PROGENITOR_COPILOT_CONFIG` (default: `/config/copilot.json`)
 * `PROGENITOR_COPILOT_TIMEOUT_SECONDS` (default: `720` - 12 minutes for complex builds)
 
 ### Scheduler
@@ -497,10 +496,7 @@ Keep it boring. Boring survives.
     * `config.py` (server configuration)
   * `agents/` (A2A agent packages created/managed by Progenitor)
   * `mcp/` (MCP servers created/managed by Progenitor)
-* `config/`
-
-  * `codex.json`
-  * `progenitor.json` (timezone, backoff, limits)
+* `.env` / `.env.example` (runtime and Copilot configuration)
 * `state/` (mounted volume)
 
   * `build_state.json`

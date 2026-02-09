@@ -1,7 +1,6 @@
 """Tests for Copilot ACP (Agent Client Protocol) integration."""
 
 import asyncio
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -219,20 +218,18 @@ class TestCopilotCLIWithACP(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test fixtures."""
         self.temp_dir = Path(tempfile.mkdtemp())
-        self.config_path = self.temp_dir / "copilot.json"
-        self.config_path.write_text(json.dumps({
-            "command": "copilot",
-            "default_flags": ["--yolo"],
-            "timeout": 1200,
-            "model": "test-model",
-        }))
+        self.copilot_cmd = "copilot"
+        self.default_flags = ["--yolo"]
+        self.model = "test-model"
 
     async def test_copilot_cli_creates_manager_from_config(self):
         """Test that CopilotCLI creates manager from config."""
         from app.progenitor.tools.copilot import CopilotCLI
 
         cli = CopilotCLI(
-            config_path=self.config_path,
+            copilot_cmd=self.copilot_cmd,
+            model=self.model,
+            default_flags=self.default_flags,
             timeout=1200,
         )
 
@@ -247,23 +244,27 @@ class TestCopilotCLIWithACP(unittest.IsolatedAsyncioTestCase):
         mock_manager = MagicMock(spec=CopilotACPManager)
 
         cli = CopilotCLI(
-            config_path=self.config_path,
+            copilot_cmd=self.copilot_cmd,
+            model=self.model,
+            default_flags=self.default_flags,
             acp_manager=mock_manager,
             timeout=1200,
         )
 
         assert cli.acp_manager == mock_manager
 
-    async def test_copilot_cli_loads_config(self):
-        """Test that CopilotCLI loads config file."""
+    async def test_copilot_cli_uses_defaults(self):
+        """Test that CopilotCLI uses provided defaults."""
         from app.progenitor.tools.copilot import CopilotCLI
 
         cli = CopilotCLI(
-            config_path=self.config_path,
+            copilot_cmd=self.copilot_cmd,
+            model=self.model,
+            default_flags=self.default_flags,
         )
 
-        assert cli.config["model"] == "test-model"
-        assert "--yolo" in cli.config["default_flags"]
+        assert cli.model == "test-model"
+        assert "--yolo" in cli.default_flags
 
     async def test_build_calls_acp_manager(self):
         """Test that build() uses ACP manager."""
@@ -282,7 +283,9 @@ class TestCopilotCLIWithACP(unittest.IsolatedAsyncioTestCase):
         })
 
         cli = CopilotCLI(
-            config_path=self.config_path,
+            copilot_cmd=self.copilot_cmd,
+            model=self.model,
+            default_flags=self.default_flags,
             acp_manager=mock_manager,
         )
 
@@ -313,7 +316,9 @@ class TestCopilotCLIWithACP(unittest.IsolatedAsyncioTestCase):
         })
 
         cli = CopilotCLI(
-            config_path=self.config_path,
+            copilot_cmd=self.copilot_cmd,
+            model=self.model,
+            default_flags=self.default_flags,
             acp_manager=mock_manager,
         )
 
@@ -332,8 +337,7 @@ class TestCopilotCLISummaryExtraction(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test fixtures."""
         self.temp_dir = Path(tempfile.mkdtemp())
-        self.config_path = self.temp_dir / "copilot.json"
-        self.config_path.write_text(json.dumps({"command": "copilot"}))
+        self.copilot_cmd = "copilot"
 
     async def test_extract_summary_from_output(self):
         """Test extracting summary section from output."""
@@ -341,7 +345,7 @@ class TestCopilotCLISummaryExtraction(unittest.IsolatedAsyncioTestCase):
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
         mock_manager = MagicMock(spec=CopilotACPManager)
-        cli = CopilotCLI(config_path=self.config_path, acp_manager=mock_manager)
+        cli = CopilotCLI(copilot_cmd=self.copilot_cmd, acp_manager=mock_manager)
 
         output = """Some output here
 More output
@@ -361,7 +365,7 @@ Files changed: 3
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
         mock_manager = MagicMock(spec=CopilotACPManager)
-        cli = CopilotCLI(config_path=self.config_path, acp_manager=mock_manager)
+        cli = CopilotCLI(copilot_cmd=self.copilot_cmd, acp_manager=mock_manager)
 
         output = "Just some regular output\nNo summary section"
         summary = cli._extract_summary_from_output(output)

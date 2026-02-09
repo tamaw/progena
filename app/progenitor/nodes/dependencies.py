@@ -118,7 +118,6 @@ class NodeDependencies:
     tool_registry: ToolRegistryProtocol
     config: ProgenitorConfig
     worktrees_dir: Optional[Path] = None
-    copilot_config_path: Optional[Path] = None
 
     # Optional overrides for specific components
     custom_nodes: dict[str, Callable] = field(default_factory=dict)
@@ -128,8 +127,7 @@ class NodeDependencies:
         if self.worktrees_dir is None:
             self.worktrees_dir = self.config.storage.worktree_dir
 
-        if self.copilot_config_path is None:
-            self.copilot_config_path = self.config.copilot.config_path
+
 
 
 # Type alias for node functions (partial state updates)

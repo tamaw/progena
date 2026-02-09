@@ -22,26 +22,9 @@ class ConfigValidationError(Exception):
 class LLMConfigValidator(BaseModel):
     """Validates LLM configuration."""
 
-    provider: str = Field(default="azure", pattern=r"^(openai|azure)$")
-    openai_api_key: Optional[str] = None
+    base_url: str = Field(min_length=1)
+    api_key: Optional[str] = None
     model_default: str = Field(min_length=1)
-    azure_endpoint: Optional[str] = None
-    azure_api_key: Optional[str] = None
-    azure_api_version: str = Field(min_length=1)
-    azure_deployment_default: Optional[str] = None
-
-    @model_validator(mode='after')
-    def validate_credentials(self) -> 'LLMConfigValidator':
-        """Ensure credentials are provided for the selected provider."""
-        if self.provider == "azure":
-            if not self.azure_endpoint:
-                raise ValueError("azure_endpoint is required when provider is 'azure'")
-            if not self.azure_api_key:
-                raise ValueError("azure_api_key is required when provider is 'azure'")
-        elif self.provider == "openai":
-            if not self.openai_api_key:
-                raise ValueError("openai_api_key is required when provider is 'openai'")
-        return self
 
 
 class RuntimeConfigValidator(BaseModel):
@@ -94,18 +77,9 @@ class CopilotConfigValidator(BaseModel):
     """Validates Copilot CLI configuration."""
 
     bin_path: str = Field(min_length=1)
-    config_path: Path
     timeout_seconds: int = Field(gt=0, le=1800)
     model: str = Field(min_length=1)
     max_tokens: int = Field(gt=0, le=1000000)
-
-
-class TelemetryConfigValidator(BaseModel):
-    """Validates telemetry configuration."""
-
-    enabled: bool = True
-    console_export: bool = False
-    metrics_interval_seconds: float = Field(gt=0, le=3600)
 
 
 class SchedulerConfigValidator(BaseModel):
@@ -121,13 +95,9 @@ def validate_llm_config(config) -> list[str]:
 
     try:
         LLMConfigValidator(
-            provider=config.provider,
-            openai_api_key=config.openai_api_key,
+            base_url=config.base_url,
+            api_key=config.api_key,
             model_default=config.model_default,
-            azure_endpoint=config.azure_endpoint,
-            azure_api_key=config.azure_api_key,
-            azure_api_version=config.azure_api_version,
-            azure_deployment_default=config.azure_deployment_default,
         )
     except Exception as e:
         issues.append(f"LLM Config Error: {e}")
@@ -189,29 +159,12 @@ def validate_copilot_config(config) -> list[str]:
     try:
         CopilotConfigValidator(
             bin_path=config.bin_path,
-            config_path=config.config_path,
             timeout_seconds=config.timeout_seconds,
             model=config.model,
             max_tokens=config.max_tokens,
         )
     except Exception as e:
         issues.append(f"Copilot Config Error: {e}")
-
-    return issues
-
-
-def validate_telemetry_config(config) -> list[str]:
-    """Validate telemetry configuration and return list of warnings/errors."""
-    issues = []
-
-    try:
-        TelemetryConfigValidator(
-            enabled=config.enabled,
-            console_export=config.console_export,
-            metrics_interval_seconds=config.metrics_interval_seconds,
-        )
-    except Exception as e:
-        issues.append(f"Telemetry Config Error: {e}")
 
     return issues
 
@@ -245,7 +198,6 @@ def validate_config(config) -> tuple[bool, list[str]]:
     issues.extend(validate_runtime_config(config.runtime))
     issues.extend(validate_storage_config(config.storage))
     issues.extend(validate_copilot_config(config.copilot))
-    issues.extend(validate_telemetry_config(config.telemetry))
     issues.extend(validate_scheduler_config(config.scheduler))
 
     is_valid = len(issues) == 0

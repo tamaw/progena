@@ -10,7 +10,6 @@ build_state.json that evolves each iteration and is consumed by BUILD.
 
 import logging
 import os
-import time
 import json
 from datetime import datetime
 from pathlib import Path
@@ -40,15 +39,6 @@ logger = logging.getLogger(__name__)
 _prompts = PromptTemplates()
 
 
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_tracer, get_metrics
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
-
-
 def _get_target_capabilities(state: ProgenitorState) -> list[str]:
     """Safely extract target_capabilities from state's current_decision."""
     decision = state.get("current_decision")
@@ -63,9 +53,6 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
     async def planner_node(state: ProgenitorState) -> ProgenitorState:
         """Generate work items based on decision or ideal state (loop.spec.md PLAN phase)."""
         logger.info("PLAN: Starting plan phase")
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
 
         decision = state.get("current_decision")
         user_input = state.get("current_input")
@@ -73,36 +60,15 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
         # Read approaches from nested structure (phases.think.approaches)
         current_approaches = state.get("phases", {}).get("think", {}).get("approaches", [])
 
-        if tracer:
-            span = tracer.start_span(
-                "node_planner",
-                attributes={
-                    "has_decision": decision is not None,
-                    "has_ideal_state": ideal_state is not None,
-                    "approaches_count": len(current_approaches),
-                },
-            )
-
         # If in inner loop with ideal state, plan based on THINK phase approaches
         if ideal_state and current_approaches:
             result = await _plan_from_ideal_state(
                 state, ideal_state, current_approaches, llm_client, state_manager
             )
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram("node_duration_seconds", duration, {"node": "planner"})
-                metrics.increment("node_invocations_total", {"node": "planner", "success": "true"})
-            if span:
-                span.set_attribute("plan_type", "ideal_state")
-                span.set_attribute("duration_seconds", duration)
-                span.end()
             return result
 
         # Otherwise, use traditional planning from decision
         if not decision:
-            if span:
-                span.set_attribute("skipped", True)
-                span.end()
             return {}
 
         # Get decision action - Decision is always a Pydantic model
@@ -125,11 +91,6 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
             backlog = list(state.get("backlog", []))
             backlog.append(work_item)
 
-            if span:
-                span.set_attribute("plan_type", "system_tool")
-                span.set_attribute("work_items_created", 1)
-                span.end()
-
             return {"backlog": backlog}
 
         # Handle schedule requests - use LLM to generate instruction
@@ -143,22 +104,12 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
 
             if schedule_result:
                 # Return schedule entry to be added to state
-                if span:
-                    span.set_attribute("plan_type", "schedule")
-                    span.set_attribute("work_items_created", 0)
-                    span.end()
                 # Cast to ProgenitorState since we're returning a partial state dict
                 return schedule_result  # type: ignore[return-value]
 
-            if span:
-                span.set_attribute("plan_type", "schedule_failed")
-                span.end()
             return {}
 
         if not decision.requires_planning:
-            if span:
-                span.set_attribute("skipped", True)
-                span.end()
             return {}
 
         # NOTE: Build actions (build_agent, build_tool, upgrade) are handled by
@@ -211,28 +162,10 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
                 "timestamp": utcnow_isoformat(),
             })
 
-            # Record telemetry
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram("node_duration_seconds", duration, {"node": "planner"})
-                metrics.increment("node_invocations_total", {"node": "planner", "success": "true"})
-                metrics.record_histogram("planner_work_items_created", len(work_items_data))
-
-            if span:
-                span.set_attribute("work_items_created", len(work_items_data))
-                span.set_attribute("duration_seconds", duration)
-                span.add_event("planning_complete", {"work_items": len(work_items_data)})
-                span.end()
-
             return {"backlog": backlog}
 
         except Exception as e:
             # Log error but continue
-            if metrics:
-                metrics.increment("node_invocations_total", {"node": "planner", "success": "false"})
-            if span:
-                span.record_exception(e)
-                span.end()
             await state_manager.log_decision({
                 "event": "planning_error",
                 "error": str(e),

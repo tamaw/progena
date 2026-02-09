@@ -53,15 +53,6 @@ else:
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_tracer, get_metrics
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
-
-
 class StatePersistence:
     """Low-level state persistence with atomic operations.
 
@@ -69,7 +60,6 @@ class StatePersistence:
     - Atomic writes (temp file → fsync → rename)
     - Async file locking
     - JSONL append operations
-    - Telemetry integration
 
     This class handles ONLY file I/O - no business logic.
     """
@@ -142,18 +132,6 @@ class StatePersistence:
             data: Data to serialize and write.
         """
         filepath = self.state_dir / filename
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
-
-        if tracer:
-            span = tracer.start_span(
-                "state_persistence_write",
-                attributes={
-                    "file": filename,
-                    "operation": "atomic_write",
-                },
-            )
 
         # Create temp file in same directory for atomic rename
         fd, tmp_path = tempfile.mkstemp(
@@ -170,24 +148,6 @@ class StatePersistence:
 
             # Atomic rename
             os.replace(tmp_path, filepath)
-
-            # Record metrics
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram(
-                    "state_write_duration_seconds",
-                    duration,
-                    {"file": filename}
-                )
-                metrics.increment(
-                    "state_write_total",
-                    {"file": filename, "success": "true"}
-                )
-
-            if span:
-                span.set_attribute("success", True)
-                span.set_attribute("duration_seconds", duration)
-                span.end()
 
             logger.debug("Atomically wrote %s", filepath)
 
@@ -222,7 +182,6 @@ class StatePersistence:
             entry: Entry to append as JSON line.
         """
         filepath = self.logs_dir / filename
-        tracer, metrics = _get_telemetry()
 
         line = json.dumps(entry, default=str) + "\n"
 
@@ -231,10 +190,6 @@ class StatePersistence:
             await f.flush()
             # fsync for durability
             os.fsync(f.fileno())
-
-        if metrics:
-            metrics.increment("log_append_total", {"log": filename})
-            metrics.record_histogram("log_entry_size_bytes", len(line))
 
     async def read_jsonl(
         self,

@@ -24,10 +24,6 @@ export default defineConfig({
       '/health': {
         target: 'http://localhost:8000',
         changeOrigin: true
-      },
-      '/metrics': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
       }
     }
   },
@@ -43,10 +39,6 @@ export default defineConfig({
         changeOrigin: true
       },
       '/health': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      },
-      '/metrics': {
         target: 'http://localhost:8000',
         changeOrigin: true
       }

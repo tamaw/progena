@@ -16,7 +16,6 @@ Every iteration produces:
 """
 
 import logging
-import time
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
@@ -34,15 +33,6 @@ from ..llm.prompts import PromptTemplates
 logger = logging.getLogger(__name__)
 
 _prompts = PromptTemplates()
-
-
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_tracer, get_metrics
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
 
 
 class CriterionScore(BaseModel):
@@ -839,21 +829,6 @@ class Verifier:
         # Ensure we have an IdealState object (may come as dict from LangGraph state)
         ideal_state = self._ensure_ideal_state(ideal_state)
 
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
-
-        if tracer:
-            span = tracer.start_span(
-                "verify",
-                attributes={
-                    "iteration": iteration,
-                    "criteria_count": len(ideal_state.success_criteria),
-                    "anti_criteria_count": len(ideal_state.anti_criteria),
-                    "uses_llm": self.uses_llm,
-                },
-            )
-
         context = context or {}
         criterion_scores = []
         violations = []
@@ -904,31 +879,9 @@ class Verifier:
                 summary=summary,
             )
 
-            # Record telemetry
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram("verify_duration_seconds", duration)
-                metrics.record_histogram("verify_score", overall_score)
-                metrics.increment("verify_total", {"passed": str(passed).lower()})
-                if violations:
-                    metrics.increment("verify_violations_total", {"count": str(len(violations))})
-
-            if span:
-                span.set_attribute("overall_score", overall_score)
-                span.set_attribute("passed", passed)
-                span.set_attribute("criteria_passed", sum(1 for s in criterion_scores if s.passed))
-                span.set_attribute("violation_count", len(violations))
-                span.set_attribute("gap_count", len(gaps))
-                span.set_attribute("duration_seconds", duration)
-                span.add_event("verification_complete", {"score": overall_score, "passed": passed})
-                span.end()
-
             return report
 
         except Exception as e:
-            if span:
-                span.record_exception(e)
-                span.end()
             raise
 
     async def _score_criterion(

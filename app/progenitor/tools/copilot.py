@@ -7,10 +7,9 @@ The builder actuator for all build operations:
 - MCP servers
 
 Uses Copilot's ACP mode for communication instead of subprocess stdin/stdout.
-Includes telemetry for observability of build operations.
+Includes logging for observability of build operations.
 """
 
-import json
 import logging
 import time
 from pathlib import Path
@@ -22,16 +21,6 @@ from ..runtime.copilot_acp import CopilotACPManager, ACPLogCapture
 logger = logging.getLogger(__name__)
 
 
-# Lazy telemetry imports
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_metrics, get_tracer, SpanKind
-        return get_metrics(), get_tracer(), SpanKind
-    except ImportError:
-        return None, None, None
-
-
 class CopilotCLI:
     """Wrapper for Copilot invocations via ACP protocol.
 
@@ -41,7 +30,10 @@ class CopilotCLI:
 
     def __init__(
         self,
-        config_path: Path,
+        copilot_cmd: str = "copilot",
+        model: Optional[str] = None,
+        default_flags: Optional[list[str]] = None,
+        allowed_dirs: Optional[list[str]] = None,
         acp_manager: Optional[CopilotACPManager] = None,
         timeout: int = 1200,  # 20 minutes per request
         log_callback=None,
@@ -50,15 +42,20 @@ class CopilotCLI:
         """Initialize Copilot CLI wrapper.
 
         Args:
-            config_path: Path to copilot.json config file.
+            copilot_cmd: Copilot CLI command or path.
+            model: Copilot model override (optional).
+            default_flags: Default Copilot CLI flags.
+            allowed_dirs: ACP allowed directories.
             acp_manager: CopilotACPManager instance for ACP communication.
             timeout: Default timeout for copilot commands (20 minutes).
             log_callback: Optional callback for logging invocations.
             logs_dir: Directory for log files (for ACPLogCapture).
         """
-        self.config_path = Path(config_path)
+        self.copilot_cmd = copilot_cmd
+        self.model = model
+        self.default_flags = default_flags or ["--yolo"]
+        self.allowed_dirs = allowed_dirs or []
         self.default_timeout = timeout
-        self.config = self._load_config()
         self.log_callback = log_callback
 
         if acp_manager is not None:
@@ -66,10 +63,10 @@ class CopilotCLI:
         else:
             # Create a default manager from config
             self.acp_manager = CopilotACPManager(
-                copilot_cmd=self.config.get("command", "copilot"),
-                model=self.config.get("model"),
-                yolo="--yolo" in self.config.get("default_flags", []),
-                allowed_dirs=self.config.get("allowed_dirs", []),
+                copilot_cmd=self.copilot_cmd,
+                model=self.model,
+                yolo="--yolo" in self.default_flags,
+                allowed_dirs=self.allowed_dirs,
                 timeout=timeout,
             )
 
@@ -79,36 +76,11 @@ class CopilotCLI:
             self.log_capture = ACPLogCapture(logs_dir)
 
         logger.info(
-            "COPILOT: Initialized with config=%s, timeout=%ds",
-            config_path,
+            "COPILOT: Initialized with cmd=%s, model=%s, timeout=%ds",
+            self.copilot_cmd,
+            self.model or "default",
             timeout,
         )
-
-    def _load_config(self) -> dict[str, Any]:
-        """Load Copilot CLI configuration."""
-        if self.config_path.exists():
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-                # Use instance timeout if not specified in file
-                if "timeout" not in config:
-                    config["timeout"] = self.default_timeout
-                logger.info(
-                    "COPILOT: Loaded config from %s: model=%s, timeout=%ds",
-                    self.config_path,
-                    config.get("model", "default"),
-                    config.get("timeout", self.default_timeout),
-                )
-                return config
-        logger.warning(
-            "COPILOT: Config file not found at %s, using defaults",
-            self.config_path,
-        )
-        return {
-            "command": "copilot",
-            "default_flags": ["--yolo"],
-            "timeout": self.default_timeout,
-            "model": "claude-haiku-4.5",
-        }
 
     async def build(
         self,
@@ -130,9 +102,6 @@ class CopilotCLI:
         """
         worktree_path = Path(worktree_path)
 
-        # Telemetry setup
-        metrics, tracer, SpanKind = _get_telemetry()
-        span = None
         start_time = time.perf_counter()
 
         logger.info(
@@ -147,20 +116,6 @@ class CopilotCLI:
             prompt[:300] + "..." if len(prompt) > 300 else prompt,
         )
 
-        if tracer and SpanKind:
-            span = tracer.start_span(
-                "tool.copilot.build",
-                kind=SpanKind.CLIENT,
-                attributes={
-                    "copilot.work_item_id": work_item_id,
-                    "copilot.worktree": str(worktree_path),
-                    "copilot.target_path": target_path,
-                    "copilot.prompt_length": len(prompt),
-                    "copilot.model": self.config.get("model", "unknown"),
-                    "copilot.mode": "acp",
-                },
-            )
-
         # Log the invocation
         invocation_log: dict[str, Any] = {
             "work_item_id": work_item_id,
@@ -171,9 +126,6 @@ class CopilotCLI:
         }
 
         try:
-            if span:
-                span.add_event("copilot.acp_start")
-
             # Execute via ACP manager
             logger.info("COPILOT: Calling ACP manager.prompt()")
             result = await self.acp_manager.prompt(
@@ -195,11 +147,6 @@ class CopilotCLI:
                 len(result.get("chunks", [])),
             )
 
-            if span:
-                span.add_event("copilot.acp_complete", {
-                    "success": success
-                })
-
             # Write to log file if log capture is configured
             if self.log_capture:
                 log_path = self.log_capture.write_log(work_item_id, result)
@@ -216,21 +163,8 @@ class CopilotCLI:
             else:
                 logger.info("COPILOT: No git diff detected")
 
-            # Record telemetry
+            # Record timing
             duration = time.perf_counter() - start_time
-
-            if metrics:
-                metrics.tool_calls_total.inc()
-                metrics.tool_call_duration.observe(duration)
-                if not success:
-                    metrics.tool_call_errors.inc()
-
-            if span:
-                span.set_attribute("copilot.success", success)
-                span.set_attribute("copilot.duration_ms", duration * 1000)
-                span.set_attribute("copilot.has_diff", bool(diff_result))
-                if diff_result:
-                    span.set_attribute("copilot.diff_lines", len(diff_result.splitlines()))
 
             invocation_log.update({
                 "completed_at": utcnow_isoformat(),
@@ -242,10 +176,6 @@ class CopilotCLI:
 
             if self.log_callback:
                 await self.log_callback(invocation_log)
-
-            # End telemetry span on success
-            if span and tracer:
-                tracer.end_span(span)
 
             return {
                 "success": success,
@@ -273,12 +203,6 @@ class CopilotCLI:
 
             if self.log_callback:
                 await self.log_callback(invocation_log)
-
-            # Record error in telemetry
-            if span:
-                span.record_exception(e)
-            if span and tracer:
-                tracer.end_span(span)
 
             return {
                 "success": False,
@@ -349,7 +273,8 @@ class CopilotCLI:
 
         try:
             process = await asyncio.create_subprocess_exec(
-                self.config.get("command", "copilot"), "--version",
+                self.copilot_cmd,
+                "--version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

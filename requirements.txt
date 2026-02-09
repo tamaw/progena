@@ -8,9 +8,6 @@ pytz>=2024.1
 python-dotenv>=1.0.0
 tiktoken>=0.7.0  # Accurate token counting for OpenAI models
 
-# Observability - Langfuse for LLM tracing
-langfuse>=2.0.0
-
 # Backend (FastAPI + OpenAI-compatible interface)
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0

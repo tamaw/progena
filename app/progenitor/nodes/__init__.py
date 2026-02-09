@@ -68,14 +68,6 @@ from .dependencies import (
     create_test_dependencies,
 )
 
-# Telemetry decorators
-from .telemetry_decorators import (
-    traced_node,
-    traced_method,
-    timed,
-    NodeInstrumentationMixin,
-)
-
 __all__ = [
     # CQ-006: Type aliases for consistent node signatures
     "NodeStateUpdate",
@@ -121,10 +113,5 @@ __all__ = [
     "create_all_nodes",
     "create_node_subset",
     "create_test_dependencies",
-    # Telemetry decorators
-    "traced_node",
-    "traced_method",
-    "timed",
-    "NodeInstrumentationMixin",
 ]
 

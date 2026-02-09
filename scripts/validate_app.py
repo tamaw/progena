@@ -110,7 +110,7 @@ def check_config_files():
     print("=" * 70)
 
     files = [
-        "config/progenitor.json",
+        ".env.example",
         "requirements.txt",
         "Dockerfile",
         "docker-compose.yml",

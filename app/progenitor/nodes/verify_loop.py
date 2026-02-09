@@ -24,15 +24,6 @@ from ..runtime.time_utils import utcnow_isoformat
 logger = logging.getLogger(__name__)
 
 
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_tracer, get_metrics
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
-
-
 def create_node(
     llm_client,
     state_manager=None,
@@ -58,27 +49,12 @@ def create_node(
         user clarification, which can interrupt the inner loop.
         """
         logger.info("VERIFY: Starting verify phase")
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
 
         ideal_state = get_ideal_state(state)
         iteration = state.get("iteration", {}).get("current", 0)
 
-        if tracer:
-            span = tracer.start_span(
-                "node_verify",
-                attributes={
-                    "iteration": iteration,
-                    "has_ideal_state": ideal_state is not None,
-                },
-            )
-
         if not ideal_state:
             logger.warning("No ideal state in VERIFY phase")
-            if span:
-                span.set_attribute("skipped", True)
-                span.end()
             return {}
 
         iteration_start_time = state.get("iteration", {}).get("start_time", time.time())
@@ -169,12 +145,6 @@ def create_node(
                                 "timestamp": utcnow_isoformat(),
                             })
 
-                        if span:
-                            span.add_event("clarification_detected", {
-                                "category": clarification_result.category,
-                                "confidence": clarification_result.confidence,
-                            })
-
             # BL-006: Prefer structured data verification when available
             # Check both top-level and phases.execute.result for execution data
             execution_result = state.get("execution_result") or state.get("phases", {}).get("execute", {}).get("result")
@@ -258,28 +228,6 @@ def create_node(
                     "timestamp": utcnow_isoformat(),
                 })
 
-            # Record telemetry
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram("node_duration_seconds", duration, {"node": "verify"})
-                metrics.record_histogram("verification_score_distribution", verification_report.overall_score)
-                metrics.increment("node_invocations_total", {"node": "verify", "success": "true"})
-                if verification_report.passed:
-                    metrics.increment("verification_passed_total")
-                else:
-                    metrics.increment("verification_failed_total")
-
-            if span:
-                span.set_attribute("score", verification_report.overall_score)
-                span.set_attribute("passed", verification_report.passed)
-                span.set_attribute("is_best", best_score == verification_report.overall_score)
-                span.set_attribute("duration_seconds", duration)
-                span.add_event("verification_complete", {
-                    "score": verification_report.overall_score,
-                    "passed": verification_report.passed,
-                })
-                span.end()
-
             logger.info(
                 f"Verification complete: score={verification_report.overall_score:.2f}, "
                 f"passed={verification_report.passed}"
@@ -334,11 +282,6 @@ def create_node(
 
         except Exception as e:
             logger.error(f"VERIFY phase error: {e}", exc_info=True)
-            if metrics:
-                metrics.increment("node_invocations_total", {"node": "verify", "success": "false"})
-            if span:
-                span.record_exception(e)
-                span.end()
             # Fallback - assume partial success
             return {
                 "phases": {
