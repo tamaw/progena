@@ -33,35 +33,8 @@ ChartJS.register(
 
 function DashboardPage() {
   const { isHealthy } = useHealth();
-  const { connectionState, getMetrics } = useApi();
+  const { connectionState } = useApi();
   const [status, setStatus] = useState(null);
-  const [metrics, setMetrics] = useState(null);
-  const [tokenHistory, setTokenHistory] = useState([]);
-
-  // Only fetch metrics (health comes from shared HealthContext)
-  const fetchMetrics = useCallback(async () => {
-    if (!isHealthy) return; // Don't fetch if server is unhealthy
-
-    try {
-      const metricsData = await getMetrics().catch(() => null);
-      if (metricsData) {
-        setMetrics(metricsData);
-        setTokenHistory(prev => [...prev.slice(-29), {
-          time: new Date().toLocaleTimeString(),
-          input: metricsData.tokens?.input || 0,
-          output: metricsData.tokens?.output || 0
-        }]);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch metrics:', e);
-    }
-  }, [isHealthy, getMetrics]);
-
-  useEffect(() => {
-    fetchMetrics();
-    const interval = setInterval(fetchMetrics, 30000); // 30s for metrics
-    return () => clearInterval(interval);
-  }, [fetchMetrics]);
 
   const handleStatusEvent = useCallback((event) => {
     if (!event?.data) return;

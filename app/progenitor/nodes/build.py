@@ -215,7 +215,10 @@ def create_node_from_deps(deps: "NodeDependencies") -> Callable[[ProgenitorState
     config = deps.require_config()
 
     copilot_cli = CopilotCLI(
-        config_path=config.copilot.config_path,
+        copilot_cmd=config.copilot.bin_path,
+        model=config.copilot.model,
+        default_flags=config.copilot.default_flags,
+        allowed_dirs=config.copilot.acp_allowed_dirs,
         timeout=config.copilot.timeout_seconds,
     )
 

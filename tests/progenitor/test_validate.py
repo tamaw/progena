@@ -75,7 +75,6 @@ def _make_config(**overrides) -> ProgenitorConfig:
     config.storage = MagicMock()
     config.copilot = MagicMock()
     config.scheduler = MagicMock()
-    config.telemetry = MagicMock()
 
     validation_config = ValidationConfig()
     for k, v in overrides.items():

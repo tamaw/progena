@@ -189,7 +189,6 @@ class TestCriticalUIDataPipeline:
             "/api/ui/loops",
             "/api/ui/tasks",
             "/api/ui/alerts",
-            "/api/ui/metrics",
             "/api/ui/logs",
         ]
 

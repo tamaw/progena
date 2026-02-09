@@ -32,7 +32,7 @@ export function useApi() {
         return response;
       } catch (error) {
         if (error.name === 'AbortError') throw error;
-        
+
         setConnectionState('error');
         if (attempt < config.api.retryAttempts - 1) {
           await new Promise(r => setTimeout(r, config.api.retryDelay * Math.pow(2, attempt)));
@@ -53,11 +53,6 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
-  const getMetrics = useCallback(async () => {
-    const response = await fetchWithRetry('/metrics/json');
-    return response.json();
-  }, [fetchWithRetry]);
-
   const sendMessage = useCallback(async (message, history = []) => {
     const messages = [...history, { role: 'user', content: message }];
     const response = await fetchWithRetry('chat', {
@@ -75,7 +70,7 @@ export function useApi() {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    
+
     abortControllerRef.current = new AbortController();
     const messages = [...history, { role: 'user', content: message }];
     const url = getApiUrl('chat');
@@ -162,7 +157,6 @@ export function useApi() {
     connectionState,
     getHealth,
     getHealthDetailed,
-    getMetrics,
     sendMessage,
     sendMessageStream,
     cancelStream,

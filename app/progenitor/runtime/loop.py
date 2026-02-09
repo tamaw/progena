@@ -10,7 +10,6 @@ Controls:
 - max actions per cycle (tool/A2A/Copilot)
 - restart-safe checkpoints (write state every cycle)
 - health file updated each cycle for Docker health checks
-- telemetry for observability (traces and metrics)
 - error handling with user notification
 - graceful cancellation/suspend with state persistence
 """
@@ -32,43 +31,6 @@ logger = logging.getLogger(__name__)
 
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
-
-# Telemetry - imported lazily to avoid circular imports
-_telemetry_initialized = False
-_exporter = None
-
-
-def _init_telemetry(config: "ProgenitorConfig"):
-    """Initialize telemetry if enabled."""
-    global _telemetry_initialized, _exporter
-
-    if _telemetry_initialized:
-        return
-
-    if not config.telemetry.enabled:
-        _telemetry_initialized = True
-        return
-
-    try:
-        from ..telemetry import setup_telemetry
-
-        output_dir = config.telemetry.output_dir
-        if output_dir is None:
-            output_dir = config.storage.log_dir / "telemetry"
-
-        _, _, _exporter = setup_telemetry(
-            output_dir=output_dir,
-            enable_console=config.telemetry.console_export,
-            metrics_interval=config.telemetry.metrics_interval_seconds,
-        )
-
-        logger.info("Telemetry initialized, output_dir=%s", output_dir)
-        _telemetry_initialized = True
-
-    except Exception as e:
-        logger.warning("Failed to initialize telemetry: %s", e)
-        _telemetry_initialized = True
-
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -117,7 +79,6 @@ class ProgenitorLoop:
         )
         # Event to signal when a graph cycle completes (for IPC synchronization)
         self._cycle_complete_event: asyncio.Event = asyncio.Event()
-        self._cycle_telemetry = None
         self._scheduler = Scheduler(timezone=config.runtime.timezone)
 
         # Stream callback for real-time LLM streaming
@@ -167,9 +128,6 @@ class ProgenitorLoop:
             set_background_runner(self._background_runner)
             self._background_runner.set_completion_callback(self._handle_build_completion)
             logger.info("Background build runner initialized with inner loop graph")
-
-        # Initialize telemetry
-        _init_telemetry(self.config)
 
         run_id = str(uuid.uuid4())
 
@@ -257,11 +215,10 @@ class ProgenitorLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Final checkpoint and telemetry shutdown
+        # Final checkpoint
         await self._checkpoint_state(self._state)
         await self._update_health_file(self._state, status="stopped")
         await self._push_event("loop_stopped", "Perpetual loop stopped")
-        self._shutdown_telemetry()
         logger.info("Loop terminated")
 
     async def _input_handler_loop(self, run_id: str) -> None:
@@ -404,8 +361,6 @@ class ProgenitorLoop:
             except Exception as e:
                 logger.error("Background worker error: %s", e, exc_info=True)
                 await self._push_event("error", f"Background worker error: {e}")
-                if self._cycle_telemetry:
-                    self._cycle_telemetry.complete(success=False, error=str(e))
                 await self._update_health_file(self._state, status="error", error=str(e))
                 await asyncio.sleep(backoff)
 
@@ -424,11 +379,6 @@ class ProgenitorLoop:
 
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
-        # Start cycle telemetry
-        cycle_telem = self._start_cycle_telemetry(cycle_num, run_id)
-        if cycle_telem:
-            cycle_telem.add_event("cycle_start", {"source": source})
-
         try:
             async for event in self.graph.astream(
                 self._state,
@@ -440,10 +390,6 @@ class ProgenitorLoop:
                     logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
                     if isinstance(node_output, dict):
                         self._state.update(node_output)
-
-                    # Record node event in telemetry
-                    if cycle_telem:
-                        cycle_telem.add_event(f"node.{node_name}", {"output_keys": str(output_info)})
 
                 # Check for response to send - stream it if not already streamed
                 pending = self._state.get("pending_response")
@@ -478,18 +424,12 @@ class ProgenitorLoop:
                         await self._stream_response(str(pending))
                     self._state["pending_response"] = None
 
-            # End cycle telemetry
-            if cycle_telem:
-                cycle_telem.complete(success=True)
-
             # Checkpoint state after cycle
             await self._checkpoint_state(self._state)
             await self._update_health_file(self._state)
 
         except Exception as e:
             logger.error("Graph cycle %d failed: %s", cycle_num, e, exc_info=True)
-            if cycle_telem:
-                cycle_telem.complete(success=False, error=str(e))
             raise
 
     async def _push_event(
@@ -576,31 +516,6 @@ class ProgenitorLoop:
             return await self._event_queue.get()
         except asyncio.TimeoutError:
             return None
-
-    def _start_cycle_telemetry(self, cycle_number: int, run_id: str):
-        """Start telemetry tracking for a cycle."""
-        if not self.config.telemetry.enabled:
-            return None
-
-        try:
-            from ..telemetry import CycleTelemetry
-
-            self._cycle_telemetry = CycleTelemetry(cycle_number, run_id)
-            self._cycle_telemetry.start()
-            return self._cycle_telemetry
-        except Exception as e:
-            logger.debug("Failed to start cycle telemetry: %s", e)
-            return None
-
-    def _shutdown_telemetry(self):
-        """Shutdown telemetry on loop exit."""
-        global _exporter
-        if _exporter:
-            try:
-                from ..telemetry import shutdown_telemetry
-                shutdown_telemetry(_exporter)
-            except Exception as e:
-                logger.debug("Failed to shutdown telemetry: %s", e)
 
     async def _get_input(self, timeout: float) -> Optional[str]:
         """Get user input with timeout.

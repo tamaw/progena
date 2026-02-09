@@ -11,7 +11,6 @@ as a fallback for cross-iteration analysis.
 
 import json
 import logging
-import time
 from typing import Any
 
 from ..llm.prompts import PromptTemplates
@@ -24,15 +23,6 @@ from . import NodeFunction, NodeStateUpdate
 logger = logging.getLogger(__name__)
 
 _prompts = PromptTemplates()
-
-
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_tracer, get_metrics
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
 
 
 def _serialize_for_prompt(obj: Any) -> str:
@@ -215,17 +205,8 @@ def create_node(
         - What worked, what failed, what to adjust?
         """
         logger.info("LEARN: Starting learn phase")
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
 
         iteration = state.get("iteration", {}).get("current", 0)
-
-        if tracer:
-            span = tracer.start_span(
-                "node_learn",
-                attributes={"iteration": iteration},
-            )
 
         # Gather ALL context for LLM analysis
         context = _gather_full_context(state)
@@ -266,19 +247,6 @@ def create_node(
                 "patterns_count": len(lessons.get("patterns_detected", [])),
                 "timestamp": utcnow_isoformat(),
             })
-
-        # Record telemetry
-        duration = time.perf_counter() - start_time
-        if metrics:
-            metrics.record_histogram("node_duration_seconds", duration, {"node": "learn"})
-            metrics.increment("node_invocations_total", {"node": "learn", "success": "true"})
-
-        if span:
-            span.set_attribute("plan_achieved", lessons.get("plan_achieved", False))
-            span.set_attribute("ideal_state_progress", lessons.get("ideal_state_progress", "unknown"))
-            span.set_attribute("patterns_detected", len(lessons.get("patterns_detected", [])))
-            span.set_attribute("duration_seconds", duration)
-            span.end()
 
         logger.info(
             f"Learning complete: plan_achieved={lessons.get('plan_achieved')}, "

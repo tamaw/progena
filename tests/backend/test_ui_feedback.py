@@ -532,35 +532,6 @@ class TestStateReaderFileOperations:
         assert snapshot.build.phase == "verify"
 
 
-class TestMetricsEndpoint:
-    """Tests for metrics endpoint used by dashboard charts."""
-
-    def test_metrics_endpoint(self, client):
-        """Test /api/ui/metrics returns metrics data."""
-        response = client.get("/api/ui/metrics")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "timestamp" in data
-
-    def test_metrics_has_token_tracking(self, client):
-        """Test metrics includes token tracking for UI."""
-        response = client.get("/api/ui/metrics")
-        data = response.json()
-
-        assert "tokens" in data
-        tokens = data["tokens"]
-        # Check for the actual field names used
-        assert "input_total" in tokens or "input" in tokens
-        assert "output_total" in tokens or "output" in tokens
-
-    def test_metrics_has_request_tracking(self, client):
-        """Test metrics includes request tracking."""
-        response = client.get("/api/ui/metrics")
-        data = response.json()
-
-        # Check for actual fields in response
-        assert "request_count" in data or "total_requests" in data or "active_agents" in data
 
 
 class TestLogsEndpoint:

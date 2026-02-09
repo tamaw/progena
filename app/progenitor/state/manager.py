@@ -24,15 +24,6 @@ import aiofiles
 
 logger = logging.getLogger(__name__)
 
-
-def _get_telemetry():
-    """Get telemetry components if available."""
-    try:
-        from ..telemetry import get_metrics, get_tracer
-        return get_tracer(), get_metrics()
-    except ImportError:
-        return None, None
-
 # Cross-platform file locking
 if sys.platform == 'win32':
     import msvcrt
@@ -290,18 +281,6 @@ class StateManager:
         file remains intact. No partial writes possible.
         """
         filepath = Path(filepath)
-        start_time = time.perf_counter()
-        tracer, metrics = _get_telemetry()
-        span = None
-
-        if tracer:
-            span = tracer.start_span(
-                "state_write",
-                attributes={
-                    "file": filepath.name,
-                    "operation": "atomic_write",
-                },
-            )
 
         # Write to temp file in same directory
         fd, tmp_path = tempfile.mkstemp(
@@ -336,29 +315,12 @@ class StateManager:
                         raise
             logger.debug("Atomically wrote %s", filepath)
 
-            # Record success metrics
-            duration = time.perf_counter() - start_time
-            if metrics:
-                metrics.record_histogram("state_write_duration_seconds", duration)
-                metrics.increment("state_write_total", {"file": filepath.name, "success": "true"})
-
-            if span:
-                span.set_attribute("success", True)
-                span.set_attribute("duration_seconds", duration)
-                span.end()
-
         except Exception as e:
             logger.error("Failed to write %s: %s", filepath, e)
             # Clean up temp file on error
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-            if metrics:
-                metrics.increment("state_write_total", {"file": filepath.name, "success": "false"})
-
-            if span:
-                span.record_exception(e)
-                span.end()
             raise
 
     async def _read_json(self, filepath: Path) -> Any:
@@ -384,7 +346,6 @@ class StateManager:
             raise ValueError(f"Unknown log: {log_name}")
 
         filepath = self.logs_dir / self.LOG_FILES[log_name]
-        tracer, metrics = _get_telemetry()
 
         # Add timestamp if not present
         if "timestamp" not in entry:
@@ -400,15 +361,8 @@ class StateManager:
             # fsync for durability - use os.fsync on the file descriptor
             os.fsync(f.fileno())
 
-        # Record log append metrics
-        if metrics:
-            metrics.increment("log_append_total", {"log": log_name})
-            metrics.record_histogram("log_entry_size_bytes", len(line))
-
     async def _append_jsonl(self, filepath: Path, entry: dict[str, Any]) -> None:
         """Append a single entry to an arbitrary JSONL file with secret redaction."""
-        tracer, metrics = _get_telemetry()
-
         # Add timestamp if not present
         if "timestamp" not in entry:
             entry["timestamp"] = utcnow_isoformat()
@@ -421,10 +375,6 @@ class StateManager:
             await f.write(line)
             await f.flush()
             os.fsync(f.fileno())
-
-        if metrics:
-            metrics.increment("log_append_total", {"log": filepath.name})
-            metrics.record_histogram("log_entry_size_bytes", len(line))
 
     async def log_conversation(self, message: ConversationMessage) -> None:
         """Log a conversation message."""

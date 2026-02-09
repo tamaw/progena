@@ -68,7 +68,6 @@ class TestNodeDependencies(unittest.TestCase):
         )
 
         assert deps.worktrees_dir == config.storage.worktree_dir
-        assert deps.copilot_config_path == config.copilot.config_path
 
     def test_custom_paths_override_config(self):
         """Test that explicit paths override config defaults."""
@@ -76,7 +75,6 @@ class TestNodeDependencies(unittest.TestCase):
         from app.progenitor.nodes import NodeDependencies
 
         custom_worktrees = Path("/custom/worktrees")
-        custom_copilot = Path("/custom/copilot.json")
 
         deps = NodeDependencies(
             llm_client=MagicMock(),
@@ -84,11 +82,10 @@ class TestNodeDependencies(unittest.TestCase):
             tool_registry=MagicMock(),
             config=ProgenitorConfig(),
             worktrees_dir=custom_worktrees,
-            copilot_config_path=custom_copilot,
         )
 
         assert deps.worktrees_dir == custom_worktrees
-        assert deps.copilot_config_path == custom_copilot
+
 
 
 class TestCreateTestDependencies(unittest.TestCase):

@@ -144,9 +144,8 @@ docs/
 
 ## Configuration
 ```
-config/
-├── progenitor.json         # Runtime configuration
-└── copilot.json            # Copilot CLI settings
+.env                 # Local environment configuration
+.env.example         # Example environment configuration
 ```
 
 ## Key Features

@@ -872,58 +872,6 @@ async def liveness_check():
     return {"status": "alive"}
 
 
-@app.get("/metrics")
-async def metrics():
-    """
-    Prometheus-compatible metrics endpoint.
-
-    Returns metrics in Prometheus text format for scraping.
-    """
-    try:
-        from ..progenitor.telemetry import get_metrics
-
-        collector = get_metrics()
-        prometheus_text = collector.to_prometheus()
-
-        return Response(
-            content=prometheus_text,
-            media_type="text/plain; version=0.0.4; charset=utf-8",
-        )
-    except ImportError:
-        return Response(
-            content="# Telemetry not available\n",
-            media_type="text/plain",
-        )
-    except Exception as e:
-        logger.warning("Failed to collect metrics: %s", e)
-        return Response(
-            content=f"# Error collecting metrics: {e}\n",
-            media_type="text/plain",
-        )
-
-
-@app.get("/metrics/json")
-async def metrics_json():
-    """
-    JSON metrics endpoint for programmatic access.
-
-    Returns all metrics as JSON objects.
-    """
-    try:
-        from ..progenitor.telemetry import get_metrics
-
-        collector = get_metrics()
-        points = collector.collect()
-
-        return {
-            "metrics": [p.to_dict() for p in points],
-            "timestamp": time.time(),
-        }
-    except ImportError:
-        return {"error": "Telemetry not available", "metrics": []}
-    except Exception as e:
-        logger.warning("Failed to collect metrics: %s", e)
-        return {"error": str(e), "metrics": []}
 
 
 @app.get("/v1/models", response_model=ModelsResponse)

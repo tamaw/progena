@@ -88,9 +88,8 @@ app/
     nodes/           # LangGraph node implementations
   agents/            # A2A agents (created by Progenitor)
   mcp/               # MCP servers (created by Progenitor)
-config/
-  copilot.json       # Copilot CLI configuration
-  progenitor.json    # Runtime configuration
+.env                 # Local environment configuration
+.env.example         # Example environment configuration
 data/
   state/             # Persisted state (JSON)
   prompts/           # Editable prompt templates
@@ -121,27 +120,22 @@ worktrees/           # Git worktrees for builds
 
 ## Configuration
 
-### progenitor.json
+Configuration is sourced from environment variables. See .env.example for defaults.
 
-```json
-{
-  "timezone": "UTC",
-  "idle_backoff_seconds": 5,
-  "max_backoff_seconds": 60,
-  "max_actions_per_cycle": 10,
-  "checkpoint_interval_seconds": 30
-}
-```
+```dotenv
+# Runtime
+PROGENITOR_TIMEZONE=Australia/Melbourne
+PROGENITOR_IDLE_BACKOFF_SECONDS=30
+PROGENITOR_MAX_BACKOFF_SECONDS=300
+PROGENITOR_MAX_ACTIONS_PER_CYCLE=10
+PROGENITOR_CHECKPOINT_INTERVAL_SECONDS=30
+PROGENITOR_MAX_INNER_ITERATIONS=20
 
-### copilot.json
-
-```json
-{
-  "command": "copilot",
-  "default_flags": ["--yolo"],
-  "timeout": 300,
-  "model": "claude-haiku-4.5"
-}
+# Copilot
+PROGENITOR_COPILOT_BIN=copilot
+PROGENITOR_COPILOT_TIMEOUT_SECONDS=300
+PROGENITOR_COPILOT_MODEL=gpt-5-mini
+PROGENITOR_COPILOT_DEFAULT_FLAGS=--allow-all-tools,--no-ask-user,--no-color,--yolo
 ```
 
 ## Usage

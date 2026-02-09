@@ -8,7 +8,6 @@ These are primarily static code analysis tests to verify the fix was applied.
 import asyncio
 import logging
 import pytest
-from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 
 
@@ -27,18 +26,15 @@ class TestCopilotExceptionHandling:
         assert "logger.debug" in content
 
     @pytest.mark.asyncio
-    async def test_validate_installation_returns_false_on_error(self, tmp_path):
+    async def test_validate_installation_returns_false_on_error(self):
         """Test that validate_installation handles errors gracefully."""
         from app.progenitor.tools.copilot import CopilotCLI
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
-        config_path = tmp_path / "copilot.json"
-        config_path.write_text('{"command": "copilot"}')
-
         # Create mock ACP manager
         mock_acp_manager = MagicMock(spec=CopilotACPManager)
 
-        cli = CopilotCLI(config_path=config_path, acp_manager=mock_acp_manager, timeout=10)
+        cli = CopilotCLI(copilot_cmd="copilot", acp_manager=mock_acp_manager, timeout=10)
 
         # Mock asyncio.create_subprocess_exec to raise FileNotFoundError
         with patch('asyncio.create_subprocess_exec', side_effect=FileNotFoundError("Not found")):
@@ -157,37 +153,5 @@ class TestCommitCoreExceptionHandling:
 
         # Should use specific exception types
         assert "(TypeError, ValueError)" in content
-        assert "logger.debug" in content
-
-
-class TestTelemetryExporterExceptionHandling:
-    """Test exception handling in telemetry exporter."""
-
-    def test_uses_specific_exception_types(self):
-        """Verify exporter uses specific exception types."""
-        import app.progenitor.telemetry.exporter as exporter_module
-
-        with open(exporter_module.__file__, 'r') as f:
-            content = f.read()
-
-        # Should use RuntimeError instead of bare except
-        assert "except RuntimeError:" in content
-
-
-class TestTelemetryDecoratorsExceptionHandling:
-    """Test exception handling in telemetry decorators."""
-
-    def test_uses_specific_exception_types(self):
-        """Verify telemetry decorators use specific exception types."""
-        import app.progenitor.nodes.telemetry_decorators as decorators_module
-
-        with open(decorators_module.__file__, 'r') as f:
-            content = f.read()
-
-        # Should have specific exception handlers
-        specific_handlers = content.count('(AttributeError, TypeError)')
-        assert specific_handlers >= 3, f"Should have multiple specific exception handlers, found {specific_handlers}"
-
-        # Should have logging
         assert "logger.debug" in content
 

@@ -130,7 +130,7 @@ class TestTestScriptRunner:
     @pytest.fixture
     def project_root(self, tmp_path):
         """Create a temp project root with required directories."""
-        (tmp_path / "data" / "tmp").mkdir(parents=True)
+        (tmp_path / "tmp").mkdir(parents=True)
         (tmp_path / "data" / "prompts").mkdir(parents=True)
         return tmp_path
 
@@ -139,7 +139,7 @@ class TestTestScriptRunner:
         runner = TestScriptRunner(project_root)
 
         assert runner.project_root == project_root
-        assert runner.tmp_dir == project_root / "data" / "tmp"
+        assert runner.tmp_dir == project_root / "tmp"
         assert runner.prompts_dir == project_root / "data" / "prompts"
 
     def test_generate_test_script_creates_file(self, project_root):
@@ -300,7 +300,7 @@ class TestAgentExerciseHarnessTestScript:
     @pytest.fixture
     def project_root(self, tmp_path):
         """Create a temp project root."""
-        (tmp_path / "data" / "tmp").mkdir(parents=True)
+        (tmp_path / "tmp").mkdir(parents=True)
         (tmp_path / "data" / "prompts").mkdir(parents=True)
         return tmp_path
 

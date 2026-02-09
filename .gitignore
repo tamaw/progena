@@ -69,6 +69,7 @@ data/state/*.json
 logs/
 !logs/.gitkeep
 worktrees/
+tmp/
 
 # Secrets
 .env

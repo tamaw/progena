@@ -612,41 +612,6 @@ class TestStreamChunk:
         assert chunk.metadata["latency_ms"] == 50
 
 
-class TestMetricsUnderLoad:
-    """Tests for metrics accuracy under load."""
-
-    def test_metrics_endpoint_under_load(self, client):
-        """Test metrics endpoint works under concurrent access."""
-
-        def get_metrics():
-            return client.get("/api/ui/metrics")
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(get_metrics) for _ in range(50)]
-            results = [f.result() for f in concurrent.futures.as_completed(futures)]
-
-        for response in results:
-            assert response.status_code == 200
-            data = response.json()
-            assert "timestamp" in data
-            assert "tokens" in data
-
-    def test_metrics_contain_expected_fields(self, client):
-        """Test metrics response contains all expected fields."""
-        response = client.get("/api/ui/metrics")
-        assert response.status_code == 200
-
-        data = response.json()
-
-        # Core metrics
-        assert "timestamp" in data
-        assert "tokens" in data
-        assert "estimated_cost" in data
-
-        # Token breakdown
-        tokens = data["tokens"]
-        assert "input_total" in tokens or "input" in tokens
-        assert "output_total" in tokens or "output" in tokens
 
 
 class TestLargeMessageHandling:

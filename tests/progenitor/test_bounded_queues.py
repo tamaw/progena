@@ -25,15 +25,6 @@ class MockRuntimeConfig:
 
 
 @dataclass
-class MockTelemetryConfig:
-    """Mock telemetry config."""
-    enabled: bool = False
-    output_dir: Path | None = None
-    console_export: bool = False
-    metrics_interval_seconds: int = 60
-
-
-@dataclass
 class MockStorageConfig:
     """Mock storage config for testing."""
     worktree_dir: Path | None = None
@@ -47,14 +38,11 @@ class MockStorageConfig:
 class MockConfig:
     """Mock config for testing."""
     runtime: MockRuntimeConfig | None = None
-    telemetry: MockTelemetryConfig | None = None
     storage: MockStorageConfig | None = None
 
     def __post_init__(self):
         if self.runtime is None:
             self.runtime = MockRuntimeConfig()
-        if self.telemetry is None:
-            self.telemetry = MockTelemetryConfig()
         if self.storage is None:
             self.storage = MockStorageConfig()
 

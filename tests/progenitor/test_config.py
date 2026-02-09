@@ -3,8 +3,6 @@ Tests for the centralized configuration module.
 """
 
 import os
-import json
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -89,62 +87,36 @@ class TestEnvParsers:
 class TestLLMConfig:
     """Tests for LLM configuration."""
 
-    def test_from_env_openai(self):
-        """Test loading OpenAI config from environment."""
+    def test_from_env(self):
+        """Test loading LLM config from environment."""
         env = {
-            "PROGENITOR_LLM_PROVIDER": "openai",
+            "LITELLM_BASE_URL": "http://localhost:5000",
             "OPENAI_API_KEY": "sk-test-key",
             "PROGENITOR_MODEL_DEFAULT": "gpt-4o",
         }
         with patch.dict(os.environ, env, clear=False):
-            # Remove Azure endpoint to avoid auto-detection
-            os.environ.pop("AZURE_OPENAI_ENDPOINT", None)
             config = LLMConfig.from_env()
-            assert config.provider == "openai"
-            assert config.openai_api_key == "sk-test-key"
+            assert config.base_url == "http://localhost:5000"
+            assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
 
-    def test_from_env_azure(self):
-        """Test loading Azure config from environment."""
-        env = {
-            "PROGENITOR_LLM_PROVIDER": "azure",
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-            "AZURE_OPENAI_API_KEY": "azure-test-key",
-            "AZURE_OPENAI_API_VERSION": "2024-08-01-preview",
-            "AZURE_OPENAI_DEPLOYMENT_DEFAULT": "gpt-4o-deploy",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            config = LLMConfig.from_env()
-            assert config.provider == "azure"
-            assert config.azure_endpoint == "https://test.openai.azure.com"
-            assert config.azure_api_key == "azure-test-key"
-            assert config.azure_deployment_default == "gpt-4o-deploy"
+    def test_defaults(self):
+        """Test default values."""
+        config = LLMConfig()
+        assert config.base_url == "http://localhost:4000"
+        assert config.model_default == "gpt-5.1-codex-max"
 
-    def test_azure_auto_detect(self):
-        """Test Azure provider is auto-detected when endpoint is set."""
-        env = {
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-            "AZURE_OPENAI_API_KEY": "azure-test-key",
-            "AZURE_OPENAI_DEPLOYMENT_DEFAULT": "gpt-4o-deploy",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            # Remove explicit provider setting
-            os.environ.pop("PROGENITOR_LLM_PROVIDER", None)
-            config = LLMConfig.from_env()
-            assert config.provider == "azure"
-
-    def test_get_deployment_for_role(self):
-        """Test per-role deployment selection."""
+    def test_get_model_for_role(self):
+        """Test per-role model selection."""
         config = LLMConfig(
-            provider="azure",
-            azure_deployment_default="default-deploy",
-            azure_deployment_planner="planner-deploy",
-            azure_deployment_builder="builder-deploy",
+            model_default="default-model",
+            model_planner="planner-model",
+            model_builder="builder-model",
         )
-        assert config.get_deployment_for_role("planner") == "planner-deploy"
-        assert config.get_deployment_for_role("builder") == "builder-deploy"
-        assert config.get_deployment_for_role("summary") == "default-deploy"
-        assert config.get_deployment_for_role("unknown") == "default-deploy"
+        assert config.get_model_for_role("planner") == "planner-model"
+        assert config.get_model_for_role("builder") == "builder-model"
+        assert config.get_model_for_role("summary") == "default-model"
+        assert config.get_model_for_role("unknown") == "default-model"
 
 
 class TestRuntimeConfig:
@@ -244,70 +216,46 @@ class TestSchedulerConfig:
 class TestProgenitorConfig:
     """Tests for full Progenitor configuration."""
 
-    def test_load_with_json_files(self):
-        """Test loading config from JSON files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_dir = Path(temp_dir)
-            project_root = Path(temp_dir)
+    def test_load_from_env(self):
+        """Test loading config from environment variables."""
+        env = {
+            "PROGENITOR_TIMEZONE": "Asia/Tokyo",
+            "PROGENITOR_IDLE_BACKOFF_SECONDS": "15",
+            "PROGENITOR_COPILOT_MODEL": "gpt-5",
+            "PROGENITOR_COPILOT_TIMEOUT_SECONDS": "600",
+        }
 
-            # Create progenitor.json
-            progenitor_json = {
-                "timezone": "Asia/Tokyo",
-                "idle_backoff_seconds": 15,
-            }
-            with open(config_dir / "progenitor.json", "w") as f:
-                json.dump(progenitor_json, f)
+        with patch.dict(os.environ, env, clear=False):
+            config = ProgenitorConfig.load(Path("."), Path("."))
 
-            # Create copilot.json
-            copilot_json = {
-                "command": "custom-copilot",
-                "timeout": 600,
-                "model": "gpt-5",
-            }
-            with open(config_dir / "copilot.json", "w") as f:
-                json.dump(copilot_json, f)
-
-            # Clear relevant env vars
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("PROGENITOR_TIMEZONE", None)
-                os.environ.pop("PROGENITOR_IDLE_BACKOFF_SECONDS", None)
-                os.environ.pop("PROGENITOR_COPILOT_MODEL", None)
-                os.environ.pop("PROGENITOR_COPILOT_TIMEOUT_SECONDS", None)
-
-                config = ProgenitorConfig.load(project_root, config_dir)
-
-                assert config.runtime.timezone == "Asia/Tokyo"
-                assert config.runtime.idle_backoff_seconds == 15
-                assert config.copilot.model == "gpt-5"
-                assert config.copilot.timeout_seconds == 600
+            assert config.runtime.timezone == "Asia/Tokyo"
+            assert config.runtime.idle_backoff_seconds == 15
+            assert config.copilot.model == "gpt-5"
+            assert config.copilot.timeout_seconds == 600
 
     def test_to_dict_redacts_secrets(self):
         """Test secrets are redacted in dict output."""
         config = ProgenitorConfig(
             llm=LLMConfig(
-                provider="azure",
-                openai_api_key="sk-secret-key",
-                azure_api_key="azure-secret-key",
+                api_key="sk-secret-key",
             )
         )
 
         result = config.to_dict(redact_secrets=True)
 
-        assert result["llm"]["openai_api_key"] == "***REDACTED***"
-        assert result["llm"]["azure_api_key"] == "***REDACTED***"
+        assert result["llm"]["api_key"] == "***REDACTED***"
 
     def test_to_dict_without_redaction(self):
         """Test secrets are exposed when redaction is disabled."""
         config = ProgenitorConfig(
             llm=LLMConfig(
-                provider="openai",
-                openai_api_key="sk-secret-key",
+                api_key="sk-secret-key",
             )
         )
 
         result = config.to_dict(redact_secrets=False)
 
-        assert result["llm"]["openai_api_key"] == "sk-secret-key"
+        assert result["llm"]["api_key"] == "sk-secret-key"
 
 
 class TestGlobalConfig:

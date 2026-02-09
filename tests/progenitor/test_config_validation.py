@@ -151,93 +151,56 @@ class TestRuntimeConfigValidation:
 class TestLLMConfigValidation:
     """Test LLM configuration validation."""
 
-    def test_valid_azure_config(self):
-        """Test that valid Azure config passes validation."""
+    def test_valid_config(self):
+        """Test that valid LLM config passes validation."""
         from app.progenitor.config_validation import LLMConfigValidator
 
         config = LLMConfigValidator(
-            provider="azure",
+            base_url="http://localhost:4000",
             model_default="gpt-4",
-            azure_endpoint="https://myresource.openai.azure.com",
-            azure_api_key="test-key",
-            azure_api_version="2024-08-01-preview",
+            api_key="sk-test-key",
         )
 
-        assert config.provider == "azure"
+        assert config.base_url == "http://localhost:4000"
+        assert config.model_default == "gpt-4"
+        assert config.api_key == "sk-test-key"
 
-    def test_valid_openai_config(self):
-        """Test that valid OpenAI config passes validation."""
+    def test_valid_config_without_api_key(self):
+        """Test that config without api_key is valid (optional)."""
         from app.progenitor.config_validation import LLMConfigValidator
 
         config = LLMConfigValidator(
-            provider="openai",
+            base_url="http://localhost:4000",
             model_default="gpt-4",
-            openai_api_key="sk-test-key",
-            azure_api_version="2024-08-01-preview",  # Required but unused
         )
 
-        assert config.provider == "openai"
+        assert config.api_key is None
 
-    def test_azure_without_endpoint_rejected(self):
-        """Test that Azure config without endpoint is rejected."""
+    def test_empty_base_url_rejected(self):
+        """Test that empty base_url is rejected."""
         from app.progenitor.config_validation import LLMConfigValidator
         import pydantic
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             LLMConfigValidator(
-                provider="azure",
+                base_url="",
                 model_default="gpt-4",
-                azure_api_key="test-key",
-                azure_api_version="2024-08-01-preview",
-                # Missing azure_endpoint
             )
 
-        assert "azure_endpoint" in str(exc_info.value)
+        assert "base_url" in str(exc_info.value)
 
-    def test_azure_without_api_key_rejected(self):
-        """Test that Azure config without API key is rejected."""
+    def test_empty_model_default_rejected(self):
+        """Test that empty model_default is rejected."""
         from app.progenitor.config_validation import LLMConfigValidator
         import pydantic
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             LLMConfigValidator(
-                provider="azure",
-                model_default="gpt-4",
-                azure_endpoint="https://myresource.openai.azure.com",
-                azure_api_version="2024-08-01-preview",
-                # Missing azure_api_key
+                base_url="http://localhost:4000",
+                model_default="",
             )
 
-        assert "azure_api_key" in str(exc_info.value)
-
-    def test_openai_without_api_key_rejected(self):
-        """Test that OpenAI config without API key is rejected."""
-        from app.progenitor.config_validation import LLMConfigValidator
-        import pydantic
-
-        with pytest.raises(pydantic.ValidationError) as exc_info:
-            LLMConfigValidator(
-                provider="openai",
-                model_default="gpt-4",
-                azure_api_version="2024-08-01-preview",
-                # Missing openai_api_key
-            )
-
-        assert "openai_api_key" in str(exc_info.value)
-
-    def test_invalid_provider_rejected(self):
-        """Test that invalid provider is rejected."""
-        from app.progenitor.config_validation import LLMConfigValidator
-        import pydantic
-
-        with pytest.raises(pydantic.ValidationError) as exc_info:
-            LLMConfigValidator(
-                provider="invalid_provider",  # Invalid
-                model_default="gpt-4",
-                azure_api_version="2024-08-01-preview",
-            )
-
-        assert "provider" in str(exc_info.value)
+        assert "model_default" in str(exc_info.value)
 
 
 class TestCopilotConfigValidation:
@@ -249,7 +212,6 @@ class TestCopilotConfigValidation:
 
         config = CopilotConfigValidator(
             bin_path="copilot",
-            config_path=Path("/config/copilot.json"),
             timeout_seconds=300,
             model="claude-haiku-4.5",
             max_tokens=8192,
@@ -265,7 +227,6 @@ class TestCopilotConfigValidation:
         with pytest.raises(pydantic.ValidationError) as exc_info:
             CopilotConfigValidator(
                 bin_path="copilot",
-                config_path=Path("/config/copilot.json"),
                 timeout_seconds=-1,  # Invalid
                 model="claude-haiku-4.5",
                 max_tokens=8192,
@@ -281,7 +242,6 @@ class TestCopilotConfigValidation:
         with pytest.raises(pydantic.ValidationError) as exc_info:
             CopilotConfigValidator(
                 bin_path="",  # Invalid: must have min_length=1
-                config_path=Path("/config/copilot.json"),
                 timeout_seconds=300,
                 model="claude-haiku-4.5",
                 max_tokens=8192,
@@ -328,13 +288,9 @@ class TestConfigValidationIntegration:
         # Create a mock config with valid values
         @dataclass
         class MockLLMConfig:
-            provider = "azure"
-            openai_api_key = None
+            base_url = "http://localhost:4000"
+            api_key = "test-key"
             model_default = "gpt-4"
-            azure_endpoint = "https://test.openai.azure.com"
-            azure_api_key = "test-key"
-            azure_api_version = "2024-08-01-preview"
-            azure_deployment_default = None
 
         @dataclass
         class MockRuntimeConfig:
@@ -366,16 +322,9 @@ class TestConfigValidationIntegration:
         @dataclass
         class MockCopilotConfig:
             bin_path = "copilot"
-            config_path = Path("/config/copilot.json")
             timeout_seconds = 300
             model = "claude-haiku-4.5"
             max_tokens = 8192
-
-        @dataclass
-        class MockTelemetryConfig:
-            enabled = True
-            console_export = False
-            metrics_interval_seconds = 15.0
 
         @dataclass
         class MockSchedulerConfig:
@@ -388,7 +337,6 @@ class TestConfigValidationIntegration:
             runtime = MockRuntimeConfig()
             storage = MockStorageConfig()
             copilot = MockCopilotConfig()
-            telemetry = MockTelemetryConfig()
             scheduler = MockSchedulerConfig()
 
         is_valid, issues = validate_config(MockConfig())
@@ -451,7 +399,6 @@ class TestConfigValidationIntegration:
             runtime = InvalidRuntimeConfig()
             storage = MagicMock()
             copilot = MagicMock()
-            telemetry = MagicMock()
             scheduler = MagicMock()
 
         # Configure mocks to pass basic attribute checks

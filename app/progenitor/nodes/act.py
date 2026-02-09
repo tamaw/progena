@@ -61,7 +61,10 @@ def create_node(
         )
 
     copilot_cli = CopilotCLI(
-        config_path=config.copilot.config_path,
+        copilot_cmd=config.copilot.bin_path,
+        model=config.copilot.model,
+        default_flags=config.copilot.default_flags,
+        allowed_dirs=config.copilot.acp_allowed_dirs,
         acp_manager=copilot_acp_manager,
         timeout=config.copilot.timeout_seconds,
         logs_dir=config.storage.log_dir,

@@ -36,8 +36,6 @@ EXPLORABLE_DIRS = [
     "llm",
     "runtime",
     "ipc",
-    "observability",
-    "telemetry",
 ]
 
 # File extensions to include
