@@ -682,16 +682,26 @@ def create_node(
         valid_approaches: list[StructuredApproach] = []
         all_issues: dict[str, list[str]] = {}
         raw_response = ""
+        reasoning_trace = ""
 
         try:
             # Retry loop: generate approaches, validate, retry if all rejected
             for attempt in range(MAX_LLM_RETRIES + 1):
-                raw_response = await llm_client.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt=system_prompt,
-                    temperature=0.7,
-                    response_format=response_format,
-                )
+                if hasattr(llm_client, "chat_with_reasoning"):
+                    raw_response, reasoning_trace = await llm_client.chat_with_reasoning(
+                        messages=[{"role": "user", "content": prompt}],
+                        system_prompt=system_prompt,
+                        temperature=0.7,
+                        response_format=response_format,
+                    )
+                else:
+                    raw_response = await llm_client.chat(
+                        messages=[{"role": "user", "content": prompt}],
+                        system_prompt=system_prompt,
+                        temperature=0.7,
+                        response_format=response_format,
+                    )
+                    reasoning_trace = ""
 
                 raw_data = json.loads(raw_response)
                 think_resp = ThinkResponse.model_validate(raw_data)
@@ -746,6 +756,7 @@ def create_node(
                 constraints_considered=[],
                 recommended_approach_id=rec_id,
                 recommendation_reasoning=rec_reasoning,
+                reasoning_trace=reasoning_trace or None,
             )
 
             # Audit trail + build messages
@@ -801,6 +812,7 @@ def create_node(
                             dict(all_issues)
                             if all_issues else {}
                         ),
+                        "reasoning_trace": reasoning_trace or None,
                     },
                 },
                 "build_phase": "think",

@@ -373,11 +373,12 @@ class Verifier:
         elif criterion_type in ("quality", "user_experience", "maintainability"):
             # Subjective criteria may need LLM
             if self.uses_llm:
-                score, llm_assessment = await self._llm_score_criterion(
+                score, llm_assessment, reasoning_trace = await self._llm_score_criterion(
                     criterion, exec_data, valid_data
                 )
                 evidence.score = score
                 evidence.llm_assessment = llm_assessment
+                evidence.reasoning_trace = reasoning_trace
                 evidence.scoring_method = "llm_judge"
             else:
                 # Fallback heuristic for subjective criteria
@@ -650,13 +651,13 @@ class Verifier:
         criterion: SuccessCriterion,
         exec_data: dict | None,
         valid_data: dict | None,
-    ) -> tuple[float, str]:
+    ) -> tuple[float, str, str | None]:
         """Use LLM to score subjective criterion.
 
         Enhanced to include test script output and build failure context for better evaluation.
         """
         if not self.llm_client:
-            return 0.5, "LLM not available"
+            return 0.5, "LLM not available", None
 
         # Build context from data
         context_parts = [f"Criterion: {criterion.description}"]
@@ -714,10 +715,17 @@ class Verifier:
         )
 
         try:
-            response = await self.llm_client.generate(
-                prompt=prompt,
-                system_prompt=_prompts.get("verifier.criterion_scoring_system.md"),
-            )
+            reasoning_trace = None
+            if hasattr(self.llm_client, "generate_with_reasoning"):
+                response, reasoning_trace = await self.llm_client.generate_with_reasoning(
+                    prompt=prompt,
+                    system_prompt=_prompts.get("verifier.criterion_scoring_system.md"),
+                )
+            else:
+                response = await self.llm_client.generate(
+                    prompt=prompt,
+                    system_prompt=_prompts.get("verifier.criterion_scoring_system.md"),
+                )
 
             # Parse response
             if "SCORE:" in response:
@@ -733,11 +741,11 @@ class Verifier:
                 score = 0.5
                 explanation = response[:200]
 
-            return score, explanation
+            return score, explanation, reasoning_trace
 
         except Exception as e:
             logger.warning(f"LLM scoring failed: {e}")
-            return 0.5, f"LLM scoring error: {e}"
+            return 0.5, f"LLM scoring error: {e}", None
 
     def _check_anti_criterion_with_data(
         self,
