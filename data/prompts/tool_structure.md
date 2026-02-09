@@ -1,14 +1,14 @@
 # FastMCP Tool Specification: {tool_name}
 
-> This is the canonical template for building FastMCP tools that live in `app/tools/`.
+> This is the canonical template for building FastMCP tools that live in `app/mcp/`.
 > These tools are self-hosted and can be used by A2A agents and the Progenitor system.
 
 ## Directory Structure
 
-Create the tool in `app/tools/{tool_name}/`:
+Create the tool in `app/mcp/{tool_name}/`:
 
 ```
-app/tools/{tool_name}/
+app/mcp/{tool_name}/
 ├── __init__.py           # Package init with exports
 ├── server.py             # FastMCP server implementation
 ├── spec.md               # This specification (copy of this file)
@@ -92,7 +92,7 @@ def server_params():
     """Create server parameters for testing."""
     return StdioServerParameters(
         command="python",
-        args=["-m", "app.tools.{tool_name}.server"],
+        args=["-m", "app.mcp.{tool_name}.server"],
     )
 
 
@@ -148,8 +148,8 @@ async def test_{primary_function}_edge_cases(server_params):
 
 Before marking as complete, verify:
 
-- [ ] `python -m app.tools.{tool_name}.server` starts without errors
-- [ ] `pytest app/tools/{tool_name}/tests/ -v` passes all tests
+- [ ] `python -m app.mcp.{tool_name}.server` starts without errors
+- [ ] `pytest app/mcp/{tool_name}/tests/ -v` passes all tests
 - [ ] Tool can be called via MCP client
 - [ ] Error cases return proper error responses (not exceptions)
 - [ ] Docstrings are complete and accurate
@@ -168,7 +168,7 @@ After building, the tool should be discoverable by:
   "description": "[What this tool does]",
   "transport": "stdio",
   "command": "python",
-  "args": ["-m", "app.tools.{tool_name}.server"],
+    "args": ["-m", "app.mcp.{tool_name}.server"],
   "status": "available"
 }
 ```

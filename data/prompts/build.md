@@ -35,11 +35,11 @@ WRONG: Creating files directly in app/agents/ like `app/agents/my_agent.py`
 CORRECT: Creating files in subdirectory like `app/agents/my_agent/agent.py`
 
 ## Directory Structure for Tools (FastMCP)
-Tools MUST be created in a subdirectory under `app/tools/<tool_name>/`:
+Tools MUST be created in a subdirectory under `app/mcp/<tool_name>/`:
 
 CORRECT structure:
 ```
-app/tools/<tool_name>/
+app/mcp/<tool_name>/
 ├── __init__.py          # Exports the mcp server and tool functions
 ├── server.py            # FastMCP server implementation (REQUIRED)
 ├── config.py            # Tool configuration (optional)
@@ -118,7 +118,7 @@ See `data/prompts/tool_structure.md` for complete FastMCP specifications and cod
         "outputs": []
     },
     "transport": "http|stdio",
-    "entrypoint": "app/agents/<agent_name>/agent.py | app/tools/<tool_name>/server.py",
+    "entrypoint": "app/agents/<agent_name>/agent.py | app/mcp/<tool_name>/server.py",
     "dependencies": [],
     "implementation_notes": "<guidance for implementation>",
     "test_cases": [

@@ -1,9 +1,10 @@
 """State models for Progenitor using Pydantic v2."""
 
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional, Any, TypedDict, Union
 import uuid
+from datetime import datetime
+from enum import Enum
+from typing import Any, TypedDict
+
 from pydantic import BaseModel, Field, field_validator
 
 from ..runtime.time_utils import utcnow
@@ -26,7 +27,7 @@ class WorkItemStatus(str, Enum):
 class WorkItemType(str, Enum):
     """Type of work item."""
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/tools/
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
     UPGRADE = "upgrade"
     A2A_CALL = "a2a_call"
     MCP_CALL = "mcp_call"
@@ -41,7 +42,7 @@ class DecisionAction(str, Enum):
     DELEGATE_A2A = "delegate_a2a"
     USE_MCP = "use_mcp"
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/tools/
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
     UPGRADE = "upgrade"
     MIXED = "mixed"
     SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)
@@ -136,16 +137,16 @@ class WorkItem(BaseModel):
     status: WorkItemStatus = WorkItemStatus.PENDING
     description: str
     context: dict[str, Any] = Field(default_factory=dict)
-    target_agent: Optional[str] = None
-    target_tool: Optional[str] = None
-    worktree_path: Optional[str] = None
-    submodule_path: Optional[str] = None  # BL-007: Path to git submodule for build isolation
+    target_agent: str | None = None
+    target_tool: str | None = None
+    worktree_path: str | None = None
+    submodule_path: str | None = None  # BL-007: Path to git submodule for build isolation
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     retry_count: int = 0
     max_retries: int = 3
-    error_message: Optional[str] = None
-    result: Optional[dict[str, Any]] = None
+    error_message: str | None = None
+    result: dict[str, Any] | None = None
 
     @field_validator('item_type', mode='before')
     @classmethod
@@ -212,7 +213,7 @@ class WorkItem(BaseModel):
         self.status = WorkItemStatus.IN_PROGRESS
         self.updated_at = utcnow()
 
-    def mark_completed(self, result: Optional[dict[str, Any]] = None) -> None:
+    def mark_completed(self, result: dict[str, Any] | None = None) -> None:
         """Mark the item as completed."""
         self.status = WorkItemStatus.COMPLETED
         self.result = result
@@ -241,7 +242,7 @@ class Decision(BaseModel):
     reasoning: str
     requires_planning: bool = False
     target_capabilities: list[str] = Field(default_factory=list)
-    direct_response: Optional[str] = None
+    direct_response: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -262,8 +263,8 @@ class ScheduleEntry(BaseModel):
     description: str
     instruction: str  # What the agent should do at the scheduled time
     run_at: datetime  # When to execute (updated for recurring tasks)
-    repeat_minutes: Optional[int] = None  # If set, repeat every N minutes
-    last_run: Optional[datetime] = None  # When it last executed
+    repeat_minutes: int | None = None  # If set, repeat every N minutes
+    last_run: datetime | None = None  # When it last executed
     enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)
 
@@ -294,17 +295,17 @@ class AgentRegistryEntry(BaseModel):
 
     # HTTP endpoint configuration
     transport: str = "http"  # http only
-    port: Optional[int] = None  # Assigned HTTP port (e.g., 8100-8199)
-    endpoint: Optional[str] = None  # Base URL (e.g., http://localhost:8100)
-    agent_card_url: Optional[str] = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)
+    port: int | None = None  # Assigned HTTP port (e.g., 8100-8199)
+    endpoint: str | None = None  # Base URL (e.g., http://localhost:8100)
+    agent_card_url: str | None = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)
 
     # Runtime status (updated from process stdout/stderr)
     status: AgentStatus = AgentStatus.STOPPED
-    status_message: Optional[str] = None  # Human-readable status detail
-    pid: Optional[int] = None  # Process ID when running
-    startup_time: Optional[datetime] = None  # When agent was last started
-    last_heartbeat: Optional[datetime] = None  # Last health check
-    last_error: Optional[str] = None  # Last error message if failed
+    status_message: str | None = None  # Human-readable status detail
+    pid: int | None = None  # Process ID when running
+    startup_time: datetime | None = None  # When agent was last started
+    last_heartbeat: datetime | None = None  # Last health check
+    last_error: str | None = None  # Last error message if failed
 
     enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)
@@ -338,8 +339,8 @@ class ValidationResult(BaseModel):
 class ConversationState(TypedDict, total=False):
     """Conversation-related state."""
     messages: list[ConversationMessage]
-    current_input: Optional[str]
-    pending_response: Optional[str]
+    current_input: str | None
+    pending_response: str | None
     attachments: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
 
@@ -347,17 +348,17 @@ class ConversationState(TypedDict, total=False):
 class WorkState(TypedDict, total=False):
     """Work item and backlog state."""
     backlog: list[WorkItem]
-    current_work_item: Optional[WorkItem]
-    current_decision: Optional[Decision]
-    build_settings: Optional[dict[str, Any]]  # BL-007: BuildSettings from structured LLM output
-    current_build_request: Optional[str]
+    current_work_item: WorkItem | None
+    current_decision: Decision | None
+    build_settings: dict[str, Any] | None  # BL-007: BuildSettings from structured LLM output
+    current_build_request: str | None
 
 
 class SchedulingState(TypedDict, total=False):
     """Scheduling and registry state."""
     schedule: list[ScheduleEntry]
-    new_schedule_entry: Optional[ScheduleEntry]  # Pending entry to be added
-    current_time: Optional[datetime]
+    new_schedule_entry: ScheduleEntry | None  # Pending entry to be added
+    current_time: datetime | None
     due_items: list[str]  # IDs of due schedule entries
     agents: list[AgentRegistryEntry]
 
@@ -367,18 +368,18 @@ class LoopControlState(TypedDict, total=False):
     cycle_count: int
     actions_this_cycle: int
     shutdown_requested: bool
-    last_commit_time: Optional[datetime]
+    last_commit_time: datetime | None
     run_id: str
-    last_validation_result: Optional[dict[str, Any]]
-    validation_result_v2: Optional[dict[str, Any]]  # ValidationResultV2 as dict
-    last_checkpoint: Optional[str]
+    last_validation_result: dict[str, Any] | None
+    validation_result_v2: dict[str, Any] | None  # ValidationResultV2 as dict
+    last_checkpoint: str | None
 
 
 class TaskInfo(TypedDict, total=False):
     """Build task information."""
     description: str  # Human-readable build description (summary)
     target_capabilities: list[str]  # Capabilities being built
-    created_at: Optional[str]  # ISO timestamp when task was created
+    created_at: str | None  # ISO timestamp when task was created
 
 
 class IterationInfo(TypedDict, total=False):
@@ -390,37 +391,37 @@ class IterationInfo(TypedDict, total=False):
 
 class SpecInfo(TypedDict, total=False):
     """Spec document reference (content read from file, not stored here)."""
-    file_path: Optional[str]  # Path to spec.md file
+    file_path: str | None  # Path to spec.md file
     revision: int  # Current revision number
-    created_at: Optional[str]  # ISO timestamp
-    updated_at: Optional[str]  # ISO timestamp
+    created_at: str | None  # ISO timestamp
+    updated_at: str | None  # ISO timestamp
 
 
 class ThinkPhase(TypedDict, total=False):
     """THINK phase results."""
     approaches: list[dict[str, Any]]  # Structured approaches
-    recommended_id: Optional[str]  # Selected approach ID
+    recommended_id: str | None  # Selected approach ID
     gaps_analyzed: list[str]  # Gaps from previous iteration
-    completed_at: Optional[str]  # ISO timestamp when thinking completed
+    completed_at: str | None  # ISO timestamp when thinking completed
 
 
 class ObservePhase(TypedDict, total=False):
     """OBSERVE phase results."""
-    ideal_state: Optional[dict[str, Any]]  # IdealState as dict for JSON serialization
-    completed_at: Optional[str]  # ISO timestamp when observe completed
+    ideal_state: dict[str, Any] | None  # IdealState as dict for JSON serialization
+    completed_at: str | None  # ISO timestamp when observe completed
 
 
 class PlanPhase(TypedDict, total=False):
     """PLAN phase results."""
-    experiment_plan: Optional[dict[str, Any]]  # ExperimentPlan
-    completed_at: Optional[str]  # ISO timestamp when planning completed
+    experiment_plan: dict[str, Any] | None  # ExperimentPlan
+    completed_at: str | None  # ISO timestamp when planning completed
 
 
 class ExecutePhase(TypedDict, total=False):
     """EXECUTE phase results."""
     completed: bool  # Whether execution finished
-    result: Optional[dict[str, Any]]  # Compact execution result (tests, duration, status)
-    completed_at: Optional[str]  # ISO timestamp when execution completed
+    result: dict[str, Any] | None  # Compact execution result (tests, duration, status)
+    completed_at: str | None  # ISO timestamp when execution completed
 
 
 class VerifyPhase(TypedDict, total=False):
@@ -429,7 +430,7 @@ class VerifyPhase(TypedDict, total=False):
     score: float  # Verification score
     target_score: float  # Target score to pass
     gaps: list[str]  # Unmet criteria
-    completed_at: Optional[str]  # ISO timestamp when verification completed
+    completed_at: str | None  # ISO timestamp when verification completed
 
 
 class BuildPhases(TypedDict, total=False):
@@ -438,15 +439,15 @@ class BuildPhases(TypedDict, total=False):
     Each phase includes optional completion timestamps for traceability.
     """
     observe: ObservePhase
-    observe_completed_at: Optional[str]  # ISO timestamp
+    observe_completed_at: str | None  # ISO timestamp
     think: ThinkPhase
-    think_completed_at: Optional[str]  # ISO timestamp
+    think_completed_at: str | None  # ISO timestamp
     plan: PlanPhase
-    plan_completed_at: Optional[str]  # ISO timestamp
+    plan_completed_at: str | None  # ISO timestamp
     execute: ExecutePhase
-    execute_completed_at: Optional[str]  # ISO timestamp
+    execute_completed_at: str | None  # ISO timestamp
     verify: VerifyPhase
-    verify_completed_at: Optional[str]  # ISO timestamp
+    verify_completed_at: str | None  # ISO timestamp
 
 
 class VerificationState(TypedDict, total=False):
@@ -455,10 +456,10 @@ class VerificationState(TypedDict, total=False):
     This provides a single source of truth for verification status,
     avoiding duplication across phases.verify and top-level fields.
     """
-    current_score: Optional[float]  # Latest verification score
-    current_passed: Optional[bool]  # Whether latest verification passed
+    current_score: float | None  # Latest verification score
+    current_passed: bool | None  # Whether latest verification passed
     target_score: float  # Target score needed to pass (default 0.8)
-    current_report: Optional[dict[str, Any]]  # Latest VerificationReportV2 as dict
+    current_report: dict[str, Any] | None  # Latest VerificationReportV2 as dict
     gaps: list[str]  # Current unmet criteria
 
 
@@ -475,8 +476,8 @@ class BestResult(TypedDict, total=False):
     iteration: int  # Iteration that produced best result
     score: float  # Best score achieved
     passed: bool  # Whether that iteration passed
-    achieved_at: Optional[str]  # ISO timestamp when best result was achieved
-    verification_report_ref: Optional[str]  # Reference to report in history (e.g., index or ID)
+    achieved_at: str | None  # ISO timestamp when best result was achieved
+    verification_report_ref: str | None  # Reference to report in history (e.g., index or ID)
 
 
 class ClarificationQA(TypedDict, total=False):
@@ -484,17 +485,40 @@ class ClarificationQA(TypedDict, total=False):
     question: str
     response: str
     asked_at: str  # ISO timestamp
-    answered_at: Optional[str]  # ISO timestamp
+    answered_at: str | None  # ISO timestamp
 
 
 class ClarificationState(TypedDict, total=False):
     """Clarification handling (user interaction during build)."""
     needed: bool  # Whether clarification is needed
-    question: Optional[str]  # Current question to ask user
-    context: Optional[str]  # Raw context indicating need
+    question: str | None  # Current question to ask user
+    context: str | None  # Raw context indicating need
     awaiting: bool  # Currently waiting for response
-    response: Optional[str]  # User's response to current question
+    response: str | None  # User's response to current question
     history: list[ClarificationQA]  # Previous Q&As for context
+
+
+class ConcurrentBuildInfo(TypedDict, total=False):
+    """Tracks a single concurrent build."""
+    work_item_id: str
+    worktree_path: str
+    branch_name: str
+    status: str  # "building" | "completed" | "failed"
+    build_result: dict[str, Any] | None
+    started_at: str
+    completed_at: str | None
+    error_message: str | None
+
+
+class MergeQueueItem(TypedDict, total=False):
+    """Tracks a pending merge operation."""
+    work_item_id: str
+    worktree_path: str
+    branch_name: str
+    merge_status: str  # "pending" | "merged" | "conflict" | "failed"
+    merge_commit_hash: str | None
+    conflict_files: list[str]
+    merge_attempt_count: int
 
 
 class InnerLoopState(TypedDict, total=False):
@@ -521,10 +545,10 @@ class InnerLoopState(TypedDict, total=False):
     """
     # Build control (top-level for quick access)
     build_in_progress: bool  # True while building, blocks new builds
-    build_started_at: Optional[str]  # ISO timestamp when build started
-    build_phase: Optional[str]  # Current phase (use BuildPhase enum values)
-    task_id: Optional[str]  # Unique task identifier
-    build_task_description: Optional[str]  # Backward-compatible top-level build description
+    build_started_at: str | None  # ISO timestamp when build started
+    build_phase: str | None  # Current phase (use BuildPhase enum values)
+    task_id: str | None  # Unique task identifier
+    build_task_description: str | None  # Backward-compatible top-level build description
     build_messages: list[dict[str, Any]]  # Build progress messages
 
     # Nested objects for organization
@@ -536,24 +560,29 @@ class InnerLoopState(TypedDict, total=False):
     best: BestResult  # Best result tracking with timestamps
     clarification: ClarificationState  # User interaction with history
     awaiting_clarification: bool  # Top-level compatibility flag
-    clarification_response: Optional[str]  # Top-level compatibility field
+    clarification_response: str | None  # Top-level compatibility field
 
     # Consolidated verification state (single source of truth)
     verification: VerificationState  # All verification data in one place
 
     # Stop conditions
     should_iterate: bool  # Whether to continue iterating
-    iteration_stop_reason: Optional[str]  # Why iteration stopped (use IterationStopReason enum values)
+    iteration_stop_reason: str | None  # Why iteration stopped (use IterationStopReason enum values)
 
     # Learning summary (from LEARN phase, consumed by OBSERVE for ideal state refinement)
-    learning_summary: Optional[dict[str, Any]]  # Latest learning summary for observe node
+    learning_summary: dict[str, Any] | None  # Latest learning summary for observe node
+
+    # Concurrent build tracking
+    concurrent_builds: list[ConcurrentBuildInfo]  # Track multiple concurrent builds
+    merge_queue: list[MergeQueueItem]  # Sequential merge queue after builds
+    max_concurrency: int  # Max concurrent builds from config
 
 
 class ExecutionState(TypedDict, total=False):
     """Execution phase state."""
     pending_tool_calls: list[dict[str, Any]]  # Tools pending execution
     work_item_completed: bool  # Whether work item is complete
-    execution_result: Optional[dict[str, Any]]  # BL-006: Structured execution result for verify
+    execution_result: dict[str, Any] | None  # BL-006: Structured execution result for verify
 
 
 # TypedDict for LangGraph state (allows partial updates)

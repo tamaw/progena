@@ -1,3 +1,6 @@
 [submodule "app/agents"]
 	path = app/agents
 	url = D:/progenitor-agents
+[submodule "app/mcp"]
+	path = app/mcp
+	url = D:/progenitor-mcp
