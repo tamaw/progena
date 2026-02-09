@@ -1,20 +1,16 @@
 """
-OpenAI API Client for Progenitor.
+LiteLLM API Client for Progenitor.
 
-Uses the OpenAI Chat Completions API via a LiteLLM proxy for all model calls.
-Implements retry logic with exponential backoff and jitter for resilience.
-The LiteLLM proxy handles provider routing (OpenAI, Azure, etc.) and
-observability (Langfuse) automatically.
+Uses the LiteLLM /responses endpoint for all model calls.
+LiteLLM handles retries, provider routing, and observability upstream.
 """
 
-import asyncio
 import json
 import logging
-import random
 from collections.abc import AsyncIterator
 from typing import Any
 
-from openai import APIConnectionError, APIError, AsyncOpenAI, RateLimitError
+import httpx
 
 from ..config import LLMConfig
 from .prompts import PromptTemplates
@@ -30,168 +26,67 @@ from .response_models import (
 logger = logging.getLogger(__name__)
 
 
-def _build_json_schema_format(model_class: type, name: str) -> dict[str, Any]:
-    """Build structured output response_format from a Pydantic model.
-
-    Uses json_schema response format which doesn't require "json" in the prompt,
-    unlike the json_object response format.
-
-    Args:
-        model_class: A Pydantic BaseModel class.
-        name: Schema name for the response format.
-
-    Returns:
-        A dict suitable for response_format parameter.
-    """
-    schema = model_class.model_json_schema()
-
-    # OpenAI structured outputs require additionalProperties: false at all levels
-    # and all properties must be required
-    def _enforce_strict_schema(obj: dict) -> dict:
-        """Recursively enforce strict schema rules for OpenAI structured outputs."""
-        if not isinstance(obj, dict):
-            return obj
-
-        result = dict(obj)
-
-        # OpenAI strict mode: $ref cannot coexist with other keywords like
-        # "description", "default", etc. Strip everything except $ref itself.
-        if "$ref" in result:
-            return {"$ref": result["$ref"]}
-
-        # For object types, add additionalProperties: false and make all required
-        if result.get("type") == "object":
-            # Always set additionalProperties to false for strict mode
-            result["additionalProperties"] = False
-
-            if "properties" in result:
-                # Make all properties required
-                result["required"] = list(result["properties"].keys())
-                # Recursively process nested properties
-                for prop_name, prop_schema in result["properties"].items():
-                    result["properties"][prop_name] = _enforce_strict_schema(prop_schema)
-            else:
-                # Free-form dict (dict[str, Any]) - convert to empty object
-                # OpenAI doesn't support additionalProperties: true, so we make it
-                # an empty object with no allowed properties
-                result["properties"] = {}
-                result["required"] = []
-
-        # Process array items
-        if "items" in result:
-            result["items"] = _enforce_strict_schema(result["items"])
-
-        # Process $defs (definitions)
-        if "$defs" in result:
-            result["$defs"] = {
-                k: _enforce_strict_schema(v) for k, v in result["$defs"].items()
-            }
-
-        # Process allOf, anyOf, oneOf
-        for key in ("allOf", "anyOf", "oneOf"):
-            if key in result:
-                result[key] = [_enforce_strict_schema(item) for item in result[key]]
-
-        return result
-
-    strict_schema = _enforce_strict_schema(schema)
-
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": name,
-            "strict": True,
-            "schema": strict_schema,
-        },
-    }
-
-
 class LLMClient:
-    """Wrapper for OpenAI API calls via LiteLLM proxy with retry logic."""
-
-    DEFAULT_RETRIES = 3
-    RETRY_DELAY = 1.0
-    RETRY_MULTIPLIER = 2.0
-    RETRY_JITTER = 0.5  # ±50% jitter to prevent thundering herd
+    """Simple wrapper for LiteLLM /responses endpoint."""
 
     def __init__(
         self,
         config: LLMConfig | None = None,
-        max_retries: int = DEFAULT_RETRIES,
+        max_retries: int = 3,  # Kept for compatibility but unused
         role: str | None = None,
     ):
         """Initialize the LLM client.
 
         Args:
             config: LLM configuration. If None, loads from environment.
-            max_retries: Maximum retry attempts for API calls.
+            max_retries: Unused - LiteLLM handles retries.
             role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
-        self.max_retries = max_retries
         self.prompts = PromptTemplates()
         self.role = role
-
-        # Select model based on role
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 
-        # Create standard AsyncOpenAI client pointed at LiteLLM proxy
-        self.client = AsyncOpenAI(
-            base_url=self.config.base_url,
-            api_key=self.config.api_key or "unused",
+        base_url = self.config.base_url.rstrip('/')
+        self.endpoint_url = f"{base_url}/responses"
+
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(120.0),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.config.api_key or 'unused'}",
+            }
         )
 
-        logger.info(
-            "LLM client configured (base_url=%s, model=%s, role=%s)",
-            self.config.base_url, self.model, self.role,
-        )
+        logger.info("LLM client configured (endpoint=%s, model=%s)", self.endpoint_url, self.model)
 
-    async def _retry_with_backoff(self, func, *args, **kwargs) -> Any:
-        """Execute function with exponential backoff retry and jitter.
+    async def close(self):
+        """Close the HTTP client."""
+        await self.client.aclose()
 
-        Retries on rate limits and connection errors. Does not retry
-        on client errors (4xx except 429).
+    async def __aenter__(self):
+        return self
 
-        Uses jitter to prevent thundering herd when multiple instances
-        hit rate limits simultaneously.
-        """
-        last_error: Exception | None = None
-        delay = self.RETRY_DELAY
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
 
-        for attempt in range(self.max_retries):
-            try:
-                return await func(*args, **kwargs)
-            except (RateLimitError, APIConnectionError) as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    # Add jitter: delay * (1 ± RETRY_JITTER)
-                    jittered_delay = delay * (1.0 + random.uniform(-self.RETRY_JITTER, self.RETRY_JITTER))
-                    logger.warning(
-                        "API call failed (attempt %d/%d): %s. Retrying in %.1fs...",
-                        attempt + 1, self.max_retries, e, jittered_delay
-                    )
-                    await asyncio.sleep(jittered_delay)
-                    delay *= self.RETRY_MULTIPLIER
-            except APIError as e:
-                # Don't retry on client errors (4xx except rate limit)
-                status = getattr(e, 'status_code', None)
-                if status and 400 <= status < 500 and status != 429:
-                    logger.error("API client error (not retrying): %s", e)
-                    raise
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    jittered_delay = delay * (1.0 + random.uniform(-self.RETRY_JITTER, self.RETRY_JITTER))
-                    logger.warning(
-                        "API error (attempt %d/%d): %s. Retrying in %.1fs...",
-                        attempt + 1, self.max_retries, e, jittered_delay
-                    )
-                    await asyncio.sleep(jittered_delay)
-                    delay *= self.RETRY_MULTIPLIER
+    def _format_input(self, messages: list[dict[str, str]], system_prompt: str | None = None) -> str:
+        """Format messages into input text for /responses endpoint."""
+        parts = []
+        if system_prompt:
+            parts.append(f"System: {system_prompt}")
 
-        logger.error("All %d retry attempts failed", self.max_retries)
-        if last_error:
-            raise last_error
-        raise RuntimeError("Retry failed with no captured error")
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                parts.append(f"System: {content}")
+            elif role == "assistant":
+                parts.append(f"Assistant: {content}")
+            else:
+                parts.append(f"User: {content}")
+
+        return "\n\n".join(parts)
 
     async def chat(
         self,
@@ -201,51 +96,23 @@ class LLMClient:
         max_tokens: int = 4096,
         response_format: dict[str, Any] | None = None,
     ) -> str:
-        """Make a chat completion request with retry."""
-        full_messages = self._build_messages(messages, system_prompt)
+        """Call /responses endpoint and return text response."""
+        input_text = self._format_input(messages, system_prompt)
 
-        async def _do_chat():
-            kwargs = self._build_chat_kwargs(full_messages, temperature, max_tokens, response_format)
-            response = await self.client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content or ""
+        response = await self.client.post(
+            self.endpoint_url,
+            json={"model": self.model, "input": input_text}
+        )
+        response.raise_for_status()
+        data = response.json()
 
-        return await self._retry_with_backoff(_do_chat)
+        # Extract text from response: data["output"][0]["content"][0]["text"]
+        if "output" in data and data["output"]:
+            for item in data["output"]:
+                if item.get("type") == "message" and item.get("content"):
+                    return item["content"][0].get("text", "")
 
-    def _build_messages(
-        self,
-        messages: list[dict[str, str]],
-        system_prompt: str | None = None,
-    ) -> list[dict[str, str]]:
-        """Build full message list with optional system prompt."""
-        full_messages = []
-
-        if system_prompt:
-            full_messages.append({"role": "system", "content": system_prompt})
-
-        full_messages.extend(messages)
-        return full_messages
-
-    def _build_chat_kwargs(
-        self,
-        messages: list[dict[str, str]],
-        temperature: float,
-        max_tokens: int,
-        response_format: dict[str, Any] | None = None,
-        stream: bool = False,
-    ) -> dict[str, Any]:
-        """Build kwargs for chat completion API call."""
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": stream,
-        }
-
-        if response_format:
-            kwargs["response_format"] = response_format
-
-        return kwargs
+        return ""
 
     async def chat_stream(
         self,
@@ -254,32 +121,9 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
-        """Make a streaming chat completion request.
-
-        Yields content chunks as they arrive from the API.
-
-        Args:
-            messages: List of conversation messages.
-            system_prompt: Optional system prompt.
-            temperature: Sampling temperature.
-            max_tokens: Maximum tokens in response.
-
-        Yields:
-            Content chunks as strings.
-        """
-        full_messages = self._build_messages(messages, system_prompt)
-
-        kwargs = self._build_chat_kwargs(
-            full_messages, temperature, max_tokens, stream=True
-        )
-
-        # Note: streaming doesn't use retry_with_backoff since we can't
-        # retry mid-stream. Connection errors will raise immediately.
-        response = await self.client.chat.completions.create(**kwargs)
-
-        async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        """Stream not supported, returns full response as single chunk."""
+        response = await self.chat(messages, system_prompt, temperature, max_tokens)
+        yield response
 
     async def decide(
         self,
@@ -287,47 +131,24 @@ class LLMClient:
         conversation_history: list[dict[str, str]],
         tool_context: str,
     ) -> dict[str, Any]:
-        """Make a routing decision for user input.
-
-        Returns validated decision response with guaranteed schema.
-        Uses structured outputs (json_schema).
-        """
+        """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
+        messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
 
-        messages = conversation_history[-10:]  # Last 10 messages for context
-        messages.append({"role": "user", "content": user_input})
-
-        response_format = _build_json_schema_format(DecisionResponse, "decision_response")
-
-        response = await self.chat(
-            messages=messages,
-            system_prompt=system_prompt,
-            temperature=0.3,  # Lower temperature for decisions
-            response_format=response_format,
-        )
+        response = await self.chat(messages, system_prompt, temperature=0.3)
 
         try:
             raw_data = json.loads(response)
-            # Validate with Pydantic model - guarantees schema compliance
             validated = validate_decision_response(raw_data)
             return validated.model_dump()
-        except json.JSONDecodeError as e:
-            logger.warning("Failed to parse decision JSON: %s. Falling back to direct answer.", e)
+        except Exception as e:
+            logger.warning("Decision parsing failed: %s", e)
             return {
                 "action": "answer_directly",
-                "reasoning": f"JSON parse error - falling back to direct answer: {e}",
+                "reasoning": f"Parse error: {e}",
                 "requires_planning": False,
                 "target_capabilities": [],
                 "direct_response": response,
-            }
-        except Exception as e:
-            logger.warning("Decision validation failed: %s. Using defaults.", e)
-            return {
-                "action": "answer_directly",
-                "reasoning": f"Validation error - falling back to direct answer: {e}",
-                "requires_planning": False,
-                "target_capabilities": [],
-                "direct_response": None,
             }
 
     async def plan(
@@ -336,13 +157,8 @@ class LLMClient:
         decision: dict[str, Any],
         current_backlog: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Generate work items for a task.
-
-        Returns validated work items with guaranteed schema.
-        Uses structured outputs (json_schema).
-        """
+        """Generate work items for a task."""
         system_prompt = self.prompts.get_planner_prompt()
-
         context = f"""
 User Request: {user_input}
 
@@ -352,28 +168,15 @@ Current Backlog: {current_backlog}
 
 Generate a list of work items to fulfill this request.
 """
-
         messages = [{"role": "user", "content": context}]
-
-        response_format = _build_json_schema_format(PlannerResponse, "planner_response")
-
-        response = await self.chat(
-            messages=messages,
-            system_prompt=system_prompt,
-            temperature=0.5,
-            response_format=response_format,
-        )
+        response = await self.chat(messages, system_prompt, temperature=0.5)
 
         try:
             raw_data = json.loads(response)
-            # Validate with Pydantic model
             validated = validate_planner_response(raw_data)
             return [item.model_dump() for item in validated.work_items]
-        except json.JSONDecodeError as e:
-            logger.warning("Failed to parse planner JSON: %s. Returning empty work items.", e)
-            return []
         except Exception as e:
-            logger.warning("Planner validation failed: %s. Returning empty work items.", e)
+            logger.warning("Planner parsing failed: %s", e)
             return []
 
     async def generate_response(
@@ -384,24 +187,20 @@ Generate a list of work items to fulfill this request.
     ) -> str:
         """Generate a response to the user."""
         system_prompt = self.prompts.get_genesis_prompt()
-
-        messages = conversation_history[-20:]  # More context for responses
+        messages = conversation_history[-20:]
 
         if action_results:
             results_summary = "\n".join([
                 f"- {r.get('action', 'unknown')}: {r.get('result', 'completed')}"
                 for r in action_results
             ])
-            context_msg = f"Actions completed:\n{results_summary}\n\nRespond to the user about these results."
-            messages.append({"role": "system", "content": context_msg})
+            messages.append({
+                "role": "system",
+                "content": f"Actions completed:\n{results_summary}\n\nRespond to the user about these results."
+            })
 
         messages.append({"role": "user", "content": user_input})
-
-        return await self.chat(
-            messages=messages,
-            system_prompt=system_prompt,
-            temperature=0.7,
-        )
+        return await self.chat(messages, system_prompt, temperature=0.7)
 
     async def generate(
         self,
@@ -410,27 +209,9 @@ Generate a list of work items to fulfill this request.
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
-        """Generate a text response for a prompt.
-
-        Simple wrapper around chat() for single-prompt generation.
-        Used by planner, think, learn and other nodes.
-
-        Args:
-            prompt: The user prompt to generate a response for.
-            system_prompt: Optional system prompt for context.
-            temperature: Sampling temperature (0.0-1.0).
-            max_tokens: Maximum tokens in response.
-
-        Returns:
-            Generated text response.
-        """
+        """Generate text response for a prompt."""
         messages = [{"role": "user", "content": prompt}]
-        return await self.chat(
-            messages=messages,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        return await self.chat(messages, system_prompt, temperature, max_tokens)
 
     async def generate_build_spec(
         self,
@@ -438,13 +219,8 @@ Generate a list of work items to fulfill this request.
         description: str,
         capabilities: list[str],
     ) -> dict[str, Any]:
-        """Generate a specification for building an agent or MCP server.
-
-        Returns validated build spec with guaranteed schema.
-        Uses structured outputs (json_schema).
-        """
+        """Generate a specification for building an agent or MCP server."""
         system_prompt = self.prompts.get_build_prompt(item_type)
-
         context = f"""
 Build Type: {item_type}
 Description: {description}
@@ -452,37 +228,15 @@ Required Capabilities: {', '.join(capabilities)}
 
 Generate a detailed specification for building this component.
 """
-
         messages = [{"role": "user", "content": context}]
-
-        response_format = _build_json_schema_format(BuildSpec, "build_spec")
-
-        response = await self.chat(
-            messages=messages,
-            system_prompt=system_prompt,
-            temperature=0.5,
-            response_format=response_format,
-        )
+        response = await self.chat(messages, system_prompt, temperature=0.5)
 
         try:
             raw_data = json.loads(response)
-            # Validate with Pydantic model
             validated = validate_build_spec(raw_data)
             return validated.model_dump()
-        except json.JSONDecodeError as e:
-            logger.warning("Failed to parse build spec JSON: %s", e)
-            return {
-                "name": "unnamed",
-                "description": description,
-                "kind": item_type,
-                "capabilities": capabilities,
-                "entrypoint": "main.py",
-                "dependencies": [],
-                "config": {},
-                "error": f"JSON parse error: {e}",
-            }
         except Exception as e:
-            logger.warning("Build spec validation failed: %s", e)
+            logger.warning("Build spec parsing failed: %s", e)
             return {
                 "name": "unnamed",
                 "description": description,
@@ -491,7 +245,7 @@ Generate a detailed specification for building this component.
                 "entrypoint": "main.py",
                 "dependencies": [],
                 "config": {},
-                "error": f"Validation error: {e}",
+                "error": f"Parse error: {e}",
             }
 
     async def complete(
@@ -501,23 +255,5 @@ Generate a detailed specification for building this component.
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
-        """Complete a prompt and return the response.
-
-        Simple wrapper around chat() for single-prompt completion.
-        Alias for generate() to match mock client interface.
-
-        Args:
-            prompt: The prompt to complete.
-            system_prompt: Optional system prompt for context.
-            temperature: Sampling temperature (0.0-1.0).
-            max_tokens: Maximum tokens in response.
-
-        Returns:
-            Generated text response.
-        """
-        return await self.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        """Complete a prompt. Alias for generate()."""
+        return await self.generate(prompt, system_prompt, temperature, max_tokens)

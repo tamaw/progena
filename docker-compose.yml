@@ -2,7 +2,7 @@
 # Shared Configuration (YAML Anchors)
 # ==============================================================================
 x-progenitor-llm-env: &progenitor-llm-env
-  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
   LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
   PROGENITOR_MODEL_DEFAULT: ${PROGENITOR_MODEL_DEFAULT:-gpt-5.1-codex-max}
 
