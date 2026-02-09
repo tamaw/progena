@@ -17,14 +17,14 @@ Progenitor is an always-on agent that:
 
 - Python 3.12+
 - Docker (optional, recommended)
-- OpenAI API key
+- LiteLLM proxy with configured models
 - Copilot CLI (for build operations)
 
 ### Environment Setup
 
 ```bash
-# Set your OpenAI API key
-export OPENAI_API_KEY=your_key_here
+# Set your LiteLLM master key
+export LITELLM_MASTER_KEY=your_key_here
 
 # Install dependencies
 pip install -r requirements.txt

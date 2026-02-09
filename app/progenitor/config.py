@@ -45,7 +45,7 @@ class LLMConfig:
         """Load LLM config from environment."""
         return cls(
             base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
-            api_key=os.getenv("OPENAI_API_KEY"),
+            api_key=os.getenv("LITELLM_MASTER_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
