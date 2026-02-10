@@ -11,7 +11,7 @@ Handles:
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Coroutine, Any, Optional, TYPE_CHECKING
+from typing import Callable, Coroutine, Any, Optional, TYPE_CHECKING, cast
 
 from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
 from ..state.helpers import normalize_work_item
@@ -176,14 +176,14 @@ def create_node(
             "completed": error is None,
         }
 
-        return {
+        return cast(ProgenitorState, {
             "current_work_item": work_item,
             "backlog": backlog,
             "actions_this_cycle": state.get("actions_this_cycle", 0) + 1,
             "execution_result": output_for_verify,  # BL-006: ExecutionState field
             "work_item_completed": error is None,
             **({"schedule": schedule_updated} if schedule_updated is not None else {}),
-        }
+        })
 
     return act_node
 

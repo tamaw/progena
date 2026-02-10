@@ -39,6 +39,7 @@ class LLMConfig:
     model_planner: str | None = None
     model_builder: str | None = None
     model_summary: str | None = None
+    model_fallbacks: list[str] = field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -46,10 +47,11 @@ class LLMConfig:
         return cls(
             base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
             api_key=os.getenv("LITELLM_MASTER_KEY"),
-            model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max"),
+            model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
+            model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
         )
 
     def get_model_for_role(self, role: str) -> str:

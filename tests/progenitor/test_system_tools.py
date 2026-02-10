@@ -328,8 +328,8 @@ class TestExecuteSystemTool:
         mock_llm = MagicMock()
         state_manager = AsyncMock()
 
-        # execute_system_tool returns (result_dict, error, state_updates)
-        result, error, state_updates = await execute_system_tool(
+        # execute_system_tool returns (result_dict, error, state_updates, should_retry_slow_path)
+        result, error, state_updates, should_retry = await execute_system_tool(
             "current_time",
             mock_registry,
             mock_llm,
@@ -338,6 +338,7 @@ class TestExecuteSystemTool:
         )
         assert error is None
         assert result is not None
+        assert should_retry is False
 
     async def test_execute_unknown_tool(self):
         """Should return error for unknown tool."""
@@ -345,7 +346,7 @@ class TestExecuteSystemTool:
         mock_llm = MagicMock()
         state_manager = AsyncMock()
 
-        result, error, state_updates = await execute_system_tool(
+        result, error, state_updates, should_retry = await execute_system_tool(
             "unknown_tool_xyz",
             mock_registry,
             mock_llm,
@@ -355,6 +356,7 @@ class TestExecuteSystemTool:
         assert error is not None
         assert "Unknown system tool" in error
         assert result is None
+        assert should_retry is False
 
     async def test_execute_list_tools(self):
         """Should execute list_tools with registry."""
@@ -363,7 +365,7 @@ class TestExecuteSystemTool:
         mock_llm = MagicMock()
         state_manager = AsyncMock()
 
-        result, error, state_updates = await execute_system_tool(
+        result, error, state_updates, should_retry = await execute_system_tool(
             "list_tools",
             mock_registry,
             mock_llm,
@@ -372,3 +374,4 @@ class TestExecuteSystemTool:
         )
         assert error is None
         assert result is not None
+        assert should_retry is False

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from ...tools.schedule_task import ScheduleTaskTool
     from ...tools.new_conversation import NewConversationTool
     from ...tools.compress_conversation import CompressConversationTool
+    from ...tools.memory import MemoryTool
 
 
 def __getattr__(name: str):
@@ -42,6 +43,7 @@ def __getattr__(name: str):
         "ScheduleTaskTool": "...tools.schedule_task",
         "NewConversationTool": "...tools.new_conversation",
         "CompressConversationTool": "...tools.compress_conversation",
+        "MemoryTool": "...tools.memory",
     }
     if name in _tool_map:
         import importlib
@@ -57,6 +59,7 @@ def __getattr__(name: str):
             "ScheduleTaskTool": "app.progenitor.tools.schedule_task",
             "NewConversationTool": "app.progenitor.tools.new_conversation",
             "CompressConversationTool": "app.progenitor.tools.compress_conversation",
+            "MemoryTool": "app.progenitor.tools.memory",
         }
         mod = importlib.import_module(_abs_map[name])
         return getattr(mod, name)
@@ -89,4 +92,5 @@ __all__ = [
     "ScheduleTaskTool",
     "NewConversationTool",
     "CompressConversationTool",
+    "MemoryTool",
 ]

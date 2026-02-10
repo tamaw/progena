@@ -5,9 +5,9 @@ Central registry for all progenitor system tools with lookup, matching, and exec
 """
 
 import logging
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
-from .protocol import ToolContext, ToolResult, SystemTool
+from .protocol import SystemTool, ToolContext
 
 if TYPE_CHECKING:
     from ...state.models import ProgenitorState
@@ -20,16 +20,17 @@ _SYSTEM_TOOLS: dict[str, SystemTool] = {}
 
 def _init_registry() -> dict[str, SystemTool]:
     """Initialize the tools registry (lazy imports to avoid circular deps)."""
-    from ...tools.list_tools import ListToolsTool
-    from ...tools.rediscover_agents import RediscoverAgentsTool
-    from ...tools.list_agents import ListAgentsTool
-    from ...tools.new_conversation import NewConversationTool
     from ...tools.build_status import BuildStatusTool
-    from ...tools.current_time import CurrentTimeTool
-    from ...tools.list_schedule import ListScheduleTool
-    from ...tools.self_reflect_tool import SelfReflectTool
-    from ...tools.schedule_task import ScheduleTaskTool
     from ...tools.compress_conversation import CompressConversationTool
+    from ...tools.current_time import CurrentTimeTool
+    from ...tools.list_agents import ListAgentsTool
+    from ...tools.list_schedule import ListScheduleTool
+    from ...tools.list_tools import ListToolsTool
+    from ...tools.memory import MemoryTool
+    from ...tools.new_conversation import NewConversationTool
+    from ...tools.rediscover_agents import RediscoverAgentsTool
+    from ...tools.schedule_task import ScheduleTaskTool
+    from ...tools.self_reflect_tool import SelfReflectTool
 
     tools = [
         ListToolsTool(),
@@ -42,6 +43,7 @@ def _init_registry() -> dict[str, SystemTool]:
         SelfReflectTool(),
         ScheduleTaskTool(),
         CompressConversationTool(),
+        MemoryTool(),
     ]
     return {tool.name: tool for tool in tools}
 
@@ -54,7 +56,7 @@ def _ensure_registry() -> dict[str, SystemTool]:
     return _SYSTEM_TOOLS
 
 
-def get_system_tool(name: str) -> Optional[SystemTool]:
+def get_system_tool(name: str) -> SystemTool | None:
     """Get a tool by name."""
     return _ensure_registry().get(name)
 
@@ -69,7 +71,7 @@ def get_system_tool_names() -> list[str]:
     return list(_ensure_registry().keys())
 
 
-def match_tool_by_input(user_input: str) -> Optional[str]:
+def match_tool_by_input(user_input: str) -> str | None:
     """Fast-path: find a system tool matching user input by keywords/patterns.
 
     Iterates over all registered system tools and checks each tool's
@@ -95,8 +97,8 @@ async def execute_system_tool(
     state: Optional["ProgenitorState"] = None,
     state_manager: Any = None,
     user_input: str = "",
-) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
-    """Execute a tool by name and return (result, error, state_updates).
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, bool]:
+    """Execute a tool by name and return (result, error, state_updates, should_retry_slow_path).
 
     This is the main entry point for executing tools from nodes.
 
@@ -109,13 +111,14 @@ async def execute_system_tool(
         user_input: The user's original input (needed by some tools).
 
     Returns:
-        Tuple of (result_dict, error_string, state_updates).
+        Tuple of (result_dict, error_string, state_updates, should_retry_slow_path).
         state_updates is a dict of state keys to merge, or None.
+        should_retry_slow_path indicates if this failed fast-path should retry via slow path.
     """
     tool = get_system_tool(tool_name)
 
     if tool is None:
-        return None, f"Unknown system tool: {tool_name}", None
+        return None, f"Unknown system tool: {tool_name}", None, False
 
     context = ToolContext(
         tool_registry=tool_registry,
@@ -129,9 +132,9 @@ async def execute_system_tool(
         result = await tool.execute(context)
 
         if result.success:
-            return result.data, None, result.state_updates
+            return result.data, None, result.state_updates, False
         else:
-            return None, result.error, None
+            return None, result.error, None, result.should_retry_slow_path
     except Exception as e:
         logger.error("Error executing tool %s: %s", tool_name, e, exc_info=True)
-        return None, f"Error executing {tool_name}: {str(e)}", None
+        return None, f"Error executing {tool_name}: {str(e)}", None, False

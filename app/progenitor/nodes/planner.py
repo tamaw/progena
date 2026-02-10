@@ -781,10 +781,12 @@ This is iteration {iteration} of the build. Focus on addressing these gaps:
 - Implement all specified behaviors and responses
 - Include tests/ directory with pytest tests"""
 
+    rel_path_str = str(rel_path)
+
     # Base prompt that references the spec file
     base_prompt = f"""{action_verb} a {entity_type} based on the specification file.
 
-SPEC FILE: {rel_path}
+SPEC FILE: {rel_path_str}
 
 Read the spec file above and implement the {entity_type} according to its requirements.
 {iteration_context}
@@ -800,14 +802,14 @@ IMPORTANT:
                     "planner.copilot_enhancement_tool.md",
                     task_description=task_description,
                     entity_name=agent_name,
-                    spec_rel_path=rel_path,
+                    spec_rel_path=rel_path_str,
                 )
             else:
                 enhancement_prompt = _prompts.get(
                     "planner.copilot_enhancement_agent.md",
                     task_description=task_description,
                     entity_name=agent_name,
-                    spec_rel_path=rel_path,
+                    spec_rel_path=rel_path_str,
                 )
 
             enhanced_guidance = await llm_client.generate(

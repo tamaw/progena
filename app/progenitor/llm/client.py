@@ -26,6 +26,31 @@ from .response_models import (
 logger = logging.getLogger(__name__)
 
 
+def _build_json_schema_format(response_model: type, schema_name: str) -> dict[str, Any]:
+    """Build response_format dict for structured output using Pydantic model.
+
+    Args:
+        response_model: Pydantic BaseModel class to generate schema from
+        schema_name: Name for the JSON schema
+
+    Returns:
+        Dictionary in format: {"type": "json_schema", "json_schema": {...}}
+    """
+    schema = response_model.model_json_schema()
+    schema["additionalProperties"] = False
+    if "properties" in schema:
+        schema["required"] = list(schema["properties"].keys())
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_name,
+            "schema": schema,
+            "strict": True,
+        }
+    }
+
+
 class LLMClient:
     """Simple wrapper for LiteLLM /responses endpoint."""
 
@@ -70,67 +95,162 @@ class LLMClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
-    def _format_input(self, messages: list[dict[str, str]], system_prompt: str | None = None) -> str:
-        """Format messages into input text for /responses endpoint."""
-        parts = []
+    def _build_input_messages(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build Responses API input messages from chat history."""
+        input_messages: list[dict[str, Any]] = []
+
         if system_prompt:
-            parts.append(f"System: {system_prompt}")
+            input_messages.append({
+                "role": "system",
+                "content": system_prompt,
+            })
 
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-            else:
-                parts.append(f"User: {content}")
 
-        return "\n\n".join(parts)
+            if isinstance(content, list):
+                if content and isinstance(content[0], dict) and content[0].get("type") in {
+                    "input_text",
+                    "output_text",
+                    "input_image",
+                    "input_file",
+                    "refusal",
+                    "summary_text",
+                    "tether_browsing_display",
+                    "computer_screenshot",
+                }:
+                    wrapped_content = content
+                else:
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            text_parts.append(str(part.get("text", "")))
+                        elif isinstance(part, str):
+                            text_parts.append(part)
+                    wrapped_content = "".join(text_parts)
+            else:
+                wrapped_content = str(content)
+
+            input_messages.append({
+                "role": role,
+                "content": wrapped_content,
+            })
+
+        return input_messages
+
+    def _get_json_response_format(self, response_model: type, schema_name: str) -> dict[str, Any]:
+        """Return a response_format payload for structured output."""
+        return _build_json_schema_format(response_model, schema_name)
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
         """Extract response text and optional reasoning trace from /responses output."""
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
 
+        output_text = data.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            text_parts.append(output_text)
+
         for item in data.get("output", []) or []:
             item_type = item.get("type")
             if item_type == "message":
-                for part in item.get("content", []) or []:
-                    part_type = part.get("type")
-                    if part_type in ("output_text", "text"):
-                        text_parts.append(part.get("text", ""))
-                    elif part_type in ("reasoning", "reasoning_text", "reasoning_summary"):
-                        reasoning_parts.append(part.get("text", ""))
+                content = item.get("content")
+                if isinstance(content, str):
+                    text_parts.append(content)
+                elif isinstance(content, dict):
+                    if content.get("text"):
+                        text_parts.append(str(content.get("text")))
+                else:
+                    for part in content or []:
+                        part_type = part.get("type") if isinstance(part, dict) else None
+                        if part_type in ("output_text", "text"):
+                            text_parts.append(part.get("text", ""))
+                        elif part_type == "refusal":
+                            text_parts.append(part.get("refusal", part.get("text", "")))
+                        elif part_type in ("reasoning", "reasoning_text", "reasoning_summary"):
+                            reasoning_parts.append(part.get("text", ""))
+            elif item_type in ("output_text", "text"):
+                text_parts.append(str(item.get("text", "")))
             elif item_type in ("reasoning", "reasoning_text", "reasoning_summary"):
                 if item.get("content"):
                     reasoning_parts.append(str(item.get("content")))
                 elif item.get("text"):
                     reasoning_parts.append(str(item.get("text")))
+            elif item_type == "refusal":
+                if item.get("refusal"):
+                    text_parts.append(str(item.get("refusal")))
+                elif item.get("text"):
+                    text_parts.append(str(item.get("text")))
+            elif item.get("text"):
+                text_parts.append(str(item.get("text")))
 
         if data.get("reasoning"):
             reasoning_parts.append(str(data.get("reasoning")))
 
-        return "".join(text_parts).strip(), "".join(reasoning_parts).strip()
+        text = "".join(text_parts).strip()
+        reasoning = "".join(reasoning_parts).strip()
+
+        if not text:
+            logger.warning("Empty LLM response text; keys=%s", list(data.keys()))
+
+        return text, reasoning
+
+    def _supports_temperature(self) -> bool:
+        """Return True if temperature should be sent for the current model."""
+        unsupported = {"gpt-5.2-chat"}
+        model_lower = self.model.lower()
+        return not any(token in model_lower for token in unsupported)
+
+    def _is_temperature_unsupported(self, response: httpx.Response | None) -> bool:
+        """Detect unsupported temperature errors from provider responses."""
+        if response is None:
+            return False
+        try:
+            data = response.json()
+            message = str(data.get("error", {}).get("message", ""))
+        except Exception:
+            message = response.text
+        message_lower = message.lower()
+        return "temperature" in message_lower and "unsupported" in message_lower
 
     async def _post_response(
         self,
-        input_text: str,
+        input_messages: list[dict[str, Any]],
         response_format: dict[str, Any] | None = None,
         include_reasoning: bool = False,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
-            "input": input_text,
+            "input": input_messages,
+            "max_output_tokens": max_tokens,
         }
+        if self.config.model_fallbacks:
+            payload["fallbacks"] = self.config.model_fallbacks
         if response_format:
             payload["response_format"] = response_format
         if include_reasoning:
             payload["reasoning"] = {"summary": "auto"}
+        if self._supports_temperature():
+            payload["temperature"] = temperature
 
-        response = await self.client.post(self.endpoint_url, json=payload)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = await self.client.post(self.endpoint_url, json=payload)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            if self._is_temperature_unsupported(exc.response) and "temperature" in payload:
+                payload.pop("temperature", None)
+                retry = await self.client.post(self.endpoint_url, json=payload)
+                retry.raise_for_status()
+                return retry.json()
+            raise
 
     async def chat(
         self,
@@ -141,12 +261,17 @@ class LLMClient:
         response_format: dict[str, Any] | None = None,
     ) -> str:
         """Call /responses endpoint and return text response."""
-        input_text = self._format_input(messages, system_prompt)
+        if response_format:
+            instruction = "Return only valid JSON that matches the provided schema. Do not include any extra text."
+            system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
+        input_messages = self._build_input_messages(messages, system_prompt)
 
         data = await self._post_response(
-            input_text=input_text,
+            input_messages=input_messages,
             response_format=response_format,
             include_reasoning=False,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
         text, _reasoning = self._extract_text_and_reasoning(data)
         return text
@@ -160,12 +285,14 @@ class LLMClient:
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
         """Call /responses endpoint and return text plus reasoning trace."""
-        input_text = self._format_input(messages, system_prompt)
+        input_messages = self._build_input_messages(messages, system_prompt)
 
         data = await self._post_response(
-            input_text=input_text,
+            input_messages=input_messages,
             response_format=response_format,
             include_reasoning=True,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
         return self._extract_text_and_reasoning(data)
 
@@ -189,22 +316,31 @@ class LLMClient:
         """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
         messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
+        response_format = _build_json_schema_format(DecisionResponse, "decision_response")
 
-        response = await self.chat(messages, system_prompt, temperature=0.3)
-
+        response = await self.chat(messages, system_prompt, temperature=0.3, response_format=response_format)
+        if not response.strip():
+            logger.warning("Empty decide response; returning default decision")
+            validated = validate_decision_response({})
+            return validated.model_dump()
         try:
             raw_data = json.loads(response)
             validated = validate_decision_response(raw_data)
             return validated.model_dump()
-        except Exception as e:
-            logger.warning("Decision parsing failed: %s", e)
-            return {
-                "action": "answer_directly",
-                "reasoning": f"Parse error: {e}",
-                "requires_planning": False,
-                "target_capabilities": [],
-                "direct_response": response,
-            }
+        except json.JSONDecodeError:
+            preview = response.strip().replace("\n", " ")[:500]
+            logger.warning("Non-JSON decide response; preview=%s", preview)
+            start = response.find("{")
+            end = response.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    raw_data = json.loads(response[start:end + 1])
+                    validated = validate_decision_response(raw_data)
+                    return validated.model_dump()
+                except json.JSONDecodeError:
+                    pass
+            validated = validate_decision_response({})
+            return validated.model_dump()
 
     async def plan(
         self,
@@ -224,15 +360,12 @@ Current Backlog: {current_backlog}
 Generate a list of work items to fulfill this request.
 """
         messages = [{"role": "user", "content": context}]
-        response = await self.chat(messages, system_prompt, temperature=0.5)
+        response_format = _build_json_schema_format(PlannerResponse, "planner_response")
 
-        try:
-            raw_data = json.loads(response)
-            validated = validate_planner_response(raw_data)
-            return [item.model_dump() for item in validated.work_items]
-        except Exception as e:
-            logger.warning("Planner parsing failed: %s", e)
-            return []
+        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
+        raw_data = json.loads(response)
+        validated = validate_planner_response(raw_data)
+        return [item.model_dump() for item in validated.work_items]
 
     async def generate_response(
         self,
@@ -295,24 +428,12 @@ Required Capabilities: {', '.join(capabilities)}
 Generate a detailed specification for building this component.
 """
         messages = [{"role": "user", "content": context}]
-        response = await self.chat(messages, system_prompt, temperature=0.5)
+        response_format = _build_json_schema_format(BuildSpec, "build_spec")
 
-        try:
-            raw_data = json.loads(response)
-            validated = validate_build_spec(raw_data)
-            return validated.model_dump()
-        except Exception as e:
-            logger.warning("Build spec parsing failed: %s", e)
-            return {
-                "name": "unnamed",
-                "description": description,
-                "kind": item_type,
-                "capabilities": capabilities,
-                "entrypoint": "main.py",
-                "dependencies": [],
-                "config": {},
-                "error": f"Parse error: {e}",
-            }
+        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
+        raw_data = json.loads(response)
+        validated = validate_build_spec(raw_data)
+        return validated.model_dump()
 
     async def complete(
         self,

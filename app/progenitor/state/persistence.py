@@ -110,6 +110,9 @@ class StatePersistence:
             Parsed JSON data or None if file doesn't exist.
         """
         filepath = self.state_dir / filename
+
+        metrics = None
+        span = None
         if not filepath.exists():
             return None
 

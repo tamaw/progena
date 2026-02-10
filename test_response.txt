@@ -1,0 +1,3 @@
+Type: <class 'str'>
+Content:
+Hello from LiteLLM /responses! 👋😊 Hope you’re having a great day!

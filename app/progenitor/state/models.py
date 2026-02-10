@@ -519,6 +519,7 @@ class MergeQueueItem(TypedDict, total=False):
     merge_commit_hash: str | None
     conflict_files: list[str]
     merge_attempt_count: int
+    error_message: str | None
 
 
 class InnerLoopState(TypedDict, total=False):
@@ -576,6 +577,8 @@ class InnerLoopState(TypedDict, total=False):
     concurrent_builds: list[ConcurrentBuildInfo]  # Track multiple concurrent builds
     merge_queue: list[MergeQueueItem]  # Sequential merge queue after builds
     max_concurrency: int  # Max concurrent builds from config
+    merged_items: list[str]  # IDs of successfully merged work items
+    failed_merge_items: list[str]  # IDs of work items that failed to merge
 
 
 class ExecutionState(TypedDict, total=False):

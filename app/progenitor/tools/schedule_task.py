@@ -8,8 +8,8 @@ and creates a ScheduleEntry via the scheduler.
 import json
 import logging
 
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 from ..llm.prompts import PromptTemplates
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,13 @@ class ScheduleTaskTool(BaseSystemTool):
                 temperature=0.3,
                 response_format={"type": "json_object"},
             )
+
+            if not response or not response.strip():
+                logger.warning("Empty LLM response for schedule extraction")
+                return ToolResult.fail(
+                    "Unable to process schedule request. Please try rephrasing your request.",
+                    should_retry_slow_path=True,
+                )
 
             parsed = json.loads(response)
 
@@ -124,7 +131,18 @@ class ScheduleTaskTool(BaseSystemTool):
 
         except json.JSONDecodeError as e:
             logger.warning("Failed to parse schedule LLM response: %s", e)
-            return ToolResult.fail(f"Failed to process schedule request: {e}")
+            return ToolResult.fail(
+                "Unable to process schedule request. Please try rephrasing your request.",
+                should_retry_slow_path=True,
+            )
         except Exception as e:
             logger.error("Error executing schedule task: %s", e, exc_info=True)
+            # For LLM timeouts or connection errors, retry with slow path
+            error_type = type(e).__name__
+            if "Timeout" in error_type or "Connection" in error_type or "408" in str(e):
+                logger.info("LLM timeout/connection error - signaling slow path retry")
+                return ToolResult.fail(
+                    "Unable to process schedule request due to temporary issue. Retrying...",
+                    should_retry_slow_path=True,
+                )
             return ToolResult.fail(f"Error scheduling task: {e}")
