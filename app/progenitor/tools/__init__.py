@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from .self_reflect_tool import SelfReflectTool
     from .schedule_task import ScheduleTaskTool
     from .compress_conversation import CompressConversationTool
+    from .memory import MemoryTool
 
 
 def __getattr__(name: str):
@@ -49,6 +50,7 @@ def __getattr__(name: str):
         "SelfReflectTool": "self_reflect_tool",
         "ScheduleTaskTool": "schedule_task",
         "CompressConversationTool": "compress_conversation",
+        "MemoryTool": "memory",
     }
     if name in _tool_modules:
         import importlib
@@ -84,4 +86,5 @@ __all__ = [
     "SelfReflectTool",
     "ScheduleTaskTool",
     "CompressConversationTool",
+    "MemoryTool",
 ]

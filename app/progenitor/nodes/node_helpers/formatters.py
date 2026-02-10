@@ -33,6 +33,8 @@ def format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
         return _format_new_conversation(result)
     elif tool_name == "compress_conversation":
         return _format_compress_conversation(result)
+    elif tool_name == "memory":
+        return _format_memory(result)
     else:
         # Default: return JSON-like representation
         return f"**Result:**\n```json\n{json.dumps(result, indent=2)}\n```"
@@ -264,6 +266,65 @@ def _format_compress_conversation(result: dict[str, Any]) -> str:
     if summary_length:
         lines.append(f"  • **Summary:** {summary_length} characters")
     return "\n".join(lines)
+
+
+def _format_memory(result: dict[str, Any]) -> str:
+    """Format memory tool results."""
+    action = result.get("action", "unknown")
+
+    if action == "store":
+        entry = result.get("entry", {})
+        summary = entry.get("summary", "(no summary)")
+        entry_id = entry.get("id", "unknown")
+        return "\n".join([
+            "**🧠 Memory Stored**",
+            f"  • **ID:** `{entry_id}`",
+            f"  • **Summary:** {summary}",
+        ])
+
+    if action == "list":
+        entries = result.get("entries", [])
+        if not entries:
+            return "**🧠 Memories**\n\nNo memories found."
+
+        lines = ["**🧠 Memories**"]
+        for entry in entries:
+            entry_id = entry.get("id", "unknown")
+            summary = entry.get("summary", "(no summary)")
+            created_at = entry.get("created_at", "unknown")
+            lines.append(f"  • `{entry_id}` - {summary} ({created_at})")
+        total = result.get("total_count")
+        if total is not None:
+            lines.append(f"\n**Total:** {total} memory entries")
+        return "\n".join(lines)
+
+    if action == "search":
+        entries = result.get("entries", [])
+        if not entries:
+            return "**🧠 Memory Search**\n\nNo matching memories found."
+
+        lines = ["**🧠 Memory Search Results**"]
+        for entry in entries:
+            entry_id = entry.get("id", "unknown")
+            summary = entry.get("summary", "(no summary)")
+            created_at = entry.get("created_at", "unknown")
+            lines.append(f"  • `{entry_id}` - {summary} ({created_at})")
+        lines.append(f"\n**Matches:** {len(entries)}")
+        return "\n".join(lines)
+
+    if action == "delete":
+        deleted = result.get("deleted_count", 0)
+        return f"**🧠 Memory Deleted**\n\nDeleted {deleted} entr{'y' if deleted == 1 else 'ies'}."
+
+    if action == "clear":
+        cleared = result.get("cleared_count", 0)
+        return f"**🧠 Memory Cleared**\n\nDeleted {cleared} entr{'y' if cleared == 1 else 'ies'}."
+
+    if action == "skip":
+        reason = result.get("reason", "No durable memory to store.")
+        return f"**🧠 Memory Skipped**\n\n{reason}"
+
+    return f"**🧠 Memory**\n\n{json.dumps(result, indent=2)}"
 
 
 async def format_schedule_result(result: dict[str, Any], llm_client) -> str:

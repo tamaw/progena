@@ -2,6 +2,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, cast
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -89,7 +90,7 @@ class TestConcurrentBuildNode:
             "iteration": {"current": 1},
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should only create 1 worktree
         assert mock_git_manager.create_worktree.call_count == 1
@@ -118,7 +119,7 @@ class TestConcurrentBuildNode:
             "iteration": {"current": 1},
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should create 3 worktrees
         assert mock_git_manager.create_worktree.call_count == 3
@@ -170,7 +171,7 @@ class TestConcurrentBuildNode:
             "iteration": {"current": 1},
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should only create 2 worktrees (respecting max_concurrency)
         assert mock_git_manager.create_worktree.call_count == 2
@@ -198,7 +199,7 @@ class TestConcurrentBuildNode:
             "iteration": {"current": 1},
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should have merge queue with all successful builds
         assert len(result["merge_queue"]) == 3
@@ -236,7 +237,7 @@ class TestConcurrentBuildNode:
             "iteration": {"current": 1},
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should have 3 concurrent builds
         assert len(result["concurrent_builds"]) == 3
@@ -277,7 +278,7 @@ class TestConcurrentBuildNode:
             "iteration": {"current": 1},
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should have 3 concurrent builds tracked
         assert len(result["concurrent_builds"]) == 3
@@ -310,7 +311,7 @@ class TestConcurrentBuildNode:
             "iteration": {"current": 1},
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # All processed items should be marked IN_PROGRESS
         backlog = result["backlog"]
@@ -336,7 +337,7 @@ class TestConcurrentBuildNode:
             "build_messages": [],
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should not create any worktrees
         assert mock_git_manager.create_worktree.call_count == 0
@@ -424,7 +425,7 @@ class TestMergeNode:
             "backlog": sample_backlog,
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should attempt merge for all items
         assert mock_git_manager.merge_to_main.call_count == 2
@@ -465,7 +466,7 @@ class TestMergeNode:
             "backlog": sample_backlog[:1],
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should be marked as failed
         assert result["merge_queue"][0]["merge_status"] == "failed"
@@ -492,7 +493,7 @@ class TestMergeNode:
             "backlog": [],
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should not attempt any merges
         assert mock_git_manager.merge_to_main.call_count == 0

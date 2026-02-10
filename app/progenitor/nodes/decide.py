@@ -14,15 +14,21 @@ from typing import TYPE_CHECKING, Any, cast
 from openai import APIConnectionError, RateLimitError
 from pydantic import BaseModel, Field
 
-from ..nodes.node_helpers.registry import match_tool_by_input, execute_system_tool
-from ..nodes.node_helpers.formatters import format_tool_result
-from ..runtime.time_utils import utcnow_isoformat
-from ..state.helpers import get_ideal_state, is_work_item_actionable
-from ..state.models import Decision, DecisionAction, ProgenitorState, ConversationMessage, generate_run_id
-from ..tools.mcp import A2AClient
-from ..llm.prompts import PromptTemplates
+from ..env_utils import env_bool, env_float, env_int
 from ..llm.conversation_compressor import ConversationCompressor
-from ..env_utils import env_bool, env_int
+from ..llm.prompts import PromptTemplates
+from ..nodes.node_helpers.formatters import format_tool_result
+from ..nodes.node_helpers.registry import execute_system_tool, match_tool_by_input
+from ..runtime.time_utils import utcnow_isoformat
+from ..state.helpers import is_work_item_actionable
+from ..state.models import (
+    ConversationMessage,
+    Decision,
+    DecisionAction,
+    ProgenitorState,
+)
+from ..tools.mcp import A2AClient
+from ..tools.memory import format_memory_context, get_relevant_memories
 
 if TYPE_CHECKING:
     from ..state.execution_schemas import BuildSettings
@@ -226,9 +232,15 @@ async def _generate_build_settings(
 # Shared helpers used by both fast and slow paths
 # ---------------------------------------------------------------------------
 
-def _extract_history(messages: list, limit: int = 10) -> list[dict[str, str]]:
+def _extract_history(
+    messages: list,
+    limit: int = 10,
+    memory_context: str | None = None,
+) -> list[dict[str, str]]:
     """Extract conversation history as list of dicts."""
     history = []
+    if memory_context:
+        history.append({"role": "system", "content": memory_context})
     for msg in messages[-limit:]:
         if isinstance(msg, dict):
             history.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
@@ -243,6 +255,7 @@ async def _respond_with_context(
     context_data: str,
     state: "ProgenitorState",
     llm_client,
+    memory_context: str | None = None,
 ) -> tuple[str, bool]:
     """Generate LLM response incorporating tool/agent call results.
 
@@ -252,7 +265,7 @@ async def _respond_with_context(
     from ..runtime.loop import get_current_loop
     loop = get_current_loop()
 
-    history = _extract_history(state.get("messages", []), limit=10)
+    history = _extract_history(state.get("messages", []), limit=10, memory_context=memory_context)
 
     system_prompt = _prompts.get(
         "decide.tool_response_system.md",
@@ -293,7 +306,8 @@ async def _execute_and_respond(
     llm_client,
     tool_registry,
     state_manager,
-) -> "ProgenitorState":
+    memory_context: str | None = None,
+) -> tuple["ProgenitorState | None", bool]:
     """Execute a system tool via the registry and generate an LLM-enriched response.
 
     This is the unified fast/slow path for system tools:
@@ -301,11 +315,21 @@ async def _execute_and_respond(
     2. Format result via node_helpers.format_tool_result (dynamic dispatch)
     3. Feed result to LLM for a natural response to the user
     4. Merge any state_updates from the tool into the returned state
+
+    Returns:
+        Tuple of (state, should_retry_slow_path).
+        If should_retry_slow_path is True, the fast-path failed and should fall back
+        to the slow path. In this case, state will be None.
     """
-    result, error, state_updates = await execute_system_tool(
+    result, error, state_updates, should_retry_slow_path = await execute_system_tool(
         tool_name, tool_registry, llm_client, state, state_manager,
         user_input=user_input,
     )
+
+    # If the tool explicitly requests slow path retry, return early
+    if should_retry_slow_path:
+        logger.info("Tool %s requested slow path fallback: %s", tool_name, error or "unknown reason")
+        return None, True
 
     if error or result is None:
         context_data = f"Error: {error or 'No result'}"
@@ -314,7 +338,7 @@ async def _execute_and_respond(
 
     try:
         response_text, was_streamed = await _respond_with_context(
-            user_input, tool_name, context_data, state, llm_client
+            user_input, tool_name, context_data, state, llm_client, memory_context
         )
     except Exception as e:
         logger.warning("LLM enrichment failed for %s, using raw result: %s", tool_name, e)
@@ -342,7 +366,7 @@ async def _execute_and_respond(
     if state_updates:
         result_state.update(state_updates)
 
-    return cast(ProgenitorState, result_state)
+    return cast(ProgenitorState, result_state), False
 
 
 def _format_a2a_response(result: dict, agent_name: str) -> str:
@@ -401,7 +425,7 @@ def create_node(
 
         auto_updates: dict[str, Any] = {}
 
-        def _merge_updates(payload: dict[str, Any]) -> ProgenitorState:
+        def _merge_updates(payload: dict[str, Any] | ProgenitorState) -> ProgenitorState:
             if auto_updates:
                 payload = {**payload, **auto_updates}
             return cast(ProgenitorState, payload)
@@ -447,16 +471,36 @@ def create_node(
                 except Exception as e:
                     logger.warning("Auto compression failed: %s", e)
 
+        memory_context = ""
+        if env_bool("PROGENITOR_MEMORY_INJECT_ENABLED", True):
+            mem_limit = env_int("PROGENITOR_MEMORY_INJECT_LIMIT", 5)
+            mem_min_conf = env_float("PROGENITOR_MEMORY_INJECT_MIN_CONFIDENCE", 0.5)
+            mem_max_chars = env_int("PROGENITOR_MEMORY_INJECT_MAX_CHARS", 1200)
+
+            memories = get_relevant_memories(
+                user_input,
+                limit=mem_limit,
+                min_confidence=mem_min_conf,
+            )
+            memory_context = format_memory_context(memories, max_chars=mem_max_chars)
+
         # ============================================================
         # FAST-PATH: Dynamic keyword/pattern match on registered tools
         # ============================================================
         matched_tool = match_tool_by_input(user_input)
         if matched_tool:
             logger.info("Fast-path match: tool=%s for input=%r", matched_tool, user_input[:80])
-            result = await _execute_and_respond(
-                matched_tool, user_input, state, llm_client, tool_registry, state_manager
+            result, should_retry_slow = await _execute_and_respond(
+                matched_tool, user_input, state, llm_client, tool_registry, state_manager, memory_context
             )
-            return _merge_updates(result)
+            if should_retry_slow:
+                logger.info("Fast-path failed, falling back to slow path")
+                # Continue to slow path below instead of returning
+            elif result is not None:
+                return _merge_updates(result)
+            else:
+                # This shouldn't happen, but handle gracefully
+                logger.warning("Fast-path returned None result without retry flag")
 
         # ============================================================
         # SLOW PATH: Use LLM for routing decision
@@ -469,7 +513,7 @@ def create_node(
 
         # Get conversation history for context
         messages = state.get("messages", [])
-        history = _extract_history(messages, limit=10)
+        history = _extract_history(messages, limit=10, memory_context=memory_context)
 
         try:
             # Ask LLM for decision (structured output with confidence)
@@ -509,10 +553,15 @@ def create_node(
 
                 if tool_name:
                     logger.info("Slow-path: LLM selected system_tool=%s", tool_name)
-                    result = await _execute_and_respond(
-                        tool_name, user_input, state, llm_client, tool_registry, state_manager
+                    result, should_retry_slow = await _execute_and_respond(
+                        tool_name, user_input, state, llm_client, tool_registry, state_manager, memory_context
                     )
-                    return _merge_updates(result)
+                    # If slow path also requests retry, we can't retry again - just use the result
+                    if not should_retry_slow and result:
+                        return _merge_updates(result)
+                    elif should_retry_slow:
+                        logger.warning("Slow-path system_tool also failed - cannot retry further")
+                        # Fall through to answer_directly below with error handling
                 else:
                     logger.warning("system_tool action without target_capabilities")
 
@@ -520,7 +569,7 @@ def create_node(
             if action == DecisionAction.DELEGATE_A2A:
                 result = await _handle_a2a(
                     user_input, state, llm_client, tool_registry, state_manager,
-                    decision_data,
+                    decision_data, memory_context,
                 )
                 return _merge_updates(result)
 
@@ -528,20 +577,19 @@ def create_node(
             if action == DecisionAction.USE_MCP:
                 result = await _handle_mcp(
                     user_input, state, llm_client, tool_registry, state_manager,
-                    decision_data,
+                    decision_data, memory_context,
                 )
                 return _merge_updates(result)
 
             # --- Handle answer_directly (with streaming if enabled) ---
             direct_resp = None
-            response_streamed = False
 
             from ..runtime.loop import get_current_loop
             loop = get_current_loop()
 
             if action == DecisionAction.ANSWER_DIRECTLY and loop and loop._streaming_enabled:
                 logger.info("STREAMING: Starting (loop id=%s)", id(loop))
-                msgs = _extract_history(state.get("messages", []), limit=10)
+                msgs = _extract_history(state.get("messages", []), limit=10, memory_context=memory_context)
                 msgs.append({"role": "user", "content": user_input})
 
                 streamed_text = ""
@@ -561,7 +609,6 @@ def create_node(
 
                 loop._streamed_response_content = streamed_text
                 direct_resp = None
-                response_streamed = True
                 loop._response_was_streamed = True
             elif action == DecisionAction.ANSWER_DIRECTLY:
                 direct_resp = user_response or decision_data.get("direct_response")
@@ -826,6 +873,7 @@ async def _handle_a2a(
     tool_registry,
     state_manager,
     decision_data: dict,
+    memory_context: str | None,
 ) -> "ProgenitorState":
     """Handle delegate_a2a action from LLM."""
     target_capabilities = decision_data.get("target_capabilities", [])
@@ -858,7 +906,7 @@ async def _handle_a2a(
 
     try:
         response_text, was_streamed = await _respond_with_context(
-            user_input, f"agent:{agent_name}", context_data, state, llm_client
+            user_input, f"agent:{agent_name}", context_data, state, llm_client, memory_context
         )
     except Exception as e:
         logger.warning("LLM enrichment failed for A2A call to %s: %s", agent_name, e)
@@ -894,6 +942,7 @@ async def _handle_mcp(
     tool_registry,
     state_manager,
     decision_data: dict,
+    memory_context: str | None,
 ) -> "ProgenitorState":
     """Handle use_mcp action from LLM."""
     target_capabilities = decision_data.get("target_capabilities", [])
@@ -914,7 +963,7 @@ async def _handle_mcp(
         context_data = f"No MCP tool found for capability: {capability}"
         try:
             response_text, was_streamed = await _respond_with_context(
-                user_input, "mcp_lookup", context_data, state, llm_client
+                user_input, "mcp_lookup", context_data, state, llm_client, memory_context
             )
         except Exception:
             response_text = context_data
@@ -937,7 +986,7 @@ async def _handle_mcp(
 
         try:
             response_text, was_streamed = await _respond_with_context(
-                user_input, f"mcp:{tool_name}", context_data, state, llm_client
+                user_input, f"mcp:{tool_name}", context_data, state, llm_client, memory_context
             )
         except Exception as e:
             logger.warning("LLM enrichment failed for MCP call to %s: %s", tool_name, e)

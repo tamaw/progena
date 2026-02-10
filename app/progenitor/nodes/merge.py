@@ -63,8 +63,13 @@ def create_node(
 
         # Sequential merge to avoid conflicts
         for queue_item in merge_queue:
-            work_item_id = queue_item["work_item_id"]
-            worktree_path = Path(queue_item["worktree_path"])
+            work_item_id = queue_item.get("work_item_id")
+            worktree_path_value = queue_item.get("worktree_path")
+            if not work_item_id or not worktree_path_value:
+                logger.warning("MERGE: Skipping queue item with missing identifiers: %s", queue_item)
+                continue
+
+            worktree_path = Path(worktree_path_value)
 
             logger.info(f"MERGE: Attempting merge for {work_item_id}")
 
@@ -106,7 +111,7 @@ def create_node(
                         logger.info(f"MERGE: Conflict resolved and merged for {work_item_id}")
                     else:
                         queue_item["merge_status"] = "failed"
-                        queue_item["merge_attempt_count"] += 1
+                        queue_item["merge_attempt_count"] = queue_item.get("merge_attempt_count", 0) + 1
                         failed_items.append(work_item_id)
 
                         # Mark work item as failed

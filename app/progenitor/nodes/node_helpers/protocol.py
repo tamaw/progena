@@ -6,8 +6,8 @@ Defines the interface for tools that can be executed inline by nodes.
 
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional, Protocol
 
 if TYPE_CHECKING:
     from ...state.models import ProgenitorState
@@ -27,19 +27,26 @@ class ToolContext:
 class ToolResult:
     """Result from a tool execution."""
     success: bool
-    data: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
-    state_updates: Optional[dict[str, Any]] = None
+    data: dict[str, Any] | None = None
+    error: str | None = None
+    state_updates: dict[str, Any] | None = None
+    should_retry_slow_path: bool = False
 
     @classmethod
-    def ok(cls, data: dict[str, Any], state_updates: Optional[dict[str, Any]] = None) -> "ToolResult":
+    def ok(cls, data: dict[str, Any], state_updates: dict[str, Any] | None = None) -> "ToolResult":
         """Create a successful result."""
         return cls(success=True, data=data, state_updates=state_updates)
 
     @classmethod
-    def fail(cls, error: str) -> "ToolResult":
-        """Create a failed result."""
-        return cls(success=False, error=error)
+    def fail(cls, error: str, should_retry_slow_path: bool = False) -> "ToolResult":
+        """Create a failed result.
+
+        Args:
+            error: Error message describing the failure.
+            should_retry_slow_path: If True, signals that this fast-path failure
+                should fall back to the slow path (LLM routing) for another attempt.
+        """
+        return cls(success=False, error=error, should_retry_slow_path=should_retry_slow_path)
 
 
 class SystemTool(Protocol):
@@ -121,11 +128,7 @@ class BaseSystemTool(ABC):
             if keyword in text:
                 return True
 
-        for pattern in self.trigger_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                return True
-
-        return False
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in self.trigger_patterns)
 
     @abstractmethod
     async def execute(self, context: ToolContext) -> ToolResult:

@@ -169,19 +169,22 @@ class IPCClient:
         # Attempt reconnection with backoff
         while self._reconnect_count < self.max_reconnect_attempts:
             self._reconnect_count += 1
+            attempt = self._reconnect_count
+            delay = self._reconnect_delay
             logger.info(
                 "Reconnection attempt %d/%d in %.1fs",
-                self._reconnect_count,
+                attempt,
                 self.max_reconnect_attempts,
-                self._reconnect_delay,
+                delay,
             )
 
-            await asyncio.sleep(self._reconnect_delay)
+            await asyncio.sleep(delay)
             self._reconnect_delay = min(
                 self._reconnect_delay * 2, RECONNECT_DELAY_MAX
             )
 
             if await self.connect():
+                logger.info("Reconnected to Progenitor IPC server (attempt %d)", attempt)
                 return
 
         raise ConnectionError(
@@ -306,61 +309,70 @@ class IPCClient:
             ConnectionError: If not connected and reconnection fails.
             TimeoutError: If request times out.
         """
-        await self._ensure_connected()
+        for attempt in range(2):
+            await self._ensure_connected()
 
-        # Pause heartbeats during message exchange
-        self._streaming = True
-        self._request_in_progress = True
-        self._missed_heartbeats = 0  # Reset on new request
+            # Pause heartbeats during message exchange
+            self._streaming = True
+            self._request_in_progress = True
+            self._missed_heartbeats = 0  # Reset on new request
 
-        async with self._lock:
-            if not self._writer or not self._reader:
-                self._streaming = False
-                self._request_in_progress = False
-                raise ConnectionError("Not connected")
+            async with self._lock:
+                if not self._writer or not self._reader:
+                    self._streaming = False
+                    self._request_in_progress = False
+                    raise ConnectionError("Not connected")
 
-            try:
-                # Send user message (non-streaming)
-                await write_message(
-                    self._writer,
-                    user_message(message, request_id, stream=False),
-                )
+                try:
+                    # Send user message (non-streaming)
+                    await write_message(
+                        self._writer,
+                        user_message(message, request_id, stream=False),
+                    )
 
-                # Read response (may receive events while waiting)
-                while True:
-                    msg = await read_message(self._reader, timeout=self.timeout)
+                    # Read response (may receive events while waiting)
+                    while True:
+                        msg = await read_message(self._reader, timeout=self.timeout)
 
-                    if msg is None:
-                        self._connected = False
-                        raise ConnectionError("Connection closed by server")
+                        if msg is None:
+                            self._connected = False
+                            raise ConnectionError("Connection closed by server")
 
-                    self._last_activity = time.time()
+                        self._last_activity = time.time()
 
-                    # Handle events that arrive during message exchange
-                    if msg.type == MessageType.AGENT_EVENT:
-                        await self._handle_event(msg)
-                        continue  # Keep waiting for actual response
+                        # Handle events that arrive during message exchange
+                        if msg.type == MessageType.AGENT_EVENT:
+                            await self._handle_event(msg)
+                            continue  # Keep waiting for actual response
 
-                    if msg.type == MessageType.ERROR:
-                        raise RuntimeError(f"Progenitor error: {msg.content}")
+                        if msg.type == MessageType.ERROR:
+                            raise RuntimeError(f"Progenitor error: {msg.content}")
 
-                    if msg.type == MessageType.ASSISTANT_MESSAGE:
-                        return msg.content
+                        if msg.type == MessageType.ASSISTANT_MESSAGE:
+                            return msg.content
 
-                    # Unexpected message type - log and use content
-                    logger.warning("Unexpected message type: %s", msg.type)
-                    return msg.content or ""
+                        # Unexpected message type - log and use content
+                        logger.warning("Unexpected message type: %s", msg.type)
+                        return msg.content or ""
 
-            except asyncio.TimeoutError:
-                raise TimeoutError(f"Request timed out after {self.timeout}s")
-            except Exception as e:
-                if "Connection" in str(type(e).__name__):
+                except asyncio.TimeoutError:
+                    raise TimeoutError(f"Request timed out after {self.timeout}s")
+                except ConnectionError as e:
                     self._connected = False
-                raise
-            finally:
-                # Resume heartbeats
-                self._streaming = False
-                self._request_in_progress = False
+                    if attempt == 0 and self.auto_reconnect:
+                        logger.warning("Connection lost during request, retrying")
+                        continue
+                    raise
+                except Exception as e:
+                    if "Connection" in str(type(e).__name__):
+                        self._connected = False
+                    raise
+                finally:
+                    # Resume heartbeats
+                    self._streaming = False
+                    self._request_in_progress = False
+
+            raise ConnectionError("Failed to send message after retries")
 
     async def send_message_stream(
         self,
@@ -380,69 +392,78 @@ class IPCClient:
             ConnectionError: If not connected and reconnection fails.
             TimeoutError: If request times out.
         """
-        await self._ensure_connected()
+        for attempt in range(2):
+            await self._ensure_connected()
 
-        # Pause heartbeats BEFORE acquiring lock to prevent race condition
-        self._streaming = True
-        self._request_in_progress = True
-        self._missed_heartbeats = 0  # Reset on new request
+            # Pause heartbeats BEFORE acquiring lock to prevent race condition
+            self._streaming = True
+            self._request_in_progress = True
+            self._missed_heartbeats = 0  # Reset on new request
 
-        # CRITICAL: Hold lock for ENTIRE request-response cycle.
-        # Without this, concurrent requests would interleave on the socket,
-        # causing responses to be delivered to the wrong caller.
-        async with self._lock:
-            try:
-                if not self._writer or not self._reader:
-                    raise ConnectionError("Not connected")
+            # CRITICAL: Hold lock for ENTIRE request-response cycle.
+            # Without this, concurrent requests would interleave on the socket,
+            # causing responses to be delivered to the wrong caller.
+            async with self._lock:
+                try:
+                    if not self._writer or not self._reader:
+                        raise ConnectionError("Not connected")
 
-                # Send user message (streaming)
-                await write_message(
-                    self._writer,
-                    user_message(message, request_id, stream=True),
-                )
+                    # Send user message (streaming)
+                    await write_message(
+                        self._writer,
+                        user_message(message, request_id, stream=True),
+                    )
 
-                # Read stream chunks (may receive events while streaming)
-                while True:
-                    msg = await read_message(self._reader, timeout=self.timeout)
+                    # Read stream chunks (may receive events while streaming)
+                    while True:
+                        msg = await read_message(self._reader, timeout=self.timeout)
 
-                    if msg is None:
-                        self._connected = False
-                        raise ConnectionError("Connection closed during streaming")
+                        if msg is None:
+                            self._connected = False
+                            raise ConnectionError("Connection closed during streaming")
 
-                    self._last_activity = time.time()
+                        self._last_activity = time.time()
 
-                    # Handle events that arrive during streaming
-                    if msg.type == MessageType.AGENT_EVENT:
-                        await self._handle_event(msg)
-                        continue  # Keep reading stream
+                        # Handle events that arrive during streaming
+                        if msg.type == MessageType.AGENT_EVENT:
+                            await self._handle_event(msg)
+                            continue  # Keep reading stream
 
-                    if msg.type == MessageType.ERROR:
-                        raise RuntimeError(f"Progenitor error: {msg.content}")
+                        if msg.type == MessageType.ERROR:
+                            raise RuntimeError(f"Progenitor error: {msg.content}")
 
-                    if msg.type == MessageType.STREAM_CHUNK:
-                        if msg.content:
-                            yield msg.content
-                        if msg.is_final:
+                        if msg.type == MessageType.STREAM_CHUNK:
+                            if msg.content:
+                                yield msg.content
+                            if msg.is_final:
+                                break
+
+                        elif msg.type == MessageType.STREAM_END:
                             break
 
-                    elif msg.type == MessageType.STREAM_END:
-                        break
+                        elif msg.type == MessageType.ASSISTANT_MESSAGE:
+                            # Fallback: got complete message instead of stream
+                            yield msg.content
+                            break
 
-                    elif msg.type == MessageType.ASSISTANT_MESSAGE:
-                        # Fallback: got complete message instead of stream
-                        yield msg.content
-                        break
+                    break
 
-            except asyncio.TimeoutError:
-                raise TimeoutError(f"Streaming timed out after {self.timeout}s")
-            except Exception as e:
-                if "Connection" in str(type(e).__name__):
+                except asyncio.TimeoutError:
+                    raise TimeoutError(f"Streaming timed out after {self.timeout}s")
+                except ConnectionError:
                     self._connected = False
-                raise
-            finally:
-                # Resume heartbeats after streaming completes
-                self._streaming = False
-                self._request_in_progress = False
+                    if attempt == 0 and self.auto_reconnect:
+                        logger.warning("Connection lost during streaming, retrying")
+                        continue
+                    raise
+                except Exception as e:
+                    if "Connection" in str(type(e).__name__):
+                        self._connected = False
+                    raise
+                finally:
+                    # Resume heartbeats after streaming completes
+                    self._streaming = False
+                    self._request_in_progress = False
 
     async def request_shutdown(self) -> None:
         """Request the Progenitor server to shutdown."""
