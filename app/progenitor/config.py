@@ -294,6 +294,24 @@ class SchedulerConfig:
 
 
 @dataclass
+class MCPConfig:
+    """MCP (Model Context Protocol) configuration."""
+
+    enabled: bool = True
+    base_url: str = "http://localhost:4000/mcp"
+    api_key: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "MCPConfig":
+        """Load MCP config from environment."""
+        return cls(
+            enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
+            base_url=os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:4000/mcp"),
+            api_key=os.getenv("PROGENITOR_MCP_API_KEY"),
+        )
+
+
+@dataclass
 class ProgenitorConfig:
     """Complete Progenitor configuration."""
 
@@ -303,6 +321,7 @@ class ProgenitorConfig:
     copilot: CopilotConfig = field(default_factory=CopilotConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
 
     @classmethod
     def load(cls, project_root: Path | None = None, _config_dir: Path | None = None) -> "ProgenitorConfig":
@@ -319,6 +338,7 @@ class ProgenitorConfig:
             copilot=CopilotConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             validation=ValidationConfig.from_env(),
+            mcp=MCPConfig.from_env(),
         )
 
         # Validate configuration
@@ -400,12 +420,18 @@ class ProgenitorConfig:
                 "enabled": self.scheduler.enabled,
                 "poll_seconds": self.scheduler.poll_seconds,
             },
+            "mcp": {
+                "enabled": self.mcp.enabled,
+                "base_url": self.mcp.base_url,
+            },
         }
 
         if redact_secrets:
             result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
+            result["mcp"]["api_key"] = "***REDACTED***" if self.mcp.api_key else None
         else:
             result["llm"]["api_key"] = self.llm.api_key
+            result["mcp"]["api_key"] = self.mcp.api_key
 
         return result
 
