@@ -1,0 +1,45 @@
+litellm_settings:
+  callbacks:
+    - langfuse_otel
+
+model_list:
+  - model_name: gpt-5.2-chat
+    litellm_params:
+      model: azure/gpt-5.2-chat
+      api_base: os.environ/AZURE_RESPONSES_API_BASE
+      api_key: os.environ/AZURE_RESPONSES_API_KEY
+      api_version: preview
+      tpm: 20000
+      rpm: 500
+      timeout: 10
+      stream_timeout: 2
+  - model_name: gpt-5-mini
+    litellm_params:
+      model: azure/gpt-5-mini
+      api_base: os.environ/AZURE_RESPONSES_API_BASE
+      api_key: os.environ/AZURE_RESPONSES_API_KEY
+      api_version: preview
+      tpm: 10000
+      rpm: 100
+      timeout: 20
+      stream_timeout: 12
+  - model_name: gpt-4.1
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: os.environ/AZURE_RESPONSES_API_BASE
+      api_key: os.environ/AZURE_RESPONSES_API_KEY
+      api_version: preview
+      tpm: 20000
+      rpm: 50
+      timeout: 40
+      stream_timeout: 22
+
+mcp_servers:
+  jina_mcp:
+    url: "https://mcp.jina.ai/v1"
+    transport: "http"
+    auth_type: "bearer_token"
+    auth_value: os.environ/JINA_API_KEY
+#    allowed_tools:
+#      - jina_mcp.search_web
+#

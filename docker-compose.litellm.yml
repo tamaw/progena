@@ -1,0 +1,63 @@
+name: litellm
+
+services:
+  litellm-db:
+    container_name: litellm-db
+    image: docker.io/postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "litellm"
+      POSTGRES_USER: "llmproxy"
+      POSTGRES_PASSWORD: "dbpassword9090"
+    volumes:
+      - litellm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+    networks:
+      - langfuse_network
+
+  litellm:
+    container_name: litellm
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    depends_on:
+      - litellm-db
+    ports:
+      - "4000:4000"
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@litellm-db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      LANGFUSE_RELEASE: 'progenitor'
+      LANGFUSE_ENVRIONEMNT: 'local'
+      LITELLM_MASTER_KEY: ""
+      JINA_API_KEY: ""
+      LANGFUSE_OTEL_HOST: "http://langfuse-web:3000"
+      AZURE_RESPONSES_API_BASE: "https://tama-mhe51q3o-eastus2.cognitiveservices.azure.com"
+      AZURE_RESPONSES_API_KEY: ""
+    command:
+      - "--config=/app/config.yaml"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - langfuse_network
+
+volumes:
+  litellm_postgres_data:
+    driver: local
+
+networks:
+  langfuse_network:
+    external: true
