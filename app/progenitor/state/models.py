@@ -343,6 +343,8 @@ class ConversationState(TypedDict, total=False):
     """Conversation-related state."""
     messages: list[ConversationMessage]
     current_input: str | None
+    current_input_role: str | None
+    current_input_metadata: dict[str, Any] | None
     pending_response: str | None
     attachments: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
