@@ -21,6 +21,7 @@ from .llm.client import LLMClient
 from .runtime.copilot_acp import CopilotACPManager
 from .runtime.loop import ProgenitorLoop
 from .state.manager import StateManager
+from .tools.mcp import setup_mcp_for_llm_client
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class Progenitor:
             self.logs_dir,
             lock_timeout=self.config.storage.state_lock_timeout_seconds,
         )
-        self.llm_client = LLMClient(config=self.config.llm)
+        self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
         self.tool_registry = ToolRegistry(self.state_dir / "registry.json")
         self.graph = None
         self.loop_runner = None
@@ -70,6 +71,10 @@ class Progenitor:
 
         # Load tool/agent registry
         await self.tool_registry.load()
+
+        # Initialize MCP tools and register with tool registry
+        await setup_mcp_for_llm_client(self.llm_client, self.config.mcp)
+        await self._register_mcp_tools()
 
         # Initialize Copilot ACP manager
         # The manager spawns copilot processes per-request via stdio (no persistent service)
@@ -118,7 +123,6 @@ class Progenitor:
     async def _log_startup_config(self) -> None:
         """Log resolved configuration to decisions.jsonl on startup."""
         from .runtime.time_utils import utcnow_isoformat
-
         config_log = {
             "event": "startup_config",
             "timestamp": utcnow_isoformat(),
@@ -130,6 +134,14 @@ class Progenitor:
 
         with open(decisions_path, "a") as f:
             f.write(json.dumps(config_log) + "\n")
+
+    async def _register_mcp_tools(self) -> None:
+        """Register MCP tools discovered via LiteLLM MCP."""
+        if not self.llm_client.mcp_tools:
+            return
+
+        for tool in self.llm_client.get_mcp_tool_registry_entries():
+            await self.tool_registry.register_tool(tool)
 
     async def run(self) -> None:
         """Run the perpetual agent loop.

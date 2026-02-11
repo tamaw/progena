@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from ..config import LLMConfig
+from ..config import LLMConfig, MCPConfig
 from .prompts import PromptTemplates
 from .response_models import (
     BuildSpec,
@@ -57,6 +57,7 @@ class LLMClient:
     def __init__(
         self,
         config: LLMConfig | None = None,
+        mcp_config: MCPConfig | None = None,
         max_retries: int = 3,  # Kept for compatibility but unused
         role: str | None = None,
     ):
@@ -64,10 +65,12 @@ class LLMClient:
 
         Args:
             config: LLM configuration. If None, loads from environment.
+            mcp_config: MCP configuration. If None, loads from environment.
             max_retries: Unused - LiteLLM handles retries.
             role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
+        self.mcp_config = mcp_config or MCPConfig.from_env()
         self.prompts = PromptTemplates()
         self.role = role
         self._max_retries = max_retries
@@ -84,11 +87,17 @@ class LLMClient:
             }
         )
 
+        # MCP context is initialized externally (startup)
+        self.mcp_client: httpx.AsyncClient | None = None
+        self.mcp_tools: list[dict[str, Any]] = []
+
         logger.info("LLM client configured (endpoint=%s, model=%s)", self.endpoint_url, self.model)
 
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
+        if self.mcp_client:
+            await self.mcp_client.aclose()
 
     async def __aenter__(self):
         return self
@@ -124,6 +133,8 @@ class LLMClient:
                     "summary_text",
                     "tether_browsing_display",
                     "computer_screenshot",
+                    "tool_call",
+                    "tool_result",
                 }:
                     wrapped_content = content
                 else:
@@ -143,6 +154,155 @@ class LLMClient:
             })
 
         return input_messages
+
+    def set_mcp_context(
+        self,
+        mcp_client: httpx.AsyncClient | None,
+        mcp_tools: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Set MCP client and tool list for tool calling."""
+        self.mcp_client = mcp_client
+        self.mcp_tools = mcp_tools or []
+
+    def get_mcp_tool_registry_entries(self) -> list[dict[str, Any]]:
+        """Return MCP tools formatted for tool registry storage."""
+        entries: list[dict[str, Any]] = []
+        for tool in self.mcp_tools:
+            name = tool.get("name")
+            if not name:
+                continue
+            entry = {
+                "name": name,
+                "description": tool.get("description", "MCP tool"),
+                "type": "mcp_tool",
+                "source": "litellm",
+                "endpoint": self.mcp_config.base_url,
+                "transport": "http",
+                "capabilities": tool.get("capabilities") or [name],
+            }
+            entries.append(entry)
+        return entries
+
+    def _normalize_tool_definition(self, tool: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize a tool definition into OpenAI-compatible format."""
+        if tool.get("type") == "function" and tool.get("function"):
+            return tool
+
+        name = tool.get("name")
+        if not name:
+            return None
+
+        description = tool.get("description") or tool.get("summary") or "MCP tool"
+        parameters = (
+            tool.get("input_schema")
+            or tool.get("inputSchema")
+            or tool.get("parameters")
+            or {"type": "object", "properties": {}}
+        )
+
+        return {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+            },
+        }
+
+    def _merge_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        """Merge caller-supplied tools with MCP tools, de-duplicated by name."""
+        merged: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+
+        for tool in tools or []:
+            name = tool.get("function", {}).get("name") if tool.get("type") == "function" else tool.get("name")
+            if name:
+                seen_names.add(name)
+            merged.append(tool)
+
+        for tool in self.mcp_tools:
+            normalized = self._normalize_tool_definition(tool)
+            if not normalized:
+                continue
+            name = normalized.get("function", {}).get("name")
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            merged.append(normalized)
+
+        return merged
+
+    def _extract_tool_calls(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract tool calls from a Responses API payload."""
+        tool_calls: list[dict[str, Any]] = []
+
+        for item in data.get("output", []) or []:
+            item_type = item.get("type")
+            if item_type == "tool_call":
+                tool_calls.append(item)
+                continue
+
+            if item_type == "message":
+                content = item.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "tool_call":
+                            tool_calls.append(part)
+
+        if isinstance(data.get("tool_calls"), list):
+            tool_calls.extend(data.get("tool_calls", []))
+
+        return tool_calls
+
+    async def _call_mcp_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
+        """Execute a tool call against the MCP server."""
+        name = tool_call.get("name") or tool_call.get("tool_name") or tool_call.get("function", {}).get("name")
+        if not name:
+            return {"error": "Tool call missing name"}
+
+        if not self.mcp_config.enabled:
+            return {"error": "MCP integration disabled"}
+
+        arguments = (
+            tool_call.get("arguments")
+            or tool_call.get("input")
+            or tool_call.get("params")
+            or tool_call.get("function", {}).get("arguments")
+            or {}
+        )
+
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {"raw": arguments}
+
+        if not self.mcp_client:
+            return {"error": "MCP client not initialized"}
+
+        logger.info("Calling MCP tool: %s", name)
+
+        request = {
+            "jsonrpc": "2.0",
+            "id": tool_call.get("id") or tool_call.get("tool_call_id") or 1,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": arguments or {},
+            },
+        }
+
+        try:
+            response = await self.mcp_client.post(self.mcp_config.base_url, json=request)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            return {"error": f"MCP call failed: {exc}"}
+
+        if isinstance(payload, dict) and payload.get("error"):
+            return {"error": payload.get("error")}
+
+        return payload.get("result", payload) if isinstance(payload, dict) else payload
 
     def _get_json_response_format(self, response_model: type, schema_name: str) -> dict[str, Any]:
         """Return a response_format payload for structured output."""
@@ -226,7 +386,11 @@ class LLMClient:
         include_reasoning: bool = False,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+        max_tool_rounds: int = 4,
     ) -> dict[str, Any]:
+        merged_tools = self._merge_tools(tools)
+
         payload: dict[str, Any] = {
             "model": self.model,
             "input": input_messages,
@@ -236,6 +400,8 @@ class LLMClient:
             payload["fallbacks"] = self.config.model_fallbacks
         if response_format:
             payload["response_format"] = response_format
+        if merged_tools:
+            payload["tools"] = merged_tools
         if include_reasoning:
             payload["reasoning"] = {"summary": "auto"}
         if self._supports_temperature():
@@ -244,14 +410,53 @@ class LLMClient:
         try:
             response = await self.client.post(self.endpoint_url, json=payload)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
         except httpx.HTTPStatusError as exc:
             if self._is_temperature_unsupported(exc.response) and "temperature" in payload:
                 payload.pop("temperature", None)
                 retry = await self.client.post(self.endpoint_url, json=payload)
                 retry.raise_for_status()
-                return retry.json()
-            raise
+                data = retry.json()
+            else:
+                raise
+
+        tool_round = 0
+        tool_calls = self._extract_tool_calls(data)
+        while tool_calls and tool_round < max_tool_rounds:
+            logger.info("Executing %d MCP tool call(s)", len(tool_calls))
+            tool_messages: list[dict[str, Any]] = []
+
+            for tool_call in tool_calls:
+                result = await self._call_mcp_tool(tool_call)
+                tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id")
+                tool_name = tool_call.get("name") or tool_call.get("tool_name")
+                message = {
+                    "role": "tool",
+                    "content": json.dumps(result, default=str),
+                }
+                if tool_call_id:
+                    message["tool_call_id"] = tool_call_id
+                if tool_name:
+                    message["name"] = tool_name
+                tool_messages.append(message)
+
+            input_messages.append({
+                "role": "assistant",
+                "content": tool_calls,
+            })
+            input_messages.extend(tool_messages)
+            payload["input"] = input_messages
+
+            response = await self.client.post(self.endpoint_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            tool_calls = self._extract_tool_calls(data)
+            tool_round += 1
+
+        if tool_calls:
+            logger.warning("MCP tool call loop reached max rounds (%d)", max_tool_rounds)
+
+        return data
 
     async def chat(
         self,
@@ -260,6 +465,7 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         response_format: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Call /responses endpoint and return text response."""
         if response_format:
@@ -273,6 +479,7 @@ class LLMClient:
             include_reasoning=False,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
         )
         text, _reasoning = self._extract_text_and_reasoning(data)
         return text
@@ -284,6 +491,7 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         response_format: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str]:
         """Call /responses endpoint and return text plus reasoning trace."""
         input_messages = self._build_input_messages(messages, system_prompt)
@@ -294,6 +502,7 @@ class LLMClient:
             include_reasoning=True,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
         )
         return self._extract_text_and_reasoning(data)
 

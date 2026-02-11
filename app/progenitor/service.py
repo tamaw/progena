@@ -108,13 +108,15 @@ class ProgenitorService:
             await self.state_manager.initialize()
 
             # Initialize LLM client
-            self.llm_client = LLMClient(config=self.config.llm)
+            self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
 
             # Initialize tool registry
             self.tool_registry = ToolRegistry(
                 self.config.storage.state_dir / "registry.json"
             )
             await self.tool_registry.load()
+
+            # MCP tools are initialized in main startup only.
 
             # Run agent discovery to populate registry from agents/ folder
             await self._discover_agents()
@@ -136,6 +138,17 @@ class ProgenitorService:
                 "Progenitor service initialized (session=%s)",
                 self._session_id
             )
+
+    async def _register_mcp_tools(self) -> None:
+        """Register MCP tools discovered via LiteLLM MCP."""
+        if not self.llm_client or not self.tool_registry:
+            return
+
+        if not self.llm_client.mcp_tools:
+            return
+
+        for tool in self.llm_client.get_mcp_tool_registry_entries():
+            await self.tool_registry.register_tool(tool)
 
     async def handle_message(
         self,

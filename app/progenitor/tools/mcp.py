@@ -11,6 +11,10 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+from ..config import MCPConfig
+
 logger = logging.getLogger(__name__)
 
 # Allowlist of safe command prefixes for MCP servers
@@ -22,6 +26,54 @@ ALLOWED_COMMAND_PREFIXES = (
     "uvx",
     "deno",
 )
+
+
+async def initialize_mcp_tools(
+    mcp_config: MCPConfig,
+) -> tuple[httpx.AsyncClient | None, list[dict[str, Any]]]:
+    """Initialize MCP tools by calling tools/list on the MCP server."""
+    if not mcp_config.enabled:
+        logger.info("MCP integration disabled")
+        return None, []
+
+    try:
+        headers = {"Content-Type": "application/json"}
+        if mcp_config.api_key:
+            headers["Authorization"] = f"Bearer {mcp_config.api_key}"
+
+        mcp_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            headers=headers,
+        )
+
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {},
+        }
+        logger.info("Fetching MCP tools from %s", mcp_config.base_url)
+
+        response = await mcp_client.post(mcp_config.base_url, json=request)
+        response.raise_for_status()
+        data = response.json()
+        result = data.get("result", data) if isinstance(data, dict) else {}
+
+        tools = result.get("tools", []) if isinstance(result, dict) else []
+        logger.info("Loaded %d MCP tools", len(tools))
+        return mcp_client, tools
+    except Exception as e:
+        logger.warning("Failed to initialize MCP tools: %s", e)
+        return None, []
+
+
+async def setup_mcp_for_llm_client(
+    llm_client,
+    mcp_config: MCPConfig,
+) -> None:
+    """Initialize MCP tools and attach them to the LLM client."""
+    mcp_client, mcp_tools = await initialize_mcp_tools(mcp_config)
+    llm_client.set_mcp_context(mcp_client, mcp_tools)
 
 
 def _validate_command(command: str | list[str]) -> list[str]:
@@ -166,10 +218,18 @@ class MCPClient:
             "params": params or {},
         }
 
+        headers = {"Content-Type": "application/json"}
+        headers.update(tool_config.get("headers", {}))
+        if "Authorization" not in headers:
+            mcp_config = MCPConfig.from_env()
+            if mcp_config.api_key:
+                headers["Authorization"] = f"Bearer {mcp_config.api_key}"
+
         try:
             async with aiohttp.ClientSession() as session, session.post(
                 endpoint,
                 json=request,
+                headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 result = await response.json()
