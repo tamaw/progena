@@ -46,14 +46,16 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             }
 
         # Create message record with metadata about clarification
-        metadata = {}
+        metadata = dict(state.get("current_input_metadata") or {})
         if awaiting_clarification:
             metadata["type"] = "clarification_response"
             metadata["clarification_context"] = state.get("clarification_context")
 
+        role = state.get("current_input_role") or "user"
+
         message = ConversationMessage(
             id=str(uuid.uuid4()),
-            role="user",
+            role=role,
             content=user_input,
             timestamp=utcnow(),
             metadata=metadata,
@@ -75,6 +77,8 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         return cast(ProgenitorState, {
             "messages": messages,
             "current_input": user_input,
+            "current_input_role": None,
+            "current_input_metadata": None,
             **clarification_updates,
         })
 

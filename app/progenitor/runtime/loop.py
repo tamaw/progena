@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from .scheduler import Scheduler
 from .time_utils import utcnow, utcnow_isoformat
+from ..llm.prompts import PromptTemplates
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
+SCHEDULED_MESSAGE_PREFIX = "[Scheduled Task] This message was triggered by the scheduler."
+_prompts = PromptTemplates()
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -143,6 +146,8 @@ class ProgenitorLoop:
             "backlog": [],
             "schedule": [],
             "agents": [],
+            "current_input_role": None,
+            "current_input_metadata": None,
             "idle_cycles": 0,
             "current_backoff_seconds": self.config.runtime.idle_backoff_seconds,
         }
@@ -313,25 +318,57 @@ class ProgenitorLoop:
                         self._state["current_backoff_seconds"] = backoff
                         self._state["idle_cycles"] = 0
 
-                        # Notify clients that background work is starting
-                        work_type = "scheduled" if self._state.get("due_items") else "backlog"
-                        await self._push_event(
-                            "work_started",
-                            f"Processing {work_type} work",
-                            {"work_type": work_type}
-                        )
+                        due_ids = list(self._state.get("due_items") or [])
+                        if not due_ids:
+                            continue
 
-                        # Run a cycle to process pending work
-                        self._state["current_input"] = None
+                        schedule_dicts = self._coerce_schedule_dicts(self._state.get("schedule", []))
+                        schedule_id = str(due_ids[0])
+                        entry = next((item for item in schedule_dicts if str(item.get("id")) == schedule_id), None)
+                        if not entry:
+                            self._state["due_items"] = []
+                            continue
+
+                        scheduled_input = self._format_scheduled_input(entry)
+                        self._state["current_input"] = scheduled_input
+                        self._state["current_input_role"] = "scheduler"
+                        self._state["current_input_metadata"] = {
+                            "type": "scheduled",
+                            "schedule_id": entry.get("id"),
+                            "schedule_description": entry.get("description"),
+                            "schedule_run_at": entry.get("run_at"),
+                            "schedule_repeat_minutes": entry.get("repeat_minutes"),
+                            "schedule_instruction": entry.get("instruction"),
+                        }
                         self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
 
-                        await self._run_graph_cycle(run_id, source=f"background_{work_type}")
+                        # Enable streaming mode for scheduled input
+                        self._streaming_enabled = True
+                        self._response_was_streamed = False
+                        self._stream_final_sent = False
+                        self._streamed_response_content = ""
 
-                        # Notify clients that work completed
+                        await self._push_event(
+                            "work_started",
+                            "Processing scheduled work",
+                            {"work_type": "scheduled", "schedule_id": schedule_id}
+                        )
+
+                        await self._run_graph_cycle(run_id, source="scheduled_input")
+
+                        # Disable streaming mode after scheduled input
+                        self._streaming_enabled = False
+                        self._response_was_streamed = False
+                        self._stream_final_sent = False
+                        self._streamed_response_content = ""
+
+                        await self._advance_schedule_after_run(schedule_id)
+                        self._state["due_items"] = []
+
                         await self._push_event(
                             "work_completed",
-                            f"Completed {work_type} work",
-                            {"work_type": work_type}
+                            "Completed scheduled work",
+                            {"work_type": "scheduled", "schedule_id": schedule_id}
                         )
                 else:
                     # No work - increase backoff exponentially
@@ -373,8 +410,6 @@ class ProgenitorLoop:
         """
         cycle_num = self._state["cycle_count"]
         thread_id = f"cycle_{cycle_num}"
-        is_background = source.startswith("background_")
-
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
         try:
@@ -397,29 +432,7 @@ class ProgenitorLoop:
                     self._stream_final_sent = True
                     self._state["pending_response"] = None
                 elif pending:
-                    if is_background:
-                        # Background task completed - push response as event for clients
-                        current_item = self._state.get("current_work_item", {})
-                        item_context = {}
-                        if hasattr(current_item, "context"):
-                            item_context = current_item.context
-                        elif isinstance(current_item, dict):
-                            item_context = current_item.get("context", {})
-
-                        await self._push_event(
-                            "scheduled_response",
-                            str(pending),
-                            {
-                                "source": source,
-                                "cycle": cycle_num,
-                                "schedule_id": item_context.get("schedule_id"),
-                                "original_request": item_context.get("user_request"),
-                            }
-                        )
-                        logger.info("Pushed scheduled response event: %s", str(pending)[:100])
-                    else:
-                        # User input - stream response as usual
-                        await self._stream_response(str(pending))
+                    await self._stream_response(str(pending))
                     self._state["pending_response"] = None
 
             # Checkpoint state after cycle
@@ -658,20 +671,11 @@ class ProgenitorLoop:
             return None
 
     async def _check_pending_work(self, state: dict[str, Any]) -> bool:
-        """Check if there's pending work in backlog or schedule.
+        """Check if there's pending scheduled work.
 
         Reloads schedule from schedule.json to pick up any new scheduled tasks
         (schedule is a system feature that persists beyond user sessions).
         """
-        backlog = state.get("backlog", [])
-        pending = [
-            item for item in backlog
-            if isinstance(item, dict) and item.get("status") in ("pending", "in_progress")
-        ]
-
-        if pending:
-            return True
-
         # Reload schedule from schedule.json (system feature, may have been updated)
         try:
             schedule_entries = await self.state_manager.get_schedule()
@@ -696,7 +700,56 @@ class ProgenitorLoop:
                 state["due_items"] = due_ids
                 return True
 
+        state["due_items"] = []
+
         return False
+
+    def _coerce_schedule_dicts(self, schedule_entries: list[Any]) -> list[dict[str, Any]]:
+        """Normalize schedule entries to dicts."""
+        schedule_dicts: list[dict[str, Any]] = []
+        for entry in schedule_entries:
+            if hasattr(entry, "model_dump"):
+                schedule_dicts.append(entry.model_dump())
+            elif isinstance(entry, dict):
+                schedule_dicts.append(dict(entry))
+        return schedule_dicts
+
+    def _format_scheduled_input(self, entry: dict[str, Any]) -> str:
+        """Build the input text for a scheduled message."""
+        prefix = self._load_scheduled_prefix()
+        instruction = entry.get("instruction") or entry.get("description") or "Scheduled task"
+        return f"{prefix}\n\n{instruction}"
+
+    def _load_scheduled_prefix(self) -> str:
+        """Load the scheduled prefix text from data/prompts with fallback."""
+        try:
+            text = _prompts.get("scheduled_prefix.md").strip()
+            return text or SCHEDULED_MESSAGE_PREFIX
+        except Exception:
+            return SCHEDULED_MESSAGE_PREFIX
+
+    async def _advance_schedule_after_run(self, schedule_id: str) -> None:
+        """Advance schedule entry timestamps after a scheduled run."""
+        schedule_dicts = self._coerce_schedule_dicts(self._state.get("schedule", []))
+        updated_schedule = self._scheduler.advance_recurring(
+            schedule_dicts,
+            schedule_id,
+            utcnow(),
+        )
+        self._state["schedule"] = updated_schedule
+
+        entry = next((item for item in updated_schedule if str(item.get("id")) == str(schedule_id)), None)
+        if not entry or not self.state_manager:
+            return
+
+        updates = {"last_run": entry.get("last_run")}
+        if entry.get("repeat_minutes"):
+            updates["run_at"] = entry.get("run_at")
+
+        try:
+            await self.state_manager.update_schedule_entry(schedule_id, updates)
+        except Exception as e:
+            logger.warning("Failed to persist schedule updates: %s", e)
 
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
         """Save full recoverable state checkpoint.

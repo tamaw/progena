@@ -241,11 +241,16 @@ def _extract_history(
     history = []
     if memory_context:
         history.append({"role": "system", "content": memory_context})
+    allowed_roles = {"system", "user", "assistant", "tool"}
     for msg in messages[-limit:]:
         if isinstance(msg, dict):
-            history.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+            raw_role = msg.get("role", "user")
+            role = raw_role if raw_role in allowed_roles else "user"
+            history.append({"role": role, "content": msg.get("content", "")})
         elif hasattr(msg, "role"):
-            history.append({"role": msg.role, "content": msg.content})
+            raw_role = msg.role
+            role = raw_role if raw_role in allowed_roles else "user"
+            history.append({"role": role, "content": msg.content})
     return history
 
 
