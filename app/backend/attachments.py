@@ -18,14 +18,11 @@ import hashlib
 import io
 import logging
 import mimetypes
-import os
-import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, BinaryIO, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import aiofiles
@@ -48,7 +45,7 @@ class AttachmentConfig(BaseModel):
         ".pdf", ".docx", ".doc",
         ".csv", ".log",
     ])
-    cache_dir: Optional[Path] = None
+    cache_dir: Path | None = None
     extract_text_from_pdf: bool = True
     extract_text_from_docx: bool = True
 
@@ -62,14 +59,14 @@ class AttachmentResult(BaseModel):
     size_bytes: int
     content: str  # Extracted text content
     content_truncated: bool = False
-    original_tokens: Optional[int] = None
-    truncated_tokens: Optional[int] = None
+    original_tokens: int | None = None
+    truncated_tokens: int | None = None
     checksum: str  # SHA256 of original file
     source_type: str = "upload"  # upload, url, paste
-    source_url: Optional[str] = None
+    source_url: str | None = None
     processed_at: datetime = Field(default_factory=datetime.utcnow)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class AttachmentManager:
@@ -83,7 +80,7 @@ class AttachmentManager:
     - Caching of processed attachments
     """
 
-    def __init__(self, config: Optional[AttachmentConfig] = None):
+    def __init__(self, config: AttachmentConfig | None = None):
         self.config = config or AttachmentConfig()
         self._cache: dict[str, AttachmentResult] = {}
         self._executor = ThreadPoolExecutor(max_workers=4)
@@ -96,7 +93,7 @@ class AttachmentManager:
         self,
         filename: str,
         size_bytes: int,
-    ) -> tuple[bool, Optional[str]]:
+    ) -> tuple[bool, str | None]:
         """Validate file before processing."""
         # Check extension
         ext = Path(filename).suffix.lower()
@@ -186,7 +183,7 @@ class AttachmentManager:
         self,
         content: str,
         max_tokens: int,
-    ) -> tuple[str, bool, Optional[int], Optional[int]]:
+    ) -> tuple[str, bool, int | None, int | None]:
         """
         Truncate content to fit token limit.
 
@@ -219,8 +216,8 @@ class AttachmentManager:
         filename: str,
         content: bytes,
         source_type: str = "upload",
-        source_url: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        source_url: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AttachmentResult:
         """
         Process a file attachment.
@@ -306,7 +303,7 @@ class AttachmentManager:
     async def process_file_path(
         self,
         file_path: Path,
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AttachmentResult:
         """Process a file from disk."""
         async with aiofiles.open(file_path, "rb") as f:
@@ -321,7 +318,7 @@ class AttachmentManager:
     async def process_url(
         self,
         url: str,
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AttachmentResult:
         """Download and process a file from URL."""
         try:
@@ -362,7 +359,7 @@ class AttachmentManager:
         self,
         data: str,
         filename: str,
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AttachmentResult:
         """Process base64-encoded file content."""
         try:
@@ -398,7 +395,7 @@ class AttachmentManager:
         self,
         text: str,
         name: str = "pasted_text",
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AttachmentResult:
         """Process pasted text as an attachment."""
         content = text.encode("utf-8")
@@ -420,7 +417,7 @@ class AttachmentManager:
         ]
         return await asyncio.gather(*tasks)
 
-    def get_cached(self, checksum: str) -> Optional[AttachmentResult]:
+    def get_cached(self, checksum: str) -> AttachmentResult | None:
         """Get cached attachment by checksum."""
         return self._cache.get(checksum)
 
@@ -479,7 +476,7 @@ async def create_attachment_from_upload(
     file_content: bytes,
     filename: str,
     content_type: str,
-    manager: Optional[AttachmentManager] = None,
+    manager: AttachmentManager | None = None,
 ) -> AttachmentResult:
     """Helper for FastAPI file upload handling."""
     mgr = manager or AttachmentManager()

@@ -4,22 +4,20 @@ Tests for Chat Server.
 Quick and dirty tests for the chat server components.
 """
 
-import asyncio
-import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
 from app.backend.models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatMessage,
-    ModelsResponse,
-    ResponseRequest,
     ResponsePayload,
+    ResponseRequest,
 )
-from app.backend.client import ProgenitorClient
 
 
 class TestChatServerConfig:
@@ -169,6 +167,7 @@ class TestChatServerAPI:
     def test_client(self):
         """Create a test client."""
         from fastapi.testclient import TestClient
+
         from app.backend.main import app
 
         return TestClient(app)

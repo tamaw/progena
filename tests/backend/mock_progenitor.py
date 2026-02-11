@@ -6,8 +6,8 @@ A simple echo server that simulates Progenitor's stdin/stdout interface.
 Useful for testing the backend without the full agent running.
 """
 
-import sys
 import json
+import sys
 
 
 def mock_progenitor():

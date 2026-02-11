@@ -1,7 +1,6 @@
 """Tests for scheduler."""
 
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from app.progenitor.runtime.scheduler import Scheduler
 from app.progenitor.runtime.time_utils import utcnow
@@ -33,7 +32,7 @@ class TestScheduler:
     def test_get_due_items_interval(self):
         """Test finding due interval-based items."""
         now = utcnow()
-        past_run = (now - timedelta(minutes=30)).isoformat()
+        (now - timedelta(minutes=30)).isoformat()
         # For recurring tasks, run_at advances after each run
         # A task is due when run_at <= now
         past_run_at = (now - timedelta(minutes=5)).isoformat()

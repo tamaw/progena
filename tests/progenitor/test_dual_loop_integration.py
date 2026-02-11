@@ -5,14 +5,14 @@ Integration test for outer and inner loop implementations.
 - Inner loop: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN (runs in background)
 """
 
-import pytest
-from unittest.mock import AsyncMock, Mock, MagicMock
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, Mock
 
-from app.progenitor.graph_outer_loop import create_progenitor_graph
-from app.progenitor.graph_inner_loop import create_inner_loop_graph
-from app.progenitor.state.models import ProgenitorState
+import pytest
+
 from app.progenitor.config import ProgenitorConfig
+from app.progenitor.graph_inner_loop import create_inner_loop_graph
+from app.progenitor.graph_outer_loop import create_progenitor_graph
 
 
 def _create_mock_copilot_acp_manager():
@@ -54,7 +54,7 @@ def test_outer_loop_graph_compiles():
 
     # Verify outer loop nodes exist
     nodes = graph.get_graph().nodes
-    node_names = {n for n in nodes.keys() if n != "__start__"}
+    node_names = {n for n in nodes if n != "__start__"}
 
     # Check outer loop nodes (no planner - only in inner loop)
     assert "intake" in node_names
@@ -101,7 +101,7 @@ def test_inner_loop_graph_compiles():
 
     # Verify inner loop nodes exist
     nodes = graph.get_graph().nodes
-    node_names = {n for n in nodes.keys() if n != "__start__"}
+    node_names = {n for n in nodes if n != "__start__"}
 
     # Check all 7 inner loop phases
     assert "observe" in node_names

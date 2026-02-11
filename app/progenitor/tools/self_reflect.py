@@ -7,11 +7,9 @@ All operations are READ-ONLY to ensure safety.
 """
 
 import logging
-import os
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -56,8 +54,8 @@ class DirectoryEntry(BaseModel):
     name: str
     path: str  # Relative to progenitor root
     is_directory: bool
-    size: Optional[int] = None
-    description: Optional[str] = None
+    size: int | None = None
+    description: str | None = None
 
 
 class DirectoryListing(BaseModel):
@@ -140,9 +138,9 @@ class SelfReflection:
         except ValueError:
             return str(path)
 
-    def _get_file_description(self, path: Path) -> Optional[str]:
+    def _get_file_description(self, path: Path) -> str | None:
         """Extract a brief description from a Python file's docstring."""
-        if not path.suffix == ".py":
+        if path.suffix != ".py":
             return None
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")[:2000]
@@ -241,7 +239,7 @@ class SelfReflection:
             total_dirs=total_dirs,
         )
 
-    def read_file(self, relative_path: str, max_lines: Optional[int] = None) -> FileContent:
+    def read_file(self, relative_path: str, max_lines: int | None = None) -> FileContent:
         """
         Read a file from the progenitor source tree.
 
@@ -360,8 +358,8 @@ class SelfReflection:
                             file_path=self._get_relative_path(py_file),
                             line_number=i + 1,
                             line_content=line.strip(),
-                            context_before=[l.strip() for l in lines[start:i]],
-                            context_after=[l.strip() for l in lines[i + 1:end]],
+                            context_before=[context_line.strip() for context_line in lines[start:i]],
+                            context_after=[context_line.strip() for context_line in lines[i + 1:end]],
                         )
                         matches.append(match)
 
@@ -572,7 +570,7 @@ async def self_reflect_explore_directory(directory: str = "") -> dict[str, Any]:
 
 async def self_reflect_read_file(
     file_path: str,
-    max_lines: Optional[int] = None,
+    max_lines: int | None = None,
 ) -> dict[str, Any]:
     """Read a file from the Progenitor source code."""
     reflection = SelfReflection()
@@ -705,7 +703,7 @@ async def execute_self_reflect(
     topic: str = "",
     module_name: str = "",
     is_regex: bool = False,
-    max_lines: Optional[int] = None,
+    max_lines: int | None = None,
     max_results: int = 10,
 ) -> dict[str, Any]:
     """

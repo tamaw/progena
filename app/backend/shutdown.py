@@ -15,18 +15,18 @@ Features:
 import asyncio
 import logging
 import signal
-import sys
 import time
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
-from typing import Any, Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class ShutdownPhase(str, Enum):
+class ShutdownPhase(StrEnum):
     """Phases of graceful shutdown."""
     RUNNING = "running"
     DRAINING = "draining"  # Stopping new requests, waiting for active ones
@@ -47,14 +47,14 @@ class ShutdownCallback:
 @dataclass
 class ShutdownStats:
     """Statistics about shutdown process."""
-    initiated_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    drain_started_at: Optional[datetime] = None
+    initiated_at: datetime | None = None
+    completed_at: datetime | None = None
+    drain_started_at: datetime | None = None
     requests_drained: int = 0
     requests_timed_out: int = 0
     callbacks_executed: int = 0
     callbacks_failed: int = 0
-    total_duration_ms: Optional[float] = None
+    total_duration_ms: float | None = None
 
 
 class GracefulShutdownManager:
@@ -86,8 +86,8 @@ class GracefulShutdownManager:
 
         self._phase = ShutdownPhase.RUNNING
         self._active_requests = 0
-        self._shutdown_event: Optional[asyncio.Event] = None
-        self._drained_event: Optional[asyncio.Event] = None
+        self._shutdown_event: asyncio.Event | None = None
+        self._drained_event: asyncio.Event | None = None
         self._lock = asyncio.Lock()
         self._callbacks: list[ShutdownCallback] = []
         self._drain_callbacks: list[ShutdownCallback] = []  # Callbacks to run when draining starts
@@ -211,10 +211,8 @@ class GracefulShutdownManager:
     def restore_signal_handlers(self) -> None:
         """Restore original signal handlers."""
         for sig, handler in self._original_handlers.items():
-            try:
+            with suppress(ValueError, OSError):
                 signal.signal(sig, handler)
-            except (ValueError, OSError):
-                pass
         self._original_handlers.clear()
         self._signals_installed = False
 
@@ -261,8 +259,8 @@ class GracefulShutdownManager:
                 return
 
             self._phase = ShutdownPhase.DRAINING
-            self._stats.initiated_at = datetime.utcnow()
-            self._stats.drain_started_at = datetime.utcnow()
+            self._stats.initiated_at = datetime.now(UTC)
+            self._stats.drain_started_at = datetime.now(UTC)
             self._shutdown_event = asyncio.Event()
             self._drained_event = asyncio.Event()
 
@@ -288,7 +286,7 @@ class GracefulShutdownManager:
                 timeout=self.drain_timeout,
             )
             logger.info("All requests drained successfully")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._stats.requests_timed_out = self._active_requests
             logger.warning(
                 "Drain timeout reached with %d requests still active",
@@ -305,7 +303,7 @@ class GracefulShutdownManager:
 
         # Complete
         self._phase = ShutdownPhase.COMPLETED
-        self._stats.completed_at = datetime.utcnow()
+        self._stats.completed_at = datetime.now(UTC)
         self._stats.total_duration_ms = (time.monotonic() - start_time) * 1000
 
         if self._shutdown_event:
@@ -332,7 +330,7 @@ class GracefulShutdownManager:
                     timeout=cb.timeout,
                 )
                 logger.debug("Drain callback completed: %s", cb.name)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Drain callback timed out: %s", cb.name)
             except Exception as e:
                 logger.error("Drain callback failed: %s - %s", cb.name, e)
@@ -348,7 +346,7 @@ class GracefulShutdownManager:
                 )
                 self._stats.callbacks_executed += 1
                 logger.debug("Callback completed: %s", cb.name)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._stats.callbacks_failed += 1
                 logger.warning("Callback timed out: %s", cb.name)
             except Exception as e:
@@ -428,7 +426,7 @@ async def stop_client_safely(
                 stop_method()
         logger.debug("%s stopped", name)
         return True
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("%s stop timed out", name)
         return False
     except Exception as e:
@@ -454,7 +452,7 @@ async def commit_state_safely(
                 commit_method()
         logger.debug("State committed")
         return True
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("State commit timed out")
         return False
     except Exception as e:

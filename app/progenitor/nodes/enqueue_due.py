@@ -2,12 +2,12 @@
 EnqueueDue Node - Converts due schedule items into backlog work items.
 """
 
-from datetime import datetime
-from typing import Callable, Coroutine, Any
 import uuid
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from ..state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
 from ..runtime.time_utils import utcnow_isoformat
+from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
 
 
 def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:

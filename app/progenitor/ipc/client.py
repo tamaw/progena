@@ -13,18 +13,20 @@ Features:
 """
 
 import asyncio
+import contextlib
 import logging
 import time
-from typing import AsyncIterator, Optional, Any
+from collections.abc import AsyncIterator
+from typing import Any
 
 from .protocol import (
-    MessageType,
     IPCMessage,
-    read_message,
-    write_message,
-    user_message,
+    MessageType,
     heartbeat,
+    read_message,
     shutdown_message,
+    user_message,
+    write_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,21 +74,21 @@ class IPCClient:
         self.auto_reconnect = auto_reconnect
         self.max_reconnect_attempts = max_reconnect_attempts
 
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
         self._connected = False
         self._lock = asyncio.Lock()
         self._last_activity = 0.0
         self._reconnect_count = 0
         self._reconnect_delay = RECONNECT_DELAY_INITIAL
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: asyncio.Task | None = None
         self._streaming = False  # Flag to pause heartbeats during streaming
         self._request_in_progress = False  # Flag to pause heartbeats during requests
         self._missed_heartbeats = 0  # Track consecutive missed heartbeats
 
         # Event handling - queue for received events and optional callback
         self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        self._event_callback: Optional[Any] = None  # Callable[[dict], Awaitable[None]]
+        self._event_callback: Any | None = None  # Callable[[dict], Awaitable[None]]
 
     async def connect(self) -> bool:
         """Connect to the Progenitor IPC server.
@@ -140,10 +142,8 @@ class IPCClient:
         # Cancel heartbeat
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
             self._heartbeat_task = None
 
         # Close connection
@@ -225,7 +225,7 @@ class IPCClient:
                         if msg and msg.type == MessageType.AGENT_EVENT:
                             await self._handle_event(msg)
                             self._last_activity = time.time()
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         pass  # No events pending, that's fine
 
                 # Send heartbeat only when timer exceeds interval
@@ -294,7 +294,7 @@ class IPCClient:
     async def send_message(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> str:
         """Send a message and get the complete response.
 
@@ -355,9 +355,9 @@ class IPCClient:
                         logger.warning("Unexpected message type: %s", msg.type)
                         return msg.content or ""
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     raise TimeoutError(f"Request timed out after {self.timeout}s")
-                except ConnectionError as e:
+                except ConnectionError:
                     self._connected = False
                     if attempt == 0 and self.auto_reconnect:
                         logger.warning("Connection lost during request, retrying")
@@ -372,12 +372,12 @@ class IPCClient:
                     self._streaming = False
                     self._request_in_progress = False
 
-            raise ConnectionError("Failed to send message after retries")
+        raise ConnectionError("Failed to send message after retries")
 
     async def send_message_stream(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response.
 
@@ -448,7 +448,7 @@ class IPCClient:
 
                     break
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     raise TimeoutError(f"Streaming timed out after {self.timeout}s")
                 except ConnectionError:
                     self._connected = False
@@ -480,7 +480,7 @@ class IPCClient:
         """Check if connected to the server."""
         return self._connected
 
-    def last_heartbeat(self) -> Optional[float]:
+    def last_heartbeat(self) -> float | None:
         """Get the timestamp of last successful activity."""
         return self._last_activity if self._last_activity > 0 else None
 
@@ -499,7 +499,7 @@ class IPCClient:
             "pending_events": self._event_queue.qsize(),
         }
 
-    def set_event_callback(self, callback: Optional[Any]) -> None:
+    def set_event_callback(self, callback: Any | None) -> None:
         """Set a callback to be called when events are received.
 
         Args:
@@ -508,7 +508,7 @@ class IPCClient:
         """
         self._event_callback = callback
 
-    async def get_event(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
+    async def get_event(self, timeout: float | None = None) -> dict[str, Any] | None:
         """Get an event from the event queue.
 
         Events are pushed by the server and represent background work updates
@@ -528,7 +528,7 @@ class IPCClient:
                     timeout=timeout
                 )
             return await self._event_queue.get()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     async def _handle_event(self, msg: IPCMessage) -> None:

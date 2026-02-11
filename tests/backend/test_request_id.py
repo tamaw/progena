@@ -4,10 +4,11 @@ Tests for OBS-001: Request ID Correlation.
 Validates that request IDs are generated, propagated, and returned correctly.
 """
 
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
-from fastapi.testclient import TestClient
 import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -77,7 +78,7 @@ class TestClientRequestIdPropagation:
         config.progenitor_timeout = 30
 
         # Call with request_id
-        result = await client.send_message("test message", request_id="req-abc123")
+        await client.send_message("test message", request_id="req-abc123")
 
         # Verify the payload included request_id
         call_args = mock_process.stdin.write.call_args[0][0]
@@ -112,7 +113,7 @@ class TestClientRequestIdPropagation:
         config.progenitor_timeout = 30
 
         # Call without request_id
-        result = await client.send_message("test message")
+        await client.send_message("test message")
 
         # Verify the payload does not include request_id
         call_args = mock_process.stdin.write.call_args[0][0]
@@ -165,11 +166,11 @@ class TestRequestIdInLogs:
     def test_request_id_logged_on_request(self, caplog):
         """Test that request ID is logged for incoming requests."""
         import logging
+
         from app.backend.main import app
 
-        with caplog.at_level(logging.INFO):
-            with TestClient(app) as client:
-                response = client.get("/health")
+        with caplog.at_level(logging.INFO), TestClient(app) as client:
+            response = client.get("/health")
 
         request_id = response.headers["X-Request-ID"]
 
@@ -184,7 +185,7 @@ class TestRequestIdHandlerIntegration:
         """Verify /v1/responses handler accesses request.state.request_id."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, 'r', encoding='utf-8') as f:
+        with open(main_module.__file__, encoding='utf-8') as f:
             content = f.read()
 
         # Check that the handler gets request_id from state
@@ -195,7 +196,7 @@ class TestRequestIdHandlerIntegration:
         """Verify /v1/responses handler accesses request.state.request_id."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, 'r', encoding='utf-8') as f:
+        with open(main_module.__file__, encoding='utf-8') as f:
             content = f.read()
 
         # Check that the handler gets request_id from state
@@ -205,7 +206,7 @@ class TestRequestIdHandlerIntegration:
         """Verify stream_response_unified function accepts request_id parameter."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, 'r', encoding='utf-8') as f:
+        with open(main_module.__file__, encoding='utf-8') as f:
             content = f.read()
 
         # Check function signature

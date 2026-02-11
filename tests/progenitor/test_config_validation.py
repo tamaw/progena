@@ -4,10 +4,11 @@ Tests for CQ-002: Config Validation at Startup.
 Validates that configuration validation catches invalid values early.
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 
 class TestRuntimeConfigValidation:
@@ -41,8 +42,9 @@ class TestRuntimeConfigValidation:
 
     def test_negative_timeout_rejected(self):
         """Test that negative timeouts are rejected."""
-        from app.progenitor.config_validation import RuntimeConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import RuntimeConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             RuntimeConfigValidator(
@@ -68,8 +70,9 @@ class TestRuntimeConfigValidation:
 
     def test_verification_score_out_of_range_rejected(self):
         """Test that verification scores outside 0-1 are rejected."""
-        from app.progenitor.config_validation import RuntimeConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import RuntimeConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             RuntimeConfigValidator(
@@ -95,8 +98,9 @@ class TestRuntimeConfigValidation:
 
     def test_invalid_log_level_rejected(self):
         """Test that invalid log levels are rejected."""
-        from app.progenitor.config_validation import RuntimeConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import RuntimeConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             RuntimeConfigValidator(
@@ -122,8 +126,9 @@ class TestRuntimeConfigValidation:
 
     def test_invalid_log_format_rejected(self):
         """Test that invalid log formats are rejected."""
-        from app.progenitor.config_validation import RuntimeConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import RuntimeConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             RuntimeConfigValidator(
@@ -178,8 +183,9 @@ class TestLLMConfigValidation:
 
     def test_empty_base_url_rejected(self):
         """Test that empty base_url is rejected."""
-        from app.progenitor.config_validation import LLMConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import LLMConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             LLMConfigValidator(
@@ -191,8 +197,9 @@ class TestLLMConfigValidation:
 
     def test_empty_model_default_rejected(self):
         """Test that empty model_default is rejected."""
-        from app.progenitor.config_validation import LLMConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import LLMConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             LLMConfigValidator(
@@ -221,8 +228,9 @@ class TestCopilotConfigValidation:
 
     def test_negative_timeout_rejected(self):
         """Test that negative timeout is rejected."""
-        from app.progenitor.config_validation import CopilotConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import CopilotConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             CopilotConfigValidator(
@@ -236,8 +244,9 @@ class TestCopilotConfigValidation:
 
     def test_empty_bin_path_rejected(self):
         """Test that empty bin path is rejected."""
-        from app.progenitor.config_validation import CopilotConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import CopilotConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             CopilotConfigValidator(
@@ -266,8 +275,9 @@ class TestSchedulerConfigValidation:
 
     def test_negative_poll_seconds_rejected(self):
         """Test that negative poll seconds is rejected."""
-        from app.progenitor.config_validation import SchedulerConfigValidator
         import pydantic
+
+        from app.progenitor.config_validation import SchedulerConfigValidator
 
         with pytest.raises(pydantic.ValidationError) as exc_info:
             SchedulerConfigValidator(
@@ -373,7 +383,6 @@ class TestConfigValidationIntegration:
 
     def test_config_validation_error_exception(self):
         """Test ConfigValidationError is raised for invalid config."""
-        from app.progenitor.config_validation import ConfigValidationError, validate_config_or_raise
 
         @dataclass
         class InvalidRuntimeConfig:

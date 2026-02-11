@@ -8,13 +8,11 @@ Tests cover:
 4. Submodule tracking
 """
 
-import pytest
-from datetime import datetime
 
 from app.progenitor.state.execution_schemas import (
     BuildSettings,
-    BuildType,
     BuildStatus,
+    BuildType,
 )
 
 

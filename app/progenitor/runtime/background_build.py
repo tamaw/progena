@@ -15,11 +15,12 @@ The runner:
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .time_utils import utcnow, utcnow_isoformat
 
@@ -52,14 +53,13 @@ def deep_merge(base: dict, updates: dict) -> dict:
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
-    from ..state.manager import StateManager
     from ..llm.client import LLMClient
-    from ..tools.registry import ToolRegistry
+    from ..state.manager import StateManager
 
 logger = logging.getLogger(__name__)
 
 
-class BuildStatus(str, Enum):
+class BuildStatus(StrEnum):
     """Status of a background build."""
     PENDING = "pending"
     RUNNING = "running"
@@ -75,10 +75,10 @@ class BuildResult:
     status: BuildStatus
     task_description: str
     started_at: datetime
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
-    output_summary: Optional[str] = None
-    agent_name: Optional[str] = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+    output_summary: str | None = None
+    agent_name: str | None = None
     iterations: int = 0
     verification_score: float = 0.0
     success_criteria_met: list[str] = field(default_factory=list)
@@ -110,7 +110,7 @@ class BackgroundBuildRunner:
         state_manager: "StateManager",
         config: "ProgenitorConfig",
         llm_client: "LLMClient",
-        worktrees_dir: Optional[Path] = None,
+        worktrees_dir: Path | None = None,
         copilot_acp_manager=None,
     ):
         self.state_manager = state_manager
@@ -122,13 +122,13 @@ class BackgroundBuildRunner:
         # Inner loop graph - created lazily
         self._inner_loop_graph = None
 
-        self._current_build: Optional[BuildRequest] = None
-        self._current_task: Optional[asyncio.Task] = None
+        self._current_build: BuildRequest | None = None
+        self._current_task: asyncio.Task | None = None
         self._build_results: dict[str, BuildResult] = {}
         self._lock = asyncio.Lock()
 
         # Callback for notifying when build completes
-        self._completion_callback: Optional[Callable[[BuildResult], None]] = None
+        self._completion_callback: Callable[[BuildResult], None] | None = None
 
     def _get_inner_loop_graph(self):
         """Lazily create the inner loop graph."""
@@ -150,11 +150,11 @@ class BackgroundBuildRunner:
         return self._current_build is not None and self._current_task is not None
 
     @property
-    def current_build_id(self) -> Optional[str]:
+    def current_build_id(self) -> str | None:
         """Get the current build ID if one is running."""
         return self._current_build.build_id if self._current_build else None
 
-    def get_build_status(self, build_id: Optional[str] = None) -> Optional[BuildResult]:
+    def get_build_status(self, build_id: str | None = None) -> BuildResult | None:
         """Get the status of a build.
 
         Args:
@@ -187,7 +187,7 @@ class BackgroundBuildRunner:
         task_description: str,
         target_capabilities: list[str],
         initial_state: dict[str, Any],
-        build_settings: Optional[Any] = None,  # BL-007: BuildSettings from decide node
+        build_settings: Any | None = None,  # BL-007: BuildSettings from decide node
     ) -> tuple[str, str]:
         """Start a background build operation.
 
@@ -257,14 +257,20 @@ class BackgroundBuildRunner:
         self,
         task_description: str,
         target_capabilities: list[str],
-        build_settings: Optional[Any] = None,
+        build_settings: Any | None = None,
     ) -> str:
         """Generate an LLM acknowledgment message for the build request."""
         try:
             # Include build settings info if available
             settings_info = ""
             if build_settings and hasattr(build_settings, 'project_name'):
-                settings_info = f"\nProject: {build_settings.project_name}\nType: {build_settings.build_type}\nDirectory: {build_settings.project_directory}"
+                settings_info = (
+                    f"\nProject: {build_settings.project_name}"
+                    f"\nType: {build_settings.build_type}"
+                    f"\nDirectory: {build_settings.project_directory}"
+                )
+            if target_capabilities:
+                settings_info += f"\nCapabilities: {', '.join(target_capabilities)}"
 
             # Use LLM to generate a friendly acknowledgment
             messages = [
@@ -577,7 +583,7 @@ class BackgroundBuildRunner:
                 except Exception as e:
                     logger.error("Build completion callback failed: %s", e)
 
-    async def cancel_build(self, build_id: Optional[str] = None) -> bool:
+    async def cancel_build(self, build_id: str | None = None) -> bool:
         """Cancel a running build.
 
         Args:
@@ -613,15 +619,15 @@ class BackgroundBuildRunner:
 
 
 # Module-level reference for access from nodes
-_background_runner: Optional[BackgroundBuildRunner] = None
+_background_runner: BackgroundBuildRunner | None = None
 
 
-def get_background_runner() -> Optional[BackgroundBuildRunner]:
+def get_background_runner() -> BackgroundBuildRunner | None:
     """Get the background build runner instance."""
     return _background_runner
 
 
-def set_background_runner(runner: Optional[BackgroundBuildRunner]) -> None:
+def set_background_runner(runner: BackgroundBuildRunner | None) -> None:
     """Set the background build runner instance."""
     global _background_runner
     _background_runner = runner

@@ -6,7 +6,6 @@ These are designed to be very specific to avoid false positives.
 """
 
 import re
-from typing import Optional
 
 
 def looks_like_agent_build_request(user_input: str) -> bool:
@@ -82,9 +81,7 @@ def looks_like_agent_build_request(user_input: str) -> bool:
             "your agent",
             "this agent",
         ]
-        if any(fp in text for fp in false_positives):
-            return False
-        return True
+        return not any(fp in text for fp in false_positives)
 
     return False
 
@@ -172,7 +169,7 @@ def looks_like_list_tools_request(user_input: str) -> bool:
         )
     )
 
-    has_tool_context = any(
+    any(
         phrase in text
         for phrase in (
             "tool",

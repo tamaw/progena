@@ -1,7 +1,7 @@
 """Tests for secret redaction functionality."""
 
-import pytest
 import uuid
+
 from app.progenitor.state.models import redact_secrets
 
 

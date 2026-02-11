@@ -8,33 +8,32 @@ Validates that:
 - State is properly separated and not cross-contaminated
 """
 
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import (
     ConversationMessage,
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
     ScheduleEntry,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
 
 
 @pytest.fixture
 async def state_manager():
     """Create a StateManager with temp directories."""
-    with tempfile.TemporaryDirectory() as state_dir:
-        with tempfile.TemporaryDirectory() as logs_dir:
-            manager = StateManager(
-                state_dir=Path(state_dir),
-                logs_dir=Path(logs_dir),
-            )
-            await manager.initialize()
-            yield manager
-            await manager.close()
+    with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as logs_dir:
+        manager = StateManager(
+            state_dir=Path(state_dir),
+            logs_dir=Path(logs_dir),
+        )
+        await manager.initialize()
+        yield manager
+        await manager.close()
 
 
 class TestBuildStateIsolation:

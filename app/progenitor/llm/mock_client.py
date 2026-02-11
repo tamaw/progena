@@ -88,6 +88,9 @@ class MockLLMClient(LLMClientProtocol):
         response_format: dict[str, Any] | None = None,
     ) -> str:
         """Return a mock chat response."""
+        _ = temperature
+        _ = max_tokens
+        _ = response_format
         self._call_count += 1
         await self._simulate_latency()
         self._maybe_fail()
@@ -126,6 +129,8 @@ class MockLLMClient(LLMClientProtocol):
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
         """Stream a mock chat response."""
+        _ = temperature
+        _ = max_tokens
         self._call_count += 1
         await self._simulate_latency()
         self._maybe_fail()
@@ -197,6 +202,8 @@ class MockLLMClient(LLMClientProtocol):
         tool_context: str,
     ) -> dict[str, Any]:
         """Return a mock decision."""
+        _ = conversation_history
+        _ = tool_context
         self._call_count += 1
         await self._simulate_latency()
         self._maybe_fail()
@@ -236,6 +243,8 @@ class MockLLMClient(LLMClientProtocol):
         current_backlog: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Return mock work items."""
+        _ = decision
+        _ = current_backlog
         self._call_count += 1
         await self._simulate_latency()
         self._maybe_fail()
@@ -261,6 +270,7 @@ class MockLLMClient(LLMClientProtocol):
         context: dict[str, Any],
     ) -> dict[str, Any]:
         """Return a mock build specification."""
+        _ = context
         self._call_count += 1
         await self._simulate_latency()
         self._maybe_fail()
@@ -283,6 +293,8 @@ class MockLLMClient(LLMClientProtocol):
         execution_result: dict[str, Any],
     ) -> dict[str, Any]:
         """Return a mock verification result."""
+        _ = work_item
+        _ = execution_result
         self._call_count += 1
         await self._simulate_latency()
         self._maybe_fail()
@@ -303,6 +315,7 @@ class MockLLMClient(LLMClientProtocol):
         context: dict[str, Any],
     ) -> str:
         """Generate a mock user-facing response."""
+        _ = context
         self._call_count += 1
         await self._simulate_latency()
         self._maybe_fail()
@@ -328,7 +341,7 @@ class MockLLMClient(LLMClientProtocol):
     def _generate_contextual_response(
         self,
         user_input: str,
-        system_prompt: str | None = None,
+        _system_prompt: str | None = None,
     ) -> str:
         """Generate a contextually appropriate mock response."""
         input_lower = user_input.lower() if user_input else ""

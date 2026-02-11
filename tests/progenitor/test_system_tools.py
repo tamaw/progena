@@ -4,24 +4,25 @@ Tests for app/progenitor/nodes/system_tools/
 Verifies system tool protocol, implementations, and registry.
 """
 
-import pytest
 from typing import cast
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from app.progenitor.nodes.node_helpers import (
+    BaseSystemTool,
+    BuildStatusTool,
+    CurrentTimeTool,
+    ListAgentsTool,
+    ListScheduleTool,
+    ListToolsTool,
+    RediscoverAgentsTool,
+    ScheduleTaskTool,
+    SelfReflectTool,
     ToolContext,
     ToolResult,
-    SystemTool,
-    BaseSystemTool,
     execute_system_tool,
     format_tool_result,
-    ListToolsTool,
-    BuildStatusTool,
-    ListScheduleTool,
-    ScheduleTaskTool,
-    RediscoverAgentsTool,
-    ListAgentsTool,
-    CurrentTimeTool,
-    SelfReflectTool,
 )
 from app.progenitor.state.models import ProgenitorState
 

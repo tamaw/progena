@@ -6,27 +6,28 @@ Tests the socket-based communication protocol between backend and Progenitor.
 
 import asyncio
 import json
-import pytest
 import struct
 
+import pytest
+
 from app.progenitor.ipc.protocol import (
-    MessageType,
+    HEADER_SIZE,
+    MAX_MESSAGE_SIZE,
     IPCMessage,
-    encode_message,
-    decode_message,
-    read_message,
-    write_message,
-    user_message,
+    MessageType,
     assistant_message,
-    stream_chunk,
-    stream_end,
+    decode_message,
+    encode_message,
     error_message,
     heartbeat,
     heartbeat_ack,
+    read_message,
     ready_message,
     shutdown_message,
-    HEADER_SIZE,
-    MAX_MESSAGE_SIZE,
+    stream_chunk,
+    stream_end,
+    user_message,
+    write_message,
 )
 
 

@@ -6,23 +6,20 @@ Tests cover:
 - execute_with_test_script: full integration flow
 """
 
-import asyncio
-import json
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.progenitor.runtime.exercise_harness import (
+    AgentExerciseHarness,
     AgentProcessRunner,
     TestScriptRunner,
-    AgentExerciseHarness,
     create_execution_result_from_build,
 )
 from app.progenitor.state.execution_schemas import (
     ExecutionResult,
     ExecutionStatus,
-    ExecutionRun,
     ExperimentPlan,
     PromptSpec,
 )
@@ -537,7 +534,7 @@ class TestVerifierWithTestOutput:
 
     def test_mechanical_score_with_test_results(self, verifier):
         """Test mechanical scoring uses test script results."""
-        from app.progenitor.state.ideal_state import SuccessCriterion, CriterionType
+        from app.progenitor.state.ideal_state import CriterionType, SuccessCriterion
 
         exec_data = {
             "status": "success",
@@ -570,7 +567,7 @@ class TestVerifierWithTestOutput:
 
     def test_mechanical_score_with_failed_tests(self, verifier):
         """Test mechanical scoring penalizes failed tests."""
-        from app.progenitor.state.ideal_state import SuccessCriterion, CriterionType
+        from app.progenitor.state.ideal_state import CriterionType, SuccessCriterion
 
         exec_data = {
             "status": "partial",
@@ -603,7 +600,7 @@ class TestVerifierWithTestOutput:
 
     def test_mechanical_score_skipped_execution(self, verifier):
         """Test mechanical scoring handles skipped execution."""
-        from app.progenitor.state.ideal_state import SuccessCriterion, CriterionType
+        from app.progenitor.state.ideal_state import CriterionType, SuccessCriterion
 
         exec_data = {
             "status": "skipped",

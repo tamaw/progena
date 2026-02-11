@@ -7,7 +7,7 @@ Provides a hierarchy of errors to distinguish between:
 - ValidationError: Input/output validation failures
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class NodeError(Exception):
@@ -16,8 +16,8 @@ class NodeError(Exception):
     def __init__(
         self,
         message: str,
-        node_name: Optional[str] = None,
-        context: Optional[dict[str, Any]] = None,
+        node_name: str | None = None,
+        context: dict[str, Any] | None = None,
     ):
         self.node_name = node_name
         self.context = context or {}
@@ -41,9 +41,9 @@ class RecoverableError(NodeError):
     def __init__(
         self,
         message: str,
-        node_name: Optional[str] = None,
-        context: Optional[dict[str, Any]] = None,
-        retry_after_seconds: Optional[float] = None,
+        node_name: str | None = None,
+        context: dict[str, Any] | None = None,
+        retry_after_seconds: float | None = None,
     ):
         super().__init__(message, node_name, context)
         self.retry_after_seconds = retry_after_seconds
@@ -74,9 +74,9 @@ class ValidationError(NodeError):
     def __init__(
         self,
         message: str,
-        node_name: Optional[str] = None,
-        context: Optional[dict[str, Any]] = None,
-        field_errors: Optional[dict[str, str]] = None,
+        node_name: str | None = None,
+        context: dict[str, Any] | None = None,
+        field_errors: dict[str, str] | None = None,
     ):
         super().__init__(message, node_name, context)
         self.field_errors = field_errors or {}
@@ -94,8 +94,8 @@ class ToolError(NodeError):
         self,
         message: str,
         tool_name: str,
-        node_name: Optional[str] = None,
-        context: Optional[dict[str, Any]] = None,
+        node_name: str | None = None,
+        context: dict[str, Any] | None = None,
         is_recoverable: bool = True,
     ):
         super().__init__(message, node_name, context)

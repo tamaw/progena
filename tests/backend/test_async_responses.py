@@ -16,26 +16,20 @@ Covers:
 
 import asyncio
 import concurrent.futures
-import json
 import time
-import threading
-from datetime import datetime, timezone
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.backend.main import app
 from app.backend.streaming import (
-    Iteratorize,
     AsyncIteratorize,
-    StreamingBuffer,
+    Iteratorize,
     StreamChunk,
-    StopNowException,
-    stop_everything,
-    reset_stop_flag,
+    StreamingBuffer,
     is_stop_requested,
+    reset_stop_flag,
+    stop_everything,
     stream_with_callback,
 )
 
@@ -649,7 +643,7 @@ class TestConnectionPooling:
 
     def test_many_sequential_requests(self, client):
         """Test many sequential requests are handled."""
-        for i in range(20):
+        for _i in range(20):
             response = client.get("/api/ui/status/snapshot")
             assert response.status_code == 200
 
@@ -671,11 +665,11 @@ class TestIPCMessageHandling:
     def test_ipc_message_encoding(self):
         """Test IPC message encoding/decoding."""
         from app.progenitor.ipc.protocol import (
+            HEADER_SIZE,
             IPCMessage,
             MessageType,
-            encode_message,
             decode_message,
-            HEADER_SIZE,
+            encode_message,
         )
 
         original = IPCMessage(
@@ -697,9 +691,9 @@ class TestIPCMessageHandling:
     def test_ipc_stream_messages(self):
         """Test IPC stream chunk and stream end messages."""
         from app.progenitor.ipc.protocol import (
+            MessageType,
             stream_chunk,
             stream_end,
-            MessageType,
         )
 
         # Test stream chunk

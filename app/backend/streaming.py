@@ -12,12 +12,14 @@ Features:
 """
 
 import asyncio
+import contextlib
 import logging
 import traceback
-from queue import Queue, Empty
-from threading import Thread, Event
-from typing import Any, Callable, Iterator, Optional, TypeVar, Generic, cast
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from queue import Queue
+from threading import Event, Thread
+from typing import Any, Generic, TypeVar, cast
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +74,10 @@ class Iteratorize(Generic[T]):
     def __init__(
         self,
         func: Callable[..., Any],
-        args: Optional[list] = None,
-        kwargs: Optional[dict] = None,
-        callback: Optional[Callable[[Any], None]] = None,
-        sentinel: Optional[Any] = None,
+        args: list | None = None,
+        kwargs: dict | None = None,
+        callback: Callable[[Any], None] | None = None,
+        sentinel: Any | None = None,
     ):
         """
         Initialize the iterator.
@@ -95,7 +97,7 @@ class Iteratorize(Generic[T]):
         self.kwargs = kwargs or {}
         self.stop_now = False
         self._result: Any = None
-        self._exception: Optional[Exception] = None
+        self._exception: Exception | None = None
 
         def _callback(val: T) -> None:
             """Internal callback that puts values on the queue."""
@@ -167,7 +169,7 @@ class StreamChunk:
     content: str
     index: int
     is_final: bool = False
-    metadata: Optional[dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
 class AsyncIteratorize(Generic[T]):
@@ -180,9 +182,9 @@ class AsyncIteratorize(Generic[T]):
     def __init__(
         self,
         func: Callable[..., Any],
-        args: Optional[list] = None,
-        kwargs: Optional[dict] = None,
-        sentinel: Optional[Any] = None,
+        args: list | None = None,
+        kwargs: dict | None = None,
+        sentinel: Any | None = None,
     ):
         self.func = func
         self.queue: asyncio.Queue[T] = asyncio.Queue()
@@ -191,8 +193,8 @@ class AsyncIteratorize(Generic[T]):
         self.kwargs = kwargs or {}
         self.stop_now = False
         self._result: Any = None
-        self._exception: Optional[Exception] = None
-        self._task: Optional[asyncio.Task] = None
+        self._exception: Exception | None = None
+        self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the background task."""
@@ -254,10 +256,8 @@ class AsyncIteratorize(Generic[T]):
         self.stop_now = True
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
 
 
 class StreamingBuffer:
@@ -279,9 +279,13 @@ class StreamingBuffer:
         self._total_length = 0
         self.flush_threshold = flush_threshold
         self.flush_timeout = flush_timeout
-        self._last_flush = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        self._last_flush = loop.time() if loop else 0
 
-    def add(self, chunk: str) -> Optional[str]:
+    def add(self, chunk: str) -> str | None:
         """
         Add a chunk to the buffer.
 
@@ -316,9 +320,9 @@ class StreamingBuffer:
 
 async def stream_with_callback(
     async_gen,
-    on_chunk: Optional[Callable[[str, int], None]] = None,
-    on_complete: Optional[Callable[[str], None]] = None,
-    on_error: Optional[Callable[[Exception], None]] = None,
+    on_chunk: Callable[[str, int], None] | None = None,
+    on_complete: Callable[[str], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> str:
     """
     Consume an async generator with callbacks for each event.

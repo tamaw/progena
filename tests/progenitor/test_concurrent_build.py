@@ -1,16 +1,17 @@
 """Tests for concurrent build functionality."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, cast
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.progenitor.state.models import (
     ProgenitorState,
     WorkItem,
-    WorkItemType,
     WorkItemStatus,
+    WorkItemType,
 )
 
 
@@ -50,7 +51,7 @@ class TestConcurrentBuildNode:
                 status=WorkItemStatus.PENDING,
                 description="Build agent 1",
                 context={"copilot_prompt": "Build agent 1"},
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
             WorkItem(
                 id="item-2",
@@ -58,7 +59,7 @@ class TestConcurrentBuildNode:
                 status=WorkItemStatus.PENDING,
                 description="Build agent 2",
                 context={"copilot_prompt": "Build agent 2"},
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
             WorkItem(
                 id="item-3",
@@ -66,7 +67,7 @@ class TestConcurrentBuildNode:
                 status=WorkItemStatus.PENDING,
                 description="Build agent 3",
                 context={"copilot_prompt": "Build agent 3"},
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
         ]
 
@@ -144,7 +145,7 @@ class TestConcurrentBuildNode:
                 status=WorkItemStatus.PENDING,
                 description="Build agent 4",
                 context={"copilot_prompt": "Build agent 4"},
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
             WorkItem(
                 id="item-5",
@@ -152,7 +153,7 @@ class TestConcurrentBuildNode:
                 status=WorkItemStatus.PENDING,
                 description="Build agent 5",
                 context={"copilot_prompt": "Build agent 5"},
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
         ])
 
@@ -286,7 +287,7 @@ class TestConcurrentBuildNode:
         # Item-1 should be marked as failed
         item1_build = [b for b in result["concurrent_builds"] if b["work_item_id"] == "item-1"][0]
         assert item1_build["status"] == "failed"
-        assert "Failed to create worktree" in item1_build["error_message"]
+        assert "Failed to create worktree" in (item1_build.get("error_message") or "")
 
         # Only 2 should be in merge queue
         assert len(result["merge_queue"]) == 2
@@ -398,14 +399,14 @@ class TestMergeNode:
                 item_type=WorkItemType.BUILD_AGENT,
                 status=WorkItemStatus.IN_PROGRESS,
                 description="Build agent 1",
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
             WorkItem(
                 id="item-2",
                 item_type=WorkItemType.BUILD_AGENT,
                 status=WorkItemStatus.IN_PROGRESS,
                 description="Build agent 2",
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
         ]
 
@@ -520,14 +521,14 @@ class TestMergeNode:
             "backlog": sample_backlog[:1],
         }
 
-        result = await node(state)
+        result = cast(dict[str, Any], await node(state))
 
         # Should be marked as failed
         assert result["merge_queue"][0]["merge_status"] == "failed"
 
         # Should have error message
         assert "error_message" in result["merge_queue"][0]
-        assert "Git merge error" in result["merge_queue"][0]["error_message"]
+        assert "Git merge error" in (result["merge_queue"][0].get("error_message") or "")
 
         # Should attempt cleanup of failed worktree
         assert mock_git_manager.cleanup_failed_worktree.call_count == 1

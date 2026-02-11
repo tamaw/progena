@@ -5,10 +5,10 @@ Centralized location for magic strings, phase names, and route targets.
 Reduces duplication and improves type safety across the codebase.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 
-class BuildPhase(str, Enum):
+class BuildPhase(StrEnum):
     """Phases of the inner build loop."""
     OBSERVE = "observe"
     THINK = "think"
@@ -18,8 +18,11 @@ class BuildPhase(str, Enum):
     VERIFY = "verify"
     LEARN = "learn"
 
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__}.{self.name}"
 
-class RouteTarget(str, Enum):
+
+class RouteTarget(StrEnum):
     """Valid routing targets for graph transitions."""
     # Outer loop targets
     INTAKE = "intake"
@@ -48,7 +51,7 @@ class RouteTarget(str, Enum):
     DONE = "done"
 
 
-class SystemToolName(str, Enum):
+class SystemToolName(StrEnum):
     """Names of available system tools."""
     LIST_TOOLS = "list_tools"
     BUILD_STATUS = "build_status"

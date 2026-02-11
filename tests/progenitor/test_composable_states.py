@@ -1,7 +1,6 @@
 """Tests for composable state types."""
 
 import unittest
-from typing import get_type_hints
 
 
 class TestComposableSubstates(unittest.TestCase):
@@ -11,12 +10,12 @@ class TestComposableSubstates(unittest.TestCase):
         """Test that all substates can be imported."""
         from app.progenitor.state import (
             ConversationState,
-            WorkState,
-            SchedulingState,
-            LoopControlState,
-            InnerLoopState,
             ExecutionState,
+            InnerLoopState,
+            LoopControlState,
             ProgenitorState,
+            SchedulingState,
+            WorkState,
         )
 
         # Verify they're TypedDicts
@@ -96,12 +95,12 @@ class TestComposableSubstates(unittest.TestCase):
         """Test ProgenitorState includes all fields from substates."""
         from app.progenitor.state import (
             ConversationState,
-            WorkState,
-            SchedulingState,
-            LoopControlState,
-            InnerLoopState,
             ExecutionState,
+            InnerLoopState,
+            LoopControlState,
             ProgenitorState,
+            SchedulingState,
+            WorkState,
         )
 
         progenitor_annotations = ProgenitorState.__annotations__
@@ -148,12 +147,12 @@ class TestComposableSubstates(unittest.TestCase):
         """Test that all substates have total=False for partial updates."""
         from app.progenitor.state import (
             ConversationState,
-            WorkState,
-            SchedulingState,
-            LoopControlState,
-            InnerLoopState,
             ExecutionState,
+            InnerLoopState,
+            LoopControlState,
             ProgenitorState,
+            SchedulingState,
+            WorkState,
         )
 
         # TypedDicts with total=False have __required_keys__ and __optional_keys__

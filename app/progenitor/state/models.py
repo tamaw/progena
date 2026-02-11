@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
@@ -15,7 +15,7 @@ def generate_run_id() -> str:
     return f"run_{uuid.uuid4().hex[:12]}"
 
 
-class WorkItemStatus(str, Enum):
+class WorkItemStatus(StrEnum):
     """Status of a work item in the backlog."""
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
@@ -24,7 +24,7 @@ class WorkItemStatus(str, Enum):
     BLOCKED = "blocked"
 
 
-class WorkItemType(str, Enum):
+class WorkItemType(StrEnum):
     """Type of work item."""
     BUILD_AGENT = "build_agent"
     BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
@@ -36,7 +36,7 @@ class WorkItemType(str, Enum):
     SYSTEM_TOOL = "system_tool"  # Internal system tools like agent discovery
 
 
-class DecisionAction(str, Enum):
+class DecisionAction(StrEnum):
     """Actions that can be decided."""
     ANSWER_DIRECTLY = "answer_directly"
     DELEGATE_A2A = "delegate_a2a"
@@ -48,7 +48,7 @@ class DecisionAction(str, Enum):
     SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)
 
 
-class BuildPhase(str, Enum):
+class BuildPhase(StrEnum):
     """Phases of the inner build loop."""
     OBSERVE = "observe"
     THINK = "think"
@@ -58,8 +58,11 @@ class BuildPhase(str, Enum):
     VERIFY = "verify"
     LEARN = "learn"
 
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__}.{self.name}"
 
-class IterationStopReason(str, Enum):
+
+class IterationStopReason(StrEnum):
     """Reasons why the inner loop iteration stopped."""
     MAX_ITERATIONS = "max_iterations"
     VERIFICATION_PASSED = "verification_passed"
@@ -269,7 +272,7 @@ class ScheduleEntry(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     """Runtime status of an A2A agent."""
     STOPPED = "stopped"      # Not running
     STARTING = "starting"    # Process spawned, waiting for ready

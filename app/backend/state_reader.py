@@ -13,14 +13,15 @@ State files:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
-import os
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +35,20 @@ class AgentInfo:
     description: str
     capabilities: list[str]
     entrypoint: str
-    endpoint: Optional[str]
+    endpoint: str | None
     transport: str
     enabled: bool
     created_at: str
     updated_at: str
     # Runtime status fields
     status: str = "stopped"
-    status_message: Optional[str] = None
-    port: Optional[int] = None
-    agent_card_url: Optional[str] = None
-    pid: Optional[int] = None
-    startup_time: Optional[str] = None
-    last_heartbeat: Optional[str] = None
-    last_error: Optional[str] = None
+    status_message: str | None = None
+    port: int | None = None
+    agent_card_url: str | None = None
+    pid: int | None = None
+    startup_time: str | None = None
+    last_heartbeat: str | None = None
+    last_error: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "AgentInfo":
@@ -95,10 +96,10 @@ class ToolInfo:
 class HealthInfo:
     """Health information from health.json."""
     status: str
-    last_active: Optional[str]
-    run_id: Optional[str]
+    last_active: str | None
+    run_id: str | None
     cycle_count: int
-    pid: Optional[int]
+    pid: int | None
 
     @classmethod
     def from_dict(cls, data: dict) -> "HealthInfo":
@@ -135,7 +136,7 @@ class BacklogItem:
     status: str
     description: str
     priority: int = 0
-    created_at: Optional[str] = None
+    created_at: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "BacklogItem":
@@ -155,7 +156,7 @@ class ScheduleItem:
     id: str
     name: str
     schedule: str
-    next_run: Optional[str]
+    next_run: str | None
     enabled: bool
 
     @classmethod
@@ -174,17 +175,17 @@ class LoopInfo:
     """Information about a processing loop (Planner/Executor)."""
     name: str
     status: str  # active, idle, error
-    last_activity: Optional[str] = None
-    current_task: Optional[str] = None
+    last_activity: str | None = None
+    current_task: str | None = None
 
 
 @dataclass
 class BuildInfo:
     """Information about current build status."""
     in_progress: bool
-    phase: Optional[str] = None  # observe, think, plan, build, execute, verify, learn
-    task_description: Optional[str] = None
-    started_at: Optional[str] = None
+    phase: str | None = None  # observe, think, plan, build, execute, verify, learn
+    task_description: str | None = None
+    started_at: str | None = None
     iteration: int = 0
     score: float = 0.0
     message_count: int = 0
@@ -213,9 +214,9 @@ class StateSnapshot:
     schedule: list[ScheduleItem]
     loops: list[LoopInfo]
     cycle_count: int
-    run_id: Optional[str]
+    run_id: str | None
     messages_count: int
-    build: Optional[BuildInfo] = None
+    build: BuildInfo | None = None
 
 
 class StateReader:
@@ -225,13 +226,13 @@ class StateReader:
     Provides methods to get current state and watch for changes.
     """
 
-    def __init__(self, state_dir: Optional[Path] = None):
+    def __init__(self, state_dir: Path | None = None):
         self.state_dir = state_dir or Path("data/state")
         self._cache: dict[str, tuple[float, Any]] = {}  # path -> (mtime, data)
         self._cache_ttl = 2.0  # Cache for 2 seconds
-        self._last_snapshot: Optional[StateSnapshot] = None
+        self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
-        self._watch_task: Optional[asyncio.Task] = None
+        self._watch_task: asyncio.Task | None = None
 
     def _read_json(self, filename: str) -> Any:
         """Read and parse a JSON file with caching.
@@ -425,11 +426,11 @@ class StateReader:
             ],
             "loops": [
                 {
-                    "name": l.name,
-                    "status": l.status,
-                    "current_task": l.current_task,
+                    "name": loop_item.name,
+                    "status": loop_item.status,
+                    "current_task": loop_item.current_task,
                 }
-                for l in snapshot.loops
+                for loop_item in snapshot.loops
             ],
             "cycle_count": snapshot.cycle_count,
             "run_id": snapshot.run_id,
@@ -456,10 +457,8 @@ class StateReader:
         """Stop watching for state changes."""
         if self._watch_task:
             self._watch_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._watch_task
-            except asyncio.CancelledError:
-                pass
             self._watch_task = None
 
     async def _watch_loop(self, interval: float):
@@ -501,14 +500,11 @@ class StateReader:
             return True
         if len(new.agents) != len(old.agents):
             return True
-        if len(new.backlog) != len(old.backlog):
-            return True
-
-        return False
+        return len(new.backlog) != len(old.backlog)
 
 
 # Global state reader instance
-_state_reader: Optional[StateReader] = None
+_state_reader: StateReader | None = None
 
 
 def get_state_reader() -> StateReader:

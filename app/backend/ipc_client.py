@@ -15,9 +15,7 @@ Features:
 
 import asyncio
 import logging
-import time
-from pathlib import Path
-from typing import AsyncIterator, Callable, Optional, Any
+from collections.abc import AsyncIterator, Callable
 
 from ..progenitor.ipc import IPCClient
 from .config import ChatServerConfig
@@ -38,7 +36,7 @@ class IPCProgenitorClient:
     frontend via SSE by calling the provided event callback.
     """
 
-    def __init__(self, config: ChatServerConfig, event_callback: Optional[EventCallback] = None):
+    def __init__(self, config: ChatServerConfig, event_callback: EventCallback | None = None):
         """Initialize the IPC-based client.
 
         Args:
@@ -47,7 +45,7 @@ class IPCProgenitorClient:
                            Signature: (event_type: str, data: dict) -> None
         """
         self.config = config
-        self._ipc_client: Optional[IPCClient] = None
+        self._ipc_client: IPCClient | None = None
         self._started = False
         self._lock = asyncio.Lock()
         self._event_callback = event_callback
@@ -140,7 +138,7 @@ class IPCProgenitorClient:
                         self._process.wait(),
                         timeout=self.config.progenitor_stop_timeout,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("Progenitor did not terminate, killing...")
                     self._process.kill()
 
@@ -155,7 +153,7 @@ class IPCProgenitorClient:
     async def send_message(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> str:
         """Send a message and get the response.
 
@@ -177,7 +175,7 @@ class IPCProgenitorClient:
     async def send_message_stream(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response.
 
@@ -206,7 +204,7 @@ class IPCProgenitorClient:
             and self._ipc_client.is_connected
         )
 
-    def last_heartbeat(self) -> Optional[float]:
+    def last_heartbeat(self) -> float | None:
         """Get last heartbeat timestamp."""
         if self._ipc_client:
             return self._ipc_client.last_heartbeat()
@@ -230,7 +228,7 @@ class IPCProgenitorClient:
 
         return status
 
-    def set_event_callback(self, callback: Optional[EventCallback]) -> None:
+    def set_event_callback(self, callback: EventCallback | None) -> None:
         """Set the event callback for SSE forwarding.
 
         Args:
@@ -262,7 +260,7 @@ class IPCProgenitorClient:
             self._ipc_client.set_event_callback(forward_event)
 
 
-def get_ipc_client(config: ChatServerConfig, event_callback: Optional[EventCallback] = None) -> IPCProgenitorClient:
+def get_ipc_client(config: ChatServerConfig, event_callback: EventCallback | None = None) -> IPCProgenitorClient:
     """Create an IPC-based Progenitor client.
 
     Args:

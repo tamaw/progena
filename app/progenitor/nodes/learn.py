@@ -15,10 +15,10 @@ from typing import Any
 
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import LearningResult
-from ..state.models import ProgenitorState
-from ..state.helpers import get_ideal_state
 from ..runtime.time_utils import utcnow_isoformat
-from . import NodeFunction, NodeStateUpdate
+from ..state.helpers import get_ideal_state
+from ..state.models import ProgenitorState
+from .types import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -150,23 +150,23 @@ def _detect_local_patterns(all_lessons: list[dict[str, Any]]) -> list[dict[str, 
     # Check for stagnation (same progress status across recent iterations)
     recent = all_lessons[-3:]
     if len(recent) >= 3:
-        progress_values = [l.get("ideal_state_progress", "unknown") for l in recent]
+        progress_values = [lesson_item.get("ideal_state_progress", "unknown") for lesson_item in recent]
         if all(p == "stagnating" for p in progress_values):
             patterns.append({
                 "pattern_type": "stagnation_signal",
                 "description": "Progress stagnating for 3+ iterations",
-                "affected_iterations": [l.get("iteration", 0) for l in recent],
+                "affected_iterations": [lesson_item.get("iteration", 0) for lesson_item in recent],
                 "recommended_action": "Consider fundamentally different approach",
             })
 
     # Check for regression pattern
     if len(recent) >= 2:
-        progress_values = [l.get("ideal_state_progress", "unknown") for l in recent]
+        progress_values = [lesson_item.get("ideal_state_progress", "unknown") for lesson_item in recent]
         if all(p == "regressing" for p in progress_values):
             patterns.append({
                 "pattern_type": "regression_pattern",
                 "description": "Regression detected across recent iterations",
-                "affected_iterations": [l.get("iteration", 0) for l in recent],
+                "affected_iterations": [lesson_item.get("iteration", 0) for lesson_item in recent],
                 "recommended_action": "Revert to best known approach and investigate cause",
             })
 

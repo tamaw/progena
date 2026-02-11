@@ -6,19 +6,19 @@ polling, command handling, and integration with the backend event system.
 """
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from collections import deque
 
+import pytest
+
+from app.backend.config import ChatServerConfig
 from app.backend.telegram_client import (
     TelegramClient,
     TelegramConfig,
     TelegramRateLimiter,
+    get_telegram_client,
     init_telegram_client,
     stop_telegram_client,
-    get_telegram_client,
 )
-from app.backend.config import ChatServerConfig
 
 
 class TestTelegramConfig:
@@ -287,7 +287,7 @@ class TestSubscriberTracking:
 
     def test_has_active_chat_subscribers_empty(self):
         """Test when no subscribers are connected."""
-        from app.backend.ui_routes import has_active_chat_subscribers, _chat_subscribers
+        from app.backend.ui_routes import _chat_subscribers, has_active_chat_subscribers
 
         # Clear subscribers for test
         original = _chat_subscribers.copy()
@@ -300,7 +300,7 @@ class TestSubscriberTracking:
 
     def test_has_active_chat_subscribers_with_subscriber(self):
         """Test when subscribers are connected."""
-        from app.backend.ui_routes import has_active_chat_subscribers, _chat_subscribers
+        from app.backend.ui_routes import _chat_subscribers, has_active_chat_subscribers
 
         # Add a mock subscriber
         original = _chat_subscribers.copy()
@@ -330,6 +330,7 @@ class TestTelegramRoutes:
     def client(self):
         """Create test FastAPI client."""
         from fastapi.testclient import TestClient
+
         from app.backend.main import app
         return TestClient(app)
 
@@ -490,9 +491,11 @@ class TestTelegramPolling:
         client_with_polling.set_message_handler(handler)
 
         # Mock API calls (chat action and send message)
-        with patch.object(client_with_polling, '_api_call', new=AsyncMock(return_value={"ok": True})):
-            with patch.object(client_with_polling, 'send_message_to_chat', new=AsyncMock(return_value=True)):
-                await client_with_polling._process_update(update)
+        with (
+            patch.object(client_with_polling, '_api_call', new=AsyncMock(return_value={"ok": True})),
+            patch.object(client_with_polling, 'send_message_to_chat', new=AsyncMock(return_value=True)),
+        ):
+            await client_with_polling._process_update(update)
 
         assert handler_called is True
         assert received_text == "Hello"

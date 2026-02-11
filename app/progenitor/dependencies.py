@@ -5,19 +5,17 @@ Provides a consistent interface for injecting dependencies into node factories.
 Replaces inconsistent function signatures with a single container pattern.
 """
 
-from dataclasses import dataclass, field
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional, Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from .config import ProgenitorConfig
-    from .llm.client import LLMClient
-    from .tools.registry import ToolRegistry
-    from .state.manager import StateManager
+    pass
 
 
 # Type alias for event pusher callback
-EventPusher = Callable[[str, str, Optional[dict[str, Any]]], Coroutine[Any, Any, None]]
+EventPusher = Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]]
 
 
 class StateManagerProtocol(Protocol):
@@ -44,15 +42,15 @@ class LLMClientProtocol(Protocol):
     async def chat(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
-        response_format: Optional[dict[str, str]] = None,
+        response_format: dict[str, str] | None = None,
     ) -> str: ...
 
     async def complete(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.7,
     ) -> str: ...
 
@@ -93,12 +91,12 @@ class NodeDependencies:
         event_pusher: Callback for pushing events to clients.
     """
 
-    llm_client: Optional[Any] = None  # LLMClientProtocol
-    state_manager: Optional[Any] = None  # StateManagerProtocol
-    tool_registry: Optional[Any] = None  # ToolRegistryProtocol
-    config: Optional[Any] = None  # ProgenitorConfig
-    worktrees_dir: Optional[Path] = None
-    event_pusher: Optional[EventPusher] = None
+    llm_client: Any | None = None  # LLMClientProtocol
+    state_manager: Any | None = None  # StateManagerProtocol
+    tool_registry: Any | None = None  # ToolRegistryProtocol
+    config: Any | None = None  # ProgenitorConfig
+    worktrees_dir: Path | None = None
+    event_pusher: EventPusher | None = None
 
     def __post_init__(self):
         """Validate dependencies after initialization."""

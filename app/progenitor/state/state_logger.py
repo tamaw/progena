@@ -14,11 +14,11 @@ For persistence, uses StatePersistence.
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
-from .models import redact_secrets, ConversationMessage
-from .persistence import StatePersistence
 from ..runtime.time_utils import utcnow_isoformat
+from .models import ConversationMessage, redact_secrets
+from .persistence import StatePersistence
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class StateLogger:
     def __init__(
         self,
         persistence: StatePersistence,
-        default_request_id: Optional[str] = None,
+        default_request_id: str | None = None,
     ):
         """Initialize state logger.
 
@@ -64,7 +64,7 @@ class StateLogger:
         self,
         category: str,
         entry: dict[str, Any],
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
         redact: bool = True,
     ) -> None:
         """Log an entry to a category.
@@ -100,7 +100,7 @@ class StateLogger:
     async def log_conversation(
         self,
         message: ConversationMessage,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> None:
         """Log a conversation message.
 
@@ -117,7 +117,7 @@ class StateLogger:
     async def log_decision(
         self,
         decision: dict[str, Any],
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> None:
         """Log a decision.
 
@@ -134,7 +134,7 @@ class StateLogger:
     async def log_copilot_call(
         self,
         call_data: dict[str, Any],
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> None:
         """Log a Copilot CLI call.
 
@@ -151,7 +151,7 @@ class StateLogger:
     async def log_validation(
         self,
         result: dict[str, Any],
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> None:
         """Log a validation result.
 
@@ -168,7 +168,7 @@ class StateLogger:
     async def log_schedule_event(
         self,
         event: dict[str, Any],
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> None:
         """Log a schedule event.
 
@@ -185,8 +185,8 @@ class StateLogger:
     async def log_error(
         self,
         error: Exception,
-        context: Optional[dict[str, Any]] = None,
-        request_id: Optional[str] = None,
+        context: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> None:
         """Log an error with context.
 
@@ -210,7 +210,7 @@ class StateLogger:
         self,
         state: dict[str, Any],
         event: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> None:
         """Save state snapshot for debugging (OBS-004).
 

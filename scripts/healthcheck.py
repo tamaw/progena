@@ -10,7 +10,7 @@ Exit codes:
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Health file location (matches HEALTH_FILE in loop.py)
@@ -38,7 +38,7 @@ def check_health() -> bool:
     try:
         # Parse ISO format timestamp
         last_time = datetime.fromisoformat(last_active.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age = (now - last_time).total_seconds()
 
         if age > STALE_SECONDS:

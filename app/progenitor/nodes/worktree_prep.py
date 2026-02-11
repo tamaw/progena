@@ -6,10 +6,11 @@ Each agent gets its own git submodule for isolated commits.
 """
 
 import logging
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Callable, Coroutine, Any
+from typing import Any
 
-from ..state.models import ProgenitorState, WorkItemType
+from ..state.models import ProgenitorState
 from ..tools.git import GitWorktreeManager
 
 logger = logging.getLogger(__name__)

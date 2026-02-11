@@ -12,10 +12,10 @@ spawning a subprocess, providing:
 """
 
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
-from ..progenitor.service import ProgenitorService, get_service
 from ..progenitor.config import ProgenitorConfig
+from ..progenitor.service import ProgenitorService, get_service
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ServiceProgenitorClient:
     def __init__(
         self,
         chat_config: ChatServerConfig,
-        progenitor_config: Optional[ProgenitorConfig] = None,
+        progenitor_config: ProgenitorConfig | None = None,
     ):
         """Initialize the service-based client.
 
@@ -41,7 +41,7 @@ class ServiceProgenitorClient:
         """
         self.chat_config = chat_config
         self.progenitor_config = progenitor_config
-        self._service: Optional[ProgenitorService] = None
+        self._service: ProgenitorService | None = None
 
     async def start(self) -> None:
         """Start the Progenitor service."""
@@ -62,7 +62,7 @@ class ServiceProgenitorClient:
     async def send_message(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> str:
         """Send a message and get the response.
 
@@ -84,7 +84,7 @@ class ServiceProgenitorClient:
     async def send_message_stream(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response.
 
@@ -109,7 +109,7 @@ class ServiceProgenitorClient:
         """Check if the service is running."""
         return self._service is not None and self._service.is_initialized
 
-    def last_heartbeat(self) -> Optional[float]:
+    def last_heartbeat(self) -> float | None:
         """Get last heartbeat timestamp (for compatibility)."""
         # In-process service doesn't need heartbeats
         import time
@@ -123,7 +123,7 @@ class ServiceProgenitorClient:
 
 def get_service_client(
     chat_config: ChatServerConfig,
-    progenitor_config: Optional[ProgenitorConfig] = None,
+    progenitor_config: ProgenitorConfig | None = None,
 ) -> ServiceProgenitorClient:
     """Create a service-based Progenitor client.
 

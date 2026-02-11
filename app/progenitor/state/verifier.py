@@ -16,19 +16,19 @@ Every iteration produces:
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
-from .ideal_state import IdealState, SuccessCriterion, AntiCriterion
+from ..llm.prompts import PromptTemplates
+from ..runtime.time_utils import utcnow
 from .execution_schemas import (
+    CriterionEvidence,
     ExecutionResult,
-    ExecutionStatus,
     ValidationResultV2,
     VerificationReportV2,
-    CriterionEvidence,
 )
-from ..runtime.time_utils import utcnow
-from ..llm.prompts import PromptTemplates
+from .ideal_state import AntiCriterion, IdealState, SuccessCriterion
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,6 @@ class Verifier:
         Returns:
             VerificationReportV2 with evidence citations from execution runs
         """
-        from ..runtime.time_utils import utcnow_isoformat
 
         ideal_state = self._ensure_ideal_state(ideal_state)
 
@@ -396,7 +395,7 @@ class Verifier:
         self,
         exec_data: dict | None,
         valid_data: dict | None,
-        criterion: SuccessCriterion,
+        _criterion: SuccessCriterion,
     ) -> tuple[float, str, str]:
         """
         BL-006: Mechanically score functional criteria using structured data.
@@ -556,7 +555,7 @@ class Verifier:
     def _mechanical_performance_score(
         self,
         exec_data: dict | None,
-        criterion: SuccessCriterion,
+        _criterion: SuccessCriterion,
     ) -> tuple[float, str]:
         """
         BL-006: Mechanically score performance criteria from timing data.
@@ -703,12 +702,6 @@ class Verifier:
                 finding_msgs = [f.get('message', '') for f in findings[:3]]
                 context_parts.append(f"Validation findings: {'; '.join(finding_msgs)}")
 
-        # Check if we have a build failure
-        has_build_failure = (
-            exec_data and
-            exec_data.get('build_output', {}).get('startup_failed', False)
-        )
-
         prompt = _prompts.get(
             "verifier.criterion_scoring.md",
             context_parts=chr(10).join(context_parts),
@@ -751,50 +744,47 @@ class Verifier:
         self,
         anti_criterion: AntiCriterion,
         exec_data: dict | None,
-        valid_data: dict | None,
+        _valid_data: dict | None,
     ) -> dict | None:
         """Check if anti-criterion is violated using structured data."""
 
         description_lower = anti_criterion.description.lower()
 
         # Check for common anti-criteria patterns
-        if "error" in description_lower or "fail" in description_lower:
-            if exec_data and exec_data.get("all_errors"):
+        if ("error" in description_lower or "fail" in description_lower) and exec_data and exec_data.get("all_errors"):
+            return {
+                "anti_criterion_id": anti_criterion.id,
+                "severity": anti_criterion.severity,
+                "description": f"Errors present: {len(exec_data['all_errors'])} errors",
+                "penalty": 0.1 * anti_criterion.severity,
+            }
+
+        if "timeout" in description_lower and exec_data:
+            duration = exec_data.get("total_duration_ms", 0)
+            if duration > 120000:  # > 2 minutes
                 return {
                     "anti_criterion_id": anti_criterion.id,
                     "severity": anti_criterion.severity,
-                    "description": f"Errors present: {len(exec_data['all_errors'])} errors",
-                    "penalty": 0.1 * anti_criterion.severity,
+                    "description": f"Execution exceeded timeout threshold: {duration}ms",
+                    "penalty": 0.15 * anti_criterion.severity,
                 }
 
-        if "timeout" in description_lower:
-            if exec_data:
-                duration = exec_data.get("total_duration_ms", 0)
-                if duration > 120000:  # > 2 minutes
+        if ("crash" in description_lower or "exception" in description_lower) and exec_data:
+            for error in exec_data.get("all_errors", []):
+                if "exception" in error.lower() or "crash" in error.lower():
                     return {
                         "anti_criterion_id": anti_criterion.id,
                         "severity": anti_criterion.severity,
-                        "description": f"Execution exceeded timeout threshold: {duration}ms",
-                        "penalty": 0.15 * anti_criterion.severity,
+                        "description": f"Exception/crash detected: {error[:100]}",
+                        "penalty": 0.2 * anti_criterion.severity,
                     }
-
-        if "crash" in description_lower or "exception" in description_lower:
-            if exec_data:
-                for error in exec_data.get("all_errors", []):
-                    if "exception" in error.lower() or "crash" in error.lower():
-                        return {
-                            "anti_criterion_id": anti_criterion.id,
-                            "severity": anti_criterion.severity,
-                            "description": f"Exception/crash detected: {error[:100]}",
-                            "penalty": 0.2 * anti_criterion.severity,
-                        }
 
         return None
 
     def _suggest_next_actions_from_evidence(
         self,
         criterion_evidences: list[CriterionEvidence],
-        gaps: list[str],
+        _gaps: list[str],
     ) -> list[str]:
         """Generate next actions from evidence."""
         actions = []
@@ -818,7 +808,7 @@ class Verifier:
         ideal_state: IdealState | dict,
         output: Any,
         iteration: int,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> VerificationReport:
         """
         Verify output against ideal state.
@@ -889,7 +879,7 @@ class Verifier:
 
             return report
 
-        except Exception as e:
+        except Exception:
             raise
 
     async def _score_criterion(
@@ -930,7 +920,7 @@ class Verifier:
         )
 
     async def _test_based_verification(
-        self, criterion: SuccessCriterion, output: Any, context: dict
+        self, _criterion: SuccessCriterion, _output: Any, context: dict
     ) -> tuple[float, str]:
         """Run test-based verification."""
         # Check if tests were run and passed
@@ -944,7 +934,7 @@ class Verifier:
             return 0.3, "Tests not run or unavailable"
 
     def _heuristic_verification(
-        self, criterion: SuccessCriterion, output: Any, context: dict
+        self, _criterion: SuccessCriterion, output: Any, context: dict
     ) -> tuple[float, str]:
         """Heuristic-based verification."""
         score = 0.0
@@ -1012,7 +1002,7 @@ class Verifier:
 
     async def _check_anti_criterion(
         self, anti_criterion: AntiCriterion, output: Any, context: dict
-    ) -> Optional[AntiCriterionViolation]:
+    ) -> AntiCriterionViolation | None:
         """Check if an anti-criterion is violated."""
         output_str = str(output).lower()
 
@@ -1020,11 +1010,9 @@ class Verifier:
         violated = False
         description = ""
 
-        if "verbose" in anti_criterion.description.lower():
-            # Check for excessive verbosity
-            if len(output_str) > 5000:
-                violated = True
-                description = f"Output too verbose ({len(output_str)} chars)"
+        if "verbose" in anti_criterion.description.lower() and len(output_str) > 5000:
+            violated = True
+            description = f"Output too verbose ({len(output_str)} chars)"
 
         if "fluff" in anti_criterion.description.lower():
             # Check for fluff words
@@ -1034,11 +1022,9 @@ class Verifier:
                 violated = True
                 description = f"Contains {fluff_count} fluff words"
 
-        if "error" in anti_criterion.description.lower():
-            # Check for errors in context
-            if context.get("errors"):
-                violated = True
-                description = f"Errors detected: {len(context['errors'])}"
+        if "error" in anti_criterion.description.lower() and context.get("errors"):
+            violated = True
+            description = f"Errors detected: {len(context['errors'])}"
 
         if violated:
             penalty = anti_criterion.severity * 0.1  # Up to 0.2 penalty

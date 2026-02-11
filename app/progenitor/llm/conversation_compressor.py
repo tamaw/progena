@@ -13,12 +13,11 @@ Usage:
 """
 
 import logging
-from typing import Any, Optional
 
-from ..state.models import ConversationMessage
 from ..runtime.time_utils import utcnow
-from .tokenizer import count_tokens, count_message_tokens, is_tiktoken_available
+from ..state.models import ConversationMessage
 from .prompts import PromptTemplates
+from .tokenizer import count_message_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +215,7 @@ class IncrementalCompressor(ConversationCompressor):
         """
         super().__init__(llm_client, max_summary_tokens)
         self._compression_threshold = compression_threshold
-        self._current_summary: Optional[str] = None
+        self._current_summary: str | None = None
         self._summarized_count: int = 0
 
     async def add_and_compress(

@@ -13,41 +13,42 @@ Components:
 import asyncio
 import logging
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any
 
 from acp import (
+    PROTOCOL_VERSION,
     Client,
     spawn_agent_process,
     text_block,
-    PROTOCOL_VERSION,
 )
 from acp.schema import (
-    PromptResponse,
-    ToolCallStart,
-    ToolCallProgress,
     AgentMessageChunk,
-    AgentThoughtChunk,
-    UserMessageChunk,
     AgentPlanUpdate,
-    AvailableCommandsUpdate,
-    CurrentModeUpdate,
-    SessionInfoUpdate,
-    PermissionOption,
-    CreateTerminalResponse,
-    ReadTextFileResponse,
-    WriteTextFileResponse,
-    RequestPermissionResponse,
-    TerminalOutputResponse,
-    ReleaseTerminalResponse,
-    KillTerminalCommandResponse,
-    WaitForTerminalExitResponse,
-    EnvVariable,
-    ToolCallUpdate,
+    AgentThoughtChunk,
     AllowedOutcome,
+    AvailableCommandsUpdate,
+    CreateTerminalResponse,
+    CurrentModeUpdate,
     DeniedOutcome,
+    EnvVariable,
+    KillTerminalCommandResponse,
+    PermissionOption,
+    PromptResponse,
+    ReadTextFileResponse,
+    ReleaseTerminalResponse,
+    RequestPermissionResponse,
+    SessionInfoUpdate,
+    TerminalOutputResponse,
+    ToolCallProgress,
+    ToolCallStart,
+    ToolCallUpdate,
+    UserMessageChunk,
+    WaitForTerminalExitResponse,
+    WriteTextFileResponse,
 )
 from acp.terminal import TerminalHandle
 
@@ -96,7 +97,7 @@ class ProgenitorACPClient(Client):
             | CurrentModeUpdate
             | SessionInfoUpdate
         ),
-        **kwargs: Any,
+        **_kwargs: Any,
     ) -> None:
         """Handle session updates from the agent.
 
@@ -108,7 +109,7 @@ class ProgenitorACPClient(Client):
         chunk_data: dict[str, Any] = {
             "type": update_type,
             "session_id": session_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Extract content based on update type
@@ -210,6 +211,10 @@ class ProgenitorACPClient(Client):
         Since we run with --yolo/--allow-all-tools, this shouldn't be called.
         If it is, we auto-approve everything.
         """
+        _ = session_id
+        _ = tool_call
+        _ = kwargs
+
         logger.warning(
             "COPILOT_ACP [%s]: Permission requested (auto-approving): %s",
             self.work_item_id,
@@ -238,6 +243,12 @@ class ProgenitorACPClient(Client):
         **kwargs: Any,
     ) -> CreateTerminalResponse | TerminalHandle:
         """Handle terminal creation requests."""
+        _ = session_id
+        _ = args
+        _ = cwd
+        _ = env
+        _ = output_byte_limit
+        _ = kwargs
         logger.debug(
             "COPILOT_ACP [%s]: Terminal create requested: %s",
             self.work_item_id,
@@ -255,6 +266,10 @@ class ProgenitorACPClient(Client):
         **kwargs: Any,
     ) -> ReadTextFileResponse:
         """Handle file read requests."""
+        _ = session_id
+        _ = limit
+        _ = line
+        _ = kwargs
         logger.debug(
             "COPILOT_ACP [%s]: File read requested: %s",
             self.work_item_id,
@@ -271,6 +286,9 @@ class ProgenitorACPClient(Client):
         **kwargs: Any,
     ) -> WriteTextFileResponse | None:
         """Handle file write requests."""
+        _ = content
+        _ = session_id
+        _ = kwargs
         logger.debug(
             "COPILOT_ACP [%s]: File write requested: %s",
             self.work_item_id,
@@ -285,6 +303,9 @@ class ProgenitorACPClient(Client):
         **kwargs: Any,
     ) -> TerminalOutputResponse:
         """Handle terminal output requests."""
+        _ = session_id
+        _ = terminal_id
+        _ = kwargs
         return TerminalOutputResponse(output="", truncated=False)
 
     async def release_terminal(
@@ -294,6 +315,9 @@ class ProgenitorACPClient(Client):
         **kwargs: Any,
     ) -> ReleaseTerminalResponse | None:
         """Handle terminal release requests."""
+        _ = session_id
+        _ = terminal_id
+        _ = kwargs
         return None
 
     async def kill_terminal(
@@ -303,6 +327,9 @@ class ProgenitorACPClient(Client):
         **kwargs: Any,
     ) -> KillTerminalCommandResponse | None:
         """Handle terminal kill requests."""
+        _ = session_id
+        _ = terminal_id
+        _ = kwargs
         return None
 
     async def wait_for_terminal_exit(
@@ -312,10 +339,14 @@ class ProgenitorACPClient(Client):
         **kwargs: Any,
     ) -> WaitForTerminalExitResponse:
         """Handle terminal exit wait requests."""
+        _ = session_id
+        _ = terminal_id
+        _ = kwargs
         return WaitForTerminalExitResponse(exit_code=0)
 
     async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Handle extension method calls."""
+        _ = params
         logger.debug(
             "COPILOT_ACP [%s]: Extension method: %s",
             self.work_item_id,
@@ -325,6 +356,7 @@ class ProgenitorACPClient(Client):
 
     async def ext_notification(self, method: str, params: dict[str, Any]) -> None:
         """Handle extension notifications."""
+        _ = params
         logger.debug(
             "COPILOT_ACP [%s]: Extension notification: %s",
             self.work_item_id,
@@ -353,9 +385,9 @@ class CopilotACPManager:
     def __init__(
         self,
         copilot_cmd: str = "copilot",
-        model: Optional[str] = None,
+        model: str | None = None,
         yolo: bool = True,
-        allowed_dirs: Optional[list[str]] = None,
+        allowed_dirs: list[str] | None = None,
         timeout: int = 1200,
     ):
         """Initialize the ACP manager.
@@ -572,7 +604,7 @@ class CopilotACPManager:
                     "elapsed_seconds": elapsed,
                 }
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             elapsed = time.perf_counter() - start_time
             logger.error(
                 "COPILOT_ACP [%s]: Prompt timed out after %.2fs (timeout=%ds)",
@@ -634,7 +666,7 @@ class ACPLogCapture:
         Returns:
             Path to the log file.
         """
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{work_item_id}.log"
         return self.logs_dir / filename
 
@@ -663,7 +695,7 @@ class ACPLogCapture:
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write("# Copilot ACP Session Log\n")
                 f.write(f"# Work Item: {work_item_id}\n")
-                f.write(f"# Timestamp: {datetime.now(timezone.utc).isoformat()}\n")
+                f.write(f"# Timestamp: {datetime.now(UTC).isoformat()}\n")
                 f.write(f"# Success: {result.get('success')}\n")
                 f.write(f"# Stop Reason: {result.get('stop_reason')}\n")
                 f.write(f"# Elapsed: {result.get('elapsed_seconds', 0):.2f}s\n")

@@ -106,19 +106,16 @@ class ToolRegistry:
                 continue
 
             spec_path = entry / "spec.md"
-            description = "Local FastMCP tool (HTTP). Start with: python -m app.mcp.%s.server" % entry.name
+            description = f"Local FastMCP tool (HTTP). Start with: python -m app.mcp.{entry.name}.server"
 
             if spec_path.exists():
                 try:
-                    with open(spec_path, "r", encoding="utf-8") as f:
+                    with open(spec_path, encoding="utf-8") as f:
                         for line in f:
                             line = line.strip()
                             if not line:
                                 continue
-                            if line.startswith("#"):
-                                description = line.lstrip("#").strip()
-                            else:
-                                description = line
+                            description = line.lstrip("#").strip() if line.startswith("#") else line
                             break
                 except OSError:
                     pass

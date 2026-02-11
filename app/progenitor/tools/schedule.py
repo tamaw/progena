@@ -8,17 +8,14 @@ executed at the scheduled time as if it were a new user request.
 
 import logging
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from ..state.models import ScheduleEntry, DecisionAction
 from ..runtime.scheduler import Scheduler
-from ..runtime.time_utils import utcnow
 
 if TYPE_CHECKING:
-    from ..llm.client import LLMClient
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +32,7 @@ class ScheduleRequest(BaseModel):
     instruction: str = Field(
         description="Processed instruction for the agent to execute at the scheduled time"
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         default=None,
         description="Human-readable description of the scheduled task"
     )
@@ -49,17 +46,17 @@ class ScheduleResult(BaseModel):
     """Result of a schedule operation."""
 
     success: bool
-    schedule_id: Optional[str] = None
+    schedule_id: str | None = None
     message: str
-    next_run: Optional[str] = None
+    next_run: str | None = None
 
 
 async def add_scheduled_task(
     user_request: str,
     time_expression: str,
     instruction: str,
-    description: Optional[str] = None,
-) -> tuple[ScheduleResult, Optional[dict]]:
+    description: str | None = None,
+) -> tuple[ScheduleResult, dict | None]:
     """
     Add a scheduled task that will execute an instruction at the specified time.
 

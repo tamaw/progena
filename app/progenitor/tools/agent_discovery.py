@@ -7,13 +7,11 @@ each agent's purpose and capabilities, then updates the registry.
 This runs on Progenitor startup and can be invoked as a tool to re-scan agents.
 """
 
-import asyncio
 import logging
-import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -56,7 +54,7 @@ class DiscoveredAgentSpec(BaseModel):
         default=True,
         description="Whether this folder contains a valid runnable agent",
     )
-    reason_if_invalid: Optional[str] = Field(
+    reason_if_invalid: str | None = Field(
         default=None,
         description="If not a valid agent, explain why",
     )
@@ -70,7 +68,7 @@ class AgentDiscoveryResult(BaseModel):
         description="List of discovered agents",
     )
     scan_timestamp: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="When the scan was performed",
     )
 

@@ -4,15 +4,14 @@ Tests for app/progenitor/constants.py
 Verifies enum values, constants, and backward compatibility.
 """
 
-import pytest
 from app.progenitor.constants import (
+    DEFAULT_BUILD_CONFIDENCE_THRESHOLD,
+    DEFAULT_MAX_INNER_ITERATIONS,
+    DEFAULT_MAX_OUTER_ITERATIONS,
+    DEFAULT_VERIFICATION_TARGET_SCORE,
     BuildPhase,
     RouteTarget,
     SystemToolName,
-    DEFAULT_MAX_INNER_ITERATIONS,
-    DEFAULT_VERIFICATION_TARGET_SCORE,
-    DEFAULT_BUILD_CONFIDENCE_THRESHOLD,
-    DEFAULT_MAX_OUTER_ITERATIONS,
 )
 
 

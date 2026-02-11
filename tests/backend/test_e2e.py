@@ -10,7 +10,6 @@ See CR-001 in CEO_REVIEW_BACKLOG.md for the longer-term fix.
 """
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -20,8 +19,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fastapi.testclient import TestClient
-from app.backend.main import app
+
 from app.backend.config import ChatServerConfig
+from app.backend.main import app
 
 
 @pytest.mark.skip(reason="ProgenitorClient hardcodes module path, doesn't use progenitor_script config")

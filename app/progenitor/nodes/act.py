@@ -9,18 +9,18 @@ Handles:
 """
 
 import logging
-from datetime import datetime
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Callable, Coroutine, Any, Optional, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
-from ..state.helpers import normalize_work_item
-from ..tools.copilot import CopilotCLI
-from ..runtime.copilot_acp import CopilotACPManager
-from ..tools.mcp import MCPClient, A2AClient
-from ..tools.user_communication import UserCommunicationTools, USER_COMMUNICATION_TOOLS
-from ..runtime.time_utils import utcnow_isoformat
 from ..llm.prompts import PromptTemplates
+from ..runtime.copilot_acp import CopilotACPManager
+from ..runtime.time_utils import utcnow_isoformat
+from ..state.helpers import normalize_work_item
+from ..state.models import ProgenitorState, WorkItem, WorkItemType
+from ..tools.copilot import CopilotCLI
+from ..tools.mcp import A2AClient, MCPClient
+from ..tools.user_communication import UserCommunicationTools
 
 _prompts = PromptTemplates()
 
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 # Type alias for event pusher callback
-EventPusher = Callable[[str, str, Optional[dict[str, Any]]], Coroutine[Any, Any, None]]
+EventPusher = Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]]
 
 
 def create_node(
@@ -40,8 +40,8 @@ def create_node(
     config: "ProgenitorConfig",
     worktrees_dir: Path,
     state_manager=None,
-    event_pusher: Optional[EventPusher] = None,
-    copilot_acp_manager: Optional[CopilotACPManager] = None,
+    event_pusher: EventPusher | None = None,
+    copilot_acp_manager: CopilotACPManager | None = None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the act node function.
 
@@ -73,7 +73,7 @@ def create_node(
     a2a_client = A2AClient()
 
     # Initialize user communication tools if event_pusher is provided
-    user_comm_tools: Optional[UserCommunicationTools] = None
+    user_comm_tools: UserCommunicationTools | None = None
     if event_pusher:
         user_comm_tools = UserCommunicationTools(event_pusher=event_pusher)
 
@@ -199,7 +199,7 @@ async def _execute_work_item(
     copilot_cli: CopilotCLI,
     llm_client,
     worktrees_dir: Path,
-    user_comm_tools: Optional[UserCommunicationTools] = None,
+    user_comm_tools: UserCommunicationTools | None = None,
 ) -> tuple[dict | None, str | None]:
     """Execute a work item and return (result, error)."""
     item_type = work_item.item_type
@@ -290,7 +290,7 @@ async def _execute_build(
 
     copilot_prompt = work_item.context.get("copilot_prompt")
     spec_file_path = work_item.context.get("spec_file_path")
-    spec: Optional[dict[str, Any]] = None  # Only set in fallback path
+    spec: dict[str, Any] | None = None  # Only set in fallback path
 
     if copilot_prompt:
         logger.info(f"BUILD: Using copilot_prompt from PLAN ({len(copilot_prompt)} chars)")
@@ -391,7 +391,7 @@ async def _execute_scheduled(
     a2a_client: A2AClient,
     mcp_client: MCPClient,
     llm_client,
-    user_comm_tools: Optional[UserCommunicationTools] = None,
+    user_comm_tools: UserCommunicationTools | None = None,
 ) -> tuple[dict | None, str | None]:
     """Execute a scheduled task.
 
@@ -533,7 +533,7 @@ async def _execute_system_tool(
     work_item: WorkItem,
     tool_registry,
     llm_client,
-    user_comm_tools: Optional[UserCommunicationTools] = None,
+    user_comm_tools: UserCommunicationTools | None = None,
 ) -> tuple[dict | None, str | None]:
     """Execute an internal system tool.
 
@@ -571,8 +571,9 @@ async def _execute_system_tool(
         return result, None
 
     elif tool_name == "rediscover_agents":
-        from ..tools.agent_discovery import discover_agents
         from pathlib import Path
+
+        from ..tools.agent_discovery import discover_agents
 
         # Get agents directory
         project_root = Path(__file__).parent.parent.parent.parent
@@ -633,7 +634,6 @@ async def _execute_system_tool(
             return {"result": result.model_dump()}, None if result.success else result.message
 
     elif tool_name == "list_schedule":
-        from ..tools.schedule import list_scheduled_tasks
 
         # This would need the schedule from state - return instruction to check state
         return {

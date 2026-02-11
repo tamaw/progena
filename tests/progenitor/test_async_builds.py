@@ -9,26 +9,25 @@ Tests cover:
 """
 
 import asyncio
-import pytest
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
-import tempfile
 import json
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 # Import the modules under test
 from app.progenitor.runtime.background_build import (
     BackgroundBuildRunner,
-    BuildStatus,
-    BuildResult,
     BuildRequest,
+    BuildResult,
+    BuildStatus,
     get_background_runner,
     set_background_runner,
 )
 from app.progenitor.runtime.time_utils import utcnow
-from app.progenitor.tools.list_schedule import ListScheduleTool
 from app.progenitor.tools.build_status import BuildStatusTool
-
+from app.progenitor.tools.list_schedule import ListScheduleTool
 
 # ============================================================================
 # BackgroundBuildRunner Tests

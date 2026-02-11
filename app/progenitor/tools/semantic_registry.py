@@ -16,10 +16,10 @@ Usage:
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from ..state.models import AgentRegistryEntry
 from ..runtime.time_utils import utcnow
+from ..state.models import AgentRegistryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ np: Any = None
 SEMANTIC_AVAILABLE = False
 
 try:
-    from sentence_transformers import SentenceTransformer as _SentenceTransformer
     import numpy as _np
+    from sentence_transformers import SentenceTransformer as _SentenceTransformer
     SentenceTransformer = _SentenceTransformer
     np = _np
     SEMANTIC_AVAILABLE = True
@@ -68,7 +68,7 @@ class SemanticRegistry:
     def __init__(
         self,
         registry_path: Path,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
     ):
         """Initialize semantic registry.
 
@@ -99,14 +99,14 @@ class SemanticRegistry:
         """Load registry from disk and build embeddings."""
         if self.registry_path.exists():
             try:
-                with open(self.registry_path, 'r') as f:
+                with open(self.registry_path) as f:
                     self._registry = json.load(f)
                 logger.info(
                     "Loaded registry with %d agents and %d tools",
                     len(self._registry.get('agents', [])),
                     len(self._registry.get('tools', []))
                 )
-            except (json.JSONDecodeError, IOError) as e:
+            except (OSError, json.JSONDecodeError) as e:
                 logger.error("Failed to load registry: %s. Starting fresh.", e)
                 self._registry = {"agents": [], "tools": []}
         else:
@@ -131,7 +131,7 @@ class SemanticRegistry:
 
         try:
             embeddings = self._encoder.encode(capabilities)
-            for cap, emb in zip(capabilities, embeddings):
+            for cap, emb in zip(capabilities, embeddings, strict=False):
                 self._embeddings_cache[cap] = emb
             logger.info("Built embeddings successfully")
         except Exception as e:
@@ -203,24 +203,22 @@ class SemanticRegistry:
         for capability, similarity in matches[:limit * 2]:  # Get more to dedupe
             # Find tool or agent with this capability
             for agent in self._registry.get("agents", []):
-                if capability in agent.get("capabilities", []):
-                    if agent.get("name") not in seen:
-                        results.append({
-                            **agent,
-                            "matched_capability": capability,
-                            "similarity": similarity,
-                        })
-                        seen.add(agent.get("name"))
+                if capability in agent.get("capabilities", []) and agent.get("name") not in seen:
+                    results.append({
+                        **agent,
+                        "matched_capability": capability,
+                        "similarity": similarity,
+                    })
+                    seen.add(agent.get("name"))
 
             for tool in self._registry.get("tools", []):
-                if capability in tool.get("capabilities", []):
-                    if tool.get("name") not in seen:
-                        results.append({
-                            **tool,
-                            "matched_capability": capability,
-                            "similarity": similarity,
-                        })
-                        seen.add(tool.get("name"))
+                if capability in tool.get("capabilities", []) and tool.get("name") not in seen:
+                    results.append({
+                        **tool,
+                        "matched_capability": capability,
+                        "similarity": similarity,
+                    })
+                    seen.add(tool.get("name"))
 
             if len(results) >= limit:
                 break
@@ -285,21 +283,21 @@ class SemanticRegistry:
             return 0.0
 
     # Standard registry methods
-    def find_agent_by_capability(self, capability: str) -> Optional[dict[str, Any]]:
+    def find_agent_by_capability(self, capability: str) -> dict[str, Any] | None:
         """Find an agent that provides a capability (exact match)."""
         for agent in self._registry.get("agents", []):
             if capability in agent.get("capabilities", []):
                 return agent
         return None
 
-    def find_tool_by_capability(self, capability: str) -> Optional[dict[str, Any]]:
+    def find_tool_by_capability(self, capability: str) -> dict[str, Any] | None:
         """Find a tool that provides a capability (exact match)."""
         for tool in self._registry.get("tools", []):
             if capability in tool.get("capabilities", []):
                 return tool
         return None
 
-    def find_by_name(self, name: str) -> Optional[dict[str, Any]]:
+    def find_by_name(self, name: str) -> dict[str, Any] | None:
         """Find an agent or tool by name."""
         for agent in self._registry.get("agents", []):
             if agent.get("name") == name:

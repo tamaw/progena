@@ -1,17 +1,16 @@
 """Tests for LangGraph nodes."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from datetime import datetime, timezone
+
+import pytest
 
 from app.progenitor.state.models import (
-    ProgenitorState,
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
     Decision,
     DecisionAction,
-    ConversationMessage,
+    ProgenitorState,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
 
 
@@ -347,8 +346,8 @@ class TestCycleLimitNode:
     @pytest.mark.asyncio
     async def test_cycle_limit_under_limit(self):
         """Test cycle limit when under limit."""
-        from app.progenitor.nodes import cycle_limit
         from app.progenitor.config import ProgenitorConfig, RuntimeConfig
+        from app.progenitor.nodes import cycle_limit
 
         # Create a minimal config
         config = ProgenitorConfig(
@@ -368,8 +367,8 @@ class TestCycleLimitNode:
     @pytest.mark.asyncio
     async def test_cycle_limit_at_limit(self):
         """Test cycle limit when at limit."""
-        from app.progenitor.nodes import cycle_limit
         from app.progenitor.config import ProgenitorConfig, RuntimeConfig
+        from app.progenitor.nodes import cycle_limit
 
         # Create config with low limit
         config = ProgenitorConfig(

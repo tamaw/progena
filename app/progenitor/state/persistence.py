@@ -20,10 +20,9 @@ import logging
 import os
 import sys
 import tempfile
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiofiles
 
@@ -100,7 +99,7 @@ class StatePersistence:
         async with lock:
             yield
 
-    async def read(self, filename: str) -> Optional[dict[str, Any]]:
+    async def read(self, filename: str) -> dict[str, Any] | None:
         """Read a JSON file asynchronously.
 
         Args:
@@ -110,13 +109,10 @@ class StatePersistence:
             Parsed JSON data or None if file doesn't exist.
         """
         filepath = self.state_dir / filename
-
-        metrics = None
-        span = None
         if not filepath.exists():
             return None
 
-        async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding='utf-8') as f:
             content = await f.read()
             return json.loads(content)
 
@@ -135,6 +131,9 @@ class StatePersistence:
             data: Data to serialize and write.
         """
         filepath = self.state_dir / filename
+
+        metrics = None
+        span = None
 
         # Create temp file in same directory for atomic rename
         fd, tmp_path = tempfile.mkstemp(
@@ -197,7 +196,7 @@ class StatePersistence:
     async def read_jsonl(
         self,
         filename: str,
-        limit: Optional[int] = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Read entries from a JSONL log file.
 
@@ -213,7 +212,7 @@ class StatePersistence:
             return []
 
         entries = []
-        async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding='utf-8') as f:
             async for line in f:
                 if line.strip():
                     entries.append(json.loads(line))
@@ -226,7 +225,7 @@ class StatePersistence:
         self,
         filename: str,
         filter_fn,
-        limit: Optional[int] = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Read filtered entries from a JSONL log file.
 
@@ -243,7 +242,7 @@ class StatePersistence:
             return []
 
         entries = []
-        async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding='utf-8') as f:
             async for line in f:
                 if line.strip():
                     entry = json.loads(line)

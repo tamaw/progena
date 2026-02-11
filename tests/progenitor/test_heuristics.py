@@ -5,14 +5,15 @@ Verifies fast-path intent detection without LLM calls.
 """
 
 import pytest
+
 from app.progenitor.nodes.heuristics import (
+    extract_project_name_from_input,
+    extract_schedule_params,
     looks_like_agent_build_request,
-    looks_like_list_schedule_request,
     looks_like_build_status_request,
+    looks_like_list_schedule_request,
     looks_like_list_tools_request,
     looks_like_schedule_request,
-    extract_schedule_params,
-    extract_project_name_from_input,
 )
 
 

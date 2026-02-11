@@ -22,6 +22,14 @@ from typing import Any
 
 import aiofiles
 
+from ..runtime.time_utils import utcnow_isoformat
+from .models import (
+    ConversationMessage,
+    ScheduleEntry,
+    WorkItem,
+    redact_secrets,
+)
+
 logger = logging.getLogger(__name__)
 
 # Cross-platform file locking
@@ -37,14 +45,6 @@ else:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     def unlock_file(f):
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
-from ..runtime.time_utils import utcnow_isoformat
-from .models import (
-    ConversationMessage,
-    ScheduleEntry,
-    WorkItem,
-    redact_secrets,
-)
 
 
 class StateManager:
@@ -763,10 +763,9 @@ class StateManager:
             # CRITICAL: Skip build_state if suspended - the suspend handler
             # already saved it correctly with a full read-modify-write pattern.
             # The cache may be stale/incomplete.
-            if name == "build_state":
-                if data and data.get("build_phase") == "suspended":
-                    logger.debug("commit_state: Skipping build_state (already saved by suspend handler)")
-                    continue
+            if name == "build_state" and data and data.get("build_phase") == "suspended":
+                logger.debug("commit_state: Skipping build_state (already saved by suspend handler)")
+                continue
 
             async with self._file_lock(name):
                 await self._atomic_write_json(

@@ -6,19 +6,16 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from app.progenitor.config import (
-    ProgenitorConfig,
     LLMConfig,
+    ProgenitorConfig,
     RuntimeConfig,
-    StorageConfig,
-    CopilotConfig,
     SchedulerConfig,
+    StorageConfig,
     get_config,
     reload_config,
 )
-from app.progenitor.env_utils import env_bool, env_int, env_float, env_list
+from app.progenitor.env_utils import env_bool, env_float, env_int, env_list
 
 
 class TestEnvParsers:

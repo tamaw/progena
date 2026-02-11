@@ -12,15 +12,16 @@ Reads real state data from data/state/ directory:
 """
 
 import asyncio
+import contextlib
 import logging
 import time
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .state_reader import get_state_reader, StateSnapshot
+from .state_reader import get_state_reader
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,9 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 class BuildInfoResponse(BaseModel):
     """Build status information."""
     in_progress: bool = False
-    phase: Optional[str] = None  # observe, think, plan, build, execute, verify, learn
-    task_description: Optional[str] = None
-    started_at: Optional[str] = None
+    phase: str | None = None  # observe, think, plan, build, execute, verify, learn
+    task_description: str | None = None
+    started_at: str | None = None
     iteration: int = 0
     score: float = 0.0
     message_count: int = 0
@@ -46,18 +47,18 @@ class UIStatusResponse(BaseModel):
     progenitor_status: str = "unknown"  # Raw status from health.json
     uptime_seconds: float
     version: str
-    memory_mb: Optional[float] = None
+    memory_mb: float | None = None
     active_requests: int
     rate_limit_minute_limit: int
     rate_limit_hour_limit: int
     # State data
     cycle_count: int = 0
-    run_id: Optional[str] = None
+    run_id: str | None = None
     messages_count: int = 0
-    pid: Optional[int] = None
-    last_active: Optional[str] = None
+    pid: int | None = None
+    last_active: str | None = None
     # Build status
-    build: Optional[BuildInfoResponse] = None
+    build: BuildInfoResponse | None = None
     # Lists
     loops: list["LoopInfo"] = []
     agents: list["SubAgentInfo"] = []
@@ -69,7 +70,7 @@ class LoopInfo(BaseModel):
     """Processing loop information (Planner/Executor)."""
     name: str
     status: str
-    current_task: Optional[str] = None
+    current_task: str | None = None
 
 
 class LoopsResponse(BaseModel):
@@ -85,8 +86,8 @@ class SubAgentInfo(BaseModel):
     version: str = "0.1.0"
     description: str = ""
     transport: str = "stdio"
-    task: Optional[str] = None
-    progress: Optional[int] = None
+    task: str | None = None
+    progress: int | None = None
 
 
 class SubAgentsResponse(BaseModel):
@@ -114,7 +115,7 @@ class ScheduleItemInfo(BaseModel):
     id: str
     name: str
     schedule: str
-    next_run: Optional[str]
+    next_run: str | None
     enabled: bool
 
 
@@ -129,8 +130,8 @@ class TaskInfo(BaseModel):
     id: str
     title: str
     status: str
-    description: Optional[str] = None
-    progress: Optional[int] = None
+    description: str | None = None
+    progress: int | None = None
 
 
 class TasksResponse(BaseModel):
@@ -227,8 +228,8 @@ async def get_ui_status_snapshot():
             build=build_info,
             # Lists
             loops=[
-                LoopInfo(name=l.name, status=l.status, current_task=l.current_task)
-                for l in snapshot.loops
+                LoopInfo(name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task)
+                for loop_item in snapshot.loops
             ],
             agents=[
                 SubAgentInfo(
@@ -266,8 +267,8 @@ async def get_loops():
 
     return LoopsResponse(
         loops=[
-            LoopInfo(name=l.name, status=l.status, current_task=l.current_task)
-            for l in loops
+            LoopInfo(name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task)
+            for loop_item in loops
         ]
     )
 
@@ -365,8 +366,8 @@ async def get_telegram_status():
     Shows whether Telegram is enabled, connected, and whether
     messages will be forwarded to Telegram (no web clients connected).
     """
-    from .telegram_client import get_telegram_client
     from . import main as chat_main
+    from .telegram_client import get_telegram_client
 
     telegram = get_telegram_client()
     subscriber_counts = get_subscriber_counts()
@@ -536,7 +537,7 @@ class AgentDetailResponse(BaseModel):
     total_tokens_input: int = 0
     total_tokens_output: int = 0
     avg_response_time: float = 0.0
-    last_active: Optional[str] = None
+    last_active: str | None = None
     uptime_seconds: float = 0.0
     # Recent activity
     recent_requests: list[dict] = []
@@ -587,8 +588,8 @@ async def get_prompts():
 
 @router.get("/logs")
 async def get_logs(
-    level: Optional[str] = None,
-    search: Optional[str] = None,
+    level: str | None = None,
+    search: str | None = None,
     limit: int = 500,
     format: str = "text",
 ):
@@ -603,9 +604,9 @@ async def get_logs(
 
     Returns recent logs from the agent.
     """
-    from pathlib import Path
     import json as json_module
     import re
+    from pathlib import Path
 
     logs_dir = Path("logs")
     log_entries = []
@@ -620,7 +621,7 @@ async def get_logs(
             recent_log = log_files[0]
 
             # Read last N lines
-            with open(recent_log, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(recent_log, encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
                 lines = lines[-limit:]
 
@@ -724,10 +725,10 @@ _chat_subscribers: list[asyncio.Queue] = []  # For IPC events (chat, tasks, aler
 _status_subscribers: list[asyncio.Queue] = []  # For state file status updates
 
 # Shutdown event for SSE connections
-_sse_shutdown_event: Optional[asyncio.Event] = None
+_sse_shutdown_event: asyncio.Event | None = None
 
 # Status monitor state
-_status_monitor_task: Optional[asyncio.Task] = None
+_status_monitor_task: asyncio.Task | None = None
 _last_status: dict = {}
 
 # Track active SSE response tasks so we can cancel them on shutdown
@@ -785,8 +786,8 @@ async def _get_current_status() -> dict:
         "last_active": snapshot.health.last_active,
         # Loops
         "loops": [
-            {"name": l.name, "status": l.status, "current_task": l.current_task}
-            for l in snapshot.loops
+            {"name": loop_item.name, "status": loop_item.status, "current_task": loop_item.current_task}
+            for loop_item in snapshot.loops
         ],
         # Agents
         "agents": [
@@ -891,10 +892,7 @@ def _status_changed(current: dict, previous: dict) -> bool:
     # Check memory change > 10MB
     curr_mem = current.get("memory_mb") or 0
     prev_mem = previous.get("memory_mb") or 0
-    if abs(curr_mem - prev_mem) > 10:
-        return True
-
-    return False
+    return abs(curr_mem - prev_mem) > 10
 
 
 def start_status_monitor():
@@ -949,16 +947,12 @@ async def close_all_sse_connections():
     }
 
     for queue in _chat_subscribers:
-        try:
+        with contextlib.suppress(asyncio.QueueFull):
             queue.put_nowait(shutdown_data)
-        except asyncio.QueueFull:
-            pass
 
     for queue in _status_subscribers:
-        try:
+        with contextlib.suppress(asyncio.QueueFull):
             queue.put_nowait(shutdown_data)
-        except asyncio.QueueFull:
-            pass
 
     # Give connections a moment to receive the shutdown message and exit cleanly
     await asyncio.sleep(0.5)
@@ -1001,7 +995,6 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
 
     Does NOT receive status/health updates (use /status for those).
     """
-    import json
 
     queue: asyncio.Queue = asyncio.Queue()
     _chat_subscribers.append(queue)
@@ -1035,7 +1028,7 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
                     break
 
                 yield f"event: {event['type']}\ndata: {event['data']}\n\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Check shutdown again on timeout
                 if shutdown_event.is_set():
                     yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
@@ -1043,10 +1036,8 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
                 # Send heartbeat (no status payload - just keepalive)
                 yield f'event: heartbeat\ndata: {{"timestamp": {time.time()}}}\n\n'
     except asyncio.CancelledError:
-        try:
+        with contextlib.suppress(Exception):
             yield 'event: shutdown\ndata: {"reason": "connection_cancelled", "message": "Connection closed"}\n\n'
-        except Exception:
-            pass
     finally:
         if queue in _chat_subscribers:
             _chat_subscribers.remove(queue)
@@ -1101,7 +1092,7 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
                     break
 
                 yield f"event: {event['type']}\ndata: {event['data']}\n\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Check shutdown again on timeout
                 if shutdown_event.is_set():
                     yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
@@ -1110,10 +1101,8 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
                 heartbeat_status = await _get_current_status()
                 yield f"event: heartbeat\ndata: {json.dumps(heartbeat_status)}\n\n"
     except asyncio.CancelledError:
-        try:
+        with contextlib.suppress(Exception):
             yield 'event: shutdown\ndata: {"reason": "connection_cancelled", "message": "Connection closed"}\n\n'
-        except Exception:
-            pass
     finally:
         if queue in _status_subscribers:
             _status_subscribers.remove(queue)
@@ -1269,7 +1258,7 @@ def broadcast_alert(alert: AlertInfo):
     })
 
 
-def broadcast_status_change(status: str, details: Optional[dict] = None):
+def broadcast_status_change(status: str, details: dict | None = None):
     """Broadcast a status change to all subscribers."""
     # Status changes go to status stream
     broadcast_status_event("status", {

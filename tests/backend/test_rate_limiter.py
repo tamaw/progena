@@ -2,7 +2,6 @@
 
 import time
 import unittest
-from unittest.mock import patch
 
 
 class TestRateLimiterMemoryBounds(unittest.TestCase):
@@ -128,7 +127,7 @@ class TestRateLimiterMemoryBounds(unittest.TestCase):
         limiter = self.RateLimiter()
         limiter.MAX_TRACKED_CLIENTS = 100  # Small for testing
 
-        now = time.time()
+        time.time()
 
         # Simulate many unique clients (more than limit)
         for i in range(150):

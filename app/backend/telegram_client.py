@@ -15,11 +15,13 @@ Features:
 """
 
 import asyncio
+import contextlib
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Optional, Callable, Awaitable, Any
 from collections import deque
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 
@@ -110,7 +112,7 @@ class TelegramRateLimiter:
 
 
 # Type for message handler callback
-MessageHandler = Callable[[str, str, dict], Awaitable[Optional[str]]]
+MessageHandler = Callable[[str, str, dict], Awaitable[str | None]]
 
 
 class TelegramClient:
@@ -129,16 +131,16 @@ class TelegramClient:
             config: Telegram configuration.
         """
         self.config = config
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         self._rate_limiter = TelegramRateLimiter(config.rate_limit_per_minute)
         self._started = False
         # Polling state
-        self._polling_task: Optional[asyncio.Task] = None
+        self._polling_task: asyncio.Task | None = None
         self._last_update_id: int = 0
-        self._message_handler: Optional[MessageHandler] = None
+        self._message_handler: MessageHandler | None = None
         self._processing_messages: set[int] = set()  # Track messages being processed
 
-    def set_message_handler(self, handler: Optional[MessageHandler]) -> None:
+    def set_message_handler(self, handler: MessageHandler | None) -> None:
         """Set the handler for incoming messages.
 
         Args:
@@ -205,10 +207,8 @@ class TelegramClient:
         """Stop the polling task."""
         if self._polling_task:
             self._polling_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._polling_task
-            except asyncio.CancelledError:
-                pass
             self._polling_task = None
             logger.info("Telegram polling stopped")
 
@@ -374,7 +374,7 @@ class TelegramClient:
         # Process regular message with handler
         if self._message_handler:
             self._processing_messages.add(message_id)
-            typing_task: Optional[asyncio.Task] = None
+            typing_task: asyncio.Task | None = None
             try:
                 # Start a background task to keep typing indicator active
                 typing_task = asyncio.create_task(
@@ -405,15 +405,13 @@ class TelegramClient:
                 # Stop the typing indicator task
                 if typing_task:
                     typing_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await typing_task
-                    except asyncio.CancelledError:
-                        pass
                 self._processing_messages.discard(message_id)
         else:
             logger.warning("No message handler configured, ignoring message")
 
-    async def _handle_command(self, chat_id: str, text: str, message: dict) -> None:
+    async def _handle_command(self, chat_id: str, text: str, _message: dict) -> None:
         """Handle bot commands.
 
         Args:
@@ -505,7 +503,7 @@ class TelegramClient:
         self,
         chat_id: str,
         text: str,
-        parse_mode: Optional[str] = None,
+        parse_mode: str | None = None,
         disable_notification: bool = False,
     ) -> bool:
         """Send a message to a specific chat.
@@ -557,9 +555,9 @@ class TelegramClient:
     async def _api_call_with_error_type(
         self,
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         retry: bool = True,
-    ) -> tuple[Optional[Any], str | None]:
+    ) -> tuple[Any | None, str | None]:
         """Make a Telegram Bot API call with retry logic and error type reporting.
 
         Args:
@@ -642,7 +640,7 @@ class TelegramClient:
                     last_error = f"API error {error_code}: {description}"
                     last_error_type = "error"
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 last_error = "Request timeout"
                 last_error_type = "timeout"
                 # Don't log timeout as error for getUpdates (it's expected)
@@ -679,9 +677,9 @@ class TelegramClient:
     async def _api_call(
         self,
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         retry: bool = True,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """Make a Telegram Bot API call with retry logic.
 
         Args:
@@ -730,11 +728,7 @@ class TelegramClient:
             else:
                 # Look for space to split at
                 space_pos = chunk.rfind(" ")
-                if space_pos > max_len // 2:
-                    split_at = space_pos + 1
-                else:
-                    # Hard split at max length
-                    split_at = max_len
+                split_at = space_pos + 1 if space_pos > max_len // 2 else max_len
 
             chunks.append(remaining[:split_at].rstrip())
             remaining = remaining[split_at:].lstrip()
@@ -744,7 +738,7 @@ class TelegramClient:
     async def send_message(
         self,
         text: str,
-        parse_mode: Optional[str] = None,
+        parse_mode: str | None = None,
         disable_notification: bool = False,
     ) -> bool:
         """Send a text message to the configured chat.
@@ -789,15 +783,15 @@ class TelegramClient:
 
 
 # Global client instance
-_telegram_client: Optional[TelegramClient] = None
+_telegram_client: TelegramClient | None = None
 
 
-def get_telegram_client() -> Optional[TelegramClient]:
+def get_telegram_client() -> TelegramClient | None:
     """Get the global Telegram client instance."""
     return _telegram_client
 
 
-async def init_telegram_client(config: ChatServerConfig) -> Optional[TelegramClient]:
+async def init_telegram_client(config: ChatServerConfig) -> TelegramClient | None:
     """Initialize the global Telegram client.
 
     Args:

@@ -1,12 +1,12 @@
 """Tests for the self-reflection tool."""
 
+
 import pytest
-from pathlib import Path
 
 from app.progenitor.tools.self_reflect import (
+    SELF_REFLECT_TOOL_SPEC,
     SelfReflection,
     execute_self_reflect,
-    SELF_REFLECT_TOOL_SPEC,
 )
 
 

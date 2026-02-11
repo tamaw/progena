@@ -36,6 +36,7 @@ class CurrentTimeTool(BaseSystemTool):
         ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
+        _ = context
         return ToolResult.ok({
             "utc_time": utcnow_isoformat(),
             "timezone": "UTC",

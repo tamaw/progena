@@ -19,12 +19,13 @@ Message Types:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import struct
-from dataclasses import dataclass, asdict
-from enum import Enum
-from typing import Any, Optional, Union
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10MB max message size
 ENCODING = "utf-8"
 
 
-class MessageType(str, Enum):
+class MessageType(StrEnum):
     """IPC message types."""
 
     # Request messages (client -> server)
@@ -60,13 +61,13 @@ class IPCMessage:
 
     type: MessageType
     content: str = ""
-    request_id: Optional[str] = None
+    request_id: str | None = None
     is_final: bool = False
     stream: bool = False
-    metadata: Optional[dict[str, Any]] = None
-    error_code: Optional[str] = None
-    timestamp: Optional[str] = None
-    event_type: Optional[str] = None  # For AGENT_EVENT: 'backlog_update', 'schedule_triggered', etc.
+    metadata: dict[str, Any] | None = None
+    error_code: str | None = None
+    timestamp: str | None = None
+    event_type: str | None = None  # For AGENT_EVENT: 'backlog_update', 'schedule_triggered', etc.
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -94,11 +95,8 @@ class IPCMessage:
     def from_dict(cls, data: dict[str, Any]) -> "IPCMessage":
         """Create from dictionary."""
         msg_type = data.get("type", "")
-        try:
+        with contextlib.suppress(ValueError):
             msg_type = MessageType(msg_type)
-        except ValueError:
-            # Keep as string if unknown type
-            pass
 
         return cls(
             type=msg_type,
@@ -113,7 +111,7 @@ class IPCMessage:
         )
 
 
-def encode_message(message: Union[IPCMessage, dict[str, Any]]) -> bytes:
+def encode_message(message: IPCMessage | dict[str, Any]) -> bytes:
     """Encode a message for transmission.
 
     Args:
@@ -125,10 +123,7 @@ def encode_message(message: Union[IPCMessage, dict[str, Any]]) -> bytes:
     Raises:
         ValueError: If message exceeds maximum size.
     """
-    if isinstance(message, IPCMessage):
-        payload = message.to_dict()
-    else:
-        payload = message
+    payload = message.to_dict() if isinstance(message, IPCMessage) else message
 
     json_bytes = json.dumps(payload).encode(ENCODING)
 
@@ -158,8 +153,8 @@ def decode_message(data: bytes) -> IPCMessage:
 
 async def read_message(
     reader: asyncio.StreamReader,
-    timeout: Optional[float] = None,
-) -> Optional[IPCMessage]:
+    timeout: float | None = None,
+) -> IPCMessage | None:
     """Read a message from an async stream.
 
     Args:
@@ -201,7 +196,7 @@ async def read_message(
     except asyncio.IncompleteReadError:
         # Connection closed cleanly
         return None
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise
     except OSError as e:
         # Handle Windows-specific network errors (e.g., WinError 64)
@@ -214,7 +209,7 @@ async def read_message(
 
 async def write_message(
     writer: asyncio.StreamWriter,
-    message: Union[IPCMessage, dict[str, Any]],
+    message: IPCMessage | dict[str, Any],
 ) -> None:
     """Write a message to an async stream.
 
@@ -230,7 +225,7 @@ async def write_message(
 # Convenience functions for creating messages
 def user_message(
     content: str,
-    request_id: Optional[str] = None,
+    request_id: str | None = None,
     stream: bool = False,
 ) -> IPCMessage:
     """Create a user message."""
@@ -244,7 +239,7 @@ def user_message(
 
 def assistant_message(
     content: str,
-    request_id: Optional[str] = None,
+    request_id: str | None = None,
 ) -> IPCMessage:
     """Create an assistant response message."""
     return IPCMessage(
@@ -257,7 +252,7 @@ def assistant_message(
 
 def stream_chunk(
     content: str,
-    request_id: Optional[str] = None,
+    request_id: str | None = None,
     is_final: bool = False,
 ) -> IPCMessage:
     """Create a streaming chunk message."""
@@ -269,7 +264,7 @@ def stream_chunk(
     )
 
 
-def stream_end(request_id: Optional[str] = None) -> IPCMessage:
+def stream_end(request_id: str | None = None) -> IPCMessage:
     """Create a stream end message."""
     return IPCMessage(
         type=MessageType.STREAM_END,
@@ -280,8 +275,8 @@ def stream_end(request_id: Optional[str] = None) -> IPCMessage:
 
 def error_message(
     content: str,
-    error_code: Optional[str] = None,
-    request_id: Optional[str] = None,
+    error_code: str | None = None,
+    request_id: str | None = None,
 ) -> IPCMessage:
     """Create an error message."""
     return IPCMessage(
@@ -315,7 +310,7 @@ def shutdown_message() -> IPCMessage:
 def agent_event(
     event_type: str,
     content: str = "",
-    metadata: Optional[dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> IPCMessage:
     """Create an agent event message for background notifications.
 

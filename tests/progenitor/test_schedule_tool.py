@@ -1,18 +1,18 @@
 """Tests for the schedule management tool (simplified model)."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import timedelta
 
-from app.progenitor.tools.schedule import (
-    add_scheduled_task,
-    remove_scheduled_task,
-    list_scheduled_tasks,
-    ScheduleResult,
-    SCHEDULE_TOOL_SPEC,
-)
-from app.progenitor.state.models import ScheduleEntry
+import pytest
+
 from app.progenitor.runtime.time_utils import utcnow
+from app.progenitor.state.models import ScheduleEntry
+from app.progenitor.tools.schedule import (
+    SCHEDULE_TOOL_SPEC,
+    ScheduleResult,
+    add_scheduled_task,
+    list_scheduled_tasks,
+    remove_scheduled_task,
+)
 
 
 class TestAddScheduledTask:

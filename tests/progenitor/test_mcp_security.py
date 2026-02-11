@@ -1,7 +1,8 @@
 """Tests for MCP client security features."""
 
 import pytest
-from app.progenitor.tools.mcp import _validate_command, ALLOWED_COMMAND_PREFIXES
+
+from app.progenitor.tools.mcp import ALLOWED_COMMAND_PREFIXES, _validate_command
 
 
 class TestCommandValidation:

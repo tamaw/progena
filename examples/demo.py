@@ -6,14 +6,14 @@ Run with: python examples/demo.py [1|2|3]
 """
 
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.backend.config import ChatServerConfig
 from app.backend.client import ProgenitorClient
+from app.backend.config import ChatServerConfig
 
 
 async def demo_async_client():

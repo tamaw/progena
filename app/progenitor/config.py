@@ -305,7 +305,7 @@ class ProgenitorConfig:
     validation: ValidationConfig = field(default_factory=ValidationConfig)
 
     @classmethod
-    def load(cls, project_root: Path | None = None, config_dir: Path | None = None) -> "ProgenitorConfig":
+    def load(cls, project_root: Path | None = None, _config_dir: Path | None = None) -> "ProgenitorConfig":
         """Load complete configuration from environment and files.
 
         Configuration is sourced from environment variables.

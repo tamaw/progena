@@ -5,13 +5,13 @@ Provides a centralized container for all node dependencies,
 reducing manual wiring and improving testability.
 """
 
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from ..config import ProgenitorConfig
 from ..state.models import ProgenitorState
-
 
 # ============================================================================
 # Protocols for dependency interfaces
@@ -50,7 +50,7 @@ class LLMClientProtocol(Protocol):
     async def generate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> str:
         """Generate text completion."""
         ...
@@ -85,7 +85,7 @@ class ToolRegistryProtocol(Protocol):
         """Get all available capabilities."""
         ...
 
-    def find_by_name(self, name: str) -> Optional[Any]:
+    def find_by_name(self, name: str) -> Any | None:
         """Find a tool by name."""
         ...
 
@@ -117,7 +117,7 @@ class NodeDependencies:
     state_manager: StateManagerProtocol
     tool_registry: ToolRegistryProtocol
     config: ProgenitorConfig
-    worktrees_dir: Optional[Path] = None
+    worktrees_dir: Path | None = None
 
     # Optional overrides for specific components
     custom_nodes: dict[str, Callable] = field(default_factory=dict)
@@ -144,23 +144,23 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         Dictionary mapping node names to their async functions.
     """
     from ..nodes import (
-        decide,
-        planner,
-        intake,
-        observe,
-        think,
         act,
-        execute,
-        verify_loop,
-        learn,
-        respond,
-        idle,
         commit_core,
-        time_check,
-        enqueue_due,
-        pick_next,
         cycle_limit,
+        decide,
+        enqueue_due,
+        execute,
+        idle,
+        intake,
+        learn,
+        observe,
+        pick_next,
+        planner,
+        respond,
+        think,
+        time_check,
         validate,
+        verify_loop,
         worktree_prep,
     )
 
@@ -243,10 +243,10 @@ def create_node_subset(
 # ============================================================================
 
 def create_test_dependencies(
-    llm_client: Optional[LLMClientProtocol] = None,
-    state_manager: Optional[StateManagerProtocol] = None,
-    tool_registry: Optional[ToolRegistryProtocol] = None,
-    config: Optional[ProgenitorConfig] = None,
+    llm_client: LLMClientProtocol | None = None,
+    state_manager: StateManagerProtocol | None = None,
+    tool_registry: ToolRegistryProtocol | None = None,
+    config: ProgenitorConfig | None = None,
 ) -> NodeDependencies:
     """Create dependencies with test defaults.
 

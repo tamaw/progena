@@ -1,11 +1,9 @@
 """Tests for Copilot ACP (Agent Client Protocol) integration."""
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -67,7 +65,7 @@ class TestCopilotACPManager(unittest.IsolatedAsyncioTestCase):
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
         with patch("app.progenitor.runtime.copilot_acp.logger") as mock_logger:
-            manager = CopilotACPManager(
+            CopilotACPManager(
                 copilot_cmd="test-copilot",
                 model="test-model",
                 yolo=True,
@@ -238,8 +236,8 @@ class TestCopilotCLIWithACP(unittest.IsolatedAsyncioTestCase):
 
     async def test_copilot_cli_uses_provided_manager(self):
         """Test that CopilotCLI uses provided manager."""
-        from app.progenitor.tools.copilot import CopilotCLI
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
+        from app.progenitor.tools.copilot import CopilotCLI
 
         mock_manager = MagicMock(spec=CopilotACPManager)
 
@@ -268,8 +266,8 @@ class TestCopilotCLIWithACP(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_calls_acp_manager(self):
         """Test that build() uses ACP manager."""
-        from app.progenitor.tools.copilot import CopilotCLI
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
+        from app.progenitor.tools.copilot import CopilotCLI
 
         mock_manager = AsyncMock(spec=CopilotACPManager)
         mock_manager.prompt = AsyncMock(return_value={
@@ -300,8 +298,8 @@ class TestCopilotCLIWithACP(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_handles_error(self):
         """Test that build() handles ACP errors."""
-        from app.progenitor.tools.copilot import CopilotCLI
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
+        from app.progenitor.tools.copilot import CopilotCLI
 
         mock_manager = AsyncMock(spec=CopilotACPManager)
         mock_manager.prompt = AsyncMock(return_value={
@@ -341,8 +339,8 @@ class TestCopilotCLISummaryExtraction(unittest.IsolatedAsyncioTestCase):
 
     async def test_extract_summary_from_output(self):
         """Test extracting summary section from output."""
-        from app.progenitor.tools.copilot import CopilotCLI
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
+        from app.progenitor.tools.copilot import CopilotCLI
 
         mock_manager = MagicMock(spec=CopilotACPManager)
         cli = CopilotCLI(copilot_cmd=self.copilot_cmd, acp_manager=mock_manager)
@@ -361,8 +359,8 @@ Files changed: 3
 
     async def test_extract_summary_no_summary(self):
         """Test extracting summary when none present."""
-        from app.progenitor.tools.copilot import CopilotCLI
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
+        from app.progenitor.tools.copilot import CopilotCLI
 
         mock_manager = MagicMock(spec=CopilotACPManager)
         cli = CopilotCLI(copilot_cmd=self.copilot_cmd, acp_manager=mock_manager)

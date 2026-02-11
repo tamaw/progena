@@ -11,21 +11,18 @@ Tests:
 - Network failures
 """
 
-import pytest
 import asyncio
 import json
-import logging
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
 
 from app.progenitor.error_handling import (
-    handle_recoverable,
-    classify_error,
-    ErrorSeverity,
     ErrorContext,
+    ErrorSeverity,
+    classify_error,
 )
-
 
 # ============================================================================
 # LLM Timeout Error Tests
@@ -40,14 +37,14 @@ class TestLLMTimeoutHandling:
         # Create mock that times out
         mock_client = AsyncMock()
         mock_client.chat_completion = AsyncMock(
-            side_effect=asyncio.TimeoutError("LLM request timed out")
+            side_effect=TimeoutError("LLM request timed out")
         )
 
         # Test with try/except pattern
         result = {"error": None}
         try:
             await mock_client.chat_completion(messages=[{"role": "user", "content": "test"}])
-        except asyncio.TimeoutError:
+        except TimeoutError:
             result = {"error": "timeout", "message": "LLM timed out"}
 
         assert result["error"] == "timeout"
@@ -61,7 +58,7 @@ class TestLLMTimeoutHandling:
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise asyncio.TimeoutError("Timeout")
+                raise TimeoutError("Timeout")
             return {"success": True}
 
         # Simulate retry logic
@@ -70,7 +67,7 @@ class TestLLMTimeoutHandling:
             try:
                 result = await flaky_call()
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if attempt == 4:
                     result = {"error": "max_retries"}
                 await asyncio.sleep(0.01)  # Brief backoff
@@ -82,7 +79,7 @@ class TestLLMTimeoutHandling:
     @pytest.mark.asyncio
     async def test_timeout_classification(self):
         """Timeout errors should be classified correctly."""
-        error = asyncio.TimeoutError("Request timed out")
+        error = TimeoutError("Request timed out")
         severity = classify_error(error)
 
         # Timeouts are recoverable
@@ -336,7 +333,7 @@ class TestNetworkFailures:
             return {"success": True}
 
         result: dict[str, Any] | None = None
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
                 result = await flaky_connection()
                 break
@@ -367,7 +364,7 @@ class TestNetworkFailures:
         errors = [
             (ConnectionRefusedError("refused"), ErrorSeverity.RECOVERABLE),
             (ConnectionResetError("reset"), ErrorSeverity.RECOVERABLE),
-            (asyncio.TimeoutError("timeout"), ErrorSeverity.RECOVERABLE),
+            (TimeoutError("timeout"), ErrorSeverity.RECOVERABLE),
         ]
 
         for error, expected_severity in errors:

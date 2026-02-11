@@ -10,8 +10,8 @@ Usage:
     python scripts/demo_ipc.py
 """
 
-import asyncio
 import argparse
+import asyncio
 import logging
 import sys
 

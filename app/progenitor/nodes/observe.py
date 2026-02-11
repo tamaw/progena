@@ -10,15 +10,14 @@ Refines ideal state, adds anti-criteria, tightens criteria based on:
 
 import logging
 import time
-from typing import Any, cast
+from typing import cast
 
-from ..state.models import ProgenitorState, ObservePhase
-from ..state.ideal_state import IdealStateBuilder, IdealState
-from ..state.helpers import get_ideal_state, set_ideal_state
-from ..constants import DEFAULT_VERIFICATION_TARGET_SCORE, DEFAULT_MAX_INNER_ITERATIONS
-from ..state.clarification import create_clarification_history_entry
+from ..constants import DEFAULT_MAX_INNER_ITERATIONS, DEFAULT_VERIFICATION_TARGET_SCORE
 from ..runtime.time_utils import utcnow_isoformat
-from . import NodeFunction, NodeStateUpdate
+from ..state.helpers import get_ideal_state, set_ideal_state
+from ..state.ideal_state import IdealState, IdealStateBuilder
+from ..state.models import ObservePhase, ProgenitorState
+from .types import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +198,7 @@ def create_node(
                 if build_settings:
                     bs_description = build_settings.get("description") if isinstance(build_settings, dict) else getattr(build_settings, "description", None)
                     bs_project_name = build_settings.get("project_name") if isinstance(build_settings, dict) else getattr(build_settings, "project_name", None)
-                    bs_user_request = build_settings.get("user_request") if isinstance(build_settings, dict) else getattr(build_settings, "user_request", None)
+                    build_settings.get("user_request") if isinstance(build_settings, dict) else getattr(build_settings, "user_request", None)
 
                     # If we have a refined description, use it to enhance the task
                     if bs_description and bs_description != task:
@@ -285,7 +284,7 @@ def create_node(
                 "learning_summary": None,  # Clear after consumption
             }
 
-        except Exception as e:
+        except Exception:
             raise
 
     return observe_node

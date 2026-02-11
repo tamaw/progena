@@ -8,7 +8,8 @@ Note: Backoff sleep is handled by the background worker loop, not here.
 """
 
 import logging
-from typing import Callable, Coroutine, Any, TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 from ..state.models import ProgenitorState
 

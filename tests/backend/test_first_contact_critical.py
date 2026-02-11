@@ -15,31 +15,19 @@ Tests cover:
 
 import asyncio
 import json
-import time
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
+
 from app.backend.main import app
 from app.backend.state_reader import (
-    StateReader,
-    StateSnapshot,
     HealthInfo,
-    AgentInfo,
-    ToolInfo,
-    BacklogItem,
-    ScheduleItem,
-    LoopInfo,
-    BuildInfo,
+    StateReader,
 )
 from app.backend.ui_routes import (
-    UIStatusResponse,
-    SubAgentInfo,
-    LoopInfo as UILoopInfo,
-    broadcast_chat_event,
     _chat_subscribers,
+    broadcast_chat_event,
 )
 
 
@@ -61,7 +49,7 @@ def complete_state_files(tmp_path):
     # Health file - agent is running strong
     health_data = {
         "status": "running",
-        "last_active": datetime.now(timezone.utc).isoformat(),
+        "last_active": datetime.now(UTC).isoformat(),
         "run_id": "first-contact-mission-001",
         "cycle_count": 1337,
         "pid": 42424,
@@ -129,7 +117,7 @@ def complete_state_files(tmp_path):
         "build_in_progress": True,
         "build_phase": "execute",
         "build_task_description": "Establishing first contact protocol",
-        "build_started_at": (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat(),
+        "build_started_at": (datetime.now(UTC) - timedelta(minutes=15)).isoformat(),
         "iteration": {"current": 7},
         "verification": {"current_score": 0.89},
         "build_messages": [
@@ -356,7 +344,7 @@ class TestRealTimeFeedbackConsistency:
         health_file = complete_state_files / "health.json"
         health = json.loads(health_file.read_text())
         health["cycle_count"] = 1338
-        health["last_active"] = datetime.now(timezone.utc).isoformat()
+        health["last_active"] = datetime.now(UTC).isoformat()
         health_file.write_text(json.dumps(health))
 
         # Clear cache to force re-read
@@ -429,7 +417,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         # Only write health file
         health_data = {
             "status": "running",
-            "last_active": datetime.now(timezone.utc).isoformat(),
+            "last_active": datetime.now(UTC).isoformat(),
             "run_id": "partial-run",
             "cycle_count": 10,
             "pid": 1234,
@@ -455,7 +443,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         state_dir.mkdir()
 
         # Write health with old last_active (2 minutes ago)
-        old_time = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        old_time = (datetime.now(UTC) - timedelta(minutes=2)).isoformat()
         health_data = {
             "status": "running",
             "last_active": old_time,
@@ -571,7 +559,7 @@ class TestDataIntegrityUnderAllConditions:
         # Recent timestamp should show running
         health3 = HealthInfo(
             status="running",
-            last_active=datetime.now(timezone.utc).isoformat(),
+            last_active=datetime.now(UTC).isoformat(),
             run_id="test",
             cycle_count=1,
             pid=1,
@@ -613,7 +601,7 @@ class TestSubAgentStatusVisibility:
 
         assert len(loops) == 2
 
-        loop_dict = {l.name: l for l in loops}
+        loop_dict = {loop_item.name: loop_item for loop_item in loops}
         assert "Planner" in loop_dict
         assert "Executor" in loop_dict
 

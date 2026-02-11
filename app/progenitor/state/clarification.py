@@ -11,11 +11,12 @@ This module integrates with the VERIFY phase as part of stop condition checking.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
-from ..runtime.time_utils import utcnow_isoformat
 from ..llm.prompts import PromptTemplates
+from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class ClarificationDetector:
         self,
         copilot_output: dict[str, Any],
         task_description: str,
-        ideal_state: Optional[Any] = None,
+        ideal_state: Any | None = None,
     ) -> ClarificationRequest:
         """
         Analyze Copilot output to detect if clarification is needed.
@@ -232,7 +233,7 @@ class ClarificationDetector:
         self,
         output: str,
         task_description: str,
-        ideal_state: Optional[Any],
+        ideal_state: Any | None,
         heuristic_result: ClarificationRequest,
     ) -> ClarificationRequest:
         """
@@ -305,7 +306,7 @@ class ClarificationDetector:
     async def format_user_question(
         self,
         clarification: ClarificationRequest,
-        task_description: str,
+        _task_description: str,
     ) -> str:
         """
         Format the clarification request into a user-friendly message.
@@ -326,7 +327,7 @@ class ClarificationDetector:
         message_parts = [
             "**Clarification Needed**",
             "",
-            f"While building your request, I need some additional information:",
+            "While building your request, I need some additional information:",
             "",
             f"❓ {base_question}",
             "",
@@ -352,7 +353,7 @@ class ClarificationDetector:
 
 def create_clarification_history_entry(
     clarification: ClarificationRequest,
-    user_response: Optional[str] = None,
+    user_response: str | None = None,
 ) -> dict[str, Any]:
     """Create a history entry for a clarification exchange."""
     return {

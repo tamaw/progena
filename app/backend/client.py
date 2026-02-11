@@ -11,11 +11,12 @@ CR-001 Improvements:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator, Optional
 
 from .config import ChatServerConfig
 
@@ -35,11 +36,12 @@ class ProgenitorClient:
 
     def __init__(self, config: ChatServerConfig):
         self.config = config
-        self._process: Optional[asyncio.subprocess.Process] = None
+        self._process: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
         self._started = False
         self._stderr_log = None
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._log_stack: contextlib.ExitStack | None = None
+        self._heartbeat_task: asyncio.Task | None = None
         self._last_heartbeat: float = 0
         self._restart_count: int = 0
         self._max_restarts: int = 3
@@ -64,7 +66,10 @@ class ProgenitorClient:
             logs_dir = Path(__file__).resolve().parents[2] / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
             stderr_path = logs_dir / "progenitor.client.stderr.log"
-            self._stderr_log = open(stderr_path, "a", encoding="utf-8")
+            self._log_stack = contextlib.ExitStack()
+            self._stderr_log = self._log_stack.enter_context(
+                stderr_path.open("a", encoding="utf-8")
+            )
 
             # Use module invocation to preserve package-relative imports
             self._process = await asyncio.create_subprocess_exec(
@@ -177,10 +182,8 @@ class ProgenitorClient:
             # Cancel heartbeat task first (CR-001)
             if self._heartbeat_task:
                 self._heartbeat_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._heartbeat_task
-                except asyncio.CancelledError:
-                    pass
                 self._heartbeat_task = None
 
             if self._process:
@@ -198,7 +201,7 @@ class ProgenitorClient:
                         self._process.wait(),
                         timeout=stop_timeout
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(
                         "Progenitor did not terminate in %ds, killing...",
                         stop_timeout
@@ -209,11 +212,14 @@ class ProgenitorClient:
                 if self._stderr_log:
                     self._stderr_log.close()
                     self._stderr_log = None
+                if self._log_stack:
+                    self._log_stack.close()
+                    self._log_stack = None
 
     async def send_message(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> str:
         """Send a message to Progenitor and get the response.
 
@@ -265,11 +271,11 @@ class ProgenitorClient:
                 response = json.loads(response_line.decode())
                 return response.get("content", str(response))
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise TimeoutError(
                     f"Progenitor did not respond within {self.config.progenitor_timeout}s"
                 )
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
                 # Return raw text if not JSON
                 self._last_heartbeat = time.time()  # CR-001
                 return response_line.decode().strip() if response_line else ""
@@ -277,7 +283,7 @@ class ProgenitorClient:
     async def send_message_stream(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response in real-time.
 
@@ -352,7 +358,7 @@ class ProgenitorClient:
                         # Unknown message type - log and continue
                         logger.debug("Received unknown message type: %s", msg_type)
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise TimeoutError(
                     f"Progenitor did not respond within {self.config.progenitor_timeout}s"
                 )
@@ -382,10 +388,10 @@ class ProgenitorClient:
 
 
 # Global client instance
-_client: Optional[ProgenitorClient] = None
+_client: ProgenitorClient | None = None
 
 
-def get_client(config: Optional[ChatServerConfig] = None) -> ProgenitorClient:
+def get_client(config: ChatServerConfig | None = None) -> ProgenitorClient:
     """Get or create the global Progenitor client."""
     global _client
     if _client is None:

@@ -33,23 +33,24 @@ Usage:
 import asyncio
 import functools
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager, contextmanager
-from enum import Enum
-from typing import Any, Callable, Optional, TypeVar, Union
+from enum import StrEnum
+from typing import Any, TypeVar
 
 from .nodes.errors import (
+    FatalError,
+    LLMError,
     NodeError,
     RecoverableError,
-    FatalError,
-    ValidationError,
-    LLMError,
     ToolError,
+    ValidationError,
 )
 
 T = TypeVar("T")
 
 
-class ErrorSeverity(str, Enum):
+class ErrorSeverity(StrEnum):
     """Error severity classification."""
     RECOVERABLE = "recoverable"
     FATAL = "fatal"
@@ -129,9 +130,9 @@ class ErrorContext:
 async def handle_recoverable(
     logger: logging.Logger,
     operation: str,
-    context: Optional[dict[str, Any]] = None,
+    context: dict[str, Any] | None = None,
     suppress: bool = False,
-    on_error: Optional[Callable[[Exception], Any]] = None,
+    on_error: Callable[[Exception], Any] | None = None,
 ):
     """Context manager for handling recoverable errors.
 
@@ -198,7 +199,7 @@ def handle_with_fallback(
     logger: logging.Logger,
     operation: str,
     fallback: Any,
-    context: Optional[dict[str, Any]] = None,
+    context: dict[str, Any] | None = None,
 ):
     """Context manager that returns fallback on error.
 
@@ -223,7 +224,7 @@ def handle_with_fallback(
     """
     class ResultContainer:
         value: Any = None
-        error: Optional[Exception] = None
+        error: Exception | None = None
 
     result = ResultContainer()
 
@@ -268,7 +269,7 @@ def wrap_recoverable(
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            last_error: Optional[Exception] = None
+            last_error: Exception | None = None
             delay = retry_delay
 
             for attempt in range(max_retries):

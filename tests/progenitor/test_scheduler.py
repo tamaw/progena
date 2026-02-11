@@ -1,7 +1,6 @@
 """Tests for scheduler (simplified model)."""
 
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from app.progenitor.runtime.scheduler import Scheduler
 from app.progenitor.runtime.time_utils import utcnow

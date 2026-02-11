@@ -6,13 +6,13 @@ Per loop.spec.md: "Final output must include a compact verification summary."
 Messages are stored in current_state.json (progenitor agent state).
 """
 
-from datetime import datetime
-from typing import Callable, Coroutine, Any, cast
 import uuid
+from collections.abc import Callable, Coroutine
+from typing import Any, cast
 
-from ..state.models import ProgenitorState, ConversationMessage, WorkItem
-from ..state.helpers import trim_conversation_history, get_ideal_state
 from ..runtime.time_utils import utcnow
+from ..state.helpers import get_ideal_state, trim_conversation_history
+from ..state.models import ConversationMessage, ProgenitorState, WorkItem
 
 
 def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
@@ -30,7 +30,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         """
         decision = state.get("current_decision")
         current_item = state.get("current_work_item")
-        user_input = state.get("current_input")
+        state.get("current_input")
 
         # Check if this is a clarification request
         clarification_updates: dict[str, Any] = {}
@@ -260,20 +260,20 @@ def _generate_response(decision, current_item, state: ProgenitorState) -> str | 
             entrypoint = new_agent_info.get("entrypoint", "")
 
             if test_passed:
-                agent_info = f"\n\n**Agent Ready for Interaction**\n"
+                agent_info = "\n\n**Agent Ready for Interaction**\n"
                 agent_info += f"✓ Agent `{agent_name}` is built, tested, and registered.\n"
                 agent_info += f"  - Entrypoint: `{entrypoint}`\n"
                 if test_response:
                     response_preview = str(test_response)[:200]
                     agent_info += f"  - Test response: {response_preview}\n"
-                agent_info += f"\nYou can now invoke this agent directly!"
+                agent_info += "\nYou can now invoke this agent directly!"
             else:
-                agent_info = f"\n\n**Agent Built (with warnings)**\n"
+                agent_info = "\n\n**Agent Built (with warnings)**\n"
                 agent_info += f"○ Agent `{agent_name}` is built and registered.\n"
                 test_error = new_agent_info.get("test_error")
                 if test_error:
                     agent_info += f"  - Test failed: {test_error[:200]}\n"
-                agent_info += f"  - Manual testing recommended before use."
+                agent_info += "  - Manual testing recommended before use."
 
             if response:
                 response += agent_info
@@ -349,9 +349,8 @@ def _count_pending(backlog: list) -> int:
         if isinstance(item, WorkItem):
             if item.is_pending:
                 count += 1
-        elif isinstance(item, dict):
-            if item.get("status") == "pending":
-                count += 1
+        elif isinstance(item, dict) and item.get("status") == "pending":
+            count += 1
     return count
 
 

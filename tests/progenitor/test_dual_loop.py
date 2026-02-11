@@ -5,16 +5,16 @@ Tests the core components: IdealState, Verifier, and phase nodes.
 """
 
 import pytest
+
 from app.progenitor.state.ideal_state import (
+    AntiCriterion,
+    CriterionType,
     IdealState,
     IdealStateBuilder,
-    SuccessCriterion,
-    AntiCriterion,
-    QualityBar,
     StopCondition,
-    CriterionType,
+    SuccessCriterion,
 )
-from app.progenitor.state.verifier import Verifier, VerificationReport
+from app.progenitor.state.verifier import VerificationReport, Verifier
 
 
 class TestIdealState:
@@ -228,8 +228,11 @@ class TestArtefactTracking:
 
     def test_state_has_artefact_fields(self):
         """Test that ProgenitorState has artefact tracking fields."""
-        from app.progenitor.state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
         import typing
+
+        from app.progenitor.state.models import (
+            ProgenitorState,
+        )
 
         # Check TypedDict has required fields (now nested)
         hints = typing.get_type_hints(ProgenitorState)
@@ -314,7 +317,7 @@ class TestPlanExperiment:
 
     def test_spec_doc_schema(self):
         """Test SpecDoc schema for persistent spec artifact."""
-        from app.progenitor.state.execution_schemas import SpecDoc, SpecDocHistory
+        from app.progenitor.state.execution_schemas import SpecDoc
 
         # Create a SpecDoc from seed
         spec = SpecDoc.create_from_seed(
@@ -400,7 +403,12 @@ class TestExecutePhase:
     async def test_execute_node_no_tools(self):
         """Test execute node when no tools are pending."""
         from app.progenitor.nodes import execute
-        from app.progenitor.state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
+        from app.progenitor.state.models import (
+            ProgenitorState,
+            WorkItem,
+            WorkItemStatus,
+            WorkItemType,
+        )
 
         # Mock tool registry
         class MockRegistry:
@@ -431,7 +439,12 @@ class TestExecutePhase:
     async def test_execute_node_with_pending_tools(self):
         """Test execute node with pending tool calls."""
         from app.progenitor.nodes import execute
-        from app.progenitor.state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
+        from app.progenitor.state.models import (
+            ProgenitorState,
+            WorkItem,
+            WorkItemStatus,
+            WorkItemType,
+        )
 
         # Mock tool registry
         class MockRegistry:
@@ -473,6 +486,7 @@ class TestIdealStateRefinement:
         """Test that violations become anti-criteria via LLM structured output."""
         import json
         from unittest.mock import AsyncMock
+
         from app.progenitor.state.ideal_state import IdealStateBuilder
 
         class _MockLLM:
@@ -531,9 +545,13 @@ class TestLoopSpecConformance:
     def test_inner_loop_phases_exist(self):
         """Test all inner loop phases are implemented."""
         from app.progenitor.nodes import (
-            observe, think, execute, verify_loop, learn
+            execute,
+            learn,
+            observe,
+            planner,  # PLAN phase
+            think,
+            verify_loop,
         )
-        from app.progenitor.nodes import planner  # PLAN phase
 
         # All phases should have create_node function
         assert hasattr(observe, "create_node")

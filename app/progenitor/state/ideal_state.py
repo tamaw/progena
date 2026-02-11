@@ -9,11 +9,12 @@ All LLM interactions use structured output (Pydantic models) for reliable
 parsing. Prompts are loaded from data/prompts/ via PromptTemplates.
 """
 
+import inspect
 import json
 import logging
 from datetime import datetime
-from enum import Enum
-from typing import Any, Optional, TypeVar, cast
+from enum import StrEnum
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -42,7 +43,7 @@ T = TypeVar('T', bound=BaseModel)
 # ============================================================================
 
 
-class CriterionType(str, Enum):
+class CriterionType(StrEnum):
     """Type of success criterion."""
     FUNCTIONAL = "functional"
     QUALITY = "quality"
@@ -193,10 +194,9 @@ class IdealState(BaseModel):
                     condition_met = True
                     reasons.append(f"Time limit {condition.threshold}s exceeded: {elapsed_time:.1f}s")
 
-            elif condition.condition_type == "tool_budget":
-                if tool_calls >= condition.threshold:
-                    condition_met = True
-                    reasons.append(f"Tool budget {condition.threshold} exhausted: {tool_calls} calls")
+            elif condition.condition_type == "tool_budget" and tool_calls >= condition.threshold:
+                condition_met = True
+                reasons.append(f"Tool budget {condition.threshold} exhausted: {tool_calls} calls")
 
             if condition_met:
                 met_condition_ids.append(condition.condition_type)
@@ -283,8 +283,16 @@ class IdealStateBuilder:
         schema_name: str,
     ) -> dict[str, Any]:
         """Get structured output response format, using provider-aware method if available."""
-        if hasattr(self.llm_client, '_get_json_response_format'):
-            return self.llm_client._get_json_response_format(response_model, schema_name)
+        response_format_fn = getattr(self.llm_client, "_get_json_response_format", None)
+        if callable(response_format_fn) and not inspect.iscoroutinefunction(response_format_fn):
+            response_format = response_format_fn(response_model, schema_name)
+            if inspect.isawaitable(response_format):
+                try:
+                    response_format.close()
+                except Exception:
+                    pass
+            else:
+                return response_format
         return _build_json_schema_format(response_model, schema_name)
 
     async def _structured_call(
@@ -323,7 +331,7 @@ class IdealStateBuilder:
     async def build_from_task(
         self,
         task_description: str,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> IdealState:
         """Build an ideal state from a task description using structured LLM output.
 
@@ -515,7 +523,7 @@ class IdealStateBuilder:
     async def suggest_verification_methods(
         self,
         ideal_state: IdealState,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> list[VerificationMethod]:
         """Use LLM to suggest verification methods for each success criterion.
 

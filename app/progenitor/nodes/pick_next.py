@@ -3,9 +3,10 @@ PickNext Node - Selects the next backlog item to process.
 """
 
 import logging
-from typing import Callable, Coroutine, Any
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from ..state.models import ProgenitorState, WorkItem, WorkItemStatus
+from ..state.models import ProgenitorState, WorkItem
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def _to_work_item(item) -> WorkItem | None:
         return item
     if isinstance(item, dict):
         try:
-            from ..state.models import WorkItemType, WorkItemStatus
+            from ..state.models import WorkItemStatus, WorkItemType
             item_type_str = item.get("item_type", "direct_answer")
             try:
                 item_type = WorkItemType(item_type_str)

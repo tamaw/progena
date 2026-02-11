@@ -8,11 +8,8 @@ Tests cover:
 4. check_submodule_exists - checks for existing submodule
 """
 
+
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-import tempfile
-import shutil
 
 from app.progenitor.tools.git import GitWorktreeManager
 
