@@ -4,8 +4,9 @@ Demo: Progenitor Responses API
 Shows the /v1/responses endpoint for interacting with the Progenitor agent.
 """
 
-import httpx
 import sys
+
+import httpx
 
 
 def demo_responses_api():

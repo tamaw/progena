@@ -11,24 +11,24 @@ deterministic processing without guessing what data is available.
 """
 
 from datetime import datetime
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from ..runtime.time_utils import utcnow
-
 
 # =============================================================================
 # BL-007: BuildSettings Schema - Structured output from LLM for build config
 # =============================================================================
 
-class BuildType(str, Enum):
+class BuildType(StrEnum):
     """Type of build - determines directory structure."""
     AGENT = "agent"  # app/agents/{project_name}/
     MCP = "mcp"      # app/mcp/{project_name}/
 
 
-class BuildStatus(str, Enum):
+class BuildStatus(StrEnum):
     """Status of a build operation."""
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
@@ -69,16 +69,16 @@ class BuildSettings(BaseModel):
 
     # Status tracking
     status: BuildStatus = Field(default=BuildStatus.PENDING, description="Current build status")
-    error_message: Optional[str] = Field(default=None, description="Error message if status is ERROR/FAILED")
+    error_message: str | None = Field(default=None, description="Error message if status is ERROR/FAILED")
 
     # Git submodule info (for isolated commits)
-    submodule_path: Optional[str] = Field(default=None, description="Path to git submodule if initialized")
+    submodule_path: str | None = Field(default=None, description="Path to git submodule if initialized")
     submodule_initialized: bool = Field(default=False, description="Whether submodule was created")
 
     # Timestamps
     created_at: datetime = Field(default_factory=utcnow, description="When build was initiated")
     updated_at: datetime = Field(default_factory=utcnow, description="Last update time")
-    completed_at: Optional[datetime] = Field(default=None, description="When build completed/failed")
+    completed_at: datetime | None = Field(default=None, description="When build completed/failed")
 
     @classmethod
     def create_from_llm_output(
@@ -101,10 +101,7 @@ class BuildSettings(BaseModel):
         safe_name = project_name.replace(" ", "_").replace("-", "_").lower()
 
         # Derive directories based on type
-        if build_type == BuildType.AGENT:
-            base_dir = "app/agents"
-        else:
-            base_dir = "app/mcp"
+        base_dir = "app/agents" if build_type == BuildType.AGENT else "app/mcp"
 
         project_dir = f"{base_dir}/{safe_name}"
 
@@ -167,7 +164,7 @@ class BuildSettings(BaseModel):
 # BL-001: ExecutionRun / ExecutionResult Schema
 # =============================================================================
 
-class ExecutionStatus(str, Enum):
+class ExecutionStatus(StrEnum):
     """Status of an execution run."""
     PENDING = "pending"
     RUNNING = "running"
@@ -185,18 +182,18 @@ class PromptResult(BaseModel):
     prompt_text: str = Field(description="The prompt that was sent")
 
     # Response data
-    response_text: Optional[str] = Field(default=None, description="Agent's response text")
-    response_data: Optional[dict[str, Any]] = Field(default=None, description="Structured response if applicable")
+    response_text: str | None = Field(default=None, description="Agent's response text")
+    response_data: dict[str, Any] | None = Field(default=None, description="Structured response if applicable")
 
     # Timing
-    started_at: Optional[datetime] = Field(default=None, description="When prompt was sent")
-    completed_at: Optional[datetime] = Field(default=None, description="When response was received")
-    duration_ms: Optional[float] = Field(default=None, description="Response time in milliseconds")
+    started_at: datetime | None = Field(default=None, description="When prompt was sent")
+    completed_at: datetime | None = Field(default=None, description="When response was received")
+    duration_ms: float | None = Field(default=None, description="Response time in milliseconds")
 
     # Status
     success: bool = Field(default=False, description="Whether the prompt executed successfully")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
-    error_type: Optional[str] = Field(default=None, description="Error classification")
+    error: str | None = Field(default=None, description="Error message if failed")
+    error_type: str | None = Field(default=None, description="Error classification")
 
     # Transcript for debugging
     transcript: list[dict[str, Any]] = Field(
@@ -220,13 +217,13 @@ class ExecutionRun(BaseModel):
 
     # Agent identification
     agent_name: str = Field(description="Name of the agent being exercised")
-    agent_endpoint: Optional[str] = Field(default=None, description="HTTP endpoint if applicable")
+    agent_endpoint: str | None = Field(default=None, description="HTTP endpoint if applicable")
     agent_transport: str = Field(default="http", description="Transport: http or stdio")
 
     # Execution details
     started_at: datetime = Field(default_factory=utcnow, description="When run started")
-    completed_at: Optional[datetime] = Field(default=None, description="When run completed")
-    duration_ms: Optional[float] = Field(default=None, description="Total duration in ms")
+    completed_at: datetime | None = Field(default=None, description="When run completed")
+    duration_ms: float | None = Field(default=None, description="Total duration in ms")
 
     # Prompt results
     prompt_results: list[PromptResult] = Field(
@@ -242,7 +239,7 @@ class ExecutionRun(BaseModel):
     prompts_succeeded: int = Field(default=0, description="Prompts that succeeded")
     prompts_failed: int = Field(default=0, description="Prompts that failed")
 
-    avg_response_time_ms: Optional[float] = Field(default=None, description="Average response time")
+    avg_response_time_ms: float | None = Field(default=None, description="Average response time")
 
     # Errors (aggregated)
     errors: list[str] = Field(default_factory=list, description="All error messages")
@@ -289,7 +286,7 @@ class ExecutionResult(BaseModel):
     """
 
     iteration: int = Field(description="Inner loop iteration number")
-    task_id: Optional[str] = Field(default=None, description="Task identifier")
+    task_id: str | None = Field(default=None, description="Task identifier")
 
     # Execution runs (typically one, but could be multiple for retries)
     runs: list[ExecutionRun] = Field(
@@ -299,7 +296,7 @@ class ExecutionResult(BaseModel):
 
     # Primary run (convenience accessor)
     @property
-    def primary_run(self) -> Optional[ExecutionRun]:
+    def primary_run(self) -> ExecutionRun | None:
         """Get the primary (last successful or last) execution run."""
         if not self.runs:
             return None
@@ -313,12 +310,12 @@ class ExecutionResult(BaseModel):
     status: ExecutionStatus = Field(default=ExecutionStatus.PENDING)
 
     # Build output (from BUILD phase, preserved for reference)
-    build_output: Optional[dict[str, Any]] = Field(default=None, description="Output from BUILD phase")
+    build_output: dict[str, Any] | None = Field(default=None, description="Output from BUILD phase")
 
     # Overall timing
     started_at: datetime = Field(default_factory=utcnow)
-    completed_at: Optional[datetime] = Field(default=None)
-    total_duration_ms: Optional[float] = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
+    total_duration_ms: float | None = Field(default=None)
 
     # Aggregated errors
     all_errors: list[str] = Field(default_factory=list, description="All errors across runs")
@@ -404,7 +401,7 @@ class PromptSpec(BaseModel):
         default_factory=list,
         description="Substrings that should NOT appear in response"
     )
-    expected_response_format: Optional[str] = Field(
+    expected_response_format: str | None = Field(
         default=None,
         description="Expected format: 'json', 'text', 'markdown', etc."
     )
@@ -429,10 +426,10 @@ class ScoringHook(BaseModel):
     hook_type: str = Field(description="Type: contains, regex, json_path, llm_judge, custom")
 
     # Configuration per type
-    pattern: Optional[str] = Field(default=None, description="Pattern for regex/contains hooks")
-    json_path: Optional[str] = Field(default=None, description="JSONPath for json_path hooks")
-    llm_prompt: Optional[str] = Field(default=None, description="Prompt for llm_judge hooks")
-    custom_function: Optional[str] = Field(default=None, description="Function name for custom hooks")
+    pattern: str | None = Field(default=None, description="Pattern for regex/contains hooks")
+    json_path: str | None = Field(default=None, description="JSONPath for json_path hooks")
+    llm_prompt: str | None = Field(default=None, description="Prompt for llm_judge hooks")
+    custom_function: str | None = Field(default=None, description="Function name for custom hooks")
 
     # Scoring
     max_score: float = Field(default=1.0, description="Max score this hook can award")
@@ -503,7 +500,7 @@ class ExperimentPlan(BaseModel):
     )
 
     # Optional reasoning trace from the LLM
-    reasoning_trace: Optional[str] = Field(
+    reasoning_trace: str | None = Field(
         default=None,
         description="Reasoning trace from the LLM, if available"
     )
@@ -555,7 +552,7 @@ class Risk(BaseModel):
     description: str = Field(description="What could go wrong")
     likelihood: str = Field(default="medium", description="low, medium, high")
     impact: str = Field(default="medium", description="low, medium, high")
-    mitigation: Optional[str] = Field(default=None, description="How to mitigate")
+    mitigation: str | None = Field(default=None, description="How to mitigate")
 
 
 class ExperimentPlanDelta(BaseModel):
@@ -573,7 +570,7 @@ class ExperimentPlanDelta(BaseModel):
         default_factory=list,
         description="Scoring hooks to add/modify"
     )
-    adjust_timeout_ms: Optional[int] = Field(
+    adjust_timeout_ms: int | None = Field(
         default=None,
         description="New timeout if different"
     )
@@ -610,7 +607,7 @@ class StructuredApproach(BaseModel):
     )
 
     # Experiment plan recommendations (BL-003 requirement)
-    recommended_plan_delta: Optional[ExperimentPlanDelta] = Field(
+    recommended_plan_delta: ExperimentPlanDelta | None = Field(
         default=None,
         description="Recommended changes to experiment plan"
     )
@@ -666,7 +663,7 @@ class ThinkOutput(BaseModel):
     )
 
     # Recommendation
-    recommended_approach_id: Optional[str] = Field(
+    recommended_approach_id: str | None = Field(
         default=None,
         description="ID of the recommended approach"
     )
@@ -676,7 +673,7 @@ class ThinkOutput(BaseModel):
     )
 
     # Optional reasoning trace from the LLM
-    reasoning_trace: Optional[str] = Field(
+    reasoning_trace: str | None = Field(
         default=None,
         description="Reasoning trace from the LLM, if available"
     )
@@ -695,23 +692,23 @@ class ValidationFinding(BaseModel):
     message: str = Field(description="Human-readable message")
 
     # Location (if applicable)
-    file_path: Optional[str] = Field(default=None, description="File where issue was found")
-    line_number: Optional[int] = Field(default=None, description="Line number")
+    file_path: str | None = Field(default=None, description="File where issue was found")
+    line_number: int | None = Field(default=None, description="Line number")
 
     # Severity (may be set by LLM structured output)
     severity: str = Field(default="medium", description="low, medium, high, critical")
 
     # Evidence
-    evidence: Optional[str] = Field(default=None, description="Supporting evidence (full text)")
+    evidence: str | None = Field(default=None, description="Supporting evidence (full text)")
 
     # Stack trace (parsed from Python tracebacks)
-    stack_trace: Optional[list[str]] = Field(
+    stack_trace: list[str] | None = Field(
         default=None,
         description="Parsed stack trace frames from Python errors"
     )
 
     # Suggested fix
-    suggested_fix: Optional[str] = Field(
+    suggested_fix: str | None = Field(
         default=None,
         description="Suggested remediation from LLM or heuristic"
     )
@@ -725,7 +722,7 @@ class ValidationFinding(BaseModel):
         default=False,
         description="Whether this finding is identified as a root cause"
     )
-    duplicate_of: Optional[str] = Field(
+    duplicate_of: str | None = Field(
         default=None,
         description="If this is a duplicate, the ID of the original"
     )
@@ -748,14 +745,14 @@ class ValidationAction(BaseModel):
     project_directory: str = Field(description="Directory the command ran in")
 
     # Results
-    exit_code: Optional[int] = Field(default=None, description="Process exit code")
-    stdout: Optional[str] = Field(default=None, description="Standard output (truncated)")
-    stderr: Optional[str] = Field(default=None, description="Standard error (truncated)")
-    duration_ms: Optional[float] = Field(default=None, description="Execution time in ms")
+    exit_code: int | None = Field(default=None, description="Process exit code")
+    stdout: str | None = Field(default=None, description="Standard output (truncated)")
+    stderr: str | None = Field(default=None, description="Standard error (truncated)")
+    duration_ms: float | None = Field(default=None, description="Execution time in ms")
 
     # Timing
     started_at: datetime = Field(default_factory=utcnow)
-    completed_at: Optional[datetime] = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
 
     # Status
     success: bool = Field(default=False, description="Whether the tool succeeded")
@@ -776,11 +773,11 @@ class ValidationStatistics(BaseModel):
     all_critical_passed: bool = Field(default=True)
 
     # Trend (compared to previous iteration)
-    previous_error_count: Optional[int] = Field(
+    previous_error_count: int | None = Field(
         default=None,
         description="Error count from previous validation"
     )
-    trend: Optional[str] = Field(
+    trend: str | None = Field(
         default=None,
         description="improving, stable, or degrading"
     )
@@ -804,7 +801,7 @@ class ValidationResultV2(BaseModel):
     validated_at: datetime = Field(default_factory=utcnow)
 
     # What was validated
-    execution_result_ref: Optional[str] = Field(
+    execution_result_ref: str | None = Field(
         default=None,
         description="Reference to the ExecutionResult being validated"
     )
@@ -833,7 +830,7 @@ class ValidationResultV2(BaseModel):
     )
 
     # Extended statistics
-    statistics: Optional[ValidationStatistics] = Field(
+    statistics: ValidationStatistics | None = Field(
         default=None,
         description="Extended validation statistics and trend data"
     )
@@ -854,7 +851,7 @@ class ValidationResultV2(BaseModel):
 
     def compute_statistics(
         self,
-        previous_error_count: Optional[int] = None,
+        previous_error_count: int | None = None,
         duplicates_suppressed: int = 0,
         patterns_detected: int = 0,
         smoke_test_passed: bool = False,
@@ -912,11 +909,11 @@ class CriterionEvidence(BaseModel):
     passed: bool = Field(description="Did it meet target?")
 
     # Evidence sources
-    execution_evidence: Optional[str] = Field(
+    execution_evidence: str | None = Field(
         default=None,
         description="Evidence from ExecutionResult"
     )
-    validation_evidence: Optional[str] = Field(
+    validation_evidence: str | None = Field(
         default=None,
         description="Evidence from ValidationResult"
     )
@@ -926,18 +923,18 @@ class CriterionEvidence(BaseModel):
         default="heuristic",
         description="heuristic, mechanical, llm_judge"
     )
-    mechanical_check: Optional[str] = Field(
+    mechanical_check: str | None = Field(
         default=None,
         description="Description of mechanical check if applicable"
     )
 
     # LLM assessment (only if needed for subjective criteria)
-    llm_assessment: Optional[str] = Field(
+    llm_assessment: str | None = Field(
         default=None,
         description="LLM's assessment if used"
     )
 
-    reasoning_trace: Optional[str] = Field(
+    reasoning_trace: str | None = Field(
         default=None,
         description="Reasoning trace from the LLM, if available"
     )
@@ -957,11 +954,11 @@ class VerificationReportV2(BaseModel):
     verified_at: datetime = Field(default_factory=utcnow)
 
     # Data sources
-    execution_result_ref: Optional[str] = Field(
+    execution_result_ref: str | None = Field(
         default=None,
         description="Reference to ExecutionResult"
     )
-    validation_result_ref: Optional[str] = Field(
+    validation_result_ref: str | None = Field(
         default=None,
         description="Reference to ValidationResult"
     )
@@ -1056,18 +1053,18 @@ class SpecDoc(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow, description="When last updated")
 
     # Context for what/who this spec is for
-    task_id: Optional[str] = Field(default=None, description="Work item ID this spec is for")
-    agent_name: Optional[str] = Field(default=None, description="Target agent name if applicable")
+    task_id: str | None = Field(default=None, description="Work item ID this spec is for")
+    agent_name: str | None = Field(default=None, description="Target agent name if applicable")
 
     # File path for copilot CLI consumption (now in app/agents/)
-    spec_file_path: Optional[str] = Field(
+    spec_file_path: str | None = Field(
         default=None,
         description="Path to the spec file in app/agents/ for copilot to reference"
     )
 
     # The prompt that instructs Copilot to read and build from the spec file
     # This is separate from the spec content itself - the prompt references the spec file
-    copilot_prompt: Optional[str] = Field(
+    copilot_prompt: str | None = Field(
         default=None,
         description="The prompt to send to Copilot that references the spec file"
     )
@@ -1079,7 +1076,7 @@ class SpecDoc(BaseModel):
     )
 
     # Metadata about updates
-    last_think_output_ref: Optional[str] = Field(
+    last_think_output_ref: str | None = Field(
         default=None,
         description="Reference to THINK output that informed last update"
     )

@@ -4,27 +4,27 @@ Tests for app/progenitor/routing.py
 Verifies routing functions work correctly for graph navigation.
 """
 
-import pytest
 import uuid
-from typing import Literal, cast
+from datetime import datetime
+from typing import cast
+
 from app.progenitor.routing import (
     ensure_ideal_state,
-    should_iterate,
-    should_continue_inner_loop,
-    route_after_verify,
-    should_continue_outer_loop,
-    route_after_decide,
-    route_after_act,
-    route_after_validate,
-    route_after_pick_next,
+    get_iteration_info,
     has_pending_work,
     is_build_in_progress,
+    route_after_act,
+    route_after_decide,
+    route_after_pick_next,
+    route_after_validate,
+    route_after_verify,
+    should_continue_inner_loop,
+    should_continue_outer_loop,
+    should_iterate,
     should_stop_for_clarification,
-    get_iteration_info,
 )
 from app.progenitor.state.ideal_state import IdealState
-from app.progenitor.state.models import WorkItem, ProgenitorState, WorkItemType, WorkItemStatus
-from datetime import datetime
+from app.progenitor.state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
 
 
 def make_work_item(**kwargs) -> WorkItem:

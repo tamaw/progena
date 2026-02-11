@@ -15,21 +15,18 @@ Covers:
 
 import asyncio
 import json
-import time
-from datetime import datetime, timezone
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.backend.main import app
 from app.backend.models import (
+    ChatCompletionChunk,
     ChatCompletionRequest,
     ChatMessage,
-    ChatCompletionChunk,
-    ResponseRequest,
     ResponseInputMessage,
+    ResponseRequest,
     SimpleChatRequest,
     StreamingChatRequest,
     StreamingResponseRequest,
@@ -285,9 +282,7 @@ class TestSSEEventDelivery:
 
     def test_broadcast_chat_event_functionality(self):
         """Test broadcast_chat_event adds events to chat subscribers."""
-        from app.backend.ui_routes import (
-            _chat_subscribers, broadcast_chat_event
-        )
+        from app.backend.ui_routes import _chat_subscribers, broadcast_chat_event
 
         _chat_subscribers.clear()
 
@@ -313,8 +308,9 @@ class TestSSEEventDelivery:
     def test_broadcast_status_event_functionality(self):
         """Test broadcast_status_event adds events to status subscribers only."""
         from app.backend.ui_routes import (
-            _status_subscribers, _chat_subscribers,
-            broadcast_status_event
+            _chat_subscribers,
+            _status_subscribers,
+            broadcast_status_event,
         )
 
         _status_subscribers.clear()
@@ -442,7 +438,7 @@ class TestErrorEvents:
     def test_rate_limit_error_format(self, client):
         """Test rate limit error has correct format."""
         # This tests the error response structure, not actual rate limiting
-        from app.backend.models import ErrorResponse, ErrorDetail
+        from app.backend.models import ErrorDetail, ErrorResponse
 
         error = ErrorResponse(
             error=ErrorDetail(
@@ -526,7 +522,7 @@ class TestSimpleChatRequest:
 
     def test_simple_chat_request_empty_rejected(self):
         """Test empty message is rejected."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SimpleChatRequest(message="")
 
     def test_simple_chat_request_max_length(self):
@@ -538,7 +534,7 @@ class TestSimpleChatRequest:
 
         # Should reject over 100000
         too_long = "x" * 100001
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SimpleChatRequest(message=too_long)
 
 

@@ -12,31 +12,20 @@ and all sub-agents. These tests verify:
 
 import asyncio
 import json
-import time
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.backend.main import app
 from app.backend.state_reader import (
-    StateReader,
-    StateSnapshot,
-    HealthInfo,
     AgentInfo,
-    ToolInfo,
     BacklogItem,
-    ScheduleItem,
-    LoopInfo,
     BuildInfo,
+    HealthInfo,
+    StateReader,
 )
 from app.backend.ui_routes import (
-    UIStatusResponse,
-    SubAgentInfo,
-    LoopInfo as UILoopInfo,
     broadcast_chat_event,
 )
 
@@ -308,7 +297,7 @@ class TestStateReader:
         # Not running - status not running
         health = HealthInfo(
             status="stopped",
-            last_active=datetime.now(timezone.utc).isoformat(),
+            last_active=datetime.now(UTC).isoformat(),
             run_id="test",
             cycle_count=10,
             pid=1234,
@@ -328,7 +317,7 @@ class TestStateReader:
         # Running - recent last_active
         health = HealthInfo(
             status="running",
-            last_active=datetime.now(timezone.utc).isoformat(),
+            last_active=datetime.now(UTC).isoformat(),
             run_id="test",
             cycle_count=10,
             pid=1234,
@@ -340,7 +329,7 @@ class TestStateReader:
         from datetime import timedelta
 
         # Stale - last_active too old (> 60 seconds)
-        old_time = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+        old_time = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
         health = HealthInfo(
             status="running",
             last_active=old_time,
@@ -440,7 +429,7 @@ class TestStateReaderFileOperations:
         """Test reading valid health.json."""
         health_data = {
             "status": "running",
-            "last_active": datetime.now(timezone.utc).isoformat(),
+            "last_active": datetime.now(UTC).isoformat(),
             "run_id": "run-123",
             "cycle_count": 42,
             "pid": 9999,
@@ -496,7 +485,7 @@ class TestStateReaderFileOperations:
         # Create all required state files
         health_data = {
             "status": "running",
-            "last_active": datetime.now(timezone.utc).isoformat(),
+            "last_active": datetime.now(UTC).isoformat(),
             "run_id": "run-123",
             "cycle_count": 42,
             "pid": 9999,

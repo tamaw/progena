@@ -7,9 +7,8 @@ rather than during runtime. Uses Pydantic for strong type validation.
 
 import logging
 from pathlib import Path
-from typing import Optional, Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class LLMConfigValidator(BaseModel):
     """Validates LLM configuration."""
 
     base_url: str = Field(min_length=1)
-    api_key: Optional[str] = None
+    api_key: str | None = None
     model_default: str = Field(min_length=1)
 
 

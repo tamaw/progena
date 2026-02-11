@@ -6,17 +6,17 @@ reduce duplication across the codebase.
 """
 
 import logging
-from typing import Any, Optional, TypeVar, Type
+from typing import Any, TypeVar
 
 from .models import (
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
+    AgentRegistryEntry,
+    ConversationMessage,
     Decision,
     DecisionAction,
     ScheduleEntry,
-    AgentRegistryEntry,
-    ConversationMessage,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
 
-def to_work_item(value: Any) -> Optional[WorkItem]:
+def to_work_item(value: Any) -> WorkItem | None:
     """Convert various formats to WorkItem.
 
     Args:
@@ -77,7 +77,7 @@ def to_work_item(value: Any) -> Optional[WorkItem]:
     return None
 
 
-def to_decision(value: Any) -> Optional[Decision]:
+def to_decision(value: Any) -> Decision | None:
     """Convert various formats to Decision.
 
     Args:
@@ -115,7 +115,7 @@ def to_decision(value: Any) -> Optional[Decision]:
     return None
 
 
-def to_schedule_entry(value: Any) -> Optional[ScheduleEntry]:
+def to_schedule_entry(value: Any) -> ScheduleEntry | None:
     """Convert various formats to ScheduleEntry.
 
     Args:
@@ -140,7 +140,7 @@ def to_schedule_entry(value: Any) -> Optional[ScheduleEntry]:
     return None
 
 
-def to_agent_registry_entry(value: Any) -> Optional[AgentRegistryEntry]:
+def to_agent_registry_entry(value: Any) -> AgentRegistryEntry | None:
     """Convert various formats to AgentRegistryEntry.
 
     Args:
@@ -165,7 +165,7 @@ def to_agent_registry_entry(value: Any) -> Optional[AgentRegistryEntry]:
     return None
 
 
-def to_conversation_message(value: Any) -> Optional[ConversationMessage]:
+def to_conversation_message(value: Any) -> ConversationMessage | None:
     """Convert various formats to ConversationMessage.
 
     Args:
@@ -195,7 +195,7 @@ def to_conversation_message(value: Any) -> Optional[ConversationMessage]:
     return None
 
 
-def to_ideal_state(value: Any) -> Optional[Any]:
+def to_ideal_state(value: Any) -> Any | None:
     """Convert dict to IdealState object if needed.
 
     Imports IdealState locally to avoid circular imports.
@@ -225,7 +225,7 @@ def to_ideal_state(value: Any) -> Optional[Any]:
     return None
 
 
-def to_dict(value: Any) -> Optional[dict[str, Any]]:
+def to_dict(value: Any) -> dict[str, Any] | None:
     """Convert a Pydantic model or dict to dict.
 
     Args:

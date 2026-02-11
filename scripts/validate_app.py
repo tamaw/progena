@@ -80,7 +80,7 @@ def test_fastapi_app():
     try:
         from app.backend.main import app
 
-        print(f"✓ FastAPI app created")
+        print("✓ FastAPI app created")
         print(f"✓ Routes: {len(app.routes)} endpoints")
 
         # Check for key endpoints

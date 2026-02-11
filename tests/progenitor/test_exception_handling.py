@@ -5,10 +5,9 @@ Validates that exception handlers use specific exception types and logging.
 These are primarily static code analysis tests to verify the fix was applied.
 """
 
-import asyncio
-import logging
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
 
 
 class TestCopilotExceptionHandling:
@@ -18,7 +17,7 @@ class TestCopilotExceptionHandling:
         """Verify copilot.py uses specific exception types."""
         import app.progenitor.tools.copilot as copilot_module
 
-        with open(copilot_module.__file__, 'r') as f:
+        with open(copilot_module.__file__) as f:
             content = f.read()
 
         # Should use specific exceptions instead of bare except
@@ -28,8 +27,8 @@ class TestCopilotExceptionHandling:
     @pytest.mark.asyncio
     async def test_validate_installation_returns_false_on_error(self):
         """Test that validate_installation handles errors gracefully."""
-        from app.progenitor.tools.copilot import CopilotCLI
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
+        from app.progenitor.tools.copilot import CopilotCLI
 
         # Create mock ACP manager
         mock_acp_manager = MagicMock(spec=CopilotACPManager)
@@ -50,7 +49,7 @@ class TestGitExceptionHandling:
         """Verify git.py uses specific exception types."""
         import app.progenitor.tools.git as git_module
 
-        with open(git_module.__file__, 'r') as f:
+        with open(git_module.__file__) as f:
             content = f.read()
 
         # Should use specific exceptions
@@ -67,7 +66,7 @@ class TestMCPExceptionHandling:
         """Verify mcp.py uses specific exception types."""
         import app.progenitor.tools.mcp as mcp_module
 
-        with open(mcp_module.__file__, 'r') as f:
+        with open(mcp_module.__file__) as f:
             content = f.read()
 
         # Should use specific exceptions
@@ -81,7 +80,7 @@ class TestMCPExceptionHandling:
 
         client = MCPClient()
 
-        with patch.object(client, 'call_tool', side_effect=asyncio.TimeoutError()):
+        with patch.object(client, 'call_tool', side_effect=TimeoutError()):
             result = await client.healthcheck({"command": "test"})
 
         assert result is False
@@ -94,7 +93,7 @@ class TestTimeUtilsExceptionHandling:
         """Verify time_utils.py uses specific exception types."""
         import app.progenitor.runtime.time_utils as time_module
 
-        with open(time_module.__file__, 'r') as f:
+        with open(time_module.__file__) as f:
             content = f.read()
 
         # Should use pytz.exceptions.UnknownTimeZoneError
@@ -103,8 +102,9 @@ class TestTimeUtilsExceptionHandling:
 
     def test_invalid_timezone_falls_back_to_utc(self):
         """Test that invalid timezone falls back to UTC."""
-        from app.progenitor.runtime.time_utils import TimeManager
         import pytz
+
+        from app.progenitor.runtime.time_utils import TimeManager
 
         tm = TimeManager(timezone_name="Invalid/NotATimezone")
 
@@ -118,7 +118,7 @@ class TestIdealStateExceptionHandling:
         """Verify ideal_state.py uses specific exception types."""
         import app.progenitor.state.ideal_state as ideal_module
 
-        with open(ideal_module.__file__, 'r') as f:
+        with open(ideal_module.__file__) as f:
             content = f.read()
 
         # Should use specific exceptions
@@ -133,7 +133,7 @@ class TestPickNextExceptionHandling:
         """Verify pick_next.py uses specific exception types."""
         import app.progenitor.nodes.pick_next as pick_next_module
 
-        with open(pick_next_module.__file__, 'r') as f:
+        with open(pick_next_module.__file__) as f:
             content = f.read()
 
         # Should have specific exception types
@@ -148,7 +148,7 @@ class TestCommitCoreExceptionHandling:
         """Verify commit_core.py uses specific exception types."""
         import app.progenitor.nodes.commit_core as commit_core_module
 
-        with open(commit_core_module.__file__, 'r') as f:
+        with open(commit_core_module.__file__) as f:
             content = f.read()
 
         # Should use specific exception types

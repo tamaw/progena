@@ -14,15 +14,14 @@ import json
 import logging
 import signal
 from pathlib import Path
-from typing import Optional
 
 from .config import ProgenitorConfig, get_config, setup_logging
 from .graph_outer_loop import create_progenitor_graph
+from .llm.client import LLMClient
+from .runtime.copilot_acp import CopilotACPManager
 from .runtime.loop import ProgenitorLoop
 from .state.manager import StateManager
-from .llm.client import LLMClient
 from .tools.registry import ToolRegistry
-from .runtime.copilot_acp import CopilotACPManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 class Progenitor:
     """Main Progenitor agent service."""
 
-    def __init__(self, config: Optional[ProgenitorConfig] = None):
+    def __init__(self, config: ProgenitorConfig | None = None):
         self.config = config or get_config(PROJECT_ROOT, CONFIG_DIR)
         self.running = False
         self._shutdown_started = False
@@ -55,7 +54,7 @@ class Progenitor:
         self.loop_runner = None
         self._background_tasks: list[asyncio.Task] = []
         self._ipc_server = None  # Socket-based IPC server
-        self._copilot_acp_manager: Optional[CopilotACPManager] = None
+        self._copilot_acp_manager: CopilotACPManager | None = None
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -227,8 +226,9 @@ class Progenitor:
 
     async def _write_health_status(self, status: str) -> None:
         """Write health status to health.json file."""
-        from .runtime.time_utils import utcnow_isoformat
         import os
+
+        from .runtime.time_utils import utcnow_isoformat
 
         health_path = self.state_dir / "health.json"
         health_data = {

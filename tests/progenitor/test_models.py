@@ -1,18 +1,17 @@
 """Tests for state models."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.progenitor.state.models import (
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
+    AgentRegistryEntry,
+    ConversationMessage,
     Decision,
     DecisionAction,
     ScheduleEntry,
-    AgentRegistryEntry,
-    ConversationMessage,
     ValidationResult,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
 
 
@@ -79,7 +78,7 @@ class TestScheduleEntry:
 
     def test_create_recurring_schedule(self):
         """Test creating a recurring schedule with repeat_minutes."""
-        run_at = datetime(2026, 1, 20, 9, 0, 0, tzinfo=timezone.utc)
+        run_at = datetime(2026, 1, 20, 9, 0, 0, tzinfo=UTC)
         entry = ScheduleEntry(
             id="schedule-1",
             description="Daily reminder",
@@ -93,7 +92,7 @@ class TestScheduleEntry:
 
     def test_create_one_off_schedule(self):
         """Test creating a one-off schedule."""
-        run_time = datetime(2026, 1, 20, 10, 0, 0, tzinfo=timezone.utc)
+        run_time = datetime(2026, 1, 20, 10, 0, 0, tzinfo=UTC)
         entry = ScheduleEntry(
             id="schedule-2",
             description="One-time reminder",

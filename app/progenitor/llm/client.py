@@ -70,6 +70,7 @@ class LLMClient:
         self.config = config or LLMConfig.from_env()
         self.prompts = PromptTemplates()
         self.role = role
+        self._max_retries = max_retries
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 
         base_url = self.config.base_url.rstrip('/')

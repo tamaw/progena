@@ -12,31 +12,33 @@ No planner in the outer loop - decide handles all routing directly.
 """
 
 import logging
-from typing import Literal
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 
-from .state.models import ProgenitorState
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
+from .nodes import (
+    act,
+    commit_core,
+    cycle_limit,
+    decide,
+    idle,
+    intake,
+    pick_next,
+    respond,
+    time_check,
+    validate,
+    worktree_prep,
+)
+from .routing import (
+    route_after_act,
+    route_after_decide,
+    route_after_pick_next,
+    route_after_validate,
+)
 from .routing import (
     should_continue_outer_loop as should_continue,
-    route_after_decide,
-    route_after_act,
-    route_after_validate,
-    route_after_pick_next,
 )
-from .nodes import (
-    intake,
-    time_check,
-    decide,
-    pick_next,
-    worktree_prep,
-    act,
-    validate,
-    commit_core,
-    respond,
-    idle,
-    cycle_limit,
-)
+from .state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
 

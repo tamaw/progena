@@ -2,10 +2,10 @@
 Shared fixtures for backend tests.
 """
 
-import pytest
 import asyncio
-import sys
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +52,7 @@ def mock_progenitor_client():
 def client():
     """Provide a TestClient for the FastAPI app."""
     from fastapi.testclient import TestClient
+
     from app.backend.main import app
 
     with TestClient(app) as client:

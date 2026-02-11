@@ -8,13 +8,13 @@ Tests cover:
 4. worktree_prep handles submodule init errors
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.progenitor.nodes.worktree_prep import create_node
-from app.progenitor.state.models import WorkItem, WorkItemType, WorkItemStatus
+from app.progenitor.state.models import WorkItem, WorkItemStatus, WorkItemType
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def worktree_prep_node(tmp_path, mock_git_manager):
     """Create worktree_prep node with mocked git manager."""
     with patch('app.progenitor.nodes.worktree_prep.GitWorktreeManager', return_value=mock_git_manager):
         node = create_node(tmp_path / "worktrees")
-        setattr(node, "_git_manager", mock_git_manager)  # Expose for testing
+        cast(Any, node)._git_manager = mock_git_manager  # Expose for testing
         return node, mock_git_manager
 
 
@@ -255,7 +255,7 @@ class TestWorktreePrepBuildTypes:
                 },
             }
 
-            result = await node(cast(Any, state))
+            await node(cast(Any, state))
 
             mock_git.init_submodule.assert_called_once()
 
@@ -279,6 +279,6 @@ class TestWorktreePrepBuildTypes:
                 ),
             }
 
-            result = await node(cast(Any, state))
+            await node(cast(Any, state))
 
             mock_git.init_submodule.assert_not_called()

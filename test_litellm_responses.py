@@ -5,7 +5,6 @@ Tests both regular chat and structured output with JSON schema.
 
 import asyncio
 import json
-import os
 import sys
 from io import TextIOWrapper
 from typing import cast
@@ -21,6 +20,7 @@ if sys.platform == "win32":
         pass  # Fall back to default encoding
 
 from pydantic import BaseModel, Field
+
 from app.progenitor.config import LLMConfig
 from app.progenitor.llm.client import LLMClient, _build_json_schema_format
 
@@ -55,7 +55,7 @@ async def test_basic_chat():
 
         response = await client.chat(messages)
 
-        print(f"\n✓ Got response")
+        print("\n✓ Got response")
         print(f"  Type: {type(response)}")
         print(f"  Length: {len(response)} chars")
         print(f"  Content: {response[:100]}..." if len(response) > 100 else f"  Content: {response}")
@@ -99,12 +99,12 @@ async def test_structured_output():
         print(f"Response format type: {response_format['type']}")
         print(f"Schema name: {response_format['json_schema']['name']}")
         print(f"Schema strict: {response_format['json_schema']['strict']}")
-        print(f"\nFull schema:")
+        print("\nFull schema:")
         print(json.dumps(response_format, indent=2))
 
         messages = [{"role": "user", "content": "Generate a friendly greeting with an emoji and rate your enthusiasm from 1-10."}]
 
-        print(f"\nSending structured output request...")
+        print("\nSending structured output request...")
         response_text = await client.chat(messages, response_format=response_format)
 
         print(f"\n✓ Got response (length: {len(response_text)} chars)")
@@ -115,7 +115,7 @@ async def test_structured_output():
             response_json = json.loads(response_text)
             validated = GreetingResponse.model_validate(response_json)
 
-            print(f"\n✓ Validated structured response:")
+            print("\n✓ Validated structured response:")
             print(f"  Greeting: {validated.greeting}")
             print(f"  Emoji: {validated.emoji}")
             print(f"  Enthusiasm: {validated.enthusiasm_level}/10")
@@ -162,7 +162,7 @@ async def test_complex_structured_output():
             "content": "Create a fictional person profile with name, age, occupation, and a list of 3 hobbies."
         }]
 
-        print(f"Sending complex structured output request...")
+        print("Sending complex structured output request...")
         response_text = await client.chat(messages, response_format=response_format)
 
         print(f"\n✓ Got response (length: {len(response_text)} chars)")
@@ -173,7 +173,7 @@ async def test_complex_structured_output():
             response_json = json.loads(response_text)
             validated = PersonInfo.model_validate(response_json)
 
-            print(f"\n✓ Validated complex structured response:")
+            print("\n✓ Validated complex structured response:")
             print(f"  Name: {validated.name}")
             print(f"  Age: {validated.age}")
             print(f"  Occupation: {validated.occupation}")
@@ -264,7 +264,7 @@ async def run_all_tests():
     print("=" * 60)
 
     config = LLMConfig.from_env()
-    print(f"\nConfiguration:")
+    print("\nConfiguration:")
     print(f"  Endpoint: {config.base_url}")
     print(f"  Model: {config.model_default}")
     print(f"  API Key: {config.api_key[:20] if config.api_key else 'None'}...")

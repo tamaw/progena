@@ -1,18 +1,16 @@
 """Tests for LLM response validation models."""
 
-import pytest
+from app.progenitor.llm.client import _build_json_schema_format
 from app.progenitor.llm.response_models import (
+    BuildSpec,
     DecisionResponse,
     PlannerResponse,
-    BuildSpec,
     WorkItemSpec,
-    VerificationResult,
+    validate_build_spec,
     validate_decision_response,
     validate_planner_response,
-    validate_build_spec,
     validate_verification_result,
 )
-from app.progenitor.llm.client import _build_json_schema_format
 
 
 class TestBuildJsonSchemaFormat:

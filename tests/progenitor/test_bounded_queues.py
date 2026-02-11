@@ -1,13 +1,12 @@
 """Tests for bounded queue functionality in ProgenitorLoop."""
 
 import asyncio
-import json
 import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

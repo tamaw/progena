@@ -10,16 +10,7 @@ Nodes return partial state updates (dicts with subset of keys) rather than
 full ProgenitorState objects. LangGraph merges these into the full state.
 """
 
-from collections.abc import Callable, Coroutine
-from typing import Any
-
-from ..state.models import ProgenitorState
-
-# CQ-006: Standard type aliases for node functions
-# Nodes receive full state and return partial updates (dict with changed keys only)
-NodeStateUpdate = dict[str, Any]  # Partial state update (subset of ProgenitorState keys)
-NodeFunction = Callable[[ProgenitorState], Coroutine[Any, Any, NodeStateUpdate]]
-NodeFactory = Callable[..., NodeFunction]
+from .types import NodeFactory, NodeFunction, NodeStateUpdate
 
 # Submodules
 from . import (
@@ -69,6 +60,8 @@ from .errors import (
     ToolError,
     ValidationError,
 )
+
+# CQ-006: Standard type aliases for node functions
 
 __all__ = [
     # CQ-006: Type aliases for consistent node signatures

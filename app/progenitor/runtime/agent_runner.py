@@ -11,12 +11,12 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import sys
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Callable
+from typing import Any
 
 from .time_utils import utcnow_isoformat
 
@@ -27,13 +27,13 @@ logger = logging.getLogger(__name__)
 class AgentProcess:
     """Represents a running agent process."""
     name: str
-    process: Optional[asyncio.subprocess.Process]
+    process: asyncio.subprocess.Process | None
     entrypoint: str
     started_at: str
     pid: int
     status: str = "running"  # running, stopped, failed, stdio
-    last_health_check: Optional[str] = None
-    error: Optional[str] = None
+    last_health_check: str | None = None
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,9 +51,9 @@ class AgentProcess:
 class AgentInteractionResult:
     """Result of interacting with a running agent."""
     success: bool
-    response: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
-    duration_ms: Optional[float] = None
+    response: dict[str, Any] | None = None
+    error: str | None = None
+    duration_ms: float | None = None
 
 
 class AgentRunner:
@@ -70,7 +70,7 @@ class AgentRunner:
     def __init__(
         self,
         project_root: Path,
-        log_callback: Optional[Callable] = None,
+        log_callback: Callable | None = None,
     ):
         """
         Initialize the agent runner.
@@ -88,7 +88,7 @@ class AgentRunner:
         self,
         agent_name: str,
         entrypoint: str,
-        env: Optional[dict[str, str]] = None,
+        env: dict[str, str] | None = None,
         background: bool = True,
     ) -> AgentProcess:
         """
@@ -169,7 +169,7 @@ class AgentRunner:
         agent_name: str,
         entrypoint: str,
         request: str | dict[str, Any],
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
         timeout: float = 60.0,
     ) -> AgentInteractionResult:
         """
@@ -266,7 +266,7 @@ class AgentRunner:
                 duration_ms=duration_ms,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             duration_ms = (datetime.now() - start_time).total_seconds() * 1000
             logger.error(f"Agent '{agent_name}' invocation timed out after {timeout}s")
             return AgentInteractionResult(
@@ -344,7 +344,7 @@ class AgentRunner:
                     agent_process.process.wait(),
                     timeout=5.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"Agent '{agent_name}' did not terminate gracefully, killing")
                 agent_process.process.kill()
 

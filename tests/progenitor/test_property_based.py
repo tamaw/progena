@@ -9,21 +9,21 @@ Tests invariants that should always hold regardless of input:
 - Backlog operations are idempotent
 """
 
-import pytest
-from hypothesis import given, strategies as st, settings, assume
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime
 
+import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
+
+from app.progenitor.state.helpers import get_actionable_items
 from app.progenitor.state.models import (
-    WorkItem,
-    WorkItemStatus,
-    WorkItemType,
     Decision,
     DecisionAction,
     ProgenitorState,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
-from app.progenitor.state.helpers import get_actionable_items
-
 
 # ============================================================================
 # Custom Strategies
@@ -289,7 +289,6 @@ class TestMarkOperationsIdempotency:
 
         item.mark_completed({"result": "test"})
         first_status = item.status_value
-        first_time = item.updated_at
 
         # Mark again
         item.mark_completed({"result": "test2"})
@@ -303,7 +302,6 @@ class TestMarkOperationsIdempotency:
         """Mark in progress should update status."""
         assume(item.status_value == WorkItemStatus.PENDING.value)
 
-        original_time = item.updated_at
         item.mark_in_progress()
 
         assert item.status_value == WorkItemStatus.IN_PROGRESS.value

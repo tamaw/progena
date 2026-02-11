@@ -35,7 +35,7 @@ from ..state.execution_schemas import (
 )
 from ..state.helpers import get_ideal_state
 from ..state.models import ProgenitorState
-from . import NodeFunction, NodeStateUpdate
+from .types import NodeFunction, NodeStateUpdate
 
 logger = logging.getLogger(__name__)
 

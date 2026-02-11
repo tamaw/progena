@@ -13,16 +13,13 @@ Features:
 """
 
 import asyncio
-import hashlib
+import contextlib
 import json
 import logging
-import secrets
-import time
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiofiles
 import yaml
@@ -36,7 +33,7 @@ class SessionConfig(BaseModel):
     session_timeout_minutes: int = 60 * 24  # 24 hours
     max_sessions: int = 1000
     cleanup_interval_seconds: int = 300  # 5 minutes
-    persist_dir: Optional[Path] = None
+    persist_dir: Path | None = None
     cookie_name: str = "progenitor_session"
     cookie_max_age: int = 60 * 60 * 24 * 7  # 7 days
 
@@ -57,7 +54,7 @@ class UserPreferences(BaseModel):
     # Model preferences
     default_model: str = "progenitor-v1"
     temperature: float = 0.7
-    max_tokens: Optional[int] = None
+    max_tokens: int | None = None
 
     # Feature toggles
     enabled_features: list[str] = Field(default_factory=lambda: [
@@ -74,7 +71,7 @@ class SessionState(BaseModel):
     """Full session state."""
     # Identity
     session_id: str = Field(default_factory=lambda: f"sess_{uuid.uuid4().hex[:16]}")
-    user_id: Optional[str] = None  # For authenticated users
+    user_id: str | None = None  # For authenticated users
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_activity: datetime = Field(default_factory=datetime.utcnow)
 
@@ -82,11 +79,11 @@ class SessionState(BaseModel):
     preferences: UserPreferences = Field(default_factory=UserPreferences)
 
     # Conversation state
-    conversation_id: Optional[str] = None
+    conversation_id: str | None = None
     message_count: int = 0
 
     # Temporary state
-    current_model: Optional[str] = None
+    current_model: str | None = None
     pending_attachments: list[str] = Field(default_factory=list)  # Attachment IDs
 
     # Extension state
@@ -117,11 +114,11 @@ class SessionManager:
     - Multi-user isolation
     """
 
-    def __init__(self, config: Optional[SessionConfig] = None):
+    def __init__(self, config: SessionConfig | None = None):
         self.config = config or SessionConfig()
         self._sessions: dict[str, SessionState] = {}
         self._user_sessions: dict[str, str] = {}  # user_id -> session_id
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
         # Persistence directory
@@ -143,10 +140,8 @@ class SessionManager:
         # Cancel cleanup task
         if self._cleanup_task:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
 
         # Persist sessions
         if self.config.persist_dir:
@@ -156,8 +151,8 @@ class SessionManager:
 
     async def create_session(
         self,
-        user_id: Optional[str] = None,
-        preferences: Optional[UserPreferences] = None,
+        user_id: str | None = None,
+        preferences: UserPreferences | None = None,
     ) -> SessionState:
         """Create a new session."""
         async with self._lock:
@@ -191,7 +186,7 @@ class SessionManager:
         self,
         session_id: str,
         touch: bool = True,
-    ) -> Optional[SessionState]:
+    ) -> SessionState | None:
         """Get session by ID."""
         session = self._sessions.get(session_id)
 
@@ -207,8 +202,8 @@ class SessionManager:
 
     async def get_or_create_session(
         self,
-        session_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        session_id: str | None = None,
+        user_id: str | None = None,
     ) -> SessionState:
         """Get existing session or create new one."""
         if session_id:
@@ -222,7 +217,7 @@ class SessionManager:
         self,
         session_id: str,
         **preferences,
-    ) -> Optional[SessionState]:
+    ) -> SessionState | None:
         """Update session preferences."""
         session = await self.get_session(session_id)
         if not session:
@@ -247,7 +242,7 @@ class SessionManager:
                 return True
             return False
 
-    async def get_session_by_user(self, user_id: str) -> Optional[SessionState]:
+    async def get_session_by_user(self, user_id: str) -> SessionState | None:
         """Get session by user ID."""
         session_id = self._user_sessions.get(user_id)
         if session_id:
@@ -334,7 +329,7 @@ class SessionManager:
             return
 
         try:
-            async with aiofiles.open(sessions_file, "r") as f:
+            async with aiofiles.open(sessions_file) as f:
                 data = json.loads(await f.read())
 
             loaded = 0
@@ -380,7 +375,7 @@ class SettingsManager:
     @staticmethod
     def export_settings(
         preferences: UserPreferences,
-        extension_states: Optional[dict[str, dict[str, Any]]] = None,
+        extension_states: dict[str, dict[str, Any]] | None = None,
     ) -> str:
         """Export settings to YAML string."""
         settings = {
@@ -457,7 +452,7 @@ class SettingsManager:
     async def save_to_file(
         filepath: Path,
         preferences: UserPreferences,
-        extension_states: Optional[dict[str, dict[str, Any]]] = None,
+        extension_states: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Save settings to YAML file."""
         content = SettingsManager.export_settings(preferences, extension_states)
@@ -469,7 +464,7 @@ class SettingsManager:
         filepath: Path,
     ) -> tuple[UserPreferences, dict[str, dict[str, Any]]]:
         """Load settings from YAML file."""
-        async with aiofiles.open(filepath, "r") as f:
+        async with aiofiles.open(filepath) as f:
             content = await f.read()
         return SettingsManager.import_settings(content)
 

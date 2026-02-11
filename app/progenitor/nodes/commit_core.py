@@ -8,11 +8,11 @@ State is split across files:
 """
 
 import logging
-from datetime import datetime
-from typing import Callable, Coroutine, Any
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from ..state.models import ProgenitorState
 from ..runtime.time_utils import utcnow, utcnow_isoformat
+from ..state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
 

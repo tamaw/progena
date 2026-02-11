@@ -4,11 +4,12 @@ Merged from time_check + enqueue_due for simplicity (they always run back-to-bac
 """
 
 import uuid
-from typing import Callable, Coroutine, Any
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from ..state.models import ProgenitorState, WorkItem, WorkItemType, WorkItemStatus
 from ..runtime.scheduler import Scheduler
 from ..runtime.time_utils import utcnow, utcnow_isoformat
+from ..state.models import ProgenitorState, WorkItem, WorkItemStatus, WorkItemType
 
 
 def create_node(timezone: str = "Australia/Melbourne", state_manager=None) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:

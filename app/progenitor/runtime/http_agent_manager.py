@@ -12,21 +12,21 @@ Agents are expected to:
 """
 
 import asyncio
-import json
 import logging
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from .time_utils import utcnow, utcnow_isoformat
-from .port_utils import find_available_port, is_port_available
 from ..state.models import AgentStatus
+from .port_utils import find_available_port, is_port_available
+from .time_utils import utcnow, utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
@@ -49,12 +49,12 @@ class ManagedAgent:
     process: asyncio.subprocess.Process
     started_at: datetime
     status: AgentStatus = AgentStatus.STARTING
-    status_message: Optional[str] = None
-    last_error: Optional[str] = None
+    status_message: str | None = None
+    last_error: str | None = None
 
     # Tasks for monitoring stdout/stderr
-    stdout_task: Optional[asyncio.Task] = None
-    stderr_task: Optional[asyncio.Task] = None
+    stdout_task: asyncio.Task | None = None
+    stderr_task: asyncio.Task | None = None
 
     @property
     def endpoint(self) -> str:
@@ -81,7 +81,7 @@ class HTTPAgentManager:
         self,
         project_root: Path,
         registry: "ToolRegistry",
-        log_callback: Optional[Callable] = None,
+        log_callback: Callable | None = None,
     ):
         """
         Initialize the HTTP agent manager.
@@ -102,7 +102,7 @@ class HTTPAgentManager:
         self,
         agent_name: str,
         entrypoint: str,
-        env: Optional[dict[str, str]] = None,
+        env: dict[str, str] | None = None,
         startup_timeout: float = 30.0,
     ) -> ManagedAgent:
         """
@@ -209,7 +209,7 @@ class HTTPAgentManager:
                     "Agent '%s' is running on port %d (PID: %d)",
                     agent_name, port, process.pid
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 error_msg = f"Agent failed to start within {startup_timeout}s"
                 logger.error("Agent '%s' startup timeout: %s", agent_name, error_msg)
                 await self._mark_failed(managed_agent, error_msg)
@@ -334,14 +334,13 @@ class HTTPAgentManager:
     async def _health_check_agent(self, agent: ManagedAgent) -> bool:
         """Check if agent is responding to HTTP requests."""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    agent.agent_card_url,
-                    timeout=aiohttp.ClientTimeout(total=2),
-                ) as response:
-                    if response.status == 200:
-                        return True
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+            async with aiohttp.ClientSession() as session, session.get(
+                agent.agent_card_url,
+                timeout=aiohttp.ClientTimeout(total=2),
+            ) as response:
+                if response.status == 200:
+                    return True
+        except (TimeoutError, aiohttp.ClientError):
             pass
         return False
 
@@ -387,7 +386,7 @@ class HTTPAgentManager:
                     agent.process.wait(),
                     timeout=5.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "Agent '%s' did not terminate gracefully, killing",
                     agent_name
@@ -419,7 +418,7 @@ class HTTPAgentManager:
         self,
         agent_name: str,
         request: str | dict[str, Any],
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
         timeout: float = 60.0,
     ) -> dict[str, Any]:
         """
@@ -443,7 +442,7 @@ class HTTPAgentManager:
         await self.registry.update_agent_status(
             agent_name,
             AgentStatus.EXECUTING,
-            status_message=f"Processing request",
+            status_message="Processing request",
         )
 
         # Build payload
@@ -455,23 +454,22 @@ class HTTPAgentManager:
                 payload["context"] = context
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    endpoint,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as response:
-                    result = await response.json()
+            async with aiohttp.ClientSession() as session, session.post(
+                endpoint,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response:
+                result = await response.json()
 
-                    # Update status back to waiting
-                    await self.registry.update_agent_status(
-                        agent_name,
-                        AgentStatus.WAITING,
-                        status_message="Idle, waiting for requests",
-                        update_heartbeat=True,
-                    )
+                # Update status back to waiting
+                await self.registry.update_agent_status(
+                    agent_name,
+                    AgentStatus.WAITING,
+                    status_message="Idle, waiting for requests",
+                    update_heartbeat=True,
+                )
 
-                    return result
+                return result
 
         except aiohttp.ClientError as e:
             error = f"HTTP error: {e}"
@@ -481,7 +479,7 @@ class HTTPAgentManager:
                 status_message=f"Request failed: {error}",
             )
             return {"success": False, "error": error}
-        except asyncio.TimeoutError:
+        except TimeoutError:
             error = f"Request timeout after {timeout}s"
             await self.registry.update_agent_status(
                 agent_name,
@@ -511,7 +509,7 @@ class HTTPAgentManager:
 
         return results
 
-    def get_agent(self, agent_name: str) -> Optional[ManagedAgent]:
+    def get_agent(self, agent_name: str) -> ManagedAgent | None:
         """Get a managed agent by name."""
         return self._agents.get(agent_name)
 

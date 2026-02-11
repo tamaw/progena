@@ -4,25 +4,25 @@ Tests for app/progenitor/state/converters.py
 Verifies type-safe conversion functions for state objects.
 """
 
-import pytest
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
+
 from app.progenitor.state.converters import (
-    to_work_item,
-    to_decision,
-    to_schedule_entry,
-    to_ideal_state,
     ensure_list_of_work_items,
+    to_decision,
+    to_ideal_state,
+    to_schedule_entry,
+    to_work_item,
 )
+from app.progenitor.state.ideal_state import IdealState
 from app.progenitor.state.models import (
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
     Decision,
     DecisionAction,
     ScheduleEntry,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
-from app.progenitor.state.ideal_state import IdealState
 
 
 def make_work_item(**kwargs) -> WorkItem:
@@ -138,24 +138,24 @@ class TestToScheduleEntry:
 
     def test_returns_schedule_entry_unchanged(self):
         """Should return ScheduleEntry objects unchanged."""
-        from datetime import datetime, timezone
+        from datetime import datetime
         entry = ScheduleEntry(
             id="test-id",
             description="Test description",
             instruction="Test instruction",
-            run_at=datetime.now(timezone.utc),
+            run_at=datetime.now(UTC),
         )
         result = to_schedule_entry(entry)
         assert result is entry
 
     def test_converts_valid_dict(self):
         """Should convert valid dict to ScheduleEntry."""
-        from datetime import datetime, timezone
+        from datetime import datetime
         data = {
             "id": "entry-1",
             "description": "Daily check description",
             "instruction": "Perform daily check",
-            "run_at": datetime.now(timezone.utc).isoformat(),
+            "run_at": datetime.now(UTC).isoformat(),
         }
         result = to_schedule_entry(data)
         assert isinstance(result, ScheduleEntry)

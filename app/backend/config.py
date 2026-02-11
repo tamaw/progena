@@ -6,11 +6,10 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
-from .env_utils import env_int, env_bool, env_float
+from .env_utils import env_bool, env_float, env_int
 
 # Load .env file from project root
 load_dotenv()

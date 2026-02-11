@@ -7,13 +7,13 @@ Also detects when a message is a response to a clarification request.
 Messages are stored in current_state.json (progenitor agent state).
 """
 
-from datetime import datetime
-from typing import Any, Callable, Coroutine, cast
 import uuid
+from collections.abc import Callable, Coroutine
+from typing import Any, cast
 
-from ..state.models import ConversationMessage, ProgenitorState
-from ..state.helpers import trim_conversation_history
 from ..runtime.time_utils import utcnow
+from ..state.helpers import trim_conversation_history
+from ..state.models import ConversationMessage, ProgenitorState
 
 
 def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:

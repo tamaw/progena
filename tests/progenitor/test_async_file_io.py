@@ -4,12 +4,10 @@ Tests for CQ-003: Async File I/O.
 Validates that state manager uses async file I/O consistently.
 """
 
-import pytest
 import asyncio
 import json
-import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+
+import pytest
 
 
 class TestAsyncFileIO:

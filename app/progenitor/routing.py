@@ -18,11 +18,10 @@ from typing import Any, Literal
 from .constants import (
     DEFAULT_MAX_INNER_ITERATIONS,
     DEFAULT_VERIFICATION_TARGET_SCORE,
-    RouteTarget,
 )
 from .state.helpers import get_actionable_items, get_ideal_state
-from .state.models import ProgenitorState, BuildPhase, IterationStopReason
 from .state.ideal_state import IdealState
+from .state.models import BuildPhase, ProgenitorState
 
 logger = logging.getLogger(__name__)
 

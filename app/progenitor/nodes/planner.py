@@ -8,31 +8,31 @@ Spec Artifact: PLAN owns a persistent "Spec" Markdown artifact stored in
 build_state.json that evolves each iteration and is consumed by BUILD.
 """
 
+import contextlib
+import json
 import logging
 import os
-import json
-from datetime import datetime
-from pathlib import Path
-from typing import Callable, Coroutine, Any
 import uuid
+from collections.abc import Callable, Coroutine
+from pathlib import Path
+from typing import Any
 
-from ..state.models import (
-    ProgenitorState,
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
-    DecisionAction,
-)
-from ..state.helpers import get_ideal_state
+from ..llm.prompts import PromptTemplates
+from ..runtime.time_utils import utcnow_isoformat
 from ..state.execution_schemas import (
     ExperimentPlan,
     PromptSpec,
     ScoringHook,
-    StopEarlyRule,
     SpecDoc,
+    StopEarlyRule,
 )
-from ..runtime.time_utils import utcnow_isoformat
-from ..llm.prompts import PromptTemplates
+from ..state.helpers import get_ideal_state
+from ..state.models import (
+    ProgenitorState,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +188,8 @@ async def _plan_schedule_task(
     The instruction is a processed version of the user's request that will
     be executed at the scheduled time as if it were a new user input.
     """
-    from ..tools.schedule import add_scheduled_task
     from ..state.models import ScheduleEntry
+    from ..tools.schedule import add_scheduled_task
 
     # Get schedule params from decision
     if hasattr(decision, "model_dump"):
@@ -327,10 +327,8 @@ async def _plan_from_ideal_state(
             item_type = current_item.item_type
         elif isinstance(current_item, dict) and "item_type" in current_item:
             item_type_str = current_item["item_type"]
-            try:
+            with contextlib.suppress(ValueError):
                 item_type = WorkItemType(item_type_str)
-            except ValueError:
-                pass
         logger.debug(f"PLANNER: Got item_type={item_type} from current_work_item")
 
     # If not found, check backlog for build items
@@ -486,13 +484,7 @@ async def _plan_from_ideal_state(
         item_type=item_type,  # BUILD_TOOL or BUILD_AGENT
     )
 
-    # Store spec_doc in state for BUILD to consume
-    if hasattr(spec_doc, "model_dump"):
-        spec_doc_dict = spec_doc.model_dump()
-    elif isinstance(spec_doc, dict):
-        spec_doc_dict = spec_doc
-    else:
-        spec_doc_dict = {"content": str(spec_doc)}
+    # spec_doc contents live on disk; only references are stored in state
 
     try:
         # BL-002: Generate structured ExperimentPlan

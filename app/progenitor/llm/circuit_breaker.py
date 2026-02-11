@@ -22,16 +22,17 @@ Usage:
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Callable, Optional, TypeVar
+from enum import StrEnum
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     """Circuit breaker states."""
     CLOSED = "closed"
     OPEN = "open"
@@ -44,7 +45,7 @@ class CircuitOpenError(Exception):
     def __init__(
         self,
         message: str = "Circuit breaker is open",
-        reset_time: Optional[float] = None,
+        reset_time: float | None = None,
     ):
         super().__init__(message)
         self.reset_time = reset_time
@@ -146,7 +147,7 @@ class CircuitBreaker:
             await self._record_success()
             return result
 
-        except Exception as e:
+        except Exception:
             await self._record_failure()
             raise
 
@@ -279,7 +280,7 @@ class CircuitBreaker:
 
 
 # Global circuit breaker instance for LLM calls
-_llm_circuit_breaker: Optional[CircuitBreaker] = None
+_llm_circuit_breaker: CircuitBreaker | None = None
 
 
 def get_llm_circuit_breaker(

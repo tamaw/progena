@@ -14,89 +14,73 @@ Features (from text-generation-webui patterns):
 """
 
 import asyncio
-import logging
+import inspect
 import json
+import logging
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional, Union
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from .config import ChatServerConfig
-from .client import ProgenitorClient
-from .ipc_client import IPCProgenitorClient, get_ipc_client
-from .models import (
-    Usage,
-    ModelsResponse,
-    ModelInfo,
-    ErrorResponse,
-    ErrorDetail,
-    ResponseRequest,
-    ResponsePayload,
-    ResponseOutputMessage,
-    ResponseOutputText,
-    SimpleChatRequest,
-    StreamingResponseRequest,
-)
-
-# New modules for enhanced features
-from .streaming import (
-    Iteratorize,
-    AsyncIteratorize,
-    StreamingBuffer,
-    stream_with_callback,
-    stop_everything,
-    reset_stop_flag,
-)
-from .conversation import (
-    ConversationHistory,
-    ConversationMessage as ConvMessage,
-    MessageMetadata,
-    AttachmentType,
-    truncate_content_by_tokens,
-)
 from .attachments import (
-    AttachmentManager,
     AttachmentConfig,
-    AttachmentResult,
-    format_attachments_for_context,
+    AttachmentManager,
     create_attachment_from_upload,
 )
+from .client import ProgenitorClient
+from .config import ChatServerConfig
+from .conversation import (
+    ConversationHistory,
+)
+from .ipc_client import IPCProgenitorClient, get_ipc_client
+from .models import (
+    ErrorDetail,
+    ErrorResponse,
+    ModelInfo,
+    ModelsResponse,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponsePayload,
+    ResponseRequest,
+    SimpleChatRequest,
+    StreamingResponseRequest,
+    Usage,
+)
 from .session import (
-    SessionManager,
     SessionConfig,
-    SessionState,
-    UserPreferences,
+    SessionManager,
     SettingsManager,
     get_session_from_request,
     set_session_cookie,
 )
 from .shutdown import (
     GracefulShutdownManager,
-    ShutdownPhase,
-    managed_shutdown,
     stop_client_safely,
-    commit_state_safely,
 )
-from .ui_routes import close_all_sse_connections, has_active_chat_subscribers
+
+# New modules for enhanced features
 from .telegram_client import (
     TelegramClient,
+    get_telegram_client,
     init_telegram_client,
     stop_telegram_client,
-    get_telegram_client,
 )
+from .ui_routes import close_all_sse_connections, has_active_chat_subscribers
+from .ui_routes import router as ui_router
 
 logger = logging.getLogger(__name__)
 
 # Global config and client
 config = ChatServerConfig.from_env()
 # Client can be either IPC-based or subprocess-based
-client: Union[ProgenitorClient, IPCProgenitorClient, None] = None
+client: ProgenitorClient | IPCProgenitorClient | None = None
 
 # Enhanced feature managers
 session_manager: SessionManager = SessionManager(SessionConfig(
@@ -215,7 +199,7 @@ class RateLimiter:
         current_clients = len(self._hour_requests)
         if current_clients >= self.MAX_TRACKED_CLIENTS:
             # Force cleanup first
-            removed = self._cleanup_stale_clients(force=True)
+            self._cleanup_stale_clients(force=True)
 
             # If still at capacity, evict oldest
             if len(self._hour_requests) >= self.MAX_TRACKED_CLIENTS:
@@ -342,7 +326,7 @@ class ShutdownManager:
                 timeout=self.drain_timeout,
             )
             logger.info("All requests drained successfully")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "Shutdown timeout reached with %d requests still active",
                 self._active_requests,
@@ -505,7 +489,7 @@ async def lifespan(app: FastAPI):
             chat_id: str,
             message: str,
             metadata: dict
-        ) -> Optional[str]:
+        ) -> str | None:
             """Handle incoming Telegram messages by forwarding to Progenitor.
 
             Args:
@@ -607,8 +591,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Include UI API routes
-from .ui_routes import router as ui_router
 app.include_router(ui_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.
@@ -795,7 +777,10 @@ async def health_check_detailed():
     # Try to get more detailed Progenitor info
     if client and hasattr(client, "get_status"):
         try:
-            progenitor_status["details"] = client.get_status()
+            details = client.get_status()
+            if inspect.isawaitable(details):
+                details = await details
+            progenitor_status["details"] = details
         except Exception as e:
             logger.debug("Failed to get progenitor status details: %s", e)
 

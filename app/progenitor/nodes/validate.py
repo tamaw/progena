@@ -25,7 +25,7 @@ from ..state.execution_schemas import (
     ValidationResultV2,
 )
 from ..state.models import ProgenitorState
-from . import NodeFunction, NodeStateUpdate
+from .types import NodeFunction, NodeStateUpdate
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig

@@ -287,6 +287,7 @@ class CurrentTimeTool(BaseSystemTool):
         return "Return the current UTC time"
 
     async def execute(self, context: ToolContext) -> ToolResult:
+        _ = context
         return ToolResult.ok({
             "utc_time": utcnow_isoformat(),
             "timezone": "UTC",
@@ -389,6 +390,7 @@ class ScheduleTaskTool(BaseSystemTool):
         return "Schedule a task to run at a specific time"
 
     async def execute(self, context: ToolContext) -> ToolResult:
+        _ = context
         # This tool requires special handling with user input
         # It's typically executed via execute_schedule_task_inline
         return ToolResult.fail("schedule_task requires user input - use execute_schedule_task_inline")

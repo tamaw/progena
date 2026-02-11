@@ -11,11 +11,25 @@ Tests cover:
 """
 
 import json
-from typing import Any, Callable, Optional
-
-import pytest
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
+
+from app.progenitor.llm.response_models import (
+    AntiCriteriaExtractionResponse,
+    AntiCriterionSpec,
+    CriteriaIssue,
+    CriteriaValidationResponse,
+    IdealStateClarificationResponse,
+    IdealStateExtractionResponse,
+    IdealStateRefinementResponse,
+    StopConditionSpec,
+    SuccessCriterionSpec,
+    TightenedCriterionSpec,
+    VerificationMethodSuggestionResponse,
+)
 from app.progenitor.state.ideal_state import (
     AntiCriterion,
     CriterionType,
@@ -29,22 +43,6 @@ from app.progenitor.state.ideal_state import (
     _spec_to_anti_criterion,
     _spec_to_success_criterion,
 )
-from app.progenitor.llm.response_models import (
-    AntiCriteriaExtractionResponse,
-    AntiCriterionSpec,
-    CriteriaIssue,
-    CriteriaValidationResponse,
-    IdealStateClarificationResponse,
-    IdealStateExtractionResponse,
-    IdealStateRefinementResponse,
-    QualityBarSpec,
-    StopConditionSpec,
-    SuccessCriterionSpec,
-    TightenedCriterionSpec,
-    VerificationMethodSpec,
-    VerificationMethodSuggestionResponse,
-)
-
 
 # ============================================================================
 # Fixtures
@@ -163,7 +161,7 @@ class SimpleMockLLM:
 
     def __init__(self, chat_return_value: str):
         self.chat = AsyncMock(return_value=chat_return_value)
-        self._get_json_response_format: Optional[Callable[[Any, Any], dict[str, Any]]] = None
+        self._get_json_response_format: Callable[[Any, Any], dict[str, Any]] | None = None
 
 
 class FailingMockLLM:
@@ -171,7 +169,7 @@ class FailingMockLLM:
 
     def __init__(self, error: Exception):
         self.chat = AsyncMock(side_effect=error)
-        self._get_json_response_format: Optional[Callable[[Any, Any], dict[str, Any]]] = None
+        self._get_json_response_format: Callable[[Any, Any], dict[str, Any]] | None = None
 
 
 def _make_mock_llm(return_value: dict) -> SimpleMockLLM:

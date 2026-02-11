@@ -11,15 +11,16 @@ Also detects when Copilot CLI needs clarification from the user.
 """
 
 import logging
-from typing import Callable, Coroutine, Any
 import time
+from collections.abc import Callable, Coroutine
+from typing import Any
 
+from ..runtime.time_utils import utcnow_isoformat
+from ..state.clarification import ClarificationDetector, create_clarification_history_entry
+from ..state.execution_schemas import VerificationReportV2
+from ..state.helpers import get_ideal_state
 from ..state.models import ProgenitorState
 from ..state.verifier import Verifier
-from ..state.clarification import ClarificationDetector, create_clarification_history_entry
-from ..state.execution_schemas import ExecutionResult, ValidationResultV2, VerificationReportV2
-from ..state.helpers import get_ideal_state
-from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +65,14 @@ def create_node(
         output = phases.get("execute", {}).get("result") or state.get("pending_response")
 
         # Gather context for verification
-        context = {
+        verification_context = {
             "validation_result": state.get("validation_result_v2"),
             "errors": state.get("errors", []),
             "completed": state.get("work_item_completed", False),
             "tool_calls": state.get("actions_this_cycle", 0),
             "elapsed_time": time.time() - iteration_start_time,
         }
+        logger.debug("Verify context: %s", verification_context)
 
         logger.info(f"Verifying iteration {iteration} output")
 

@@ -7,10 +7,8 @@ Provides utilities to:
 - Find the next available port in a range
 """
 
-import asyncio
 import logging
 import socket
-from typing import Optional
 
 import httpx
 
@@ -37,7 +35,7 @@ def is_port_available(port: int, host: str = "localhost") -> bool:
             sock.settimeout(1)
             sock.bind((host, port))
             return True
-    except (OSError, socket.error) as e:
+    except OSError as e:
         logger.debug(f"Port {port} is not available: {e}")
         return False
 
@@ -80,7 +78,7 @@ def find_available_port(
     start_port: int = 8080,
     end_port: int = 8199,
     host: str = "localhost",
-    exclude_ports: Optional[set[int]] = None,
+    exclude_ports: set[int] | None = None,
 ) -> int:
     """
     Find an available port in the given range.
@@ -123,7 +121,7 @@ async def find_available_port_async(
     start_port: int = 8080,
     end_port: int = 8199,
     host: str = "localhost",
-    exclude_ports: Optional[set[int]] = None,
+    exclude_ports: set[int] | None = None,
     check_health: bool = False,
 ) -> int:
     """
@@ -156,10 +154,9 @@ async def find_available_port_async(
             continue
 
         # Optionally check if a service responds (catches edge cases)
-        if check_health:
-            if await is_service_running_on_port(port, host):
-                logger.debug(f"Port {port} has a service running, skipping")
-                continue
+        if check_health and await is_service_running_on_port(port, host):
+            logger.debug(f"Port {port} has a service running, skipping")
+            continue
 
         logger.info(f"Found available port: {port}")
         return port

@@ -3,19 +3,18 @@
 Tests accurate token counting with tiktoken and fallback behavior.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from app.progenitor.llm.tokenizer import (
-    count_tokens,
-    count_message_tokens,
-    estimate_tokens_naive,
-    truncate_to_tokens,
-    get_encoding,
-    is_tiktoken_available,
-    get_token_stats,
-    MODEL_ENCODINGS,
     DEFAULT_ENCODING,
+    MODEL_ENCODINGS,
+    count_message_tokens,
+    count_tokens,
+    estimate_tokens_naive,
+    get_encoding,
+    get_token_stats,
+    is_tiktoken_available,
+    truncate_to_tokens,
 )
 
 

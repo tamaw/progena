@@ -15,14 +15,16 @@ Controls:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
-from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 import uuid
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
 
-from .time_utils import utcnow, utcnow_isoformat
 from .scheduler import Scheduler
+from .time_utils import utcnow, utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -50,7 +52,7 @@ class ProgenitorLoop:
         state_manager,
         config: "ProgenitorConfig",
         llm_client=None,
-        worktrees_dir: Optional[Path] = None,
+        worktrees_dir: Path | None = None,
         copilot_acp_manager=None,
     ):
         self.graph = graph
@@ -83,7 +85,7 @@ class ProgenitorLoop:
 
         # Stream callback for real-time LLM streaming
         # Nodes can use this to stream tokens directly to the client
-        self._stream_callback: Optional[Callable[[str, bool], Awaitable[None]]] = None
+        self._stream_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
         # Streaming state - controlled by the loop, accessed by nodes
         self._streaming_enabled = False
@@ -199,10 +201,8 @@ class ProgenitorLoop:
             # Cancel remaining tasks
             for task in pending:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         except asyncio.CancelledError:
             logger.info("Loop cancelled by signal")
@@ -210,10 +210,8 @@ class ProgenitorLoop:
             await self._suspend_active_build("Cancelled by signal")
             input_task.cancel()
             background_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.gather(input_task, background_task, return_exceptions=True)
-            except asyncio.CancelledError:
-                pass
 
         # Final checkpoint
         await self._checkpoint_state(self._state)
@@ -286,7 +284,7 @@ class ProgenitorLoop:
         backoff = runtime.idle_backoff_seconds
         max_backoff = runtime.max_backoff_seconds
         backoff_multiplier = runtime.backoff_multiplier
-        last_idle_log_backoff: Optional[float] = None
+        last_idle_log_backoff: float | None = None
 
         logger.info("Background worker started")
         await self._push_event("background_worker_started", "Background worker is now running")
@@ -366,7 +364,7 @@ class ProgenitorLoop:
 
         logger.info("Background worker stopped")
 
-    async def _run_graph_cycle(self, run_id: str, source: str = "unknown") -> None:
+    async def _run_graph_cycle(self, _run_id: str, source: str = "unknown") -> None:
         """Run a single graph cycle.
 
         Args:
@@ -436,7 +434,7 @@ class ProgenitorLoop:
         self,
         event_type: str,
         content: str = "",
-        metadata: Optional[dict[str, Any]] = None
+        metadata: dict[str, Any] | None = None
     ) -> None:
         """Push an event to clients via the event queue.
 
@@ -498,7 +496,7 @@ class ProgenitorLoop:
             )
         )
 
-    async def get_event(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
+    async def get_event(self, timeout: float | None = None) -> dict[str, Any] | None:
         """Get an event from the event queue.
 
         Args:
@@ -514,10 +512,10 @@ class ProgenitorLoop:
                     timeout=timeout
                 )
             return await self._event_queue.get()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
-    async def _get_input(self, timeout: float) -> Optional[str]:
+    async def _get_input(self, timeout: float) -> str | None:
         """Get user input with timeout.
 
         Caps timeout at 30 seconds to ensure health updates happen frequently.
@@ -529,7 +527,7 @@ class ProgenitorLoop:
                 self._input_queue.get(),
                 timeout=effective_timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     async def _send_output(self, message: str) -> None:
@@ -557,7 +555,7 @@ class ProgenitorLoop:
         """
         self._cycle_complete_event.set()
 
-    async def wait_cycle_complete(self, timeout: Optional[float] = None) -> bool:
+    async def wait_cycle_complete(self, timeout: float | None = None) -> bool:
         """Wait for the current graph cycle to complete.
 
         Args:
@@ -577,7 +575,7 @@ class ProgenitorLoop:
             # Clear the event for the next cycle
             self._cycle_complete_event.clear()
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     async def _stream_response(self, text: str) -> None:
@@ -643,7 +641,7 @@ class ProgenitorLoop:
         except asyncio.QueueFull:
             logger.warning("Stream queue full, could not send stream end marker")
 
-    async def get_stream_chunk(self, timeout: Optional[float] = None) -> Optional[dict]:
+    async def get_stream_chunk(self, timeout: float | None = None) -> dict | None:
         """Get a streaming chunk from the agent.
 
         Returns:
@@ -656,7 +654,7 @@ class ProgenitorLoop:
                     timeout=timeout
                 )
             return await self._stream_queue.get()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     async def _check_pending_work(self, state: dict[str, Any]) -> bool:
@@ -831,7 +829,7 @@ class ProgenitorLoop:
                 logger.warning("Skipping non-serializable backlog item: %s", type(item))
         return serialized
 
-    def _serialize_decision(self, decision: Any) -> Optional[dict]:
+    def _serialize_decision(self, decision: Any) -> dict | None:
         """Serialize decision object for checkpoint."""
         if decision is None:
             return None
@@ -841,7 +839,7 @@ class ProgenitorLoop:
             return decision
         return None
 
-    async def enqueue_input(self, message: str, timeout: Optional[float] = 30.0) -> bool:
+    async def enqueue_input(self, message: str, timeout: float | None = 30.0) -> bool:
         """Add a message to the input queue.
 
         Args:
@@ -871,7 +869,7 @@ class ProgenitorLoop:
         except asyncio.QueueFull:
             logger.warning("Input queue full, message rejected (non-blocking)")
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "Input queue full, message rejected after %.1fs timeout. "
                 "Queue size: %d/%d",
@@ -881,7 +879,7 @@ class ProgenitorLoop:
             )
             return False
 
-    async def get_output(self, timeout: Optional[float] = None) -> Optional[str]:
+    async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from the agent."""
         try:
             if timeout:
@@ -890,7 +888,7 @@ class ProgenitorLoop:
                     timeout=timeout
                 )
             return await self._output_queue.get()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     def stop(self) -> None:
@@ -930,7 +928,7 @@ class ProgenitorLoop:
         self,
         state: dict[str, Any],
         status: str = "running",
-        error: Optional[str] = None,
+        error: str | None = None,
     ) -> None:
         """Update health file for Docker health checks.
 
@@ -971,7 +969,7 @@ class ProgenitorLoop:
     async def handle_build_error(
         self,
         error_message: str,
-        build_id: Optional[str] = None,
+        build_id: str | None = None,
         notify_user: bool = True,
     ) -> None:
         """Handle a build error by updating state and notifying user.
@@ -1006,7 +1004,7 @@ class ProgenitorLoop:
 
         # Create error work item for user notification
         if notify_user:
-            from ..state.models import WorkItem, WorkItemType, WorkItemStatus
+            from ..state.models import WorkItem, WorkItemStatus, WorkItemType
 
             error_item = WorkItem(
                 id=f"error_{uuid.uuid4().hex[:8]}",

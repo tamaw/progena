@@ -13,7 +13,8 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from typing import Sequence
+    from collections.abc import Sequence
+
     import tiktoken
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ DEFAULT_ENCODING = "cl100k_base"
 
 
 @lru_cache(maxsize=8)
-def get_encoding(model: str | None = None) -> "tiktoken.Encoding | None":
+def get_encoding(model: str | None = None) -> tiktoken.Encoding | None:
     """Get tiktoken encoding for a model.
 
     Args:
@@ -144,7 +145,7 @@ def count_message_tokens(
         total = 0
         for msg in messages:
             content = msg.get("content", "")
-            role = msg.get("role", "")
+            msg.get("role", "")
             # Estimate: content + role + formatting overhead
             total += max(1, len(content) // 4) + 4
         return total

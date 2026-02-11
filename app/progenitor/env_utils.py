@@ -4,7 +4,6 @@ Environment variable parsing utilities for Progenitor.
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ def env_float(key: str, default: float) -> float:
     return default
 
 
-def env_list(key: str, default: Optional[list[str]] = None) -> list[str]:
+def env_list(key: str, default: list[str] | None = None) -> list[str]:
     """Parse comma-separated list environment variable.
 
     Returns list of stripped non-empty strings.

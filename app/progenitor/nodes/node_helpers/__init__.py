@@ -6,28 +6,29 @@ used by the LangGraph nodes to execute and present tool results.
 """
 
 from typing import TYPE_CHECKING
-from .protocol import ToolContext, ToolResult, SystemTool, BaseSystemTool
+
+from .formatters import format_schedule_result, format_tool_result
+from .protocol import BaseSystemTool, SystemTool, ToolContext, ToolResult
 from .registry import (
     execute_system_tool,
-    get_system_tool,
     get_all_system_tools,
+    get_system_tool,
     get_system_tool_names,
     match_tool_by_input,
 )
-from .formatters import format_tool_result, format_schedule_result
 
 if TYPE_CHECKING:
-    from ...tools.list_tools import ListToolsTool
-    from ...tools.rediscover_agents import RediscoverAgentsTool
-    from ...tools.list_agents import ListAgentsTool
     from ...tools.build_status import BuildStatusTool
-    from ...tools.current_time import CurrentTimeTool
-    from ...tools.list_schedule import ListScheduleTool
-    from ...tools.self_reflect_tool import SelfReflectTool
-    from ...tools.schedule_task import ScheduleTaskTool
-    from ...tools.new_conversation import NewConversationTool
     from ...tools.compress_conversation import CompressConversationTool
+    from ...tools.current_time import CurrentTimeTool
+    from ...tools.list_agents import ListAgentsTool
+    from ...tools.list_schedule import ListScheduleTool
+    from ...tools.list_tools import ListToolsTool
     from ...tools.memory import MemoryTool
+    from ...tools.new_conversation import NewConversationTool
+    from ...tools.rediscover_agents import RediscoverAgentsTool
+    from ...tools.schedule_task import ScheduleTaskTool
+    from ...tools.self_reflect_tool import SelfReflectTool
 
 
 def __getattr__(name: str):

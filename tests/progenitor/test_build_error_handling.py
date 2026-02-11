@@ -10,13 +10,13 @@ Tests cover:
 """
 
 import tempfile
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
-from app.progenitor.runtime.loop import ProgenitorLoop
+import pytest
+
 from app.progenitor.config import ProgenitorConfig, RuntimeConfig
+from app.progenitor.runtime.loop import ProgenitorLoop
 
 
 @pytest.fixture

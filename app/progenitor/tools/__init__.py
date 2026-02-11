@@ -2,39 +2,39 @@
 
 from typing import TYPE_CHECKING
 
-from .registry import ToolRegistry
+from .agent_discovery import AgentDiscovery, discover_agents
 from .copilot import CopilotCLI
 from .git import GitWorktreeManager
 from .mcp import MCPClient
-from .agent_discovery import AgentDiscovery, discover_agents
+from .registry import ToolRegistry
 from .schedule import (
-    add_scheduled_task,
-    remove_scheduled_task,
-    list_scheduled_tasks,
     SCHEDULE_TOOL_SPEC,
+    add_scheduled_task,
+    list_scheduled_tasks,
+    remove_scheduled_task,
 )
 from .self_reflect import (
+    SELF_REFLECT_TOOL_SPEC,
     SelfReflection,
     execute_self_reflect,
-    SELF_REFLECT_TOOL_SPEC,
 )
 from .user_communication import (
-    UserCommunicationTools,
     USER_COMMUNICATION_TOOLS,
+    UserCommunicationTools,
 )
 
 if TYPE_CHECKING:
-    from .list_tools import ListToolsTool
-    from .rediscover_agents import RediscoverAgentsTool
-    from .list_agents import ListAgentsTool
-    from .new_conversation import NewConversationTool
     from .build_status import BuildStatusTool
-    from .current_time import CurrentTimeTool
-    from .list_schedule import ListScheduleTool
-    from .self_reflect_tool import SelfReflectTool
-    from .schedule_task import ScheduleTaskTool
     from .compress_conversation import CompressConversationTool
+    from .current_time import CurrentTimeTool
+    from .list_agents import ListAgentsTool
+    from .list_schedule import ListScheduleTool
+    from .list_tools import ListToolsTool
     from .memory import MemoryTool
+    from .new_conversation import NewConversationTool
+    from .rediscover_agents import RediscoverAgentsTool
+    from .schedule_task import ScheduleTaskTool
+    from .self_reflect_tool import SelfReflectTool
 
 
 def __getattr__(name: str):

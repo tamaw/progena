@@ -8,10 +8,10 @@ Includes automatic cleanup of orphaned worktrees on startup and failure.
 import asyncio
 import logging
 import shutil
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional, Any
 import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 from ..runtime.time_utils import format_timestamp, utcnow
 
@@ -37,7 +37,7 @@ class GitWorktreeManager:
     def __init__(
         self,
         worktrees_dir: Path,
-        repo_path: Optional[Path] = None,
+        repo_path: Path | None = None,
         max_worktree_age_hours: int = 24,
         cleanup_on_init: bool = True,
     ):
@@ -48,7 +48,7 @@ class GitWorktreeManager:
         # CR-003: Lock to prevent race between cleanup and worktree creation
         self._init_lock = asyncio.Lock()
         self._cleanup_complete = asyncio.Event()
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task | None = None
 
         if cleanup_on_init:
             # CR-003: Schedule cleanup with proper synchronization
@@ -78,7 +78,7 @@ class GitWorktreeManager:
     async def create_worktree(
         self,
         work_item_id: str,
-        branch_name: Optional[str] = None,
+        branch_name: str | None = None,
     ) -> Path:
         """Create a new worktree for a work item.
 
@@ -89,7 +89,7 @@ class GitWorktreeManager:
         if self._cleanup_task and not self._cleanup_complete.is_set():
             try:
                 await asyncio.wait_for(self._cleanup_complete.wait(), timeout=30.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Startup cleanup timed out, proceeding with worktree creation")
 
         async with self._init_lock:
@@ -137,14 +137,14 @@ class GitWorktreeManager:
         except Exception as e:
             logger.warning("Failed to write worktree metadata: %s", e)
 
-    async def _read_worktree_metadata(self, worktree_path: Path) -> Optional[dict]:
+    async def _read_worktree_metadata(self, worktree_path: Path) -> dict | None:
         """Read metadata from a worktree."""
         import json
         metadata_path = worktree_path / self.METADATA_FILE
         if not metadata_path.exists():
             return None
         try:
-            with open(metadata_path, "r") as f:
+            with open(metadata_path) as f:
                 return json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.debug("Failed to read worktree metadata from %s: %s", metadata_path, e)
@@ -172,7 +172,7 @@ class GitWorktreeManager:
         self,
         worktree_path: Path,
         message: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Commit all changes in a worktree."""
         worktree_path = Path(worktree_path)
 
@@ -260,7 +260,7 @@ class GitWorktreeManager:
 
         return worktrees
 
-    async def cleanup_old_worktrees(self, max_age_hours: Optional[int] = None) -> int:
+    async def cleanup_old_worktrees(self, max_age_hours: int | None = None) -> int:
         """Clean up worktrees older than max_age_hours.
 
         Args:
@@ -291,8 +291,7 @@ class GitWorktreeManager:
                     created_at = datetime.fromisoformat(metadata["created_at"])
                     if created_at.tzinfo is None:
                         # Assume UTC for naive datetimes
-                        from datetime import timezone
-                        created_at = created_at.replace(tzinfo=timezone.utc)
+                        created_at = created_at.replace(tzinfo=UTC)
                     if created_at < cutoff_time:
                         should_remove = True
                         reason = f"older than {max_age}h"
@@ -303,8 +302,7 @@ class GitWorktreeManager:
             if not should_remove:
                 try:
                     mtime = datetime.fromtimestamp(item.stat().st_mtime)
-                    from datetime import timezone
-                    mtime = mtime.replace(tzinfo=timezone.utc)
+                    mtime = mtime.replace(tzinfo=UTC)
                     if mtime < cutoff_time:
                         should_remove = True
                         reason = f"mtime older than {max_age}h"
@@ -378,7 +376,7 @@ class GitWorktreeManager:
         self,
         submodule_path: Path,
         submodule_name: str,
-        remote_url: Optional[str] = None,
+        remote_url: str | None = None,
     ) -> tuple[bool, str]:
         """Initialize a git submodule for an agent/MCP project.
 
@@ -476,7 +474,7 @@ class GitWorktreeManager:
         self,
         submodule_path: Path,
         message: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Commit changes in a submodule.
 
         Args:
@@ -554,7 +552,7 @@ class GitWorktreeManager:
                 logger.info("GIT: Command completed with code %s", process.returncode)
                 if stderr:
                     logger.warning("GIT stderr: %s", stderr.decode()[:200])
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error("GIT: Command timed out after %ss", timeout)
                 process.kill()
                 return {

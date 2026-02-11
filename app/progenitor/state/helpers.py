@@ -7,17 +7,17 @@ partially with dicts.
 """
 
 import logging
-from typing import Any, Optional, TypeVar, Type, TYPE_CHECKING, Mapping, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
+
 from .models import (
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
+    BuildPhases,
     Decision,
     DecisionAction,
     ScheduleEntry,
-    AgentRegistryEntry,
-    ConversationMessage,
-    BuildPhases,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ def get_actionable_items(backlog: list) -> list:
     return [item for item in backlog if is_work_item_actionable(item)]
 
 
-def normalize_work_item(item: Any) -> Optional[WorkItem]:
+def normalize_work_item(item: Any) -> WorkItem | None:
     """Convert various formats to WorkItem.
 
     Args:
@@ -124,7 +124,7 @@ def normalize_work_item(item: Any) -> Optional[WorkItem]:
     return None
 
 
-def normalize_decision(item: Any) -> Optional[Decision]:
+def normalize_decision(item: Any) -> Decision | None:
     """Convert various formats to Decision.
 
     Args:
@@ -157,7 +157,7 @@ def normalize_decision(item: Any) -> Optional[Decision]:
     return None
 
 
-def normalize_schedule_entry(item: Any) -> Optional[ScheduleEntry]:
+def normalize_schedule_entry(item: Any) -> ScheduleEntry | None:
     """Convert various formats to ScheduleEntry.
 
     Args:
@@ -377,7 +377,7 @@ def trim_conversation_history(
 def summarize_old_messages(
     messages: list,
     summary_threshold: int = 50,
-) -> tuple[list, Optional[str]]:
+) -> tuple[list, str | None]:
     """Create a summary of old messages when history grows large.
 
     This is an alternative to simple truncation - creates a condensed
@@ -537,7 +537,12 @@ def mark_actionable_items_completed(
     for item in backlog:
         if is_work_item_actionable(item):
             mark_work_item_completed(item, result, timestamp)
-            item_id = item.id if hasattr(item, "id") else item.get("id", "unknown") if isinstance(item, dict) else "unknown"
+            if isinstance(item, WorkItem):
+                item_id = item.id
+            elif isinstance(item, dict):
+                item_id = item.get("id", "unknown")
+            else:
+                item_id = getattr(item, "id", "unknown")
             logger.info(f"Marked work item {item_id} as completed")
         updated_backlog.append(item)
 
@@ -557,8 +562,10 @@ def find_work_item_by_id(backlog: list, item_id: str) -> Any:
     for item in backlog:
         if isinstance(item, WorkItem) and item.id == item_id:
             return item
-        if isinstance(item, dict) and item.get("id") == item_id:
-            return item
-        if hasattr(item, "id") and getattr(item, "id") == item_id:
+        if isinstance(item, dict):
+            if item.get("id") == item_id:
+                return item
+            continue
+        if getattr(item, "id", None) == item_id:
             return item
     return None

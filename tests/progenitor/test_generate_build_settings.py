@@ -8,8 +8,9 @@ Tests cover:
 4. Project name extraction patterns
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 # Import the function under test
 from app.progenitor.nodes.decide import _generate_build_settings

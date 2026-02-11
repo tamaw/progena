@@ -7,10 +7,9 @@ Handles communication with MCP servers via stdio or HTTP transports.
 import asyncio
 import json
 import logging
-import os
 import shlex
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +81,7 @@ class MCPClient:
         self,
         tool_config: dict[str, Any],
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call an MCP tool method."""
         transport = tool_config.get("transport", "stdio")
@@ -98,7 +97,7 @@ class MCPClient:
         self,
         tool_config: dict[str, Any],
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call an MCP server via stdio."""
         command = tool_config.get("command")
@@ -151,7 +150,7 @@ class MCPClient:
         self,
         tool_config: dict[str, Any],
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call an MCP server via HTTP."""
         import aiohttp
@@ -168,14 +167,13 @@ class MCPClient:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    endpoint,
-                    json=request,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response:
-                    result = await response.json()
-                    return result.get("result", result)
+            async with aiohttp.ClientSession() as session, session.post(
+                endpoint,
+                json=request,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                result = await response.json()
+                return result.get("result", result)
         except Exception as e:
             return {"error": str(e)}
 
@@ -205,7 +203,7 @@ class A2AClient:
         self,
         agent_config: dict[str, Any],
         request: str,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
         timeout: float = 60.0,
     ) -> dict[str, Any]:
         """Call an A2A agent with a request.
@@ -240,7 +238,7 @@ class A2AClient:
         self,
         agent_config: dict[str, Any],
         request: str,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
         timeout: float = 60.0,
     ) -> dict[str, Any]:
         """Call an agent via HTTP."""
@@ -256,25 +254,24 @@ class A2AClient:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    endpoint,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as response:
-                    if response.status >= 400:
-                        text = await response.text()
-                        return {
-                            "success": False,
-                            "error": f"HTTP {response.status}: {text[:200]}",
-                        }
-                    return await response.json()
+            async with aiohttp.ClientSession() as session, session.post(
+                endpoint,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response:
+                if response.status >= 400:
+                    text = await response.text()
+                    return {
+                        "success": False,
+                        "error": f"HTTP {response.status}: {text[:200]}",
+                    }
+                return await response.json()
         except aiohttp.ClientConnectorError as e:
             return {
                 "success": False,
                 "error": f"Connection failed: {e}. Agent may not be running.",
             }
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {
                 "success": False,
                 "error": f"Request timeout after {timeout}s",
@@ -286,7 +283,7 @@ class A2AClient:
         self,
         agent_config: dict[str, Any],
         timeout: float = 5.0,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Fetch the agent card from an HTTP agent.
 
         Args:
@@ -307,13 +304,12 @@ class A2AClient:
                 return None
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    agent_card_url,
-                    timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
+            async with aiohttp.ClientSession() as session, session.get(
+                agent_card_url,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
         except Exception as e:
             logger.debug("Failed to fetch agent card: %s", e)
 

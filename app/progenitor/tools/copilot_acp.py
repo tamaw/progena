@@ -11,11 +11,14 @@ Components:
 """
 
 import asyncio
+import contextlib
+import importlib.util
 import logging
 import time
-from datetime import datetime, timezone
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +33,9 @@ class CopilotACPService:
     def __init__(
         self,
         port: int = 3000,
-        model: Optional[str] = None,
+        model: str | None = None,
         yolo: bool = True,
-        allowed_dirs: Optional[list[str]] = None,
+        allowed_dirs: list[str] | None = None,
     ):
         """Initialize the ACP service manager.
 
@@ -47,10 +50,10 @@ class CopilotACPService:
         self.yolo = yolo
         self.allowed_dirs = allowed_dirs or []
 
-        self.process: Optional[asyncio.subprocess.Process] = None
+        self.process: asyncio.subprocess.Process | None = None
         self._started = asyncio.Event()
-        self._stdout_task: Optional[asyncio.Task] = None
-        self._stderr_task: Optional[asyncio.Task] = None
+        self._stdout_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
         self._stdout_lines: list[str] = []
         self._stderr_lines: list[str] = []
 
@@ -69,9 +72,6 @@ class CopilotACPService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            logger.info("COPILOT_ACP: Process started with PID %s", self.process.pid)
-
-            # Start background tasks to monitor stdout/stderr
             self._stdout_task = asyncio.create_task(
                 self._monitor_stream(self.process.stdout, "stdout", self._stdout_lines)
             )
@@ -103,7 +103,7 @@ class CopilotACPService:
 
     async def _monitor_stream(
         self,
-        stream: Optional[asyncio.StreamReader],
+        stream: asyncio.StreamReader | None,
         name: str,
         buffer: list[str],
     ) -> None:
@@ -148,7 +148,7 @@ class CopilotACPService:
             # Wait for the _started event or timeout
             await asyncio.wait_for(self._started.wait(), timeout=timeout)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Even if we don't see "ready", check if process is still running
             if self.process.returncode is None:
                 logger.warning(
@@ -177,10 +177,8 @@ class CopilotACPService:
         for task in [self._stdout_task, self._stderr_task]:
             if task and not task.done():
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         # Graceful shutdown with SIGTERM, then SIGKILL
         try:
@@ -190,7 +188,7 @@ class CopilotACPService:
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=5.0)
                 logger.info("COPILOT_ACP: Process terminated gracefully")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("COPILOT_ACP: Process did not respond to SIGTERM, sending SIGKILL")
                 self.process.kill()
                 await self.process.wait()
@@ -235,7 +233,7 @@ class CopilotACPClient:
         self.port = port
         self.timeout = timeout
         self._connection: Any = None  # Will hold the ACP connection
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -249,8 +247,8 @@ class CopilotACPClient:
 
         try:
             # Import ACP SDK types
-            from acp import Client
-            from acp.schema import NewSessionRequest
+            if importlib.util.find_spec("acp") is None:
+                raise ImportError("acp")
 
             logger.info("COPILOT_ACP_CLIENT: Connecting to ACP server on port %d", self.port)
 
@@ -294,7 +292,6 @@ class CopilotACPClient:
             await self.initialize()
 
         try:
-            from acp.schema import NewSessionRequest
             import json
 
             # Send new session request via JSON-RPC
@@ -326,7 +323,7 @@ class CopilotACPClient:
             logger.info("COPILOT_ACP_CLIENT: Created session %s", self._session_id)
             return self._session_id or ""
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("COPILOT_ACP_CLIENT: Timeout creating session")
             raise RuntimeError("Timeout creating ACP session")
         except Exception as e:
@@ -337,7 +334,7 @@ class CopilotACPClient:
         self,
         prompt_text: str,
         cwd: Path,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Send a prompt and stream the response.
 
@@ -359,7 +356,7 @@ class CopilotACPClient:
 
         try:
             import json
-            from acp import text_block
+
 
             # Send prompt request
             request_id = f"prompt_{int(time.time() * 1000)}"
@@ -405,8 +402,6 @@ class CopilotACPClient:
                         break
 
                     response = json.loads(line.decode())
-
-                    # Handle different response types
                     if "error" in response:
                         yield {
                             "type": "error",
@@ -426,7 +421,7 @@ class CopilotACPClient:
                                    stop_reason)
                         break
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Continue loop to check overall timeout
                     continue
 
@@ -482,7 +477,7 @@ class ACPLogCapture:
         Returns:
             Path to the log file.
         """
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{work_item_id}.log"
         return self.logs_dir / filename
 
@@ -508,9 +503,9 @@ class ACPLogCapture:
 
         try:
             with open(log_path, "w", encoding="utf-8") as f:
-                f.write(f"# Copilot ACP Session Log\n")
+                f.write("# Copilot ACP Session Log\n")
                 f.write(f"# Work Item: {work_item_id}\n")
-                f.write(f"# Started: {datetime.now(timezone.utc).isoformat()}\n")
+                f.write(f"# Started: {datetime.now(UTC).isoformat()}\n")
                 f.write("# " + "=" * 70 + "\n\n")
 
                 async for chunk in stream:
@@ -551,7 +546,7 @@ class ACPLogCapture:
                     f.flush()
 
                 f.write("\n\n# " + "=" * 70 + "\n")
-                f.write(f"# Completed: {datetime.now(timezone.utc).isoformat()}\n")
+                f.write(f"# Completed: {datetime.now(UTC).isoformat()}\n")
                 f.write(f"# Total chunks: {len(chunks)}\n")
 
             logger.info("COPILOT_ACP_LOG: Session complete - %d chunks captured", len(chunks))

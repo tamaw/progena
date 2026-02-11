@@ -12,17 +12,17 @@ Features:
 - Automatic reconnection
 """
 
+from .client import IPCClient
 from .protocol import (
-    MessageType,
     IPCMessage,
-    encode_message,
+    MessageType,
+    agent_event,
     decode_message,
+    encode_message,
     read_message,
     write_message,
-    agent_event,
 )
 from .server import IPCServer
-from .client import IPCClient
 
 __all__ = [
     "MessageType",

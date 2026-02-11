@@ -5,12 +5,13 @@ These models ensure that LLM responses are properly structured
 and validated before being used in the application.
 """
 
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator
 
 
-class DecisionAction(str, Enum):
+class DecisionAction(StrEnum):
     """Valid actions for the decide endpoint."""
     ANSWER_DIRECTLY = "answer_directly"
     ANSWER = "answer"  # Alias for answer_directly
@@ -48,26 +49,26 @@ class DecisionResponse(BaseModel):
         default_factory=list,
         description="List of capabilities needed for this task"
     )
-    user_response: Optional[str] = Field(
+    user_response: str | None = Field(
         default=None,
         description="A helpful, specific response to show the user about what action will be taken"
     )
-    direct_response: Optional[str] = Field(
+    direct_response: str | None = Field(
         default=None,
         description="Direct response content if action is answer_directly (deprecated, use user_response)"
     )
     # Build-specific fields (populated when action is build_agent, build_tool, or upgrade)
-    project_name: Optional[str] = Field(
+    project_name: str | None = Field(
         default=None,
         description="For build actions: the agent/project name in snake_case (e.g., 'weather_agent'). "
         "Should be a concise, descriptive name based on what the user wants to build. "
         "Do NOT include filler words like 'for_me', 'please', 'a', 'the'."
     )
-    build_type: Optional[str] = Field(
+    build_type: str | None = Field(
         default=None,
         description="For build actions: 'agent' for A2A agents, 'mcp' for MCP servers/tools"
     )
-    build_description: Optional[str] = Field(
+    build_description: str | None = Field(
         default=None,
         description="For build actions: a clear, refined description of what the user wants to build. "
         "This should capture the core intent and requirements from the user's request."
@@ -139,8 +140,8 @@ class WorkItemSpec(BaseModel):
         description="Type of work item"
     )
     description: str = Field(default="", description="Work item description")
-    target_agent: Optional[str] = Field(default=None, description="Target agent for delegation")
-    target_tool: Optional[str] = Field(default=None, description="Target MCP tool")
+    target_agent: str | None = Field(default=None, description="Target agent for delegation")
+    target_tool: str | None = Field(default=None, description="Target MCP tool")
     priority: int = Field(default=0, description="Priority (higher = more urgent)")
     context: dict[str, Any] = Field(default_factory=dict, description="Additional context")
 
@@ -820,7 +821,7 @@ class LearningResult(BaseModel):
         description="Correlations between planned actions and observed outcomes"
     )
 
-    reasoning_trace: Optional[str] = Field(
+    reasoning_trace: str | None = Field(
         default=None,
         description="Reasoning trace from the LLM, if available"
     )
@@ -963,7 +964,7 @@ class ThinkResponse(BaseModel):
         description="Why the recommended approach is preferred over others"
     )
 
-    reasoning_trace: Optional[str] = Field(
+    reasoning_trace: str | None = Field(
         default=None,
         description="Reasoning trace from the LLM, if available"
     )

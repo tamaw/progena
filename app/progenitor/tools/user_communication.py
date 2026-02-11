@@ -7,14 +7,15 @@ Provides tools for the agent to communicate with the user through IPC:
 """
 
 import logging
-from typing import Any, Callable, Coroutine, Optional, Protocol
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 # Type alias for event pusher callback
 EventPusher = Callable[
-    [str, str, Optional[dict[str, Any]]],
+    [str, str, dict[str, Any] | None],
     Coroutine[Any, Any, None]
 ]
 
@@ -30,7 +31,7 @@ class UserCommunicationTools:
     then received by connected clients (e.g., the frontend).
     """
 
-    def __init__(self, event_pusher: EventPusher, run_id: Optional[str] = None):
+    def __init__(self, event_pusher: EventPusher, run_id: str | None = None):
         """Initialize user communication tools.
 
         Args:
@@ -44,8 +45,8 @@ class UserCommunicationTools:
     async def say_to_user(
         self,
         message: str,
-        context: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        context: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Send a message to the user.
 
@@ -85,9 +86,9 @@ class UserCommunicationTools:
     async def ask_user(
         self,
         question: str,
-        context: Optional[str] = None,
-        options: Optional[list[str]] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        context: str | None = None,
+        options: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Ask the user a question.
 
@@ -137,7 +138,7 @@ class UserCommunicationTools:
         title: str,
         body: str,
         level: str = "info",
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Send a notification to the user.
 

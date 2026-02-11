@@ -5,6 +5,7 @@ requests that should trigger fast-path tool execution.
 """
 
 import pytest
+
 from app.progenitor.tools.rediscover_agents import RediscoverAgentsTool
 from app.progenitor.tools.self_reflect_tool import SelfReflectTool
 

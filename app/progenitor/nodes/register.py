@@ -5,13 +5,13 @@ Also tests and activates newly built agents for immediate interaction.
 """
 
 import logging
-from datetime import datetime
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Callable, Coroutine, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from ..state.models import ProgenitorState, AgentRegistryEntry
-from ..runtime.time_utils import utcnow_isoformat
 from ..runtime.agent_runner import AgentRunner
+from ..runtime.time_utils import utcnow_isoformat
+from ..state.models import AgentRegistryEntry, ProgenitorState
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def create_node(
     tool_registry,
     state_manager,
-    config: "Optional[ProgenitorConfig]" = None,
+    config: "ProgenitorConfig | None" = None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the register node function.
 

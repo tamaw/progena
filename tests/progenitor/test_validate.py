@@ -16,41 +16,35 @@ Tests cover:
 - ValidationConfig from env
 """
 
-import json
 import os
-from unittest.mock import AsyncMock, patch, MagicMock
-
-import pytest
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.progenitor.nodes.validate import (
-    _extract_file_location,
-    _parse_python_traceback,
-    _parse_pytest_output,
-    _parse_pyright_output,
-    _parse_mypy_output,
-    _parse_ruff_output,
-    _deduplicate_findings,
-    _detect_patterns,
-    _prioritize_findings,
-    _analyze_execution_result,
-    _analyze_execution_run,
-    _analyze_build_output,
-    _get_project_directory,
-    create_node,
-)
-from app.progenitor.state.execution_schemas import (
-    ValidationFinding,
-    ValidationAction,
-    ValidationStatistics,
-    ValidationResultV2,
-)
-from app.progenitor.config import ValidationConfig, ProgenitorConfig
+from app.progenitor.config import ProgenitorConfig, ValidationConfig
 from app.progenitor.llm.response_models import (
     FindingSeveritySpec,
     ValidationSeverityResponse,
 )
-
+from app.progenitor.nodes.validate import (
+    _analyze_build_output,
+    _analyze_execution_result,
+    _deduplicate_findings,
+    _detect_patterns,
+    _extract_file_location,
+    _get_project_directory,
+    _parse_mypy_output,
+    _parse_pyright_output,
+    _parse_pytest_output,
+    _parse_python_traceback,
+    _parse_ruff_output,
+    _prioritize_findings,
+    create_node,
+)
+from app.progenitor.state.execution_schemas import (
+    ValidationAction,
+    ValidationFinding,
+    ValidationResultV2,
+)
 
 # ============================================================================
 # Helpers

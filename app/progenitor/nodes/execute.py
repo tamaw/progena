@@ -17,18 +17,22 @@ and clean separation of concerns.
 """
 
 import logging
-from typing import Callable, Coroutine, Any
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from ..state.models import ProgenitorState, WorkItem, WorkItemStatus
-from ..state.helpers import mark_work_item_completed, find_work_item_by_id
+from ..runtime.port_utils import (
+    TEST_HARNESS_PORT_END,
+    TEST_HARNESS_PORT_START,
+    find_available_port_async,
+)
+from ..runtime.time_utils import utcnow_isoformat
 from ..state.execution_schemas import (
     ExecutionResult,
-    ExecutionRun,
     ExecutionStatus,
     ExperimentPlan,
 )
-from ..runtime.time_utils import utcnow_isoformat, utcnow
-from ..runtime.port_utils import find_available_port_async, TEST_HARNESS_PORT_START, TEST_HARNESS_PORT_END
+from ..state.helpers import find_work_item_by_id, mark_work_item_completed
+from ..state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,7 @@ def create_node(
         project_root: Project root path for agent harness.
     """
     from pathlib import Path
+
     from ..runtime.exercise_harness import AgentExerciseHarness, create_execution_result_from_build
 
     # Initialize exercise harness for agent testing
@@ -410,7 +415,6 @@ async def _exercise_agent(
             agent_name = build_settings.get("project_name") if isinstance(build_settings, dict) else getattr(build_settings, "project_name", None)
 
         if agent_name and project_root:
-            from pathlib import Path
             # Check for standard agent locations relative to project root
             potential_paths = [
                 project_root / f"app/agents/{agent_name}/agent.py",
@@ -485,8 +489,8 @@ async def _exercise_agent(
     else:
         # No endpoint or entrypoint - create failed result
         logger.warning("No agent endpoint or entrypoint available for exercise")
-        from ..state.execution_schemas import ExecutionResult, ExecutionStatus
         from ..runtime.time_utils import utcnow
+        from ..state.execution_schemas import ExecutionResult, ExecutionStatus
 
         result = ExecutionResult(
             iteration=iteration,
@@ -536,14 +540,13 @@ async def _execute_tool(tool_name: str, tool_args: dict, tool_registry) -> Any:
     elif tool_type == "function":
         # Execute local function
         func = tool.get("function")
-        if func and callable(func):
-            if hasattr(func, "__call__"):
-                # Check if async
-                import asyncio
-                if asyncio.iscoroutinefunction(func):
-                    return await func(**tool_args)
-                else:
-                    return func(**tool_args)
+        if func and callable(func) and callable(func):
+            # Check if async
+            import asyncio
+            if asyncio.iscoroutinefunction(func):
+                return await func(**tool_args)
+            else:
+                return func(**tool_args)
         raise ValueError(f"Tool {tool_name} has no callable function")
 
     else:

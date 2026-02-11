@@ -13,22 +13,22 @@ Features:
 """
 
 import asyncio
+import contextlib
 import logging
 import uuid
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .protocol import (
-    MessageType,
     IPCMessage,
-    read_message,
-    write_message,
+    MessageType,
+    agent_event,
     assistant_message,
-    stream_chunk,
-    stream_end,
     error_message,
     heartbeat_ack,
+    read_message,
     ready_message,
-    agent_event,
+    stream_chunk,
+    write_message,
 )
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ class IPCServer:
         self.port = port
         self.max_clients = max_clients
 
-        self._server: Optional[asyncio.Server] = None
+        self._server: asyncio.Server | None = None
         self._running = False
         self._client_count = 0
         self._clients: dict[str, asyncio.StreamWriter] = {}
@@ -82,7 +82,7 @@ class IPCServer:
         # doesn't track request IDs through the output queue
         self._request_lock = asyncio.Lock()
         # Background task for broadcasting events
-        self._event_broadcast_task: Optional[asyncio.Task] = None
+        self._event_broadcast_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the IPC server."""
@@ -127,10 +127,8 @@ class IPCServer:
         # Stop event broadcast task
         if self._event_broadcast_task and not self._event_broadcast_task.done():
             self._event_broadcast_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._event_broadcast_task
-            except asyncio.CancelledError:
-                pass
             self._event_broadcast_task = None
 
         # Close all client connections
@@ -187,7 +185,7 @@ class IPCServer:
             while self._running:
                 try:
                     msg = await read_message(reader, timeout=300)  # 5 min timeout
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.debug("Client %s timed out", client_id)
                     break
 
@@ -313,7 +311,7 @@ class IPCServer:
                 if not cycle_done:
                     logger.warning("Cycle complete timeout for %s", request_id)
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error("Request %s timed out waiting for response", request_id)
                 await write_message(
                     writer,

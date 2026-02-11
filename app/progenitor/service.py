@@ -22,16 +22,16 @@ Usage:
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any
 
 from .config import ProgenitorConfig, get_config
 from .graph_outer_loop import create_progenitor_graph
-from .state.manager import StateManager
 from .llm.client import LLMClient
+from .state.manager import StateManager
+from .state.models import ConversationMessage, ProgenitorState
 from .tools.registry import ToolRegistry
-from .state.models import ProgenitorState, ConversationMessage
-from .runtime.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,8 @@ class ProgenitorService:
 
     def __init__(
         self,
-        config: Optional[ProgenitorConfig] = None,
-        project_root: Optional[Path] = None,
+        config: ProgenitorConfig | None = None,
+        project_root: Path | None = None,
     ):
         """Initialize the Progenitor service.
 
@@ -71,13 +71,13 @@ class ProgenitorService:
         self._lock = asyncio.Lock()
 
         # Components (initialized in initialize())
-        self.state_manager: Optional[StateManager] = None
-        self.llm_client: Optional[LLMClient] = None
-        self.tool_registry: Optional[ToolRegistry] = None
+        self.state_manager: StateManager | None = None
+        self.llm_client: LLMClient | None = None
+        self.tool_registry: ToolRegistry | None = None
         self.graph = None
 
         # State tracking
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
         self._message_count = 0
 
     async def initialize(self) -> None:
@@ -140,7 +140,7 @@ class ProgenitorService:
     async def handle_message(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> str:
         """Handle a user message and return the response.
 
@@ -220,7 +220,7 @@ class ProgenitorService:
     async def handle_message_stream(
         self,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Handle a message and stream the response.
 
@@ -260,14 +260,13 @@ class ProgenitorService:
             full_response = ""
             async for event in self.graph.astream(initial_state, config):  # type: ignore[arg-type]
                 # Extract any response updates
-                for node_name, node_output in event.items():
-                    if isinstance(node_output, dict):
-                        if chunk := node_output.get("pending_response"):
-                            # Yield new content
-                            new_content = chunk[len(full_response):]
-                            if new_content:
-                                full_response = chunk
-                                yield new_content
+                for _node_name, node_output in event.items():
+                    if isinstance(node_output, dict) and (chunk := node_output.get("pending_response")):
+                        # Yield new content
+                        new_content = chunk[len(full_response):]
+                        if new_content:
+                            full_response = chunk
+                            yield new_content
 
             # Log conversation
             if self.state_manager:
@@ -304,7 +303,7 @@ class ProgenitorService:
         return self._initialized
 
     @property
-    def session_id(self) -> Optional[str]:
+    def session_id(self) -> str | None:
         """Get the current session ID."""
         return self._session_id
 
@@ -338,8 +337,9 @@ class ProgenitorService:
     async def _discover_agents(self) -> None:
         """Discover and register agents from the agents/ folder."""
         try:
-            from .tools.agent_discovery import discover_agents
             from pathlib import Path
+
+            from .tools.agent_discovery import discover_agents
 
             # Determine agents directory relative to project root
             # Assuming we're in app/progenitor/, agents is at app/agents/
@@ -386,10 +386,10 @@ class ProgenitorService:
 
 
 # Module-level service instance for singleton access
-_service: Optional[ProgenitorService] = None
+_service: ProgenitorService | None = None
 
 
-def get_service(config: Optional[ProgenitorConfig] = None) -> ProgenitorService:
+def get_service(config: ProgenitorConfig | None = None) -> ProgenitorService:
     """Get or create the global Progenitor service instance.
 
     Args:
@@ -405,7 +405,7 @@ def get_service(config: Optional[ProgenitorConfig] = None) -> ProgenitorService:
 
 
 async def get_initialized_service(
-    config: Optional[ProgenitorConfig] = None
+    config: ProgenitorConfig | None = None
 ) -> ProgenitorService:
     """Get an initialized service instance.
 

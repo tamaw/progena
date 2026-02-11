@@ -9,21 +9,18 @@ Critical tests for ensuring the aliens see real-time feedback:
 """
 
 import asyncio
-import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from queue import Queue
-from threading import Thread
 
 from app.backend.streaming import (
-    Iteratorize,
     AsyncIteratorize,
+    Iteratorize,
     StreamChunk,
     StreamingBuffer,
-    StopNowException,
-    stop_everything,
-    reset_stop_flag,
     is_stop_requested,
+    reset_stop_flag,
+    stop_everything,
     stream_with_callback,
 )
 
@@ -307,7 +304,7 @@ class TestIPCProtocol:
 
     def test_user_message_creation(self):
         """Test creating user message."""
-        from app.progenitor.ipc.protocol import user_message, MessageType
+        from app.progenitor.ipc.protocol import MessageType, user_message
 
         msg = user_message("Hello, agent!")
 
@@ -316,7 +313,7 @@ class TestIPCProtocol:
 
     def test_stream_chunk_message(self):
         """Test creating stream chunk message."""
-        from app.progenitor.ipc.protocol import stream_chunk, MessageType
+        from app.progenitor.ipc.protocol import MessageType, stream_chunk
 
         msg = stream_chunk("token", request_id="req-123")
 
@@ -326,7 +323,7 @@ class TestIPCProtocol:
 
     def test_stream_end_message(self):
         """Test creating stream end message."""
-        from app.progenitor.ipc.protocol import stream_end, MessageType
+        from app.progenitor.ipc.protocol import MessageType, stream_end
 
         msg = stream_end(request_id="req-123")
 
@@ -336,7 +333,7 @@ class TestIPCProtocol:
 
     def test_error_message(self):
         """Test creating error message."""
-        from app.progenitor.ipc.protocol import error_message, MessageType
+        from app.progenitor.ipc.protocol import MessageType, error_message
 
         msg = error_message("Something went wrong", error_code="ERR001")
 
@@ -346,7 +343,7 @@ class TestIPCProtocol:
 
     def test_heartbeat_message(self):
         """Test creating heartbeat message."""
-        from app.progenitor.ipc.protocol import heartbeat, MessageType
+        from app.progenitor.ipc.protocol import MessageType, heartbeat
 
         msg = heartbeat()
 
@@ -354,7 +351,7 @@ class TestIPCProtocol:
 
     def test_ready_message(self):
         """Test creating ready message."""
-        from app.progenitor.ipc.protocol import ready_message, MessageType
+        from app.progenitor.ipc.protocol import MessageType, ready_message
 
         msg = ready_message()
 
@@ -367,11 +364,11 @@ class TestIPCEncoding:
     def test_encode_decode_roundtrip(self):
         """Test message survives encode/decode roundtrip."""
         from app.progenitor.ipc.protocol import (
+            HEADER_SIZE,
             IPCMessage,
             MessageType,
-            encode_message,
             decode_message,
-            HEADER_SIZE,
+            encode_message,
         )
 
         original = IPCMessage(
@@ -396,10 +393,10 @@ class TestIPCEncoding:
     def test_message_size_validation(self):
         """Test message size limits."""
         from app.progenitor.ipc.protocol import (
+            MAX_MESSAGE_SIZE,
             IPCMessage,
             MessageType,
             encode_message,
-            MAX_MESSAGE_SIZE,
         )
 
         # Create a message that's too large
@@ -469,6 +466,7 @@ class TestSubAgentDelegation:
     def test_task_response_structure(self):
         """Test task endpoint returns proper structure."""
         from fastapi.testclient import TestClient
+
         from app.backend.main import app
 
         client = TestClient(app)
@@ -556,6 +554,7 @@ class TestChatAPIStreaming:
     def test_responses_endpoint_exists(self, mock_get_client):
         """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
+
         from app.backend.main import app
 
         # Mock the client to avoid IPC connection issues
@@ -580,6 +579,7 @@ class TestChatAPIStreaming:
     def test_responses_api_endpoint_exists(self, mock_get_client):
         """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
+
         from app.backend.main import app
 
         # Mock the client to avoid IPC connection issues
@@ -605,8 +605,9 @@ class TestRealTimeUpdates:
 
     def test_broadcast_event_puts_to_queue(self):
         """Test broadcast_event adds to subscriber queues."""
-        from app.backend.ui_routes import _chat_subscribers, broadcast_chat_event
         import asyncio
+
+        from app.backend.ui_routes import _chat_subscribers, broadcast_chat_event
 
         # Clear subscribers
         _chat_subscribers.clear()
@@ -627,8 +628,8 @@ class TestRealTimeUpdates:
     def test_status_monitor_function_exists(self):
         """Test status monitor functions exist."""
         from app.backend.ui_routes import (
-            start_status_monitor,
             _get_current_status,
+            start_status_monitor,
         )
 
         # Functions should be callable

@@ -10,13 +10,14 @@ Uses Copilot's ACP mode for communication instead of subprocess stdin/stdout.
 Includes logging for observability of build operations.
 """
 
+import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
+from ..runtime.copilot_acp import ACPLogCapture, CopilotACPManager
 from ..runtime.time_utils import utcnow_isoformat
-from ..runtime.copilot_acp import CopilotACPManager, ACPLogCapture
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +32,13 @@ class CopilotCLI:
     def __init__(
         self,
         copilot_cmd: str = "copilot",
-        model: Optional[str] = None,
-        default_flags: Optional[list[str]] = None,
-        allowed_dirs: Optional[list[str]] = None,
-        acp_manager: Optional[CopilotACPManager] = None,
+        model: str | None = None,
+        default_flags: list[str] | None = None,
+        allowed_dirs: list[str] | None = None,
+        acp_manager: CopilotACPManager | None = None,
         timeout: int = 1200,  # 20 minutes per request
         log_callback=None,
-        logs_dir: Optional[Path] = None,
+        logs_dir: Path | None = None,
     ):
         """Initialize Copilot CLI wrapper.
 
@@ -71,7 +72,7 @@ class CopilotCLI:
             )
 
         # Setup log capture
-        self.log_capture: Optional[ACPLogCapture] = None
+        self.log_capture: ACPLogCapture | None = None
         if logs_dir:
             self.log_capture = ACPLogCapture(logs_dir)
 
@@ -87,7 +88,7 @@ class CopilotCLI:
         work_item_id: str,
         worktree_path: Path,
         prompt: str,
-        target_path: Optional[str] = None,
+        target_path: str | None = None,
     ) -> dict[str, Any]:
         """Execute a build task via Copilot ACP.
 
@@ -168,6 +169,7 @@ class CopilotCLI:
 
             invocation_log.update({
                 "completed_at": utcnow_isoformat(),
+                "duration_seconds": duration,
                 "success": success,
                 "stdout_preview": result.get("stdout", "")[:1000] if result.get("stdout") else None,
                 "stderr_preview": result.get("stderr", "")[:500] if result.get("stderr") else None,

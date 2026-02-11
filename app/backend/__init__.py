@@ -15,48 +15,48 @@ Enhanced features (from text-generation-webui patterns):
 __version__ = "0.2.0"
 
 # Core exports
-from .main import app, config
-
-# Enhanced feature modules
-from .streaming import (
-    Iteratorize,
-    AsyncIteratorize,
-    StreamingBuffer,
-    stream_with_callback,
-    stop_everything,
-    reset_stop_flag,
-    StopNowException,
+from .attachments import (
+    AttachmentConfig,
+    AttachmentManager,
+    AttachmentResult,
+    create_attachment_from_upload,
+    format_attachments_for_context,
 )
 from .conversation import (
+    Attachment,
+    AttachmentType,
     ConversationHistory,
     ConversationMessage,
     MessageMetadata,
-    AttachmentType,
-    Attachment,
-    ToolCallRecord,
     ReasoningStep,
+    ToolCallRecord,
     truncate_content_by_tokens,
 )
-from .attachments import (
-    AttachmentManager,
-    AttachmentConfig,
-    AttachmentResult,
-    format_attachments_for_context,
-    create_attachment_from_upload,
-)
+from .main import app, config
 from .session import (
-    SessionManager,
     SessionConfig,
+    SessionManager,
     SessionState,
-    UserPreferences,
     SettingsManager,
+    UserPreferences,
 )
 from .shutdown import (
     GracefulShutdownManager,
     ShutdownPhase,
+    commit_state_safely,
     managed_shutdown,
     stop_client_safely,
-    commit_state_safely,
+)
+
+# Enhanced feature modules
+from .streaming import (
+    AsyncIteratorize,
+    Iteratorize,
+    StopNowException,
+    StreamingBuffer,
+    reset_stop_flag,
+    stop_everything,
+    stream_with_callback,
 )
 
 __all__ = [

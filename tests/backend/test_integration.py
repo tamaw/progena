@@ -5,7 +5,6 @@ Integration test for Backend.
 Tests the backend endpoints without needing Progenitor running.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fastapi.testclient import TestClient
+
 from app.backend.main import app
 
 

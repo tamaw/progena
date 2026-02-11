@@ -3,8 +3,8 @@ Time utilities for Progenitor.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
+
 import pytz
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ def utcnow() -> datetime:
     This replaces the deprecated datetime.utcnow() with
     the recommended timezone-aware approach.
     """
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def utcnow_isoformat() -> str:
@@ -24,7 +24,7 @@ def utcnow_isoformat() -> str:
     return utcnow().isoformat()
 
 
-def format_timestamp(dt: Optional[datetime] = None) -> str:
+def format_timestamp(dt: datetime | None = None) -> str:
     """Format a datetime for file naming. Uses current time if not provided."""
     if dt is None:
         dt = utcnow()
@@ -48,7 +48,7 @@ class TimeManager:
 
     def utc_now(self) -> datetime:
         """Get current UTC time."""
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def to_local(self, dt: datetime) -> datetime:
         """Convert datetime to configured timezone."""
@@ -66,7 +66,7 @@ class TimeManager:
         """Format datetime for display."""
         return self.to_local(dt).strftime(fmt)
 
-    def parse_time(self, time_str: str) -> Optional[datetime]:
+    def parse_time(self, time_str: str) -> datetime | None:
         """Parse a time string."""
         formats = [
             "%Y-%m-%dT%H:%M:%S",

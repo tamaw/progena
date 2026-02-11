@@ -5,19 +5,20 @@ Tests a complete OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY →
 with mocked LLM but real state transitions.
 """
 
-import pytest
-from unittest.mock import AsyncMock, Mock, MagicMock, patch
-from pathlib import Path
 import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, Mock
 
+import pytest
+
+from app.progenitor.config import ProgenitorConfig
 from app.progenitor.graph_outer_loop import create_progenitor_graph
 from app.progenitor.state.models import (
     ProgenitorState,
     WorkItem,
-    WorkItemType,
     WorkItemStatus,
+    WorkItemType,
 )
-from app.progenitor.config import ProgenitorConfig
 
 
 @pytest.fixture

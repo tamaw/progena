@@ -6,10 +6,10 @@ is detected, presented to the user, and incorporated back into
 the build process.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from typing import cast
+from unittest.mock import AsyncMock
+
+import pytest
 
 from app.progenitor.state.clarification import (
     ClarificationDetector,
@@ -489,7 +489,7 @@ class TestClarificationDetectorEdgeCases:
             ("please specify the scope", "scope"),
         ]
 
-        for signal, expected_category in test_cases:
+        for signal, _expected_category in test_cases:
             category = detector._categorize_need(signal)
             # Categories might vary, but should be reasonable
             assert category in ("design", "requirements", "technical", "scope", "general")

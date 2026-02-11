@@ -8,9 +8,9 @@ Simplified model:
 - Recurring: run_at + repeat_minutes. After each run, run_at advances by repeat_minutes.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
 import re
+from datetime import datetime, timedelta
+from typing import Any
 
 from .time_utils import utcnow
 
@@ -49,9 +49,8 @@ class Scheduler:
                 continue
 
             # One-off task: skip if already executed
-            if not item.get("repeat_minutes"):
-                if item.get("last_run"):
-                    continue
+            if not item.get("repeat_minutes") and item.get("last_run"):
+                continue
 
             due.append(item)
 
@@ -97,10 +96,7 @@ class Scheduler:
             value = int(match.group(1))
             unit = match.group(2)
 
-            if unit in ("hour", "hr"):
-                repeat_minutes = value * 60
-            else:
-                repeat_minutes = value
+            repeat_minutes = value * 60 if unit in ("hour", "hr") else value
 
             result["run_at"] = utcnow().isoformat()  # Start now
             result["repeat_minutes"] = repeat_minutes
@@ -133,10 +129,7 @@ class Scheduler:
             value = int(match.group(1))
             unit = match.group(2)
 
-            if unit in ("hour", "hr"):
-                delta = timedelta(hours=value)
-            else:
-                delta = timedelta(minutes=value)
+            delta = timedelta(hours=value) if unit in ("hour", "hr") else timedelta(minutes=value)
 
             run_at = utcnow() + delta
             result["run_at"] = run_at.isoformat()
@@ -166,7 +159,7 @@ class Scheduler:
 
         return result
 
-    def _parse_datetime(self, value: Any) -> Optional[datetime]:
+    def _parse_datetime(self, value: Any) -> datetime | None:
         """Parse a datetime from various formats."""
         if isinstance(value, datetime):
             return value

@@ -5,9 +5,10 @@ Based on OpenAI Chat Completions API format.
 https://platform.openai.com/docs/api-reference/chat
 """
 
-from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field
 import time
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
@@ -15,7 +16,7 @@ class ChatMessage(BaseModel):
 
     role: Literal["system", "user", "assistant", "tool"] = "user"
     content: str
-    name: Optional[str] = None
+    name: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -23,18 +24,18 @@ class ChatCompletionRequest(BaseModel):
 
     model: str = "progenitor-v1"
     messages: list[ChatMessage]
-    temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
-    max_tokens: Optional[int] = Field(default=None, ge=1)
-    stream: Optional[bool] = False
-    user: Optional[str] = None
+    temperature: float | None = Field(default=0.7, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=1)
+    stream: bool | None = False
+    user: str | None = None
 
     # Additional fields we ignore but accept for compatibility
-    top_p: Optional[float] = None
-    n: Optional[int] = None
-    stop: Optional[str | list[str]] = None
-    presence_penalty: Optional[float] = None
-    frequency_penalty: Optional[float] = None
-    logit_bias: Optional[dict[str, float]] = None
+    top_p: float | None = None
+    n: int | None = None
+    stop: str | list[str] | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    logit_bias: dict[str, float] | None = None
 
 
 class ChatCompletionChoice(BaseModel):
@@ -138,8 +139,8 @@ class ErrorDetail(BaseModel):
 
     message: str
     type: str = "invalid_request_error"
-    param: Optional[str] = None
-    code: Optional[str] = None
+    param: str | None = None
+    code: str | None = None
 
 
 class ErrorResponse(BaseModel):

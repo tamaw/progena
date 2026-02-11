@@ -2,7 +2,8 @@
 CycleLimit Node - Caps actions per cycle to prevent runaway loops.
 """
 
-from typing import Callable, Coroutine, Any, TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 from ..state.models import ProgenitorState
 

@@ -14,21 +14,17 @@ Tests the complete feedback path:
 
 import asyncio
 import json
-import time
-from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
+from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
+
 from app.backend.main import app
 from app.backend.state_reader import (
-    StateReader,
-    HealthInfo,
     AgentInfo,
     BuildInfo,
-    LoopInfo,
-    BacklogItem,
+    HealthInfo,
+    StateReader,
 )
 
 
@@ -47,7 +43,7 @@ def mock_state_files(tmp_path):
     # Health file - agent is running
     health_data = {
         "status": "running",
-        "last_active": datetime.now(timezone.utc).isoformat(),
+        "last_active": datetime.now(UTC).isoformat(),
         "run_id": "alien-demo-001",
         "cycle_count": 42,
         "pid": 12345,
@@ -95,7 +91,7 @@ def mock_state_files(tmp_path):
         "build_in_progress": True,
         "build_phase": "execute",
         "build_task_description": "Establishing first contact protocol",
-        "build_started_at": datetime.now(timezone.utc).isoformat(),
+        "build_started_at": datetime.now(UTC).isoformat(),
         "iteration": {"current": 3},
         "verification": {"current_score": 0.75},
         "build_messages": [
@@ -302,7 +298,7 @@ class TestLoopStatusFeedback:
         # When agent is running, loops should be present
         assert len(loops) == 2
 
-        loop_names = {l.name for l in loops}
+        loop_names = {loop_item.name for loop_item in loops}
         assert "Planner" in loop_names
         assert "Executor" in loop_names
 
@@ -374,7 +370,6 @@ class TestRealTimeSSEFeedback:
     def test_broadcast_mechanism_works(self):
         """Test broadcast_event puts events in subscriber queues."""
         from app.backend.ui_routes import _chat_subscribers, broadcast_chat_event
-        import asyncio
 
         # Clear existing subscribers
         _chat_subscribers.clear()

@@ -17,35 +17,33 @@ Enhanced flow:
 """
 
 import asyncio
-import httpx
+import contextlib
 import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
+import httpx
+
+from ..runtime.port_utils import (
+    TEST_HARNESS_PORT_END,
+    TEST_HARNESS_PORT_START,
+    find_available_port,
+    is_port_available,
+)
+from ..runtime.time_utils import utcnow, utcnow_isoformat
 from ..state.execution_schemas import (
     ExecutionResult,
     ExecutionRun,
     ExecutionStatus,
-    PromptResult,
     ExperimentPlan,
+    PromptResult,
     PromptSpec,
-)
-from ..runtime.time_utils import utcnow, utcnow_isoformat
-from ..runtime.port_utils import (
-    find_available_port,
-    is_port_available,
-    DEFAULT_AGENT_PORT_START,
-    DEFAULT_AGENT_PORT_END,
-    TEST_HARNESS_PORT_START,
-    TEST_HARNESS_PORT_END,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,13 +78,13 @@ class AgentProcessRunner:
         self._requested_port = port
         self.port = port
         self.auto_find_port = auto_find_port
-        self.process: Optional[asyncio.subprocess.Process] = None
+        self.process: asyncio.subprocess.Process | None = None
         self.stdout_lines: list[str] = []
         self.stderr_lines: list[str] = []
-        self._reader_task: Optional[asyncio.Task[None]] = None
+        self._reader_task: asyncio.Task[None] | None = None
         # Track the actual port used (may differ from requested if port was in use)
-        self.actual_port: Optional[int] = None
-        self._reader_task: Optional[asyncio.Task[None]] = None
+        self.actual_port: int | None = None
+        self._reader_task: asyncio.Task[None] | None = None
 
     async def start(self, timeout: float = DEFAULT_STARTUP_TIMEOUT) -> tuple[bool, str]:
         """
@@ -184,7 +182,7 @@ class AgentProcessRunner:
             read_stream(self.process.stderr, self.stderr_lines),
         )
 
-    def _detect_port_from_stdout(self) -> Optional[int]:
+    def _detect_port_from_stdout(self) -> int | None:
         """Detect the actual port the agent started on from stdout.
 
         Scans for STATUS:running messages or common port patterns to find
@@ -265,10 +263,8 @@ class AgentProcessRunner:
         """Stop the agent process gracefully."""
         if self._reader_task:
             self._reader_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
-            except asyncio.CancelledError:
-                pass
 
         if self.process and self.process.returncode is None:
             logger.info("Stopping agent process...")
@@ -276,7 +272,7 @@ class AgentProcessRunner:
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=5.0)
                 logger.info("Agent process stopped successfully")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Agent did not terminate gracefully, killing...")
                 self.process.kill()
                 await self.process.wait()
@@ -305,6 +301,8 @@ class TestScriptRunner:
     4. Parse test results
     """
 
+    __test__ = False
+
     DEFAULT_TEST_TIMEOUT = 60.0
 
     def __init__(self, project_root: Path):
@@ -331,8 +329,17 @@ class TestScriptRunner:
         if not test_prompts:
             test_prompts = ["Hello, are you working?"]
 
+        description_line = f"Description: {description}" if description else ""
+        capabilities_line = (
+            f"Capabilities: {', '.join(capabilities)}" if capabilities else ""
+        )
+
         # Generate script content
-        script_content = f'''"""Auto-generated test script for {agent_name}."""
+        script_content = f'''"""Auto-generated test script for {agent_name}.
+
+    {description_line}
+    {capabilities_line}
+    """
 import asyncio
 import aiohttp
 import sys
@@ -487,7 +494,7 @@ if __name__ == "__main__":
                 "success": process.returncode == 0,
             }
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {
                 "stdout": "",
                 "stderr": f"Test script timed out after {timeout}s",
@@ -513,7 +520,7 @@ if __name__ == "__main__":
     def _parse_test_output(self, stdout: str) -> list[dict[str, Any]]:
         """Parse test output into structured results."""
         tests: list[dict[str, Any]] = []
-        current_test: Optional[str] = None
+        current_test: str | None = None
 
         for line in stdout.split("\n"):
             line = line.strip()
@@ -564,10 +571,10 @@ class AgentExerciseHarness:
     async def execute_experiment(
         self,
         experiment_plan: ExperimentPlan,
-        agent_endpoint: Optional[str] = None,
-        agent_entrypoint: Optional[str] = None,
+        agent_endpoint: str | None = None,
+        agent_entrypoint: str | None = None,
         iteration: int = 0,
-        task_id: Optional[str] = None,
+        task_id: str | None = None,
     ) -> ExecutionResult:
         """
         Execute an experiment plan against the agent.
@@ -791,7 +798,7 @@ class AgentExerciseHarness:
         self,
         run: ExecutionRun,
         prompts: list[PromptSpec],
-        entrypoint: Optional[str],
+        entrypoint: str | None,
         plan: ExperimentPlan,
     ) -> None:
         """Run prompts against a stdio agent."""
@@ -843,8 +850,8 @@ class AgentExerciseHarness:
         prompt_spec: PromptSpec,
     ) -> PromptResult:
         """Execute a single prompt via stdio."""
-        import sys
         import os
+        import sys
 
         result = PromptResult(
             prompt_id=prompt_spec.id,
@@ -913,7 +920,7 @@ class AgentExerciseHarness:
                 result.error = f"Exit code {process.returncode}: {stderr.decode()[:200]}"
                 result.error_type = "exit_error"
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             result.success = False
             result.error = f"Timeout after {timeout_s}s"
             result.error_type = "timeout"
@@ -964,12 +971,10 @@ class AgentExerciseHarness:
                 if consecutive_failures >= rule.threshold:
                     return True
 
-            elif rule.rule_type == "score_threshold":
-                # Calculate current score
-                if run.prompt_results:
-                    current_score = run.prompts_succeeded / len(run.prompt_results)
-                    if current_score >= rule.threshold:
-                        return True
+            elif rule.rule_type == "score_threshold" and run.prompt_results:
+                current_score = run.prompts_succeeded / len(run.prompt_results)
+                if current_score >= rule.threshold:
+                    return True
 
         return False
 
@@ -979,7 +984,7 @@ class AgentExerciseHarness:
         agent_entrypoint: str,
         port: int = TEST_HARNESS_PORT_START,
         iteration: int = 0,
-        task_id: Optional[str] = None,
+        task_id: str | None = None,
     ) -> ExecutionResult:
         """
         Execute experiment by spawning agent and running generated test script.
@@ -1017,9 +1022,9 @@ class AgentExerciseHarness:
             started_at=utcnow(),
         )
 
-        agent_runner: Optional[AgentProcessRunner] = None
-        test_script_path: Optional[str] = None
-        actual_port: Optional[int] = None  # Track the actual port used for registry/shutdown
+        agent_runner: AgentProcessRunner | None = None
+        test_script_path: str | None = None
+        actual_port: int | None = None  # Track the actual port used for registry/shutdown
 
         try:
             # Step 1: Spawn agent process
@@ -1079,12 +1084,12 @@ class AgentExerciseHarness:
                     )
                 ]
 
-            test_script_path = test_runner.generate_test_script(
+            test_script_path = str(test_runner.generate_test_script(
                 agent_name=experiment_plan.agent_name,
                 port=actual_port,  # Use actual port, not requested port
                 prompts=prompts,
                 description=experiment_plan.experiment_description or "",
-            )
+            ))
 
             logger.info(f"Generated test script: {test_script_path}")
 
@@ -1178,7 +1183,7 @@ class AgentExerciseHarness:
 async def create_execution_result_from_build(
     build_output: dict[str, Any],
     iteration: int,
-    work_item: Optional[Any] = None,
+    work_item: Any | None = None,
 ) -> ExecutionResult:
     """
     Create an ExecutionResult from BUILD phase output.

@@ -1,18 +1,16 @@
 """Tests for agent discovery functionality."""
 
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-import tempfile
-import os
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.progenitor.tools.agent_discovery import (
+    SKIP_FILES,
+    SKIP_FOLDERS,
     AgentDiscovery,
     AgentFolderInfo,
     DiscoveredAgentSpec,
-    AgentDiscoveryResult,
-    SKIP_FOLDERS,
-    SKIP_FILES,
 )
 
 

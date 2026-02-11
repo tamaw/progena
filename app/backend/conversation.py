@@ -13,22 +13,20 @@ Features:
 - Reasoning traces per message
 """
 
-import json
 import logging
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
-from pathlib import Path
-from typing import Any, Optional, Iterator
-import copy
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 
-class AttachmentType(str, Enum):
+class AttachmentType(StrEnum):
     """Type of attachment."""
     TEXT = "text/plain"
     HTML = "text/html"
@@ -45,9 +43,9 @@ class Attachment(BaseModel):
     id: str = Field(default_factory=lambda: f"att_{uuid.uuid4().hex[:8]}")
     name: str
     type: AttachmentType = AttachmentType.TEXT
-    url: Optional[str] = None
-    content: Optional[str] = None  # Extracted/truncated content
-    size_bytes: Optional[int] = None
+    url: str | None = None
+    content: str | None = None  # Extracted/truncated content
+    size_bytes: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -57,9 +55,9 @@ class ToolCallRecord(BaseModel):
     id: str = Field(default_factory=lambda: f"tc_{uuid.uuid4().hex[:8]}")
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
-    result: Optional[str] = None
-    error: Optional[str] = None
-    duration_ms: Optional[float] = None
+    result: str | None = None
+    error: str | None = None
+    duration_ms: float | None = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -67,8 +65,8 @@ class ReasoningStep(BaseModel):
     """A step in the reasoning trace."""
     step_number: int
     thought: str
-    action: Optional[str] = None
-    observation: Optional[str] = None
+    action: str | None = None
+    observation: str | None = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -76,14 +74,14 @@ class MessageMetadata(BaseModel):
     """Rich metadata for a conversation message."""
     # Identity
     message_id: str = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:8]}")
-    parent_id: Optional[str] = None  # For branching conversations
+    parent_id: str | None = None  # For branching conversations
     version: int = 1  # For message versioning
 
     # Timing
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    generation_start: Optional[datetime] = None
-    generation_end: Optional[datetime] = None
-    generation_duration_ms: Optional[float] = None
+    generation_start: datetime | None = None
+    generation_end: datetime | None = None
+    generation_duration_ms: float | None = None
 
     # Attachments
     attachments: list[Attachment] = Field(default_factory=list)
@@ -93,17 +91,17 @@ class MessageMetadata(BaseModel):
 
     # Reasoning trace
     reasoning_steps: list[ReasoningStep] = Field(default_factory=list)
-    thinking_content: Optional[str] = None  # Raw thinking/reasoning content
+    thinking_content: str | None = None  # Raw thinking/reasoning content
 
     # Model info
-    model_name: Optional[str] = None
-    prompt_tokens: Optional[int] = None
-    completion_tokens: Optional[int] = None
-    total_tokens: Optional[int] = None
+    model_name: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
     # Request correlation
-    request_id: Optional[str] = None
-    session_id: Optional[str] = None
+    request_id: str | None = None
+    session_id: str | None = None
 
     # Custom fields
     custom: dict[str, Any] = Field(default_factory=dict)
@@ -113,7 +111,7 @@ class MessageMetadata(BaseModel):
         name: str,
         content: str,
         attachment_type: AttachmentType = AttachmentType.TEXT,
-        url: Optional[str] = None,
+        url: str | None = None,
         **metadata,
     ) -> Attachment:
         """Add an attachment to this message."""
@@ -132,9 +130,9 @@ class MessageMetadata(BaseModel):
         self,
         tool_name: str,
         arguments: dict[str, Any],
-        result: Optional[str] = None,
-        error: Optional[str] = None,
-        duration_ms: Optional[float] = None,
+        result: str | None = None,
+        error: str | None = None,
+        duration_ms: float | None = None,
     ) -> ToolCallRecord:
         """Record a tool call."""
         record = ToolCallRecord(
@@ -150,8 +148,8 @@ class MessageMetadata(BaseModel):
     def add_reasoning_step(
         self,
         thought: str,
-        action: Optional[str] = None,
-        observation: Optional[str] = None,
+        action: str | None = None,
+        observation: str | None = None,
     ) -> ReasoningStep:
         """Add a reasoning step."""
         step = ReasoningStep(
@@ -191,7 +189,7 @@ class ConversationMessage(BaseModel):
     metadata: MessageMetadata = Field(default_factory=MessageMetadata)
 
     # Internal tracking (separate visible vs internal content like webui)
-    visible_content: Optional[str] = None  # What user sees (may have redactions)
+    visible_content: str | None = None  # What user sees (may have redactions)
 
     @property
     def id(self) -> str:
@@ -252,8 +250,8 @@ class ConversationHistory:
         self,
         role: str,
         content: str,
-        visible_content: Optional[str] = None,
-        metadata: Optional[MessageMetadata] = None,
+        visible_content: str | None = None,
+        metadata: MessageMetadata | None = None,
     ) -> ConversationMessage:
         """Add a message to the history."""
         msg_metadata = metadata or MessageMetadata()
@@ -275,14 +273,14 @@ class ConversationHistory:
 
         return message
 
-    def get_message(self, message_id: str) -> Optional[ConversationMessage]:
+    def get_message(self, message_id: str) -> ConversationMessage | None:
         """Get message by ID."""
         index = self._index.get(message_id)
         if index is not None and 0 <= index < len(self.internal):
             return self.internal[index]
         return None
 
-    def get_metadata(self, role: str, index: int) -> Optional[MessageMetadata]:
+    def get_metadata(self, role: str, index: int) -> MessageMetadata | None:
         """Get metadata by role and index."""
         key = self._make_key(role, index)
         return self._metadata.get(key)
@@ -300,7 +298,7 @@ class ConversationHistory:
             else:
                 metadata.custom[field_name] = field_value
 
-    def get_message_by_index(self, index: int) -> Optional[ConversationMessage]:
+    def get_message_by_index(self, index: int) -> ConversationMessage | None:
         """Get message by index."""
         if 0 <= index < len(self.internal):
             return self.internal[index]
@@ -311,7 +309,7 @@ class ConversationHistory:
         message_id: str,
         new_content: str,
         create_branch: bool = True,
-    ) -> Optional[ConversationMessage]:
+    ) -> ConversationMessage | None:
         """Edit a message, optionally creating a branch."""
         original = self.get_message(message_id)
         if not original:
@@ -343,7 +341,7 @@ class ConversationHistory:
 
     def iter_messages(
         self,
-        roles: Optional[list[str]] = None,
+        roles: list[str] | None = None,
     ) -> Iterator[tuple[int, ConversationMessage]]:
         """Iterate messages, optionally filtering by role."""
         for i, msg in enumerate(self.internal):
@@ -358,14 +356,14 @@ class ConversationHistory:
         """Get all assistant messages."""
         return [msg for msg in self.internal if msg.role == "assistant"]
 
-    def get_last_user_message(self) -> Optional[ConversationMessage]:
+    def get_last_user_message(self) -> ConversationMessage | None:
         """Get the most recent user message."""
         for msg in reversed(self.internal):
             if msg.role == "user":
                 return msg
         return None
 
-    def get_last_assistant_message(self) -> Optional[ConversationMessage]:
+    def get_last_assistant_message(self) -> ConversationMessage | None:
         """Get the most recent assistant message."""
         for msg in reversed(self.internal):
             if msg.role == "assistant":

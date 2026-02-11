@@ -5,12 +5,11 @@ Tests end-to-end communication between the IPC client and server.
 """
 
 import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.progenitor.ipc.server import IPCServer
+import pytest
+
 from app.progenitor.ipc.client import IPCClient
-from app.progenitor.ipc.protocol import MessageType
+from app.progenitor.ipc.server import IPCServer
 
 
 class MockLoopRunner:
@@ -54,7 +53,7 @@ class MockLoopRunner:
                     timeout=timeout
                 )
             return self._output_queue.get_nowait()
-        except (asyncio.TimeoutError, asyncio.QueueEmpty):
+        except (TimeoutError, asyncio.QueueEmpty):
             return None
 
     async def get_stream_chunk(self, timeout: float | None = None) -> dict | None:
@@ -66,7 +65,7 @@ class MockLoopRunner:
                     timeout=timeout
                 )
             return self._stream_queue.get_nowait()
-        except (asyncio.TimeoutError, asyncio.QueueEmpty):
+        except (TimeoutError, asyncio.QueueEmpty):
             return None
 
     async def wait_cycle_complete(self, timeout: float | None = None) -> bool:
@@ -370,7 +369,7 @@ class TestIPCConcurrency:
         """Test multiple clients can connect simultaneously."""
         clients = []
 
-        for i in range(3):
+        for _i in range(3):
             client = IPCClient(
                 host="127.0.0.1",
                 port=ipc_server.port,
@@ -405,7 +404,7 @@ class TestIPCConcurrency:
         clients = []
         try:
             # Connect max clients
-            for i in range(2):
+            for _i in range(2):
                 client = IPCClient(
                     host="127.0.0.1",
                     port=actual_port,
@@ -419,7 +418,7 @@ class TestIPCConcurrency:
 
             # Third client should be rejected
             # (The server sends error and closes, client sees as failed connect)
-            third_client = IPCClient(
+            IPCClient(
                 host="127.0.0.1",
                 port=actual_port,
                 timeout=2.0,

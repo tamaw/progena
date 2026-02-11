@@ -46,11 +46,10 @@ def _extract_text(response: dict[str, Any]) -> str:
             # Check for message content
             if item.get("role") == "assistant":
                 for content in item.get("content", []):
-                    if isinstance(content, dict):
-                        if content.get("type") in ("output_text", "text"):
-                            text = content.get("text") or content.get("content")
-                            if isinstance(text, str):
-                                texts.append(text)
+                    if isinstance(content, dict) and content.get("type") in ("output_text", "text"):
+                        text = content.get("text") or content.get("content")
+                        if isinstance(text, str):
+                            texts.append(text)
             # Direct text type
             elif item.get("type") == "message":
                 for content in item.get("content", []):

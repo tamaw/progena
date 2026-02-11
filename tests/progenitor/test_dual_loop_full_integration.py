@@ -6,24 +6,18 @@ TEST-001: Full integration test for dual-loop with controlled LLM responses.
 Tests the complete OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN cycle.
 """
 
-import pytest
-import asyncio
-from pathlib import Path
-from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
-from app.progenitor.graph_outer_loop import create_progenitor_graph
-from app.progenitor.graph_inner_loop import should_iterate
-from app.progenitor.state.models import (
-    ProgenitorState,
-    WorkItem,
-    WorkItemStatus,
-    WorkItemType,
-    Decision,
-    DecisionAction,
-    ConversationMessage,
-)
+import pytest
+
 from app.progenitor.config import ProgenitorConfig
+from app.progenitor.graph_inner_loop import should_iterate
+from app.progenitor.graph_outer_loop import create_progenitor_graph
+from app.progenitor.state.models import (
+    ConversationMessage,
+    ProgenitorState,
+)
 
 
 @pytest.fixture
@@ -176,7 +170,7 @@ class TestDualLoopGraphCreation:
         )
 
         nodes = graph.get_graph().nodes
-        node_names = {n for n in nodes.keys() if n != "__start__"}
+        node_names = {n for n in nodes if n != "__start__"}
 
         # Outer loop nodes (no planner - only in inner loop)
         assert "intake" in node_names

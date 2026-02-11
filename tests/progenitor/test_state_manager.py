@@ -1,18 +1,18 @@
 """Tests for state manager."""
 
-import pytest
-import tempfile
 import json
-import asyncio
+import tempfile
 from pathlib import Path
+
+import pytest
 
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import (
-    WorkItem,
-    WorkItemType,
-    WorkItemStatus,
-    ScheduleEntry,
     ConversationMessage,
+    ScheduleEntry,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
 )
 
 
@@ -22,9 +22,8 @@ class TestStateManager:
     @pytest.fixture
     def temp_dirs(self):
         """Create temporary state and logs directories."""
-        with tempfile.TemporaryDirectory() as state_dir:
-            with tempfile.TemporaryDirectory() as logs_dir:
-                yield Path(state_dir), Path(logs_dir)
+        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as logs_dir:
+            yield Path(state_dir), Path(logs_dir)
 
     @pytest.mark.asyncio
     async def test_initialize_creates_files(self, temp_dirs):
@@ -147,7 +146,7 @@ class TestStateManager:
         log_path = logs_dir / "conversation.jsonl"
         assert log_path.exists()
 
-        with open(log_path, 'r') as f:
+        with open(log_path) as f:
             lines = f.readlines()
 
         assert len(lines) == 2
@@ -221,9 +220,8 @@ class TestStateManagerCacheReads:
 
     @pytest.fixture
     def temp_dirs(self):
-        with tempfile.TemporaryDirectory() as state_dir:
-            with tempfile.TemporaryDirectory() as logs_dir:
-                yield Path(state_dir), Path(logs_dir)
+        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as logs_dir:
+            yield Path(state_dir), Path(logs_dir)
 
     @pytest.mark.asyncio
     async def test_get_build_state_returns_from_cache(self, temp_dirs):

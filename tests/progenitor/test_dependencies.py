@@ -4,9 +4,9 @@ Tests for app/progenitor/dependencies.py
 Verifies NodeDependencies dataclass for dependency injection.
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
+
 from app.progenitor.dependencies import NodeDependencies
 
 
@@ -98,9 +98,9 @@ class TestNodeDependenciesWithRealTypes:
 
     def test_with_async_event_pusher(self):
         """Should handle async event pusher correctly."""
-        from typing import Any, Optional
+        from typing import Any
 
-        async def push_event(event_type: str, event_name: str, data: Optional[dict[str, Any]] = None) -> None:
+        async def push_event(event_type: str, event_name: str, data: dict[str, Any] | None = None) -> None:
             pass
 
         deps = NodeDependencies(
