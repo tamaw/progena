@@ -37,7 +37,10 @@ async def initialize_mcp_tools(
         return None, []
 
     try:
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
         if mcp_config.api_key:
             headers["Authorization"] = f"Bearer {mcp_config.api_key}"
 

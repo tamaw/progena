@@ -22,8 +22,31 @@ from .response_models import (
     validate_decision_response,
     validate_planner_response,
 )
+from .tokenizer import count_message_tokens
 
 logger = logging.getLogger(__name__)
+
+# Context window sizes for common models (in tokens)
+MODEL_CONTEXT_WINDOWS = {
+    # GPT-4 models
+    "gpt-4": 8192,
+    "gpt-4-32k": 32768,
+    "gpt-4-turbo": 128000,
+    "gpt-4-turbo-preview": 128000,
+    "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
+    # GPT-3.5 models
+    "gpt-3.5-turbo": 16385,
+    "gpt-3.5-turbo-16k": 16385,
+    # Claude models
+    "claude-3-opus": 200000,
+    "claude-3-sonnet": 200000,
+    "claude-3-haiku": 200000,
+    "claude-3-5-sonnet": 200000,
+    "claude-3-5-haiku": 200000,
+    # Fallback
+    "default": 8192,
+}
 
 
 def _build_json_schema_format(response_model: type, schema_name: str) -> dict[str, Any]:
@@ -58,7 +81,6 @@ class LLMClient:
         self,
         config: LLMConfig | None = None,
         mcp_config: MCPConfig | None = None,
-        max_retries: int = 3,  # Kept for compatibility but unused
         role: str | None = None,
     ):
         """Initialize the LLM client.
@@ -66,14 +88,12 @@ class LLMClient:
         Args:
             config: LLM configuration. If None, loads from environment.
             mcp_config: MCP configuration. If None, loads from environment.
-            max_retries: Unused - LiteLLM handles retries.
             role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
         self.mcp_config = mcp_config or MCPConfig.from_env()
         self.prompts = PromptTemplates()
         self.role = role
-        self._max_retries = max_retries
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 
         base_url = self.config.base_url.rstrip('/')
@@ -184,10 +204,15 @@ class LLMClient:
         return entries
 
     def _normalize_tool_definition(self, tool: dict[str, Any]) -> dict[str, Any] | None:
-        """Normalize a tool definition into OpenAI-compatible format."""
-        if tool.get("type") == "function" and tool.get("function"):
+        """Normalize a tool definition into OpenAI-compatible format.
+        
+        Handles both OpenAI format and MCP format tools.
+        """
+        # Already in OpenAI format
+        if tool.get("type") == "function" and "function" in tool:
             return tool
 
+        # Extract from MCP format
         name = tool.get("name")
         if not name:
             return None
@@ -233,36 +258,50 @@ class LLMClient:
         return merged
 
     def _extract_tool_calls(self, data: dict[str, Any]) -> list[dict[str, Any]]:
-        """Extract tool calls from a Responses API payload."""
+        """Extract tool calls from a Responses API payload.
+        
+        Tool calls can appear in:
+        - data["output"] as {"type": "tool_call", ...}
+        - data["output"] > message > content as tool_call items
+        - data["tool_calls"] as direct list
+        """
         tool_calls: list[dict[str, Any]] = []
 
-        for item in data.get("output", []) or []:
-            item_type = item.get("type")
-            if item_type == "tool_call":
+        # Check output array
+        for item in data.get("output", []):
+            if item.get("type") == "tool_call":
                 tool_calls.append(item)
                 continue
-
-            if item_type == "message":
+                
+            # Check message content for tool calls
+            if item.get("type") == "message":
                 content = item.get("content")
                 if isinstance(content, list):
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "tool_call":
                             tool_calls.append(part)
 
+        # Check top-level tool_calls
         if isinstance(data.get("tool_calls"), list):
-            tool_calls.extend(data.get("tool_calls", []))
+            tool_calls.extend(data["tool_calls"])
 
         return tool_calls
 
     async def _call_mcp_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool call against the MCP server."""
-        name = tool_call.get("name") or tool_call.get("tool_name") or tool_call.get("function", {}).get("name")
+        # Extract tool name
+        name = (
+            tool_call.get("name") 
+            or tool_call.get("tool_name") 
+            or tool_call.get("function", {}).get("name")
+        )
         if not name:
             return {"error": "Tool call missing name"}
 
         if not self.mcp_config.enabled:
             return {"error": "MCP integration disabled"}
 
+        # Extract arguments
         arguments = (
             tool_call.get("arguments")
             or tool_call.get("input")
@@ -271,6 +310,7 @@ class LLMClient:
             or {}
         )
 
+        # Parse JSON string arguments
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
@@ -288,7 +328,7 @@ class LLMClient:
             "method": "tools/call",
             "params": {
                 "name": name,
-                "arguments": arguments or {},
+                "arguments": arguments,
             },
         }
 
@@ -296,76 +336,92 @@ class LLMClient:
             response = await self.mcp_client.post(self.mcp_config.base_url, json=request)
             response.raise_for_status()
             payload = response.json()
+            
+            if isinstance(payload, dict):
+                if error := payload.get("error"):
+                    return {"error": error}
+                return payload.get("result", payload)
+            return payload
+            
         except Exception as exc:
+            logger.warning("MCP tool call failed: %s", exc)
             return {"error": f"MCP call failed: {exc}"}
-
-        if isinstance(payload, dict) and payload.get("error"):
-            return {"error": payload.get("error")}
-
-        return payload.get("result", payload) if isinstance(payload, dict) else payload
 
     def _get_json_response_format(self, response_model: type, schema_name: str) -> dict[str, Any]:
         """Return a response_format payload for structured output."""
         return _build_json_schema_format(response_model, schema_name)
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
-        """Extract response text and optional reasoning trace from /responses output."""
+        """Extract response text and optional reasoning trace from /responses output.
+        
+        LiteLLM /responses format:
+        {
+            "output_text": "...",  # Primary text response
+            "output": [            # Structured output items
+                {"type": "message", "content": "..."},
+                {"type": "text", "text": "..."},
+                {"type": "reasoning", "content": "..."},
+                ...
+            ],
+            "reasoning": "..."     # Top-level reasoning if requested
+        }
+        """
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
 
-        output_text = data.get("output_text")
-        if isinstance(output_text, str) and output_text.strip():
-            text_parts.append(output_text)
+        # Primary text response
+        if output_text := data.get("output_text"):
+            text_parts.append(str(output_text))
 
-        for item in data.get("output", []) or []:
+        # Structured output items
+        for item in data.get("output", []):
             item_type = item.get("type")
+            
             if item_type == "message":
-                content = item.get("content")
+                content = item.get("content", "")
                 if isinstance(content, str):
                     text_parts.append(content)
-                elif isinstance(content, dict):
-                    if content.get("text"):
-                        text_parts.append(str(content.get("text")))
-                else:
-                    for part in content or []:
-                        part_type = part.get("type") if isinstance(part, dict) else None
+                elif isinstance(content, dict) and content.get("text"):
+                    text_parts.append(str(content["text"]))
+                elif isinstance(content, list):
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        part_type = part.get("type")
                         if part_type in ("output_text", "text"):
                             text_parts.append(part.get("text", ""))
                         elif part_type == "refusal":
-                            text_parts.append(part.get("refusal", part.get("text", "")))
+                            text_parts.append(part.get("refusal") or part.get("text", ""))
                         elif part_type in ("reasoning", "reasoning_text", "reasoning_summary"):
                             reasoning_parts.append(part.get("text", ""))
+                            
             elif item_type in ("output_text", "text"):
                 text_parts.append(str(item.get("text", "")))
+                
             elif item_type in ("reasoning", "reasoning_text", "reasoning_summary"):
-                if item.get("content"):
-                    reasoning_parts.append(str(item.get("content")))
-                elif item.get("text"):
-                    reasoning_parts.append(str(item.get("text")))
+                reasoning_parts.append(str(item.get("content") or item.get("text", "")))
+                
             elif item_type == "refusal":
-                if item.get("refusal"):
-                    text_parts.append(str(item.get("refusal")))
-                elif item.get("text"):
-                    text_parts.append(str(item.get("text")))
-            elif item.get("text"):
-                text_parts.append(str(item.get("text")))
+                text_parts.append(str(item.get("refusal") or item.get("text", "")))
 
-        if data.get("reasoning"):
-            reasoning_parts.append(str(data.get("reasoning")))
+        # Top-level reasoning
+        if reasoning := data.get("reasoning"):
+            reasoning_parts.append(str(reasoning))
 
         text = "".join(text_parts).strip()
         reasoning = "".join(reasoning_parts).strip()
 
         if not text:
-            logger.warning("Empty LLM response text; keys=%s", list(data.keys()))
+            logger.warning("Empty LLM response - keys present: %s", list(data.keys()))
 
         return text, reasoning
 
     def _supports_temperature(self) -> bool:
-        """Return True if temperature should be sent for the current model."""
-        unsupported = {"gpt-5.2-chat"}
+        """Return True if temperature parameter is supported for the current model."""
+        # Some models don't support temperature parameter
+        unsupported_keywords = {"gpt-5.2-chat"}
         model_lower = self.model.lower()
-        return not any(token in model_lower for token in unsupported)
+        return not any(keyword in model_lower for keyword in unsupported_keywords)
 
     def _is_temperature_unsupported(self, response: httpx.Response | None) -> bool:
         """Detect unsupported temperature errors from provider responses."""
@@ -379,6 +435,36 @@ class LLMClient:
         message_lower = message.lower()
         return "temperature" in message_lower and "unsupported" in message_lower
 
+    def _get_context_window_size(self, model: str | None = None) -> int:
+        """Get context window size for a model."""
+        target_model = model or self.model
+        target_model_lower = target_model.lower()
+        
+        # Check exact match first
+        for model_key, size in MODEL_CONTEXT_WINDOWS.items():
+            if model_key in target_model_lower:
+                return size
+        
+        return MODEL_CONTEXT_WINDOWS["default"]
+
+    def _check_token_usage(self, messages: list[dict[str, Any]], model: str | None = None) -> None:
+        """Check token usage and log warning if exceeding 50% of context window."""
+        try:
+            token_count = count_message_tokens(messages, model or self.model)
+            context_window = self._get_context_window_size(model)
+            usage_percent = (token_count / context_window) * 100
+            
+            if usage_percent > 50:
+                logger.warning(
+                    "Token usage at %.1f%% of context window: %d/%d tokens (model=%s)",
+                    usage_percent,
+                    token_count,
+                    context_window,
+                    model or self.model
+                )
+        except Exception as e:
+            logger.debug("Failed to check token usage: %s", e)
+
     async def _post_response(
         self,
         input_messages: list[dict[str, Any]],
@@ -389,6 +475,13 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         max_tool_rounds: int = 4,
     ) -> dict[str, Any]:
+        """Call LiteLLM /responses endpoint with optional tool calling loop.
+        
+        LiteLLM handles retries, fallbacks, and provider routing upstream.
+        """
+        # Check token usage before making the call
+        self._check_token_usage(input_messages)
+        
         merged_tools = self._merge_tools(tools)
 
         payload: dict[str, Any] = {
@@ -396,6 +489,7 @@ class LLMClient:
             "input": input_messages,
             "max_output_tokens": max_tokens,
         }
+        
         if self.config.model_fallbacks:
             payload["fallbacks"] = self.config.model_fallbacks
         if response_format:
@@ -407,46 +501,48 @@ class LLMClient:
         if self._supports_temperature():
             payload["temperature"] = temperature
 
+        # Initial call
         try:
             response = await self.client.post(self.endpoint_url, json=payload)
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as exc:
-            if self._is_temperature_unsupported(exc.response) and "temperature" in payload:
+            # Retry without temperature if unsupported
+            if self._is_temperature_unsupported(exc.response):
+                logger.debug("Temperature unsupported, retrying without it")
                 payload.pop("temperature", None)
-                retry = await self.client.post(self.endpoint_url, json=payload)
-                retry.raise_for_status()
-                data = retry.json()
+                response = await self.client.post(self.endpoint_url, json=payload)
+                response.raise_for_status()
+                data = response.json()
             else:
                 raise
 
+        # Tool calling loop (MCP tools)
         tool_round = 0
         tool_calls = self._extract_tool_calls(data)
+        
         while tool_calls and tool_round < max_tool_rounds:
-            logger.info("Executing %d MCP tool call(s)", len(tool_calls))
+            logger.info("Executing %d MCP tool call(s) - round %d", len(tool_calls), tool_round + 1)
             tool_messages: list[dict[str, Any]] = []
 
             for tool_call in tool_calls:
                 result = await self._call_mcp_tool(tool_call)
-                tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id")
-                tool_name = tool_call.get("name") or tool_call.get("tool_name")
-                message = {
+                tool_message = {
                     "role": "tool",
                     "content": json.dumps(result, default=str),
                 }
-                if tool_call_id:
-                    message["tool_call_id"] = tool_call_id
-                if tool_name:
-                    message["name"] = tool_name
-                tool_messages.append(message)
+                if tool_call_id := tool_call.get("id") or tool_call.get("tool_call_id"):
+                    tool_message["tool_call_id"] = tool_call_id
+                if tool_name := tool_call.get("name") or tool_call.get("tool_name"):
+                    tool_message["name"] = tool_name
+                tool_messages.append(tool_message)
 
-            input_messages.append({
-                "role": "assistant",
-                "content": tool_calls,
-            })
+            # Add assistant response with tool calls + tool results
+            input_messages.append({"role": "assistant", "content": tool_calls})
             input_messages.extend(tool_messages)
             payload["input"] = input_messages
 
+            # Next round
             response = await self.client.post(self.endpoint_url, json=payload)
             response.raise_for_status()
             data = response.json()
