@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # Import the function under test
-from app.progenitor.nodes.decide import _generate_build_settings
+from app.progenitor.nodes.decide import _extract_history, _generate_build_settings
 
 
 @pytest.fixture
@@ -242,3 +242,44 @@ class TestLLMFallback:
 
         assert settings is not None
         assert "weather" in settings.project_name
+
+
+class TestExtractHistory:
+    """Regression tests for conversation history extraction."""
+
+    def test_excludes_latest_matching_user_input(self):
+        """Latest intake message should be excluded when passed separately as user_input."""
+        messages = [
+            {"role": "assistant", "content": "How can I help?"},
+            {"role": "user", "content": "build me a weather agent"},
+        ]
+
+        history = _extract_history(
+            messages,
+            limit=10,
+            exclude_latest_user_input="build me a weather agent",
+        )
+
+        assert history == [{"role": "assistant", "content": "How can I help?"}]
+
+    def test_keeps_non_latest_matching_user_input(self):
+        """Earlier matching messages must be preserved; only latest message is skippable."""
+        messages = [
+            {"role": "user", "content": "same text"},
+            {"role": "assistant", "content": "ack"},
+            {"role": "user", "content": "same text"},
+            {"role": "assistant", "content": "done"},
+        ]
+
+        history = _extract_history(
+            messages,
+            limit=10,
+            exclude_latest_user_input="same text",
+        )
+
+        assert history == [
+            {"role": "user", "content": "same text"},
+            {"role": "assistant", "content": "ack"},
+            {"role": "user", "content": "same text"},
+            {"role": "assistant", "content": "done"},
+        ]

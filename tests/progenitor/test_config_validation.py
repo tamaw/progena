@@ -326,7 +326,7 @@ class TestConfigValidationIntegration:
             state_dir = Path("/data/state")
             log_dir = Path("/logs")
             worktree_dir = Path("/worktrees")
-            prompts_dir = Path("/data/prompts")
+            prompts_dir = Path("/prompts")
             state_lock_timeout_seconds = 10
 
         @dataclass

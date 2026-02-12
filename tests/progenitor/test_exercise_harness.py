@@ -137,7 +137,7 @@ class TestTestScriptRunner:
 
         assert runner.project_root == project_root
         assert runner.tmp_dir == project_root / "tmp"
-        assert runner.prompts_dir == project_root / "data" / "prompts"
+        assert runner.prompts_dir == project_root / "prompts"
 
     def test_generate_test_script_creates_file(self, project_root):
         """Test that generate_test_script creates a Python file."""
