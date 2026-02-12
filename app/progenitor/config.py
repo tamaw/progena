@@ -306,7 +306,7 @@ class MCPConfig:
         """Load MCP config from environment."""
         return cls(
             enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
-            base_url=os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:4000/mcp"),
+            base_url=os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:4000/mcp/"),  # Note trailing slash
             api_key=os.getenv("PROGENITOR_MCP_API_KEY"),
         )
 
