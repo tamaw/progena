@@ -721,7 +721,7 @@ class ProgenitorLoop:
         return f"{prefix}\n\n{instruction}"
 
     def _load_scheduled_prefix(self) -> str:
-        """Load the scheduled prefix text from data/prompts with fallback."""
+        """Load the scheduled prefix text from prompts with fallback."""
         try:
             text = _prompts.get("scheduled_prefix.md").strip()
             return text or SCHEDULED_MESSAGE_PREFIX

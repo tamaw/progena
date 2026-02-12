@@ -236,21 +236,40 @@ def _extract_history(
     messages: list,
     limit: int = 10,
     memory_context: str | None = None,
+    exclude_latest_user_input: str | None = None,
 ) -> list[dict[str, str]]:
     """Extract conversation history as list of dicts."""
     history = []
     if memory_context:
         history.append({"role": "system", "content": memory_context})
     allowed_roles = {"system", "user", "assistant", "tool"}
-    for msg in messages[-limit:]:
+    recent_messages = messages[-limit:]
+    last_index = len(recent_messages) - 1
+    for idx, msg in enumerate(recent_messages):
         if isinstance(msg, dict):
             raw_role = msg.get("role", "user")
             role = raw_role if raw_role in allowed_roles else "user"
-            history.append({"role": role, "content": msg.get("content", "")})
+            content = msg.get("content", "")
+            if (
+                exclude_latest_user_input is not None
+                and idx == last_index
+                and role == "user"
+                and content == exclude_latest_user_input
+            ):
+                continue
+            history.append({"role": role, "content": content})
         elif hasattr(msg, "role"):
             raw_role = msg.role
             role = raw_role if raw_role in allowed_roles else "user"
-            history.append({"role": role, "content": msg.content})
+            content = msg.content
+            if (
+                exclude_latest_user_input is not None
+                and idx == last_index
+                and role == "user"
+                and content == exclude_latest_user_input
+            ):
+                continue
+            history.append({"role": role, "content": content})
     return history
 
 
@@ -270,7 +289,12 @@ async def _respond_with_context(
     from ..runtime.loop import get_current_loop
     loop = get_current_loop()
 
-    history = _extract_history(state.get("messages", []), limit=10, memory_context=memory_context)
+    history = _extract_history(
+        state.get("messages", []),
+        limit=10,
+        memory_context=memory_context,
+        exclude_latest_user_input=user_input,
+    )
 
     system_prompt = _prompts.get(
         "decide.tool_response_system.md",
@@ -518,7 +542,12 @@ def create_node(
 
         # Get conversation history for context
         messages = state.get("messages", [])
-        history = _extract_history(messages, limit=10, memory_context=memory_context)
+        history = _extract_history(
+            messages,
+            limit=10,
+            memory_context=memory_context,
+            exclude_latest_user_input=user_input,
+        )
 
         try:
             # Ask LLM for decision (structured output with confidence)
@@ -594,7 +623,12 @@ def create_node(
 
             if action == DecisionAction.ANSWER_DIRECTLY and loop and loop._streaming_enabled:
                 logger.info("STREAMING: Starting (loop id=%s)", id(loop))
-                msgs = _extract_history(state.get("messages", []), limit=10, memory_context=memory_context)
+                msgs = _extract_history(
+                    state.get("messages", []),
+                    limit=10,
+                    memory_context=memory_context,
+                    exclude_latest_user_input=user_input,
+                )
                 msgs.append({"role": "user", "content": user_input})
 
                 streamed_text = ""

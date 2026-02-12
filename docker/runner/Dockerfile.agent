@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN addgroup --system progenitor && adduser --system --ingroup progenitor runner
+
+WORKDIR /app
+
+COPY pyproject.toml README.md /app/
+COPY app /app/app
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir .
+
+USER runner
+WORKDIR /workspace
+
+ENTRYPOINT ["python", "-m", "app.progenitor.runtime.container_runner"]

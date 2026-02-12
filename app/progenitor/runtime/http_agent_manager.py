@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from ..state.models import AgentStatus
+from .container_spawner import PortMapping, RunnerSpawnConfig, ContainerSpawner
 from .port_utils import find_available_port, is_port_available
 from .time_utils import utcnow, utcnow_isoformat
 
@@ -97,6 +98,7 @@ class HTTPAgentManager:
         self._agents: dict[str, ManagedAgent] = {}
         self._lock = asyncio.Lock()
         self._shutdown = False
+        self._container_spawner = ContainerSpawner(self.project_root)
 
     async def start_agent(
         self,
@@ -162,15 +164,73 @@ class HTTPAgentManager:
                 agent_env.update(env)
 
             # Start the process with port argument
-            process = await asyncio.create_subprocess_exec(
-                sys.executable, str(entrypoint_path),
-                "--port", str(port),
-                "--name", agent_name,
-                cwd=self.project_root,
-                env=agent_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            if self._container_spawner.enabled and not bool(env and env.get("DISABLE_CONTAINER")):
+                raw_env = env or {}
+                runtime_env = {
+                    key: value
+                    for key, value in raw_env.items()
+                    if isinstance(value, str)
+                }
+                raw_allowlist = raw_env.get("CONTAINER_ENV_ALLOWLIST", [])
+                if isinstance(raw_allowlist, str):
+                    env_allowlist = [part.strip() for part in raw_allowlist.split(",") if part.strip()]
+                elif isinstance(raw_allowlist, list):
+                    env_allowlist = [str(item) for item in raw_allowlist if str(item).strip()]
+                else:
+                    env_allowlist = []
+
+                try:
+                    entrypoint_rel = entrypoint_path.relative_to(self.project_root).as_posix()
+                except ValueError:
+                    entrypoint_rel = Path(entrypoint).as_posix().lstrip("/")
+                if entrypoint_rel.startswith("app/") and entrypoint_rel.endswith(".py"):
+                    module = entrypoint_rel[:-3].replace("/", ".")
+                    command = [
+                        "python",
+                        "-m",
+                        module,
+                        "--port",
+                        str(port),
+                        "--name",
+                        agent_name,
+                    ]
+                else:
+                    command = [
+                        "python",
+                        f"/app/{entrypoint_rel}",
+                        "--port",
+                        str(port),
+                        "--name",
+                        agent_name,
+                    ]
+
+                spawn_config = RunnerSpawnConfig(
+                    name=agent_name,
+                    mode="a2a",
+                    transport="http",
+                    command=command,
+                    timeout_seconds=startup_timeout,
+                    env_allowlist=env_allowlist,
+                    env=runtime_env,
+                    network=(raw_env.get("CONTAINER_NETWORK", "bridge") if isinstance(raw_env.get("CONTAINER_NETWORK", "bridge"), str) else "bridge"),
+                    ports=[PortMapping(host_port=port, container_port=port)],
+                    readiness_path="/.well-known/agent.json",
+                )
+                handle = await self._container_spawner.spawn_agent(spawn_config)
+                process = handle.process
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    str(entrypoint_path),
+                    "--port",
+                    str(port),
+                    "--name",
+                    agent_name,
+                    cwd=self.project_root,
+                    env=agent_env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
 
             managed_agent = ManagedAgent(
                 name=agent_name,

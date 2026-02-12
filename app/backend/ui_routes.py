@@ -580,9 +580,9 @@ async def get_prompts():
     """
     Get available prompt templates.
 
-    Returns list of prompt templates from data/prompts/ directory.
+    Returns list of prompt templates from prompts/ directory.
     """
-    # TODO: Implement actual prompt loading from data/prompts/
+    # TODO: Implement actual prompt loading from prompts/
     return {"prompts": []}
 
 

@@ -184,7 +184,7 @@ class StorageConfig:
     state_dir: Path = field(default_factory=lambda: Path("/data/state"))
     log_dir: Path = field(default_factory=lambda: Path("/logs"))
     worktree_dir: Path = field(default_factory=lambda: Path("/worktrees"))
-    prompts_dir: Path = field(default_factory=lambda: Path("/data/prompts"))
+    prompts_dir: Path = field(default_factory=lambda: Path("/prompts"))
     state_lock_timeout_seconds: int = 10
 
     @classmethod
@@ -194,7 +194,7 @@ class StorageConfig:
         default_state = "/data/state" if project_root is None else str(project_root / "data" / "state")
         default_logs = "/logs" if project_root is None else str(project_root / "logs")
         default_worktrees = "/worktrees" if project_root is None else str(project_root / "worktrees")
-        default_prompts = "/data/prompts" if project_root is None else str(project_root / "data" / "prompts")
+        default_prompts = "/prompts" if project_root is None else str(project_root / "prompts")
 
         return cls(
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", default_state)),

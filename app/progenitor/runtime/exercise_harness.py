@@ -307,7 +307,7 @@ class TestScriptRunner:
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
-        self.prompts_dir = self.project_root / "data" / "prompts"
+        self.prompts_dir = self.project_root / "prompts"
         self.tmp_dir = self.project_root / "tmp"
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
 

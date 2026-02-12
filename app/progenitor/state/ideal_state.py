@@ -6,7 +6,7 @@ verification methods, and stop conditions. The Ideal State is the primary
 control surface for the agent loop.
 
 All LLM interactions use structured output (Pydantic models) for reliable
-parsing. Prompts are loaded from data/prompts/ via PromptTemplates.
+parsing. Prompts are loaded from prompts/ via PromptTemplates.
 """
 
 import inspect
@@ -269,7 +269,7 @@ class IdealStateBuilder:
     """Builds and refines ideal state using structured LLM outputs.
 
     All LLM calls use Pydantic response models for guaranteed schema
-    compliance. Prompts are loaded from data/prompts/ via PromptTemplates.
+    compliance. Prompts are loaded from prompts/ via PromptTemplates.
     """
 
     def __init__(self, llm_client):

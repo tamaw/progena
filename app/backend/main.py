@@ -84,10 +84,10 @@ client: ProgenitorClient | IPCProgenitorClient | None = None
 
 # Enhanced feature managers
 session_manager: SessionManager = SessionManager(SessionConfig(
-    persist_dir=Path("data/state/sessions") if config.host else None,
+    persist_dir=Path("data/sessions") if config.host else None,
 ))
 attachment_manager: AttachmentManager = AttachmentManager(AttachmentConfig(
-    cache_dir=Path("data/state/attachments"),
+    cache_dir=Path("data/attachments"),
 ))
 conversation_history: ConversationHistory = ConversationHistory()
 graceful_shutdown: GracefulShutdownManager = GracefulShutdownManager(
