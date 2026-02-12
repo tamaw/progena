@@ -41,6 +41,13 @@ class LLMConfig:
     model_summary: str | None = None
     model_fallbacks: list[str] = field(default_factory=list)
 
+    # Optional direct Azure OpenAI /responses path for structured output only.
+    # This is a temporary workaround for LiteLLM structured-output reliability.
+    azure_structured_enabled: bool = False
+    azure_structured_responses_url: str | None = None
+    azure_structured_api_key: str | None = None
+    azure_structured_model: str | None = None
+
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
@@ -52,6 +59,10 @@ class LLMConfig:
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
+            azure_structured_enabled=env_bool("PROGENITOR_AZURE_STRUCTURED_ENABLED", False),
+            azure_structured_responses_url=os.getenv("PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL"),
+            azure_structured_api_key=os.getenv("PROGENITOR_AZURE_STRUCTURED_API_KEY"),
+            azure_structured_model=os.getenv("PROGENITOR_AZURE_STRUCTURED_MODEL"),
         )
 
     def get_model_for_role(self, role: str) -> str:
@@ -386,6 +397,9 @@ class ProgenitorConfig:
                 "model_planner": self.llm.model_planner,
                 "model_builder": self.llm.model_builder,
                 "model_summary": self.llm.model_summary,
+                "azure_structured_enabled": self.llm.azure_structured_enabled,
+                "azure_structured_responses_url": self.llm.azure_structured_responses_url,
+                "azure_structured_model": self.llm.azure_structured_model,
             },
             "runtime": {
                 "timezone": self.runtime.timezone,
@@ -428,9 +442,11 @@ class ProgenitorConfig:
 
         if redact_secrets:
             result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
+            result["llm"]["azure_structured_api_key"] = "***REDACTED***" if self.llm.azure_structured_api_key else None
             result["mcp"]["api_key"] = "***REDACTED***" if self.mcp.api_key else None
         else:
             result["llm"]["api_key"] = self.llm.api_key
+            result["llm"]["azure_structured_api_key"] = self.llm.azure_structured_api_key
             result["mcp"]["api_key"] = self.mcp.api_key
 
         return result

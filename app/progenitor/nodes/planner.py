@@ -9,6 +9,7 @@ build_state.json that evolves each iteration and is consumed by BUILD.
 """
 
 import contextlib
+import inspect
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..llm.prompts import PromptTemplates
+from ..llm.response_models import PlannerResponse, validate_planner_response
 from ..runtime.time_utils import utcnow_isoformat
 from ..state.execution_schemas import (
     ExperimentPlan,
@@ -45,6 +47,61 @@ def _get_target_capabilities(state: ProgenitorState) -> list[str]:
     if decision and hasattr(decision, "target_capabilities"):
         return decision.target_capabilities or []
     return []
+
+
+async def _request_plan_work_items(
+    llm_client,
+    user_input: str,
+    decision: dict[str, Any],
+    current_backlog: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Request planner work items from LLM using structured output."""
+    try:
+        inspect.getattr_static(llm_client, "chat_structured")
+        has_real_chat_structured = True
+    except AttributeError:
+        has_real_chat_structured = False
+
+    if not has_real_chat_structured and hasattr(llm_client, "plan") and callable(getattr(llm_client, "plan")):
+        return await llm_client.plan(
+            user_input=user_input,
+            decision=decision,
+            current_backlog=current_backlog,
+        )
+
+    system_prompt = _prompts.get_planner_prompt()
+    context = f"""
+User Request: {user_input}
+
+Decision: {decision}
+
+Current Backlog: {current_backlog}
+
+Generate a list of work items to fulfill this request.
+"""
+    messages = [{"role": "user", "content": context}]
+
+    if hasattr(llm_client, "chat_structured"):
+        parsed = await llm_client.chat_structured(
+            messages=messages,
+            response_model=PlannerResponse,
+            schema_name="planner_response",
+            system_prompt=system_prompt,
+            temperature=0.5,
+        )
+        validated = validate_planner_response(parsed.model_dump())
+        return [item.model_dump() for item in validated.work_items]
+
+    response_format = llm_client._get_json_response_format(PlannerResponse, "planner_response")
+    response = await llm_client.chat(
+        messages=messages,
+        system_prompt=system_prompt,
+        temperature=0.5,
+        response_format=response_format,
+    )
+    raw_data = json.loads(response)
+    validated = validate_planner_response(raw_data)
+    return [item.model_dump() for item in validated.work_items]
 
 
 def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
@@ -129,7 +186,8 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
             # Ask LLM to plan work items
             decision_dict = decision.model_dump() if hasattr(decision, "model_dump") else decision
 
-            work_items_data = await llm_client.plan(
+            work_items_data = await _request_plan_work_items(
+                llm_client=llm_client,
                 user_input=user_input,
                 decision=decision_dict,
                 current_backlog=backlog_dicts,

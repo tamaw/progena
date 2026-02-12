@@ -312,10 +312,18 @@ async def _generate_lessons_via_llm(
     system_prompt = _prompts.get("learn.system.md")
 
     try:
-        # Use structured output via response_format
+        if hasattr(llm_client, "chat_structured"):
+            return await llm_client.chat_structured(
+                messages=[{"role": "user", "content": prompt}],
+                response_model=LearningResult,
+                schema_name="learning_result",
+                system_prompt=system_prompt,
+                temperature=0.3,
+            )
+
+        # Fallback for test doubles / alternate clients
         response_format = _get_response_format(llm_client)
 
-        # If using json_object fallback (older Azure), add json instruction
         if response_format.get("type") == "json_object":
             system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
 

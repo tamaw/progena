@@ -222,25 +222,34 @@ async def _resolve_conflict_with_llm(
 
     # 4. Call LLM
     try:
-        # Get response format for structured output
-        response_format = llm_client._get_json_response_format(
-            ConflictResolution, "conflict_resolution"
-        )
-
         system_content = "You are a git merge conflict resolver."
-        if response_format.get("type") == "json_object":
-            system_content += "\n\nReturn a single JSON object and nothing else (valid json)."
+        if hasattr(llm_client, "chat_structured"):
+            resolution_response = await llm_client.chat_structured(
+                messages=[{"role": "user", "content": prompt}],
+                response_model=ConflictResolution,
+                schema_name="conflict_resolution",
+                system_prompt=system_content,
+                temperature=0.2,
+            )
+        else:
+            # Get response format for structured output
+            response_format = llm_client._get_json_response_format(
+                ConflictResolution, "conflict_resolution"
+            )
 
-        response = await llm_client.chat(
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt=system_content,
-            temperature=0.2,
-            response_format=response_format,
-        )
+            if response_format.get("type") == "json_object":
+                system_content += "\n\nReturn a single JSON object and nothing else (valid json)."
 
-        # Parse and validate response
-        raw_data = json.loads(response)
-        resolution_response = ConflictResolution.model_validate(raw_data)
+            response = await llm_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=system_content,
+                temperature=0.2,
+                response_format=response_format,
+            )
+
+            # Parse and validate response
+            raw_data = json.loads(response)
+            resolution_response = ConflictResolution.model_validate(raw_data)
 
         # 5. Apply resolution
         for file_resolution in resolution_response.file_resolutions:

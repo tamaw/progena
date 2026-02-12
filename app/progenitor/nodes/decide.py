@@ -8,6 +8,7 @@ Slow path: LLM decides (with full tool context) -> route to system_tool/a2a/mcp/
 import json
 import logging
 import re
+import inspect
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, cast
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field
 from ..env_utils import env_bool, env_float, env_int
 from ..llm.conversation_compressor import ConversationCompressor
 from ..llm.prompts import PromptTemplates
+from ..llm.response_models import DecisionResponse, validate_decision_response
 from ..nodes.node_helpers.formatters import format_tool_result
 from ..nodes.node_helpers.registry import execute_system_tool, match_tool_by_input
 from ..runtime.time_utils import utcnow_isoformat
@@ -98,6 +100,78 @@ def _clean_project_name(name: str) -> str:
     return cleaned
 
 
+async def _request_decision_data(
+    llm_client,
+    user_input: str,
+    conversation_history: list[dict[str, str]],
+    tool_context: str,
+) -> dict[str, Any]:
+    """Request routing decision from LLM using structured output."""
+    try:
+        inspect.getattr_static(llm_client, "chat_structured")
+        has_real_chat_structured = True
+    except AttributeError:
+        has_real_chat_structured = False
+
+    if not has_real_chat_structured and hasattr(llm_client, "decide") and callable(getattr(llm_client, "decide")):
+        decision = await llm_client.decide(
+            user_input=user_input,
+            conversation_history=conversation_history,
+            tool_context=tool_context,
+        )
+        logger.info(
+            "DECIDE TEST: action=%s confidence=%s targets=%s",
+            decision.get("action"),
+            decision.get("confidence"),
+            decision.get("target_capabilities"),
+        )
+        return decision
+
+    system_prompt = _prompts.get_decide_prompt(tool_context)
+    messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
+
+    try:
+        if hasattr(llm_client, "chat_structured"):
+            parsed = await llm_client.chat_structured(
+                messages=messages,
+                response_model=DecisionResponse,
+                schema_name="decision_response",
+                system_prompt=system_prompt,
+                temperature=0.3,
+            )
+            validated = validate_decision_response(parsed.model_dump())
+            decision = validated.model_dump()
+            logger.info(
+                "DECIDE TEST: action=%s confidence=%s targets=%s",
+                decision.get("action"),
+                decision.get("confidence"),
+                decision.get("target_capabilities"),
+            )
+            return decision
+
+        response_format = llm_client._get_json_response_format(DecisionResponse, "decision_response")
+        response = await llm_client.chat(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=0.3,
+            response_format=response_format,
+        )
+        parsed = json.loads(response)
+        validated = validate_decision_response(parsed)
+        decision = validated.model_dump()
+        logger.info(
+            "DECIDE TEST: action=%s confidence=%s targets=%s",
+            decision.get("action"),
+            decision.get("confidence"),
+            decision.get("target_capabilities"),
+        )
+        return decision
+    except Exception as exc:
+        logger.warning("Failed to get structured decide response: %s", exc)
+        validated = validate_decision_response({})
+        return validated.model_dump()
+
+
 async def _generate_build_settings(
     user_input: str,
     llm_client,
@@ -144,36 +218,41 @@ async def _generate_build_settings(
                 user_input=user_input,
             )
 
-            response_format = llm_client._get_json_response_format(
-                BuildNameExtraction, "build_name_extraction"
-            )
+            if hasattr(llm_client, "chat_structured"):
+                parsed_model = await llm_client.chat_structured(
+                    messages=[{"role": "user", "content": prompt}],
+                    response_model=BuildNameExtraction,
+                    schema_name="build_name_extraction",
+                    system_prompt=system_prompt,
+                    temperature=0.1,
+                )
+                extracted_name = _clean_project_name(parsed_model.project_name)
+                extracted_type = parsed_model.build_type.strip().lower()
+            else:
+                response_format = llm_client._get_json_response_format(
+                    BuildNameExtraction, "build_name_extraction"
+                )
 
-            actual_prompt = prompt
-            if response_format.get("type") == "json_object":
-                actual_prompt = prompt + "\n\nRespond with valid JSON matching this schema: {project_name: string, build_type: 'agent'|'mcp', reasoning: string}"
+                actual_prompt = prompt
+                if response_format.get("type") == "json_object":
+                    actual_prompt = prompt + "\n\nRespond with valid JSON matching this schema: {project_name: string, build_type: 'agent'|'mcp', reasoning: string}"
 
-            response = await llm_client.complete(
-                prompt=actual_prompt,
-                system_prompt=system_prompt,
-                temperature=0.1,
-                response_format=response_format,
-            )
+                response = await llm_client.complete(
+                    prompt=actual_prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.1,
+                    response_format=response_format,
+                )
+                parsed = json.loads(response.strip())
+                extracted_name = _clean_project_name(parsed.get("project_name", ""))
+                extracted_type = parsed.get("build_type", "agent").strip().lower()
 
-            if response:
-                try:
-                    parsed = json.loads(response.strip())
-                    extracted_name = _clean_project_name(parsed.get("project_name", ""))
-                    extracted_type = parsed.get("build_type", "agent").strip().lower()
+            if extracted_name and len(extracted_name) > 1:
+                project_name = extracted_name
+                logger.info("LLM extracted project name: %s", project_name)
 
-                    if extracted_name and len(extracted_name) > 1:
-                        project_name = extracted_name
-                        logger.info("LLM extracted project name: %s", project_name)
-
-                    if extracted_type == "mcp":
-                        build_type = BuildType.MCP
-
-                except json.JSONDecodeError:
-                    logger.warning("Failed to parse LLM structured response: %s", response[:100])
+            if extracted_type == "mcp":
+                build_type = BuildType.MCP
 
         except Exception as e:
             logger.warning("Failed to extract project name via LLM structured output: %s", e)
@@ -551,7 +630,8 @@ def create_node(
 
         try:
             # Ask LLM for decision (structured output with confidence)
-            decision_data = await llm_client.decide(
+            decision_data = await _request_decision_data(
+                llm_client=llm_client,
                 user_input=user_input,
                 conversation_history=history,
                 tool_context=tool_context,
@@ -632,18 +712,30 @@ def create_node(
                 msgs.append({"role": "user", "content": user_input})
 
                 streamed_text = ""
-                token_count = 0
+                chunk_count = 0
                 try:
                     async for token in llm_client.chat_stream(
                         messages=msgs,
                         temperature=0.7,
                     ):
-                        token_count += 1
+                        chunk_count += 1
                         streamed_text += token
                         await loop.stream_token(token)
-                    logger.info("STREAMING: Completed - %d tokens", token_count)
+                    estimated_tokens = max(1, len(streamed_text) // 4) if streamed_text else 0
+                    logger.info(
+                        "STREAMING: Completed - chunks=%d, estimated_tokens=%d, chars=%d",
+                        chunk_count,
+                        estimated_tokens,
+                        len(streamed_text),
+                    )
                 except Exception as e:
-                    logger.error("STREAMING: Error after %d tokens: %s", token_count, e)
+                    estimated_tokens = max(1, len(streamed_text) // 4) if streamed_text else 0
+                    logger.error(
+                        "STREAMING: Error after chunks=%d, estimated_tokens=%d: %s",
+                        chunk_count,
+                        estimated_tokens,
+                        e,
+                    )
                     raise
 
                 loop._streamed_response_content = streamed_text
