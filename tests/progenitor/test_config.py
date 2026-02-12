@@ -171,7 +171,7 @@ class TestStorageConfig:
         assert config.state_dir == project_root / "data" / "state"
         assert config.log_dir == project_root / "logs"
         assert config.worktree_dir == project_root / "worktrees"
-        assert config.prompts_dir == project_root / "data" / "prompts"
+        assert config.prompts_dir == project_root / "prompts"
 
     def test_env_overrides(self):
         """Test environment variables override defaults."""
