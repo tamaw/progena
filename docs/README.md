@@ -1,33 +1,22 @@
 # Progenitor Documentation
 
-## Quick Start
+This folder contains stable, project-facing documentation only.
 
-- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - Complete project organization and file structure
+## Start Here
 
-## Core Specifications
+- **[SPEC.md](SPEC.md)** - Product-level specification and behavior requirements
+- **[loop.spec.md](loop.spec.md)** - Minimal dual-loop algorithm contract
+- **[ARCHITECTURE_DIAGRAM.md](ARCHITECTURE_DIAGRAM.md)** - Visual architecture and loop flow
 
-- **[SPEC.md](SPEC.md)** - Original system specification and requirements
-- **[loop.spec.md](loop.spec.md)** - Inner loop architecture (OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN)
+## Implementation References
 
-## Architecture
+- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - Current repository layout and key modules
+- **[BACKEND.md](BACKEND.md)** - FastAPI backend endpoints, runtime modes, and local run commands
+- **[DOCKER.md](DOCKER.md)** - Container stack and docker compose usage
+- **[CONTAINER_RUNNERS.md](CONTAINER_RUNNERS.md)** - Isolated runner containers for spawned A2A/MCP runtimes
 
-- **[ARCHITECTURE_DIAGRAM.md](ARCHITECTURE_DIAGRAM.md)** - Visual system architecture and component diagrams
-- **[LOOP_IMPROVEMENTS.md](LOOP_IMPROVEMENTS.md)** - Loop architecture and dual-loop implementation details
-- **[LOOP_IMPROVEMENTS_SUMMARY.md](LOOP_IMPROVEMENTS_SUMMARY.md)** - Summary of loop implementation
-
-## Components
-
-- **[BACKEND.md](BACKEND.md)** - Backend API documentation and endpoints
-- **[DOCKER.md](DOCKER.md)** - Docker deployment guide and container configuration
-- **[CONTAINER_RUNNERS.md](CONTAINER_RUNNERS.md)** - Containerized A2A/MCP runtime isolation and runner contract
-
-## Validation
-
-- **[VALIDATION_SUMMARY.md](VALIDATION_SUMMARY.md)** - Validation test results and coverage
-
-## Quick Links
+## Project Links
 
 - [Main README](../README.md)
 - [Tests](../tests/)
-- [Examples](../examples/)
 - [Scripts](../scripts/)

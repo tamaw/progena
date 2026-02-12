@@ -1,143 +1,68 @@
-# Backend - Implementation Summary
+# Backend API
 
-## What Was Built
+The backend is a FastAPI service that exposes OpenAI-compatible APIs and bridges requests to the Progenitor runtime.
 
-A **FastAPI-based API server** that provides an OpenAI-compatible REST API for interacting with the Progenitor agent.
+## Runtime Topology
 
-> **Note**: The backend is API-only and does not serve static files. The frontend runs separately via npm/Vite and proxies API requests to the backend.
+- Frontend (`app/frontend`) runs separately and proxies API calls to backend (`:8000`)
+- Backend communicates with Progenitor primarily through IPC (socket)
+- Progenitor hosts the perpetual loop and IPC server
 
-### Architecture
+## Main Files
 
-```
-┌─────────────────────────────────────────────────────┐
-│  Frontend (React/Vite)                             │
-│  - Dev: http://localhost:5173                      │
-│  - Prod: http://localhost:4173 (preview)           │
-│  - Proxies /api, /v1, /health to backend           │
-└────────────────────┬────────────────────────────────┘
-                     │ HTTP (proxied)
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│  Backend (FastAPI) - API Only                      │
-│  - http://localhost:8000                           │
-│  - /v1/chat/completions (OpenAI Chat API)          │
-│  - /v1/responses (OpenAI unified API)              │
-│  - /v1/models (OpenAI-compatible)                  │
-│  - /api/ui/* (UI API routes)                       │
-│  - /health (health check)                          │
-└────────────────────┬────────────────────────────────┘
-                     │ IPC (TCP Socket) - Default
-                     │ OR stdin/stdout (Legacy)
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│  Progenitor Agent (subprocess or same process)     │
-│  - IPC Server (port 9500 by default)               │
-│  - Perpetual loop                                  │
-│  - State management                                │
-│  - LangGraph orchestration                         │
-└─────────────────────────────────────────────────────┘
+- `app/backend/main.py` - FastAPI app and API routes
+- `app/backend/config.py` - Environment-based server config
+- `app/backend/ipc_client.py` - IPC client used by backend
+- `app/backend/client.py` - Legacy subprocess client
+- `app/progenitor/ipc/` - IPC protocol and server implementation
+
+## Local Development
+
+Always activate virtual environment first:
+
+```powershell
+& .\.venv\Scripts\Activate.ps1
 ```
 
-### Communication Modes
+Start Progenitor runtime:
 
-The backend supports multiple communication modes with the Progenitor agent:
-
-1. **IPC (Socket-based) - Default & Recommended**
-   - Uses TCP sockets for reliable, streaming communication
-   - Better error handling and reconnection support
-   - Native streaming response support
-   - Set `CHAT_SERVER_IPC_ENABLED=true` (default)
-
-2. **Subprocess (stdin/stdout) - Legacy**
-   - Original implementation using pipes
-   - May have buffering issues and deadlocks
-   - Set `CHAT_SERVER_IPC_ENABLED=false` to use
-
-3. **In-process Service** (for testing)
-   - Direct async calls without subprocess
-   - Fastest but no process isolation
-
-## Files
-
-### Core Backend
-- `app/backend/main.py` - FastAPI application
-- `app/backend/client.py` - Legacy subprocess communication
-- `app/backend/ipc_client.py` - IPC-based client (recommended)
-- `app/backend/models.py` - OpenAI-compatible models
-- `app/backend/config.py` - Configuration
-
-### IPC Module
-- `app/progenitor/ipc/protocol.py` - Message framing protocol
-- `app/progenitor/ipc/server.py` - IPC server for Progenitor
-- `app/progenitor/ipc/client.py` - IPC client library
-
-### Testing
-- `tests/backend/test_backend.py` - 12 unit tests ✓
-- `tests/backend/test_integration.py` - Integration tests ✓
-- `tests/backend/test_e2e.py` - End-to-end tests ✓
-- `tests/backend/mock_progenitor.py` - Mock for testing
-- `tests/progenitor/test_ipc_protocol.py` - IPC protocol tests
-- `tests/progenitor/test_ipc_integration.py` - IPC integration tests
-
-### Tools
-- `cli.py` - Command-line interface
-- `scripts/demo_ipc.py` - IPC demo script
-- `examples/demo.py` - Demo scripts
-
-## Quick Start
-
-### Run Tests
 ```bash
-python cli.py test
-```
-
-### Start Server
-```bash
-python cli.py serve
-```
-
-### Run Demo
-```bash
-python examples/demo.py 1
-```
-
-### Test IPC Communication
-```bash
-# Terminal 1: Start Progenitor with IPC
 python -m app.progenitor.main
-
-# Terminal 2: Test IPC client
-python scripts/demo_ipc.py --message "Hello, Progenitor!"
-
-# Or interactive mode
-python scripts/demo_ipc.py --interactive
 ```
 
-## Configuration
+Start backend API:
 
-### IPC Settings (Environment Variables)
+```bash
+python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHAT_SERVER_IPC_ENABLED` | `true` | Use IPC instead of subprocess |
-| `CHAT_SERVER_IPC_HOST` | `127.0.0.1` | IPC server host |
-| `CHAT_SERVER_IPC_PORT` | `9500` | IPC server port |
-| `CHAT_SERVER_IPC_AUTO_START` | `true` | Auto-start Progenitor subprocess |
-| `PROGENITOR_IPC_ENABLED` | `true` | Enable IPC server in Progenitor |
-| `PROGENITOR_IPC_HOST` | `127.0.0.1` | IPC bind host |
-| `PROGENITOR_IPC_PORT` | `9500` | IPC bind port |
+## Core Endpoints
 
-## API Endpoints
+- `GET /health` - Service health summary
+- `GET /ready` - Readiness check
+- `GET /live` - Liveness check
+- `GET /v1/models` - OpenAI-compatible model listing
+- `POST /v1/responses` - Primary response API
+- `POST /chat` - Simplified chat endpoint
+- `POST /v1/attachments` - Upload and register attachments
+- `GET /v1/attachments/{attachment_id}` - Attachment metadata/status
+- `GET /v1/session` / `POST /v1/session` - Session retrieval/update
+- `GET /v1/conversation` - Retrieve conversation history
 
-- `GET /health` - Health check
-- `GET /health/detailed` - Detailed health with IPC status
-- `GET /v1/models` - List models (OpenAI-compatible)
-- `POST /v1/chat/completions` - Chat Completions API (legacy)
-- `POST /v1/responses` - Unified Responses API (recommended)
-- `POST /chat` - Simple chat
+Additional UI-specific routes are mounted under `/api/ui/*`.
 
-Note: `/v1/chat/completions` and `/v1/responses` are aliases and behave identically.
+## Key Environment Variables
 
-## Status
+- `CHAT_SERVER_HOST` (default `0.0.0.0`)
+- `CHAT_SERVER_PORT` (default `8000`)
+- `CHAT_SERVER_PROGENITOR_TIMEOUT` (default `300`)
+- `CHAT_SERVER_IPC_HOST` (default `127.0.0.1`)
+- `CHAT_SERVER_IPC_PORT` (default `9500`)
+- `CHAT_SERVER_MODEL_NAME` (default `progenitor-v1`)
+- `CHAT_SERVER_RATE_LIMIT_ENABLED` (default `true`)
+- `CHAT_SERVER_STREAM_ENABLED` (default `true`)
 
-✅ **Complete and Tested** - Ready to integrate with real Progenitor agent
+## Notes
+
+- `POST /v1/responses` is the preferred OpenAI-style endpoint for this project.
+- Legacy subprocess communication remains available for compatibility but IPC is the primary path.

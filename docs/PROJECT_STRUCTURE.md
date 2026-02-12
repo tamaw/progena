@@ -1,185 +1,83 @@
 # Progenitor Project Structure
 
-## Root Directory
+This document reflects the current repository layout and the major runtime components.
+
+## Root Layout
+
 ```
 progenitor/
-├── app/                    # Application source code
-├── tests/                  # Test suite
-├── docs/                   # Documentation
-├── config/                 # Configuration files
-├── data/                   # Runtime data
-│   ├── state/              # State files (gitignored except .gitkeep)
-│   └── prompts/            # Editable prompt templates
-├── examples/               # Usage examples
-├── scripts/                # CLI scripts and utilities
-├── logs/                   # Application logs (gitignored)
-├── worktrees/              # Git worktrees for builds (gitignored)
-├── .venv/                  # Python virtual environment
-│
-├── README.md               # Main project documentation
-├── requirements.txt        # Python dependencies
-├── pytest.ini              # Test configuration
-├── docker-compose.yml      # Docker orchestration
-└── Dockerfile              # Container definition
+├── app/                         # Runtime applications (agent, backend, frontend)
+├── data/                        # Persistent runtime data (state, sessions, attachments)
+├── docker/                      # Docker compose files and runner Dockerfiles
+├── docs/                        # Project documentation
+├── prompts/                     # Prompt templates used by the agent
+├── scripts/                     # Utility and demo scripts
+├── tests/                       # Test suite
+├── worktrees/                   # Worktree artifacts for build flows
+├── logs/                        # Runtime logs
+├── Dockerfile
+├── pyproject.toml
+└── requirements.txt
 ```
 
-## Scripts Directory
-```
-scripts/
-├── server_cli.py           # Server control (test/serve/mock)
-├── start_all.ps1           # Start all services
-├── chat_cli.py             # Interactive chat client
-├── chat_cli_httpx.py       # Async chat client (httpx)
-├── validate_app.py         # App validation script
-└── validate_docker.py      # Docker validation script
-```
+## Application Code
 
-## Data Directory
-```
-data/
-├── state/                  # Runtime state (gitignored)
-│   ├── build_state.json    # Build state (backlog, messages, ideal_state)
-│   ├── current_state.json  # User session state (messages, tool calls)
-│   ├── registry.json       # Registered agents/tools
-│   └── schedule.json       # Scheduled tasks (system feature, persists beyond sessions)
-│
-└── prompts/                # Editable prompts
-    ├── genesis.md          # System prompt
-    ├── decide.md           # Decision routing
-    ├── planner.md          # Work planning
-    ├── build.md            # Build specifications
-    ├── copilot_task.md     # Copilot CLI tasks
-    └── agent_structure.md  # Agent directory structure
-```
-
-## Application Structure
 ```
 app/
-├── progenitor/             # Main agent package
-│   ├── __init__.py
-│   ├── main.py             # Service entry point
-│   ├── config.py           # Configuration management
-│   ├── graph.py            # Original graph implementation
-│   ├── graph_dual_loop.py  # Loop.spec.md implementation ⭐
-│   │
-│   ├── nodes/              # 19 LangGraph nodes
-│   │   ├── intake.py       # User input processing
-│   │   ├── decide.py       # Decision making
-│   │   ├── observe.py      # OBSERVE phase ⭐
-│   │   ├── think.py        # THINK phase ⭐
-│   │   ├── planner.py      # PLAN phase ⭐
-│   │   ├── act.py          # BUILD phase ⭐
-│   │   ├── execute.py      # EXECUTE phase ⭐ NEW
-│   │   ├── verify_loop.py  # VERIFY phase ⭐
-│   │   ├── learn.py        # LEARN phase ⭐
-│   │   └── ... (11 more)
-│   │
-│   ├── state/              # State management
-│   │   ├── models.py       # Pydantic models
-│   │   ├── manager.py      # State persistence
-│   │   ├── ideal_state.py  # Ideal state (loop.spec.md) ⭐
-│   │   ├── verifier.py     # Verification system ⭐
-│   │   └── helpers.py      # State utilities
-│   │
-│   ├── llm/                # LLM integration
-│   │   ├── client.py       # LLM client wrapper
-│   │   └── prompts.py      # Prompt templates
-│   │
-│   ├── tools/              # Tool integrations
-│   │   ├── registry.py     # Tool/agent registry
-│   │   ├── copilot.py      # Copilot CLI integration
-│   │   ├── git.py          # Git operations
-│   │   └── mcp.py          # MCP/A2A clients
-│   │
-│   └── runtime/            # Runtime utilities
-│       ├── loop.py         # Main loop runner
-│       ├── scheduler.py    # Task scheduling
-│       └── time_utils.py   # Time utilities
-│
-├── backend/                # HTTP backend
-│   ├── main.py             # FastAPI server
-│   ├── client.py           # Client SDK
-│   ├── config.py           # Server config
-│   └── models.py           # API models
-│
-├── frontend/               # React UI (Vite)
-│
-├── agents/                 # Built agents (empty initially)
-└── mcp/                    # MCP servers (empty initially)
+├── progenitor/                  # Core perpetual agent
+│   ├── main.py                  # Service entrypoint
+│   ├── graph_outer_loop.py      # Outer loop graph topology
+│   ├── graph_inner_loop.py      # Inner loop graph topology
+│   ├── routing.py               # Graph routing helpers
+│   ├── nodes/                   # Node implementations (intake, decide, act, validate, etc.)
+│   ├── state/                   # State models, persistence, verification
+│   ├── llm/                     # LLM provider client and prompt handling
+│   ├── tools/                   # Tool registry + integrations (MCP, git, copilot)
+│   ├── runtime/                 # Loop runner, scheduler, IPC, execution utilities
+│   └── ipc/                     # IPC protocol/server/client
+├── backend/                     # FastAPI OpenAI-compatible API
+├── frontend/                    # React + Vite web client
+├── agents/                      # Built/registered A2A agents
+└── mcp/                         # MCP servers
 ```
 
-## Tests Structure
+## Runtime Data
+
 ```
-tests/
-├── test_dual_loop.py       # Loop.spec.md tests (20 tests) ⭐
-├── test_dual_loop_integration.py  # Integration tests
-├── test_models.py          # Model tests
-├── test_nodes.py           # Node tests
-├── test_state_manager.py   # State tests
-├── test_registry.py        # Registry tests
-├── test_scheduler.py       # Scheduler tests
-├── test_helpers.py         # Helper tests
-├── test_config.py          # Config tests
-│
-└── backend/                # Backend tests
-    ├── test_backend.py
-    ├── test_integration.py
-    ├── test_e2e.py
-    └── mock_progenitor.py
+data/
+├── state/                       # Core state files (json)
+│   ├── build_state.json
+│   ├── current_state.json
+│   ├── registry.json
+│   └── schedule.json
+├── sessions/                    # Session persistence for backend/UI
+├── attachments/                 # Uploaded file storage/cache
+└── memory/                      # Additional memory artifacts
 ```
 
-## Documentation
+## Docker Assets
+
 ```
-docs/
-├── README.md                        # Documentation index
-├── SPEC.md                          # Original specification
-├── loop.spec.md                     # Inner loop spec ⭐
-├── ARCHITECTURE_DIAGRAM.md          # System architecture
-├── LOOP_IMPROVEMENTS.md             # Improvement notes
-├── LOOP_IMPROVEMENTS_SUMMARY.md     # Improvement summary
-├── VALIDATION_SUMMARY.md            # Validation results
-├── BACKEND.md                       # Backend API
-└── DOCKER.md                        # Docker guide
+docker/
+├── docker-compose.progenitor.yml  # Main stack (litellm + progenitor + backend)
+├── docker-compose.litellm.yml     # LiteLLM-focused stack
+└── runner/
+    ├── Dockerfile.agent           # Runner image for A2A agent processes
+    └── Dockerfile.mcp             # Runner image for MCP processes
 ```
 
-## Configuration
+## Common Development Commands
+
+```bash
+# Activate virtual environment first
+& .\.venv\Scripts\Activate.ps1
+
+# Run tests
+pytest
+
+# Type check
+mypy app/
+
+# Lint
+ruff check app/
 ```
-.env                 # Local environment configuration
-.env.example         # Example environment configuration
-```
-
-## Key Features
-
-### ⭐ Loop.spec.md Implementation
-The dual-loop architecture is the recommended implementation:
-
-**Outer Loop**: Ideal state management
-- Define success criteria
-- Refine based on results
-- Verify against quality bar
-
-**Inner Loop**: 7-phase iteration
-1. OBSERVE - Refine ideal state
-2. THINK - Generate approaches
-3. PLAN - Choose experiment
-4. BUILD - Create candidate
-5. EXECUTE - Run tools (NEW)
-6. VERIFY - Score output
-7. LEARN - Update strategy
-
-### Graph Implementations
-- `graph.py` - Original single-loop
-- `graph_dual_loop.py` - Loop.spec.md implementation (default)
-
-### Test Coverage
-- 140 total tests passing
-- 20 tests specifically for loop.spec.md
-- Full coverage of all nodes and phases
-
-## Recent Improvements
-- ✓ Added EXECUTE phase (separating BUILD from tool execution)
-- ✓ Enhanced anti-criteria extraction from violations
-- ✓ Improved best artefact tracking on early stop
-- ✓ Organized documentation into docs/ folder
-- ✓ Removed build artifacts (__pycache__)
-- ✓ Created documentation index

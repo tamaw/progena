@@ -197,30 +197,20 @@ The Backend is a separate FastAPI application that provides an **OpenAI-compatib
 ### Architecture
 
 * **Separate process**: Backend runs independently of Progenitor
-* **Subprocess communication**: Spawns Progenitor as a subprocess, communicates via stdin/stdout JSON lines
-* **OpenAI compatibility**: Implements `/v1/chat/completions` and `/v1/models` endpoints
+* **IPC-first communication**: Uses socket-based IPC to communicate with the Progenitor runtime (legacy subprocess path remains for compatibility)
+* **OpenAI compatibility**: Implements `/v1/responses` and `/v1/models` endpoints
 * **Streaming support**: Supports SSE streaming responses
 
 ### Endpoints
 
 * `GET /health` - Health check
 * `GET /v1/models` - List available models (OpenAI-compatible)
-* `POST /v1/chat/completions` - Chat completion (OpenAI-compatible)
+* `POST /v1/responses` - Primary OpenAI-compatible response endpoint
 * `POST /chat` - Simple chat endpoint for quick testing
 
 ### Communication Protocol
 
-Messages between Backend and Progenitor use JSON lines:
-
-**Request** (Backend → Progenitor stdin):
-```json
-{"type": "user_message", "content": "Hello, Progenitor!"}
-```
-
-**Response** (Progenitor stdout → Backend):
-```json
-{"content": "Hello! I'm Progenitor. How can I help you today?"}
-```
+Backend-to-agent communication is implemented through the IPC protocol under `app/progenitor/ipc/`, with request/response payloads serialized over sockets.
 
 ### Running
 
@@ -483,7 +473,8 @@ Keep it boring. Boring survives.
   * `progenitor/`
 
     * `main.py` (service entrypoint)
-    * `graph.py` (LangGraph topology)
+    * `graph_outer_loop.py` (outer loop LangGraph topology)
+    * `graph_inner_loop.py` (inner loop LangGraph topology)
     * `llm/` (OpenAI Responses wrapper + prompt templates)
     * `tools/` (Codex wrapper, git/worktree helpers, MCP runner/client)
     * `runtime/` (loop, idle/backoff, time, scheduler)
@@ -491,13 +482,14 @@ Keep it boring. Boring survives.
   * `backend/` (FastAPI gateway with OpenAI-compatible interface)
 
     * `main.py` (FastAPI application)
-    * `client.py` (Progenitor subprocess client)
+    * `ipc_client.py` (primary Progenitor IPC client)
+    * `client.py` (legacy subprocess client)
     * `models.py` (OpenAI-compatible Pydantic models)
     * `config.py` (server configuration)
   * `agents/` (A2A agent packages created/managed by Progenitor)
   * `mcp/` (MCP servers created/managed by Progenitor)
 * `.env` / `.env.example` (runtime and Copilot configuration)
-* `state/` (mounted volume)
+* `data/state/` (mounted volume)
 
   * `build_state.json`
   * `registry.json`
