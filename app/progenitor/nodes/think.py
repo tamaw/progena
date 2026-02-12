@@ -664,15 +664,7 @@ def create_node(
             prompts, ideal_state, iteration or 0, last_verification, state,
         )
 
-        # Get structured output response format
-        response_format = _get_response_format(llm_client)
         system_prompt = THINK_SYSTEM_PROMPT
-
-        # If using json_object fallback (older Azure), add json instruction
-        if response_format.get("type") == "json_object":
-            system_prompt += (
-                "\n\nReturn a single JSON object and nothing else (valid json)."
-            )
 
         # Load approach history from in-memory state for exploration/novelty scoring
         approach_history = _load_approach_history(state)
@@ -687,14 +679,31 @@ def create_node(
         try:
             # Retry loop: generate approaches, validate, retry if all rejected
             for attempt in range(MAX_LLM_RETRIES + 1):
-                if hasattr(llm_client, "chat_with_reasoning"):
-                    raw_response, reasoning_trace = await llm_client.chat_with_reasoning(
+                if hasattr(llm_client, "chat_structured_with_reasoning"):
+                    think_resp, reasoning_trace = await llm_client.chat_structured_with_reasoning(
                         messages=[{"role": "user", "content": prompt}],
+                        response_model=ThinkResponse,
+                        schema_name="think_response",
                         system_prompt=system_prompt,
                         temperature=0.7,
-                        response_format=response_format,
                     )
+                    raw_response = think_resp.model_dump_json()
+                elif hasattr(llm_client, "chat_structured"):
+                    think_resp = await llm_client.chat_structured(
+                        messages=[{"role": "user", "content": prompt}],
+                        response_model=ThinkResponse,
+                        schema_name="think_response",
+                        system_prompt=system_prompt,
+                        temperature=0.7,
+                    )
+                    raw_response = think_resp.model_dump_json()
+                    reasoning_trace = ""
                 else:
+                    response_format = _get_response_format(llm_client)
+                    if response_format.get("type") == "json_object":
+                        system_prompt += (
+                            "\n\nReturn a single JSON object and nothing else (valid json)."
+                        )
                     raw_response = await llm_client.chat(
                         messages=[{"role": "user", "content": prompt}],
                         system_prompt=system_prompt,
@@ -702,9 +711,8 @@ def create_node(
                         response_format=response_format,
                     )
                     reasoning_trace = ""
-
-                raw_data = json.loads(raw_response)
-                think_resp = ThinkResponse.model_validate(raw_data)
+                    raw_data = json.loads(raw_response)
+                    think_resp = ThinkResponse.model_validate(raw_data)
 
                 approaches = _convert_approaches(think_resp)
 

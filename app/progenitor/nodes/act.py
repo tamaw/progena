@@ -8,12 +8,15 @@ Handles:
 - User communication tools (say_to_user, ask_user)
 """
 
+import json
+import inspect
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from ..llm.prompts import PromptTemplates
+from ..llm.response_models import BuildSpec, validate_build_spec
 from ..runtime.copilot_acp import CopilotACPManager
 from ..runtime.time_utils import utcnow_isoformat
 from ..state.helpers import normalize_work_item
@@ -32,6 +35,59 @@ logger = logging.getLogger(__name__)
 
 # Type alias for event pusher callback
 EventPusher = Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]]
+
+
+async def _request_build_spec(
+    llm_client,
+    item_type: str,
+    description: str,
+    capabilities: list[str],
+) -> dict[str, Any]:
+    """Request build specification from LLM using structured output."""
+    try:
+        inspect.getattr_static(llm_client, "chat_structured")
+        has_real_chat_structured = True
+    except AttributeError:
+        has_real_chat_structured = False
+
+    if not has_real_chat_structured and hasattr(llm_client, "generate_build_spec") and callable(getattr(llm_client, "generate_build_spec")):
+        return await llm_client.generate_build_spec(
+            item_type=item_type,
+            description=description,
+            capabilities=capabilities,
+        )
+
+    system_prompt = llm_client.prompts.get_build_prompt(item_type)
+    context = f"""
+Build Type: {item_type}
+Description: {description}
+Required Capabilities: {', '.join(capabilities)}
+
+Generate a detailed specification for building this component.
+"""
+    messages = [{"role": "user", "content": context}]
+
+    if hasattr(llm_client, "chat_structured"):
+        parsed = await llm_client.chat_structured(
+            messages=messages,
+            response_model=BuildSpec,
+            schema_name="build_spec",
+            system_prompt=system_prompt,
+            temperature=0.5,
+        )
+        validated = validate_build_spec(parsed.model_dump())
+        return validated.model_dump()
+
+    response_format = llm_client._get_json_response_format(BuildSpec, "build_spec")
+    response = await llm_client.chat(
+        messages=messages,
+        system_prompt=system_prompt,
+        temperature=0.5,
+        response_format=response_format,
+    )
+    raw_data = json.loads(response)
+    validated = validate_build_spec(raw_data)
+    return validated.model_dump()
 
 
 def create_node(
@@ -299,7 +355,8 @@ async def _execute_build(
     else:
         # Fallback: Generate build spec the old way if no copilot_prompt
         logger.info("BUILD: No copilot_prompt from PLAN, falling back to spec generation...")
-        spec = await llm_client.generate_build_spec(
+        spec = await _request_build_spec(
+            llm_client=llm_client,
             item_type=item_type_value,
             description=work_item.description,
             capabilities=capabilities,

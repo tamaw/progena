@@ -308,6 +308,15 @@ class IdealStateBuilder:
         Uses the LLM client's chat() method with response_format for
         guaranteed schema compliance. Falls back gracefully on parse errors.
         """
+        if hasattr(self.llm_client, "chat_structured"):
+            return await self.llm_client.chat_structured(
+                messages=[{"role": "user", "content": prompt}],
+                response_model=response_model,
+                schema_name=schema_name,
+                system_prompt=system_prompt,
+                temperature=temperature,
+            )
+
         response_format = self._get_response_format(response_model, schema_name)
 
         # If using json_object fallback (older Azure), add json instruction

@@ -207,8 +207,16 @@ class AgentDiscovery:
         )
 
         try:
-            # Get the appropriate response format based on provider and API version
-            # Uses _get_json_response_format which handles Azure API version checks
+            if hasattr(self.llm_client, "chat_structured"):
+                return await self.llm_client.chat_structured(
+                    messages=[{"role": "user", "content": user_prompt}],
+                    response_model=AgentDiscoveryResult,
+                    schema_name="agent_discovery_result",
+                    system_prompt=system_prompt,
+                    temperature=0.1,
+                )
+
+            # Fallback for clients without structured helper
             response_format = self.llm_client._get_json_response_format(
                 AgentDiscoveryResult, "agent_discovery_result"
             )
@@ -217,7 +225,7 @@ class AgentDiscovery:
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
                 response_format=response_format,
-                temperature=0.1,  # Low temperature for structured extraction
+                temperature=0.1,
             )
 
             # Parse the response

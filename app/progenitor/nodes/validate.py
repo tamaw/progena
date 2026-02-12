@@ -519,22 +519,31 @@ async def _assess_severity_with_llm(
         iteration=iteration,
     )
 
-    response_format = llm_client._get_json_response_format(
-        ValidationSeverityResponse, "validation_severity"
-    )
-    if response_format.get("type") == "json_object":
-        system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
-
     try:
-        response = await llm_client.chat(
-            messages=[{"role": "user", "content": "Assess the severity of these validation findings."}],
-            system_prompt=system_prompt,
-            temperature=0.2,
-            response_format=response_format,
-        )
+        if hasattr(llm_client, "chat_structured"):
+            validated = await llm_client.chat_structured(
+                messages=[{"role": "user", "content": "Assess the severity of these validation findings."}],
+                response_model=ValidationSeverityResponse,
+                schema_name="validation_severity",
+                system_prompt=system_prompt,
+                temperature=0.2,
+            )
+        else:
+            response_format = llm_client._get_json_response_format(
+                ValidationSeverityResponse, "validation_severity"
+            )
+            if response_format.get("type") == "json_object":
+                system_prompt += "\n\nReturn a single JSON object and nothing else (valid json)."
 
-        raw_data = json.loads(response)
-        validated = ValidationSeverityResponse.model_validate(raw_data)
+            response = await llm_client.chat(
+                messages=[{"role": "user", "content": "Assess the severity of these validation findings."}],
+                system_prompt=system_prompt,
+                temperature=0.2,
+                response_format=response_format,
+            )
+
+            raw_data = json.loads(response)
+            validated = ValidationSeverityResponse.model_validate(raw_data)
 
         # Apply LLM assessments back to findings
         assessment_map = {a.finding_id: a for a in validated.assessments}
