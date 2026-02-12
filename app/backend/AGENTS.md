@@ -2,13 +2,13 @@
 
 ## FastAPI Backend Agent
 
-OpenAI-compatible API server providing chat completions and streaming endpoints.
+OpenAI-compatible API server providing responses and streaming endpoints.
 
 ### Agent Capabilities
 - FastAPI application development
 - OpenAI-compatible API implementation
 - SSE (Server-Sent Events) streaming
-- IPC via async queues
+- IPC via socket-based client/server
 - CORS configuration
 - Health checks and monitoring
 
@@ -17,13 +17,15 @@ OpenAI-compatible API server providing chat completions and streaming endpoints.
 backend/
 ├── main.py              # FastAPI app and endpoints
 ├── models.py            # Request/response models
-└── routes/              # API route handlers
+├── ipc_client.py        # IPC client for Progenitor runtime
+└── client.py            # Legacy subprocess client
 ```
 
 ### Key Endpoints
-- `POST /v1/chat/completions` - OpenAI-compatible chat endpoint
+- `POST /v1/responses` - OpenAI-compatible responses endpoint
 - `GET /health` - Health check endpoint
-- `GET /` - Root endpoint with status
+- `GET /ready` - Readiness endpoint
+- `GET /live` - Liveness endpoint
 
 ### Development
 ```bash
@@ -42,7 +44,7 @@ pytest tests/backend/ -v
 ```
 
 ### Integration Points
-- **Progenitor Loop**: Communicates via IPC queues (`send_queue`, `receive_queue`)
+- **Progenitor Loop**: Communicates via IPC socket protocol
 - **Frontend**: CORS enabled for `http://localhost:5173`
 - **LLM**: Proxies to configured LLM provider (Azure OpenAI, OpenAI, etc.)
 
@@ -61,7 +63,7 @@ pytest tests/backend/ -v
 - Always runs on port 8000
 - Frontend proxies API calls in dev mode
 - Supports both streaming and non-streaming responses
-- IPC queues created at startup
+- IPC client is initialized at startup
 
 ### References
 - API Spec: `openapi_spec.json`

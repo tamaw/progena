@@ -54,7 +54,7 @@ npm run preview
 
 ### Integration Points
 - **Backend API**: Proxies to `http://localhost:8000` in dev mode
-- **Chat Endpoint**: `/v1/chat/completions`
+- **Chat Endpoint**: `/v1/responses`
 - **Streaming**: SSE for real-time responses
 
 ### Development Server

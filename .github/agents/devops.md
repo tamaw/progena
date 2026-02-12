@@ -14,7 +14,7 @@ You are a **DevOps Engineer** focused on deployment, infrastructure, CI/CD, and 
 - Performance monitoring
 
 ## Context: Progenitor System
-- **Deployment**: Docker containers with docker-compose
+- **Deployment**: Docker containers with Docker Compose
 - **Services**: Backend (FastAPI), Frontend (React/Vite), Progenitor Agent
 - **Dependencies**: LiteLLM proxy, PostgreSQL (future), Redis (future)
 - **Configuration**: Environment variables + JSON config files
@@ -34,8 +34,8 @@ services:
 
 ### Key Files
 - `Dockerfile` - Container image definition
-- `docker-compose.yml` - Production orchestration
-- `docker-compose.litellm.yml` - LiteLLM proxy service
+- `docker/docker-compose.progenitor.yml` - Main stack orchestration
+- `docker/docker-compose.litellm.yml` - LiteLLM stack
 - `.env.example` - Environment variable template
 - `requirements.txt` - Python dependencies
 - `app/frontend/package.json` - Node.js dependencies
@@ -44,8 +44,8 @@ services:
 
 ### Local Development
 ```bash
-# Start all services in dev mode
-docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Start main stack
+docker compose -f docker/docker-compose.progenitor.yml up --build -d
 
 # Or use VS Code tasks
 # Task: "Start All (dev)"
@@ -54,16 +54,16 @@ docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
 ### Production Deployment
 ```bash
 # Build images
-docker-compose build
+docker compose -f docker/docker-compose.progenitor.yml build
 
 # Start services
-docker-compose up -d
+docker compose -f docker/docker-compose.progenitor.yml up -d
 
 # Check status
-docker-compose ps
+docker compose -f docker/docker-compose.progenitor.yml ps
 
 # View logs
-docker-compose logs -f progenitor
+docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 ```
 
 ### Health Checks
@@ -118,7 +118,7 @@ repos:
         entry: pytest
         language: system
         pass_filenames: false
-      
+
       - id: ruff
         name: ruff
         entry: ruff check
@@ -186,13 +186,13 @@ grep -c INFO logs/progenitor.log
 - Memory usage
 - CPU usage
 - Active connections
-- Queue depths (IPC queues)
+- IPC connection and request health
 
 ### Health Checks
 Implement health check endpoints:
 - `/health` - Basic health
-- `/health/ready` - Ready to serve traffic
-- `/health/live` - Service is alive
+- `/ready` - Ready to serve traffic
+- `/live` - Service is alive
 
 ## Backup & Recovery
 
@@ -208,10 +208,10 @@ tar -xzf backup-20260212.tar.gz
 ### Database Backup (Future)
 ```bash
 # PostgreSQL backup
-docker-compose exec postgres pg_dump -U user dbname > backup.sql
+docker compose -f docker/docker-compose.progenitor.yml exec postgres pg_dump -U user dbname > backup.sql
 
 # Restore
-docker-compose exec -T postgres psql -U user dbname < backup.sql
+docker compose -f docker/docker-compose.progenitor.yml exec -T postgres psql -U user dbname < backup.sql
 ```
 
 ## Performance Optimization
@@ -241,13 +241,13 @@ docker-compose exec -T postgres psql -U user dbname < backup.sql
 #### Container won't start
 ```bash
 # Check logs
-docker-compose logs service_name
+docker compose -f docker/docker-compose.progenitor.yml logs service_name
 
 # Check container status
-docker-compose ps
+docker compose -f docker/docker-compose.progenitor.yml ps
 
 # Rebuild image
-docker-compose build --no-cache service_name
+docker compose -f docker/docker-compose.progenitor.yml build --no-cache service_name
 ```
 
 #### Port already in use
@@ -256,7 +256,7 @@ docker-compose build --no-cache service_name
 netstat -ano | findstr :8000  # Windows
 lsof -i :8000                  # Linux/Mac
 
-# Change port in docker-compose.yml
+# Change port in docker/docker-compose.progenitor.yml
 ```
 
 #### Out of disk space
@@ -273,8 +273,8 @@ find logs/ -name "*.log" -mtime +30 -delete
 # Check .env file exists
 test -f .env && echo "Found" || echo "Missing"
 
-# Verify docker-compose loads it
-docker-compose config
+# Verify compose loads it
+docker compose -f docker/docker-compose.progenitor.yml config
 ```
 
 ## Security Checklist
@@ -298,7 +298,7 @@ docker-compose config
 - Progenitor: Single instance (state management), future: leader election
 
 ### Vertical Scaling
-- Increase container resources in docker-compose.yml
+- Increase container resources in docker/docker-compose.progenitor.yml
 - Monitor memory usage and adjust limits
 - Optimize database queries
 
