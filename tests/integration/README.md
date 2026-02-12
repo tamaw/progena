@@ -16,12 +16,12 @@ Start Progenitor:
 # Option 1: Start all services (recommended)
 # Use VS Code Task: "Start All (dev)"
 
-# Option 2: Start backend only (which starts Progenitor)
-cd app/backend
-python -m app.backend.main
+# Option 2: Start Progenitor + backend manually
+python -m app.progenitor.main
+python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
 
-# Option 3: Use docker-compose
-docker-compose up
+# Option 3: Use Docker stack
+docker compose -f docker/docker-compose.progenitor.yml up --build -d
 ```
 
 Verify Progenitor is running:
@@ -37,7 +37,7 @@ python tests/integration/helpers.py
 - **Schedule**: Scheduled task creation
 - **Build**: Agent building workflow discussion
 - **System Tool**: System tool invocation
-- **MCP Tool**: MCP tool interaction  
+- **MCP Tool**: MCP tool interaction
 - **Multi-turn**: Conversation state persistence
 
 ## Running Tests

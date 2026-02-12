@@ -41,10 +41,10 @@ async def test_feature_name():
     # Arrange: Set up test data and mocks
     mock_client = AsyncMock()
     mock_client.method.return_value = {"result": "success"}
-    
+
     # Act: Execute the code under test
     result = await function_under_test(mock_client)
-    
+
     # Assert: Verify the results
     assert result["status"] == "success"
     mock_client.method.assert_called_once()
@@ -141,9 +141,9 @@ Test component interactions:
 async def test_node_updates_state_manager():
     state_manager = StateManager("test_data")
     node = create_node(state_manager)
-    
+
     result = await node({"messages": []})
-    
+
     # Verify state manager was called
     assert state_manager.update_called
 ```
@@ -153,13 +153,14 @@ Test HTTP endpoints:
 ```python
 from fastapi.testclient import TestClient
 
-def test_chat_completion_endpoint():
+def test_responses_endpoint():
     client = TestClient(app)
-    response = client.post("/v1/chat/completions", json={
-        "messages": [{"role": "user", "content": "test"}]
+    response = client.post("/v1/responses", json={
+        "model": "progenitor-v1",
+        "input": "test"
     })
     assert response.status_code == 200
-    assert "choices" in response.json()
+    assert "output" in response.json()
 ```
 
 ### Parametrized Tests
@@ -206,12 +207,12 @@ Don't obsess over 100% coverage on:
 async def test_decide_node_calls_llm():
     mock_llm = AsyncMock()
     mock_state_manager = AsyncMock()
-    
+
     node = create_decide_node(mock_state_manager, mock_llm)
     state = {"messages": [{"role": "user", "content": "test"}]}
-    
+
     result = await node(state)
-    
+
     assert "decision" in result
     mock_llm.decide.assert_called_once()
 ```
@@ -221,13 +222,13 @@ async def test_decide_node_calls_llm():
 async def test_state_manager_persists_changes():
     temp_dir = tmp_path / "test_data"
     manager = StateManager(str(temp_dir))
-    
+
     await manager.update_state({"key": "value"})
     await manager.save_state()
-    
+
     # Verify file exists
     assert (temp_dir / "current_state.json").exists()
-    
+
     # Verify content
     loaded = await manager.load_state()
     assert loaded["key"] == "value"
@@ -238,11 +239,11 @@ async def test_state_manager_persists_changes():
 async def test_node_handles_llm_failure():
     mock_llm = AsyncMock()
     mock_llm.decide.side_effect = Exception("LLM error")
-    
+
     node = create_decide_node(mock_state_manager, mock_llm)
-    
+
     result = await node({"messages": []})
-    
+
     # Should handle gracefully
     assert "error" in result or result.get("action") == "fallback"
 ```

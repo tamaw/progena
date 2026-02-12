@@ -10,14 +10,14 @@ The `test_mcp_tool` integration test sends a request through IPC asking the Prog
 
 **Test Request:**
 ```
-Search the web for 'Python 3.13 new features' using MCP tools. 
+Search the web for 'Python 3.13 new features' using MCP tools.
 If MCP is not available, just say so.
 ```
 
 ## Result
 
-**Response Time:** 9.14 seconds  
-**Success:** True  
+**Response Time:** 9.14 seconds
+**Success:** True
 **MCP Status:** Not Available
 
 **Agent Response:**
@@ -25,7 +25,7 @@ If MCP is not available, just say so.
 MCP tools are **not available** in this environment, so I can't perform a live web search.
 
 If you want, I can still:
-- Summarize **known Python 3.13 features** based on my training data, or  
+- Summarize **known Python 3.13 features** based on my training data, or
 - Show you **how to search for this using MCP** in an environment where it's enabled.
 
 Just tell me how you'd like to proceed.
@@ -46,8 +46,8 @@ Just tell me how you'd like to proceed.
 
 1. **Missing Authentication**
    - LiteLLM's MCP endpoint (`http://localhost:4000/mcp/`) requires authentication
-   - `LITELLM_MASTER_KEY` is set to empty string in docker-compose
-   - `JINA_API_KEY` is set to empty string in docker-compose
+   - `LITELLM_MASTER_KEY` is set to empty string in `docker/docker-compose.litellm.yml`
+   - `JINA_API_KEY` is set to empty string in `docker/docker-compose.litellm.yml`
 
 2. **Configuration Issue**
    - MCP is configured in `litellm-config.yaml`:
@@ -73,7 +73,7 @@ Just tell me how you'd like to proceed.
 # BEFORE
 base_url=os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:4000/mcp"),
 
-# AFTER  
+# AFTER
 base_url=os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:4000/mcp/"),
 ```
 
@@ -89,14 +89,14 @@ See [`MCP_SETUP.md`](./MCP_SETUP.md) for detailed instructions.
 **Quick summary:**
 
 1. Get a Jina API key from https://jina.ai/
-2. Edit `docker-compose.litellm.yml`:
+2. Edit `docker/docker-compose.litellm.yml`:
    ```yaml
    JINA_API_KEY: "your-jina-key-here"
    LITELLM_MASTER_KEY: "sk-your-master-key-here"
    ```
 3. Restart LiteLLM:
    ```bash
-   docker-compose -f docker-compose.litellm.yml restart litellm
+   docker compose -f docker/docker-compose.litellm.yml restart litellm
    ```
 4. Set Progenitor env var:
    ```powershell
@@ -116,13 +116,13 @@ Once MCP is properly configured, the test should show:
 
 If MCP setup is not desired, the integration test suite already covers:
 
-✅ **Chat** - Basic conversation  
-✅ **Streaming** - Chunked responses  
-✅ **Schedule** - Task scheduling  
-✅ **Build** - Agent building workflow  
-✅ **System Tools** - list_tools functionality  
-✅ **Multi-turn** - Conversation memory  
-⚠️ **MCP** - Requires external API keys  
+✅ **Chat** - Basic conversation
+✅ **Streaming** - Chunked responses
+✅ **Schedule** - Task scheduling
+✅ **Build** - Agent building workflow
+✅ **System Tools** - list_tools functionality
+✅ **Multi-turn** - Conversation memory
+⚠️ **MCP** - Requires external API keys
 
 Consider using **A2A agents** instead (localhost, no API keys needed):
 ```python
@@ -133,6 +133,6 @@ message = "Tell me the current BTC price using the BTC Price Agent"
 
 The MCP integration test is **working as designed** - it correctly detects that MCP is not available and handles it gracefully. To actually test MCP tool usage, the LiteLLM configuration needs to be completed with valid API keys.
 
-**Test Status:** ✅ PASS  
-**MCP Status:** ⚠️ NOT CONFIGURED  
+**Test Status:** ✅ PASS
+**MCP Status:** ⚠️ NOT CONFIGURED
 **Action Required:** Configure API keys or skip MCP testing

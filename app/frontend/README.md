@@ -79,10 +79,11 @@ src/
 ## API Endpoints Used
 
 - `GET /health` - Server health check
-- `GET /health/detailed` - Detailed status
-- `POST /v1/chat/completions` - Chat API (streaming)
+- `GET /ready` - Readiness status
+- `GET /live` - Liveness status
+- `POST /v1/responses` - Primary chat API (streaming/non-streaming)
 - `GET /api/ui/events` - SSE for real-time updates
-- `GET /metrics/json` - Metrics data
+- `GET /v1/session` - Session data
 
 ## VS Code Tasks
 

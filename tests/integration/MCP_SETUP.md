@@ -15,7 +15,7 @@ litellm/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py", line 120,
 
 ## Root Cause
 
-In `docker-compose.litellm.yml`, these environment variables are set to empty strings:
+In `docker/docker-compose.litellm.yml`, these environment variables are set to empty strings:
 
 ```yaml
 LITELLM_MASTER_KEY: ""
@@ -42,7 +42,7 @@ But the `JINA_API_KEY` environment variable is empty.
 ## To Fix
 
 1. **Get a Jina API key** from https://jina.ai/
-2. **Set the key in docker-compose.litellm.yml:**
+2. **Set the key in `docker/docker-compose.litellm.yml`:**
    ```yaml
    JINA_API_KEY: "your-api-key-here"
    ```
@@ -52,7 +52,7 @@ But the `JINA_API_KEY` environment variable is empty.
    ```
 4. **Restart LiteLLM:**
    ```bash
-   docker-compose -f docker-compose.litellm.yml restart litellm
+  docker compose -f docker/docker-compose.litellm.yml restart litellm
    ```
 5. **Update Progenitor config:**
    ```bash
