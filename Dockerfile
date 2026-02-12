@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code (including app.chat_server and app.progenitor)
 COPY app/ ./app/
 COPY config/ ./config/
-COPY data/prompts/ ./data/prompts/
+COPY prompts/ ./prompts/
 COPY scripts/ ./scripts/
 
 # Create directories for mounted volumes

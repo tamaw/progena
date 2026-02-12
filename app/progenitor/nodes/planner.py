@@ -909,8 +909,8 @@ async def _seed_spec_doc_from_template(
     # Determine path to seed template
     # Try project-relative path first
     seed_paths = [
-        Path(f"data/prompts/{template_name}"),
-        Path(__file__).parent.parent.parent.parent / f"data/prompts/{template_name}",
+        Path(f"prompts/{template_name}"),
+        Path(__file__).parent.parent.parent.parent / f"prompts/{template_name}",
     ]
 
     template_content = ""

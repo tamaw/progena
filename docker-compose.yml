@@ -50,7 +50,7 @@ services:
       TZ: UTC
     volumes:
       - ./data/state:/app/data/state
-      - ./data/prompts:/app/data/prompts:ro
+      - ./prompts:/app/prompts:ro
       - ./logs:/app/logs
       - ./worktrees:/app/worktrees
       - ./config:/app/config:ro

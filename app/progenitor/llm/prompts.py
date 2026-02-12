@@ -1,30 +1,66 @@
 """
 Prompt Templates for Progenitor.
 
-Loads prompts from data/prompts/ directory.
+Loads prompts from prompts/ directory.
 All prompts are stored as markdown files for easy editing.
 """
 
 import json
+import os
+import logging
 from pathlib import Path
 from typing import Any
 
-# Default prompts directory (relative to project root)
-# Path: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
-DEFAULT_PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "data" / "prompts"
+logger = logging.getLogger(__name__)
+
+# Project root: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_PROMPTS_DIR = PROJECT_ROOT / "prompts"
+LEGACY_PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
+
+
+def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
+    """Resolve prompt directory from explicit override, env, and defaults.
+
+    Resolution order:
+    1. Explicit ``prompts_dir`` argument (always honored)
+    2. ``PROGENITOR_PROMPTS_DIR`` environment variable
+    3. Project default ``<root>/prompts``
+    4. Legacy fallback ``<root>/data/prompts`` (for backward compatibility)
+    """
+    if prompts_dir is not None:
+        return Path(prompts_dir).expanduser().resolve()
+
+    env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
+    if env_prompts_dir:
+        resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
+        if resolved_env_dir.exists():
+            return resolved_env_dir
+        logger.warning(
+            "PROGENITOR_PROMPTS_DIR points to missing directory: %s. Falling back to defaults.",
+            resolved_env_dir,
+        )
+
+    if DEFAULT_PROMPTS_DIR.exists():
+        return DEFAULT_PROMPTS_DIR
+
+    if LEGACY_PROMPTS_DIR.exists():
+        return LEGACY_PROMPTS_DIR
+
+    return DEFAULT_PROMPTS_DIR
 
 
 class PromptTemplates:
     """Manages prompt templates for Progenitor.
 
-    All prompts are loaded from data/prompts/*.md files.
+    All prompts are loaded from prompts/*.md files.
     """
 
     VERSION = "1.0.0"
 
-    def __init__(self, prompts_dir: Path | None = None):
+    def __init__(self, prompts_dir: Path | str | None = None):
         """Initialize with optional custom prompts directory."""
-        self.prompts_dir = Path(prompts_dir) if prompts_dir else DEFAULT_PROMPTS_DIR
+        self.prompts_dir = resolve_prompts_dir(prompts_dir)
 
     def _load_prompt(self, filename: str) -> str:
         """Load a prompt from file.
@@ -40,16 +76,21 @@ class PromptTemplates:
         """
         prompt_file = self.prompts_dir / filename
         if not prompt_file.exists():
+            searched_dirs = [str(self.prompts_dir)]
+            if self.prompts_dir != DEFAULT_PROMPTS_DIR:
+                searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
+            if self.prompts_dir != LEGACY_PROMPTS_DIR:
+                searched_dirs.append(str(LEGACY_PROMPTS_DIR))
             raise FileNotFoundError(
                 f"Prompt file not found: {prompt_file}. "
-                f"Ensure data/prompts/{filename} exists."
+                f"Ensure prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
             )
         return prompt_file.read_text(encoding="utf-8")
 
     def get(self, filename: str, **replacements: str) -> str:
         """Load a prompt template and apply optional replacements.
 
-        Generic loader for any prompt file in data/prompts/.
+        Generic loader for any prompt file in prompts/.
         Template variables use {placeholder} syntax.
 
         Args:

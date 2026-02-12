@@ -106,9 +106,9 @@ worktrees/           # Git worktrees for builds
 
 ### Prompt Files (Editable)
 
-- `data/prompts/genesis.md` - System prompt
-- `data/prompts/decide.md` - Decision routing
-- `data/prompts/build.md` - Build specifications
+- `prompts/genesis.md` - System prompt
+- `prompts/decide.md` - Decision routing
+- `prompts/build.md` - Build specifications
 
 ### Log Files
 
@@ -177,6 +177,7 @@ See [docs/](docs/) for detailed documentation:
 - [ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) - Visual architecture
 - [BACKEND.md](docs/BACKEND.md) - Backend API
 - [DOCKER.md](docs/DOCKER.md) - Docker deployment
+- [CONTAINER_RUNNERS.md](docs/CONTAINER_RUNNERS.md) - Isolated A2A/MCP runner containers
 
 ## Development
 

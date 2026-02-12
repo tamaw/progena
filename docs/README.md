@@ -19,6 +19,7 @@
 
 - **[BACKEND.md](BACKEND.md)** - Backend API documentation and endpoints
 - **[DOCKER.md](DOCKER.md)** - Docker deployment guide and container configuration
+- **[CONTAINER_RUNNERS.md](CONTAINER_RUNNERS.md)** - Containerized A2A/MCP runtime isolation and runner contract
 
 ## Validation
 

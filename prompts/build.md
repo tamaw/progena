@@ -68,7 +68,7 @@ Each agent is **self-contained** - there is no base class to inherit from. The a
    - `get_agent_card()` method
    - `main()` function that reads JSON from stdin and writes to stdout
 
-See `data/prompts/agent_structure.md` for complete HTTP endpoint specifications and code examples.
+See `prompts/agent_structure.md` for complete HTTP endpoint specifications and code examples.
 
 ## Tool Implementation Requirements (FastMCP)
 
@@ -97,7 +97,7 @@ Each tool uses FastMCP. The server.py file MUST:
        main()
    ```
 
-See `data/prompts/tool_structure.md` for complete FastMCP specifications and code examples.
+See `prompts/tool_structure.md` for complete FastMCP specifications and code examples.
 
 ## Requirements
 - Clear name and description

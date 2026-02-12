@@ -14,6 +14,11 @@ from typing import Any
 import httpx
 
 from ..config import MCPConfig
+from ..runtime.container_spawner import (
+    ContainerMount,
+    ContainerSpawner,
+    RunnerSpawnConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +134,10 @@ def _validate_command(command: str | list[str]) -> list[str]:
 class MCPClient:
     """Client for calling MCP servers/tools."""
 
-    def __init__(self):
+    def __init__(self, project_root: Path | None = None):
         self._processes: dict[str, asyncio.subprocess.Process] = {}
+        self.project_root = Path(project_root) if project_root else Path.cwd()
+        self.container_spawner = ContainerSpawner(self.project_root)
 
     async def call_tool(
         self,
@@ -170,20 +177,50 @@ class MCPClient:
         # Safely parse and validate command (prevents command injection)
         cmd_parts = _validate_command(command)
 
-        # Run the MCP server
-        process = await asyncio.create_subprocess_exec(
-            *cmd_parts,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        process: asyncio.subprocess.Process
+        handle = None
+
+        if self.container_spawner.enabled and not tool_config.get("disable_container", False):
+            mounts = [
+                ContainerMount(
+                    source=mount.get("source", ""),
+                    target=mount.get("target", ""),
+                    read_only=bool(mount.get("read_only", False)),
+                )
+                for mount in tool_config.get("mounts", [])
+                if mount.get("source") and mount.get("target")
+            ]
+            spawn_config = RunnerSpawnConfig(
+                name=tool_config.get("name", "mcp-tool"),
+                mode="mcp",
+                transport="stdio",
+                command=cmd_parts,
+                timeout_seconds=float(tool_config.get("timeout", 30)),
+                env_allowlist=tool_config.get("env_allowlist", []),
+                env=tool_config.get("env", {}),
+                network=tool_config.get("network", "bridge"),
+                mounts=mounts,
+            )
+            handle = await self.container_spawner.spawn_mcp(spawn_config)
+            process = handle.process
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd_parts,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
         # Send request and get response
         request_bytes = json.dumps(request).encode() + b"\n"
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(input=request_bytes),
-            timeout=30
-        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=request_bytes),
+                timeout=float(tool_config.get("timeout", 30)),
+            )
+        finally:
+            if handle is not None:
+                await self.container_spawner.stop(handle)
 
         if process.returncode != 0:
             return {
