@@ -44,6 +44,18 @@ class ConversationCompressor:
         """
         self._llm_client = llm_client
         self._max_summary_tokens = max_summary_tokens
+        try:
+            self._genesis_prompt = _prompts.get_genesis_prompt().strip()
+        except Exception:
+            self._genesis_prompt = ""
+
+    def _is_genesis_message(self, message: ConversationMessage) -> bool:
+        """Detect genesis bootstrap prompt messages in history."""
+        return (
+            message.role == "system"
+            and bool(self._genesis_prompt)
+            and message.content.strip() == self._genesis_prompt
+        )
 
     async def compress(
         self,
@@ -59,12 +71,14 @@ class ConversationCompressor:
         Returns:
             Compressed message list with summary + recent messages.
         """
-        if len(messages) <= keep_recent:
-            return messages
+        filtered_messages = [m for m in messages if not self._is_genesis_message(m)]
+
+        if len(filtered_messages) <= keep_recent:
+            return filtered_messages
 
         # Split into old and recent
-        old_messages = messages[:-keep_recent]
-        recent_messages = messages[-keep_recent:]
+        old_messages = filtered_messages[:-keep_recent]
+        recent_messages = filtered_messages[-keep_recent:]
 
         logger.info(
             "Compressing conversation: %d old messages into summary",

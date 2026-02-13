@@ -13,21 +13,21 @@ async def ask_about_mcp():
     """Ask agent about MCP tools."""
     client = IPCClient()
     await client.connect()
-    
+
     print("Asking: What MCP tools are available?\n")
     response_parts = []
-    
+
     async for chunk in client.send_message_stream("What MCP tools do you have available? List them."):
         if isinstance(chunk, dict):
             response_parts.append(chunk.get("content", ""))
         else:
             response_parts.append(str(chunk))
-    
+
     response = "".join(response_parts)
     print("Response:")
     print(response)
-    
-    await client.close()
+
+    await client.disconnect()
 
 
 if __name__ == "__main__":

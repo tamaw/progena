@@ -23,9 +23,9 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..llm.prompts import PromptTemplates
 from .scheduler import Scheduler
 from .time_utils import utcnow, utcnow_isoformat
-from ..llm.prompts import PromptTemplates
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig

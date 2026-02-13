@@ -157,10 +157,10 @@ async def main():
     """Run the mock server."""
     server = MockProgenitorServer()
     await server.start()
-    
+
     logger.info("Mock Progenitor IPC server ready for testing")
     logger.info("Press Ctrl+C to stop")
-    
+
     try:
         await server.serve_forever()
     except KeyboardInterrupt:

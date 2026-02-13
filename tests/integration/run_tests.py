@@ -35,16 +35,16 @@ async def check_progenitor() -> bool:
     if await is_progenitor_running():
         logger.info("✓ Progenitor is running")
         return True
-    
+
     logger.warning("Progenitor is not running")
     logger.info("Please start Progenitor before running integration tests:")
     logger.info("  python -m app.progenitor.main")
     logger.info("\nWaiting 30 seconds for Progenitor to start...")
-    
+
     if await wait_for_progenitor(timeout=30.0):
         logger.info("✓ Progenitor is now running")
         return True
-    
+
     logger.error("✗ Progenitor did not start in time")
     return False
 
@@ -52,14 +52,14 @@ async def check_progenitor() -> bool:
 def run_pytest() -> int:
     """Run pytest on integration tests."""
     import subprocess
-    
+
     logger.info("Running integration tests...")
-    
+
     result = subprocess.run(
         ["pytest", "tests/integration/test_live_ipc.py", "-v", "-m", "integration"],
         cwd=PROJECT_ROOT,
     )
-    
+
     return result.returncode
 
 
@@ -68,27 +68,27 @@ def main() -> int:
     logger.info("=" * 60)
     logger.info("Progenitor Integration Test Runner")
     logger.info("=" * 60)
-    
+
     # Check Progenitor
     if not asyncio.run(check_progenitor()):
         return 1
-    
+
     # Run tests
     logger.info("")
     exit_code = run_pytest()
-    
+
     # Show summary
     logger.info("")
     results_dir = Path(__file__).parent / "results"
     print_results_summary(results_dir)
-    
+
     # Cleanup reminder
     logger.info("")
     logger.info("=" * 60)
     logger.info("Remember to stop Progenitor when done:")
     logger.info("  pwsh tests/integration/cleanup.ps1")
     logger.info("=" * 60)
-    
+
     return exit_code
 
 

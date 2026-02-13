@@ -234,7 +234,6 @@ class CopilotCLI:
 
     async def _get_diff(self, worktree_path: Path) -> str:
         """Get git diff for the worktree."""
-        import asyncio
 
         try:
             # Try staged diff first
@@ -265,13 +264,12 @@ class CopilotCLI:
             )
             return stdout.decode() if stdout else ""
 
-        except (OSError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError) as e:
             logger.debug("Failed to get worktree diff for %s: %s", worktree_path, e)
             return ""
 
     async def validate_installation(self) -> bool:
         """Check if Copilot CLI is installed and accessible."""
-        import asyncio
 
         try:
             process = await asyncio.create_subprocess_exec(

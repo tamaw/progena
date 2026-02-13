@@ -7,19 +7,29 @@ LiteLLM handles retries, provider routing, and observability upstream.
 
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from typing import Any, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel
 
 from ..config import LLMConfig, MCPConfig
 from .prompts import PromptTemplates
+from .response_models import (
+    BuildSpec,
+    DecisionResponse,
+    PlannerResponse,
+    validate_build_spec,
+    validate_decision_response,
+    validate_planner_response,
+)
 from .tokenizer import count_message_tokens
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T", bound=BaseModel)
+TModel = TypeVar("TModel", bound=BaseModel)
 
 # Context window sizes for common models (in tokens)
 MODEL_CONTEXT_WINDOWS = {
@@ -102,30 +112,15 @@ class LLMClient:
             }
         )
 
-        # TEMPORARY WORKAROUND:
-        # LiteLLM structured output has been unreliable for some providers/models.
-        # When enabled by env config, structured calls use Azure OpenAI /responses
-        # directly so JSON schema outputs remain stable. Keep LiteLLM as default path
-        # and for non-structured calls; this can be removed once LiteLLM is reliable.
-        self.azure_structured_url = (self.config.azure_structured_responses_url or "").strip() or None
-        self.azure_structured_enabled = bool(
-            self.config.azure_structured_enabled
-            and self.azure_structured_url
-            and self.config.azure_structured_api_key
+        self.structured_override_url = self._resolve_structured_override_url()
+        self.structured_override_api_key = (
+            os.getenv("PROGENITOR_AZURE_STRUCTURED_API_KEY")
+            or os.getenv("AZURE_OPENAI_API_KEY")
         )
-        self.azure_structured_client: httpx.AsyncClient | None = None
-        if self.azure_structured_enabled:
-            self.azure_structured_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(120.0),
-                headers={
-                    "Content-Type": "application/json",
-                    "api-key": str(self.config.azure_structured_api_key),
-                },
-            )
-        elif self.config.azure_structured_enabled:
-            logger.warning(
-                "Azure structured output is enabled but config is incomplete; falling back to LiteLLM for structured calls"
-            )
+        self.structured_override_model = (
+            os.getenv("PROGENITOR_AZURE_STRUCTURED_MODEL")
+            or os.getenv("AZURE_OPENAI_DEPLOYMENT_DEFAULT")
+        )
 
         # MCP context is initialized externally (startup)
         self.mcp_client: httpx.AsyncClient | None = None
@@ -136,8 +131,6 @@ class LLMClient:
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
-        if self.azure_structured_client:
-            await self.azure_structured_client.aclose()
         if self.mcp_client:
             await self.mcp_client.aclose()
 
@@ -373,30 +366,51 @@ class LLMClient:
         """Return a response_format payload for structured output."""
         return _build_json_schema_format(response_model, schema_name)
 
-    def _parse_structured_json(self, response_text: str) -> dict[str, Any]:
-        """Parse structured JSON response with a bracketed-object fallback."""
-        text = (response_text or "").strip()
-        if not text:
-            raise ValueError("Empty structured response")
+    @staticmethod
+    def _normalize_azure_base(endpoint: str) -> str:
+        endpoint = endpoint.strip()
+        parsed = urlparse(endpoint)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return endpoint.rstrip("/")
 
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start == -1 or end == -1 or end <= start:
-                raise
-            payload = json.loads(text[start:end + 1])
+    def _resolve_structured_override_url(self) -> str | None:
+        explicit_url = os.getenv("PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL")
+        if explicit_url:
+            return explicit_url
 
-        if not isinstance(payload, dict):
-            raise ValueError(f"Expected JSON object, got {type(payload).__name__}")
-        return payload
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+        if not endpoint:
+            return None
 
-    def _get_structured_model_name(self) -> str:
-        """Return model name for structured calls (Azure override if configured)."""
-        return self.config.azure_structured_model or self.model
+        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "preview")
+        base = self._normalize_azure_base(endpoint)
+        return f"{base}/openai/v1/responses?api-version={api_version}"
 
-    async def _post_azure_structured_response(
+    def _can_use_structured_override(self) -> bool:
+        return bool(
+            self.structured_override_url
+            and self.structured_override_api_key
+            and self.structured_override_model
+        )
+
+    @staticmethod
+    def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
+        if response_format.get("type") != "json_schema":
+            return response_format
+
+        json_schema = response_format.get("json_schema")
+        if not isinstance(json_schema, dict):
+            return response_format
+
+        return {
+            "type": "json_schema",
+            "name": json_schema.get("name") or "structured_output",
+            "schema": json_schema.get("schema") or {},
+            "strict": bool(json_schema.get("strict", True)),
+        }
+
+    async def _post_structured_response_override(
         self,
         input_messages: list[dict[str, Any]],
         response_format: dict[str, Any],
@@ -404,134 +418,44 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
     ) -> dict[str, Any]:
-        """Call Azure OpenAI /responses directly for structured output.
+        if not self._can_use_structured_override():
+            raise RuntimeError("Azure structured override is not configured")
 
-        TEMPORARY WORKAROUND: direct Azure path for structured calls only.
-        """
-        if not self.azure_structured_client or not self.azure_structured_url:
-            raise RuntimeError("Azure structured client is not configured")
+        override_url = self.structured_override_url
+        if not override_url:
+            raise RuntimeError("Azure structured override URL is missing")
 
         payload: dict[str, Any] = {
-            "model": self._get_structured_model_name(),
+            "model": self.structured_override_model,
             "input": input_messages,
             "max_output_tokens": max_tokens,
+            "text": {
+                "format": self._to_azure_text_format(response_format),
+            },
         }
 
-        # TEMPORARY WORKAROUND TRANSLATION:
-        # LiteLLM-style response_format uses:
-        #   {"type":"json_schema", "json_schema":{"name":...,"schema":...,"strict":...}}
-        # Azure OpenAI Responses expects text.format flattened as:
-        #   {"type":"json_schema", "name":..., "schema":..., "strict":...}
-        # Keep this translation local to the direct-Azure structured path so it
-        # can be removed once LiteLLM structured output is reliable again.
-        azure_text_format: dict[str, Any]
-        if response_format.get("type") == "json_schema" and isinstance(response_format.get("json_schema"), dict):
-            json_schema = response_format["json_schema"]
-            azure_text_format = {
-                "type": "json_schema",
-                "name": json_schema.get("name", "structured_response"),
-                "schema": json_schema.get("schema", {}),
-                "strict": bool(json_schema.get("strict", True)),
-            }
-        else:
-            azure_text_format = response_format
-
-        payload["text"] = {"format": azure_text_format}
         if include_reasoning:
             payload["reasoning"] = {"summary": "auto"}
         if self._supports_temperature():
             payload["temperature"] = temperature
 
-        try:
-            response = await self.azure_structured_client.post(self.azure_structured_url, json=payload)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as exc:
-            if self._is_temperature_unsupported(exc.response):
-                logger.debug("Azure structured call: temperature unsupported, retrying without it")
-                payload.pop("temperature", None)
-                response = await self.azure_structured_client.post(self.azure_structured_url, json=payload)
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": self.structured_override_api_key,
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0), headers=headers) as azure_client:
+            try:
+                response = await azure_client.post(override_url, json=payload)
                 response.raise_for_status()
                 return response.json()
-            raise
-
-    async def chat_structured(
-        self,
-        messages: list[dict[str, str]],
-        response_model: type[T],
-        schema_name: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        tools: list[dict[str, Any]] | None = None,
-    ) -> T:
-        """Call chat() with structured output and return validated model."""
-        response_format = self._get_json_response_format(response_model, schema_name)
-
-        if response_format.get("type") == "json_object":
-            instruction = "Return a single JSON object and nothing else (valid json)."
-            system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
-
-        if self.azure_structured_enabled:
-            input_messages = self._build_input_messages(messages, system_prompt)
-            data = await self._post_azure_structured_response(
-                input_messages=input_messages,
-                response_format=response_format,
-                include_reasoning=False,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            response_text, _reasoning = self._extract_text_and_reasoning(data)
-        else:
-            response_text = await self.chat(
-                messages=messages,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format,
-                tools=tools,
-            )
-        payload = self._parse_structured_json(response_text)
-        return response_model.model_validate(payload)
-
-    async def chat_structured_with_reasoning(
-        self,
-        messages: list[dict[str, str]],
-        response_model: type[T],
-        schema_name: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        tools: list[dict[str, Any]] | None = None,
-    ) -> tuple[T, str]:
-        """Call chat_with_reasoning() with structured output and return validated model."""
-        response_format = self._get_json_response_format(response_model, schema_name)
-
-        if response_format.get("type") == "json_object":
-            instruction = "Return a single JSON object and nothing else (valid json)."
-            system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
-
-        if self.azure_structured_enabled:
-            input_messages = self._build_input_messages(messages, system_prompt)
-            data = await self._post_azure_structured_response(
-                input_messages=input_messages,
-                response_format=response_format,
-                include_reasoning=True,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            response_text, reasoning_trace = self._extract_text_and_reasoning(data)
-        else:
-            response_text, reasoning_trace = await self.chat_with_reasoning(
-                messages=messages,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format,
-                tools=tools,
-            )
-        payload = self._parse_structured_json(response_text)
-        return response_model.model_validate(payload), reasoning_trace
+            except httpx.HTTPStatusError as exc:
+                if self._is_temperature_unsupported(exc.response):
+                    payload.pop("temperature", None)
+                    retry_response = await azure_client.post(override_url, json=payload)
+                    retry_response.raise_for_status()
+                    return retry_response.json()
+                raise
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
         """Extract response text and optional reasoning trace from /responses output.
@@ -666,6 +590,19 @@ class LLMClient:
 
         merged_tools = self._merge_tools(tools)
 
+        if (
+            response_format
+            and not merged_tools
+            and self._can_use_structured_override()
+        ):
+            return await self._post_structured_response_override(
+                input_messages=input_messages,
+                response_format=response_format,
+                include_reasoning=include_reasoning,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
         payload: dict[str, Any] = {
             "model": self.model,
             "input": input_messages,
@@ -762,6 +699,30 @@ class LLMClient:
         text, _reasoning = self._extract_text_and_reasoning(data)
         return text
 
+    async def chat_structured(
+        self,
+        messages: list[dict[str, str]],
+        response_model: type[TModel],
+        schema_name: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> TModel:
+        """Call /responses endpoint and return a validated structured model."""
+        response_format = self._get_json_response_format(response_model, schema_name)
+        response = await self.chat(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            tools=tools,
+        )
+
+        raw_data = json.loads(response)
+        return response_model.model_validate(raw_data)
+
     async def chat_with_reasoning(
         self,
         messages: list[dict[str, str]],
@@ -795,6 +756,66 @@ class LLMClient:
         response = await self.chat(messages, system_prompt, temperature, max_tokens)
         yield response
 
+    async def decide(
+        self,
+        user_input: str,
+        conversation_history: list[dict[str, str]],
+        tool_context: str,
+    ) -> dict[str, Any]:
+        """Make a routing decision for user input."""
+        system_prompt = self.prompts.get_decide_prompt(tool_context)
+        messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
+        response_format = _build_json_schema_format(DecisionResponse, "decision_response")
+
+        response = await self.chat(messages, system_prompt, temperature=0.3, response_format=response_format)
+        if not response.strip():
+            logger.warning("Empty decide response; returning default decision")
+            validated = validate_decision_response({})
+            return validated.model_dump()
+        try:
+            raw_data = json.loads(response)
+            validated = validate_decision_response(raw_data)
+            return validated.model_dump()
+        except json.JSONDecodeError:
+            preview = response.strip().replace("\n", " ")[:500]
+            logger.warning("Non-JSON decide response; preview=%s", preview)
+            start = response.find("{")
+            end = response.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    raw_data = json.loads(response[start:end + 1])
+                    validated = validate_decision_response(raw_data)
+                    return validated.model_dump()
+                except json.JSONDecodeError:
+                    pass
+            validated = validate_decision_response({})
+            return validated.model_dump()
+
+    async def plan(
+        self,
+        user_input: str,
+        decision: dict[str, Any],
+        current_backlog: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Generate work items for a task."""
+        system_prompt = self.prompts.get_planner_prompt()
+        context = f"""
+User Request: {user_input}
+
+Decision: {decision}
+
+Current Backlog: {current_backlog}
+
+Generate a list of work items to fulfill this request.
+"""
+        messages = [{"role": "user", "content": context}]
+        response_format = _build_json_schema_format(PlannerResponse, "planner_response")
+
+        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
+        raw_data = json.loads(response)
+        validated = validate_planner_response(raw_data)
+        return [item.model_dump() for item in validated.work_items]
+
     async def generate_response(
         self,
         user_input: str,
@@ -824,19 +845,10 @@ class LLMClient:
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        response_format: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate text response for a prompt."""
         messages = [{"role": "user", "content": prompt}]
-        return await self.chat(
-            messages,
-            system_prompt,
-            temperature,
-            max_tokens,
-            response_format=response_format,
-            tools=tools,
-        )
+        return await self.chat(messages, system_prompt, temperature, max_tokens)
 
     async def generate_with_reasoning(
         self,
@@ -844,19 +856,33 @@ class LLMClient:
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        response_format: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str]:
         """Generate text response and return reasoning trace when available."""
         messages = [{"role": "user", "content": prompt}]
-        return await self.chat_with_reasoning(
-            messages,
-            system_prompt,
-            temperature,
-            max_tokens,
-            response_format=response_format,
-            tools=tools,
-        )
+        return await self.chat_with_reasoning(messages, system_prompt, temperature, max_tokens)
+
+    async def generate_build_spec(
+        self,
+        item_type: str,
+        description: str,
+        capabilities: list[str],
+    ) -> dict[str, Any]:
+        """Generate a specification for building an agent or MCP server."""
+        system_prompt = self.prompts.get_build_prompt(item_type)
+        context = f"""
+Build Type: {item_type}
+Description: {description}
+Required Capabilities: {', '.join(capabilities)}
+
+Generate a detailed specification for building this component.
+"""
+        messages = [{"role": "user", "content": context}]
+        response_format = _build_json_schema_format(BuildSpec, "build_spec")
+
+        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
+        raw_data = json.loads(response)
+        validated = validate_build_spec(raw_data)
+        return validated.model_dump()
 
     async def complete(
         self,
@@ -864,15 +890,6 @@ class LLMClient:
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        response_format: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Complete a prompt. Alias for generate()."""
-        return await self.generate(
-            prompt,
-            system_prompt,
-            temperature,
-            max_tokens,
-            response_format=response_format,
-            tools=tools,
-        )
+        return await self.generate(prompt, system_prompt, temperature, max_tokens)

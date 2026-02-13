@@ -286,12 +286,7 @@ class IdealStateBuilder:
         response_format_fn = getattr(self.llm_client, "_get_json_response_format", None)
         if callable(response_format_fn) and not inspect.iscoroutinefunction(response_format_fn):
             response_format = response_format_fn(response_model, schema_name)
-            if inspect.isawaitable(response_format):
-                try:
-                    response_format.close()
-                except Exception:
-                    pass
-            else:
+            if not inspect.isawaitable(response_format) and isinstance(response_format, dict):
                 return response_format
         return _build_json_schema_format(response_model, schema_name)
 
