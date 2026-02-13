@@ -97,6 +97,10 @@ unfixable = []
 ]
 "scripts/**/*.py" = [
     "ARG",    # Unused arguments OK in scripts
+    "E402",   # Allow sys.path bootstrap before local imports
+]
+"tests/integration/**/*.py" = [
+    "E402",   # Allow sys.path bootstrap before local imports
 ]
 
 [tool.ruff.lint.isort]

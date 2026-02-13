@@ -10,8 +10,6 @@ Nodes return partial state updates (dicts with subset of keys) rather than
 full ProgenitorState objects. LangGraph merges these into the full state.
 """
 
-from .types import NodeFactory, NodeFunction, NodeStateUpdate
-
 # Submodules
 from . import (
     act,
@@ -60,6 +58,7 @@ from .errors import (
     ToolError,
     ValidationError,
 )
+from .types import NodeFactory, NodeFunction, NodeStateUpdate
 
 # CQ-006: Standard type aliases for node functions
 

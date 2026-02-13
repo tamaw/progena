@@ -23,6 +23,9 @@ Progenitor is an always-on agent that:
 ### Environment Setup
 
 ```bash
+# Activate venv (Windows)
+& .\.venv\Scripts\Activate.ps1
+
 # Set your LiteLLM master key
 export LITELLM_MASTER_KEY=your_key_here
 
@@ -55,13 +58,13 @@ Open `http://localhost:5173` for the UI (proxies to backend automatically).
 
 ```bash
 # Build and run
-docker-compose up -d
+docker compose -f docker/docker-compose.progenitor.yml up --build -d
 
 # View logs
-docker-compose logs -f progenitor
+docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 
 # Stop
-docker-compose down
+docker compose -f docker/docker-compose.progenitor.yml down
 ```
 
 ## Architecture
@@ -80,7 +83,8 @@ CycleLimit → (PickNext | Idle)
 app/
   progenitor/
     main.py          # Service entrypoint
-    graph.py         # LangGraph topology
+    graph_outer_loop.py  # Outer loop topology
+    graph_inner_loop.py  # Inner loop topology
     llm/             # OpenAI wrapper + prompts
     tools/           # Copilot, git, MCP clients
     runtime/         # Loop, scheduler, time
@@ -92,7 +96,8 @@ app/
 .env.example         # Example environment configuration
 data/
   state/             # Persisted state (JSON)
-  prompts/           # Editable prompt templates
+  sessions/          # Session persistence
+  attachments/       # Uploaded file cache/data
 logs/                # Append-only logs (JSONL)
 scripts/             # CLI utilities
 worktrees/           # Git worktrees for builds
@@ -114,7 +119,7 @@ worktrees/           # Git worktrees for builds
 
 - `logs/conversation.jsonl` - All user/assistant messages
 - `logs/decisions.jsonl` - Routing decisions
-- `logs/copilot_calls.jsonl` - Copilot CLI invocations
+- `logs/acp_calls.jsonl` - Copilot ACP invocations
 - `logs/validation.jsonl` - Validation results
 - `logs/schedule.jsonl` - Schedule events
 

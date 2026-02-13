@@ -5,10 +5,10 @@ Fast path: keyword match on registered tools -> execute tool -> LLM responds.
 Slow path: LLM decides (with full tool context) -> route to system_tool/a2a/mcp/build -> execute -> LLM responds.
 """
 
+import inspect
 import json
 import logging
 import re
-import inspect
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, cast
 
@@ -38,6 +38,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _prompts = PromptTemplates()
+
+try:
+    _GENESIS_PROMPT = _prompts.get_genesis_prompt().strip()
+except Exception:
+    _GENESIS_PROMPT = ""
+
+
+def _is_genesis_message(role: str, content: str) -> bool:
+    """Return True when a message is the genesis bootstrap prompt."""
+    return role == "system" and bool(_GENESIS_PROMPT) and content.strip() == _GENESIS_PROMPT
+
+
+def _compose_user_response_system_prompt(extra_prompt: str | None = None) -> str | None:
+    """Compose system prompt for user-facing responses with genesis first."""
+    base = _GENESIS_PROMPT
+    extra = (extra_prompt or "").strip()
+
+    if base and extra:
+        return f"{base}\n\n{extra}"
+    if base:
+        return base
+    return extra or None
 
 # ---------------------------------------------------------------------------
 # Build-related helpers (kept here as they are decide-node concerns, not tools)
@@ -113,12 +135,19 @@ async def _request_decision_data(
     except AttributeError:
         has_real_chat_structured = False
 
-    if not has_real_chat_structured and hasattr(llm_client, "decide") and callable(getattr(llm_client, "decide")):
-        decision = await llm_client.decide(
+    fallback_decide = getattr(llm_client, "decide", None)
+    if not has_real_chat_structured and callable(fallback_decide):
+        fallback_result = fallback_decide(
             user_input=user_input,
             conversation_history=conversation_history,
             tool_context=tool_context,
         )
+        if inspect.isawaitable(fallback_result):
+            decision = await fallback_result
+        else:
+            decision = fallback_result
+        if not isinstance(decision, dict):
+            return {}
         logger.info(
             "DECIDE TEST: action=%s confidence=%s targets=%s",
             decision.get("action"),
@@ -329,6 +358,8 @@ def _extract_history(
             raw_role = msg.get("role", "user")
             role = raw_role if raw_role in allowed_roles else "user"
             content = msg.get("content", "")
+            if _is_genesis_message(role, content):
+                continue
             if (
                 exclude_latest_user_input is not None
                 and idx == last_index
@@ -341,6 +372,8 @@ def _extract_history(
             raw_role = msg.role
             role = raw_role if raw_role in allowed_roles else "user"
             content = msg.content
+            if _is_genesis_message(role, content):
+                continue
             if (
                 exclude_latest_user_input is not None
                 and idx == last_index
@@ -375,11 +408,11 @@ async def _respond_with_context(
         exclude_latest_user_input=user_input,
     )
 
-    system_prompt = _prompts.get(
+    system_prompt = _compose_user_response_system_prompt(_prompts.get(
         "decide.tool_response_system.md",
         context_label=context_label,
         context_data=context_data,
-    )
+    ))
 
     messages = history + [{"role": "user", "content": user_input}]
 
@@ -542,10 +575,15 @@ def create_node(
             messages: list[ConversationMessage] = []
             for msg in raw_messages:
                 if isinstance(msg, ConversationMessage):
+                    if _is_genesis_message(msg.role, msg.content):
+                        continue
                     messages.append(msg)
                 elif isinstance(msg, dict):
                     try:
-                        messages.append(ConversationMessage(**msg))
+                        parsed = ConversationMessage(**msg)
+                        if _is_genesis_message(parsed.role, parsed.content):
+                            continue
+                        messages.append(parsed)
                     except Exception:
                         continue
             return messages
@@ -716,6 +754,7 @@ def create_node(
                 try:
                     async for token in llm_client.chat_stream(
                         messages=msgs,
+                        system_prompt=_compose_user_response_system_prompt(),
                         temperature=0.7,
                     ):
                         chunk_count += 1
@@ -743,6 +782,23 @@ def create_node(
                 loop._response_was_streamed = True
             elif action == DecisionAction.ANSWER_DIRECTLY:
                 direct_resp = user_response or decision_data.get("direct_response")
+                msgs = _extract_history(
+                    state.get("messages", []),
+                    limit=10,
+                    memory_context=memory_context,
+                    exclude_latest_user_input=user_input,
+                )
+                msgs.append({"role": "user", "content": user_input})
+                try:
+                    generated = await llm_client.chat(
+                        messages=msgs,
+                        system_prompt=_compose_user_response_system_prompt(),
+                        temperature=0.7,
+                    )
+                    if isinstance(generated, str) and generated.strip():
+                        direct_resp = generated
+                except Exception as e:
+                    logger.warning("Failed to generate direct response with genesis prompt: %s", e)
 
             decision = Decision(
                 action=action,

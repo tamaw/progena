@@ -8,8 +8,8 @@ Handles:
 - User communication tools (say_to_user, ask_user)
 """
 
-import json
 import inspect
+import json
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -50,12 +50,18 @@ async def _request_build_spec(
     except AttributeError:
         has_real_chat_structured = False
 
-    if not has_real_chat_structured and hasattr(llm_client, "generate_build_spec") and callable(getattr(llm_client, "generate_build_spec")):
-        return await llm_client.generate_build_spec(
+    fallback_generate_build_spec = getattr(llm_client, "generate_build_spec", None)
+    if not has_real_chat_structured and callable(fallback_generate_build_spec):
+        fallback_result = fallback_generate_build_spec(
             item_type=item_type,
             description=description,
             capabilities=capabilities,
         )
+        if inspect.isawaitable(fallback_result):
+            fallback_result = await fallback_result
+        if isinstance(fallback_result, dict):
+            return fallback_result
+        return {}
 
     system_prompt = llm_client.prompts.get_build_prompt(item_type)
     context = f"""

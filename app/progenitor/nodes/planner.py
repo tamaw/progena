@@ -62,12 +62,18 @@ async def _request_plan_work_items(
     except AttributeError:
         has_real_chat_structured = False
 
-    if not has_real_chat_structured and hasattr(llm_client, "plan") and callable(getattr(llm_client, "plan")):
-        return await llm_client.plan(
+    fallback_plan = getattr(llm_client, "plan", None)
+    if not has_real_chat_structured and callable(fallback_plan):
+        fallback_result = fallback_plan(
             user_input=user_input,
             decision=decision,
             current_backlog=current_backlog,
         )
+        if inspect.isawaitable(fallback_result):
+            fallback_result = await fallback_result
+        if isinstance(fallback_result, list):
+            return [item for item in fallback_result if isinstance(item, dict)]
+        return []
 
     system_prompt = _prompts.get_planner_prompt()
     context = f"""
@@ -184,11 +190,18 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
 
         try:
             # Ask LLM to plan work items
-            decision_dict = decision.model_dump() if hasattr(decision, "model_dump") else decision
+            if hasattr(decision, "model_dump"):
+                decision_dict: dict[str, Any] = decision.model_dump()
+            elif isinstance(decision, dict):
+                decision_dict = decision
+            else:
+                decision_dict = {}
+
+            user_input_for_plan = user_input or ""
 
             work_items_data = await _request_plan_work_items(
                 llm_client=llm_client,
-                user_input=user_input,
+                user_input=user_input_for_plan,
                 decision=decision_dict,
                 current_backlog=backlog_dicts,
             )

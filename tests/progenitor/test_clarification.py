@@ -397,7 +397,7 @@ NEW_ANTI_CRITERIA:
 
     def test_should_iterate_pauses_for_clarification(self):
         """Test that iteration pauses when clarification needed."""
-        from app.progenitor.graph_inner_loop import should_iterate
+        from app.progenitor.routing import should_iterate
 
         # State where clarification is needed
         state = cast(ProgenitorState, {

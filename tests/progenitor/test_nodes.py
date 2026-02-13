@@ -191,6 +191,61 @@ class TestDecideNode:
 
         assert result.get("current_decision") is None
 
+    @pytest.mark.asyncio
+    async def test_decide_answer_direct_uses_genesis_system_prompt(self):
+        """Direct user answers should be generated with genesis as system prompt."""
+        from app.progenitor.llm.prompts import PromptTemplates
+        from app.progenitor.nodes import decide
+
+        mock_llm = MagicMock()
+        mock_llm.decide = AsyncMock(return_value={
+            "action": "answer_directly",
+            "reasoning": "Simple question",
+            "requires_planning": False,
+            "target_capabilities": [],
+        })
+        mock_llm.chat = AsyncMock(return_value="Genesis-based response")
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool_context.return_value = ""
+        mock_state_manager = AsyncMock()
+
+        node = decide.create_node(mock_llm, mock_registry, mock_state_manager)
+
+        state: ProgenitorState = {
+            "current_input": "Say hi",
+            "messages": [],
+        }
+
+        result = await node(state)
+
+        decision = result.get("current_decision")
+        assert decision is not None
+        assert decision.action == DecisionAction.ANSWER_DIRECTLY
+        assert decision.direct_response == "Genesis-based response"
+
+        called_kwargs = mock_llm.chat.await_args.kwargs
+        expected_genesis = PromptTemplates().get_genesis_prompt().strip()
+        assert called_kwargs["system_prompt"] == expected_genesis
+
+    def test_extract_history_excludes_genesis_system_message(self):
+        """History extraction should not include genesis bootstrap prompt."""
+        from app.progenitor.llm.prompts import PromptTemplates
+        from app.progenitor.nodes import decide
+
+        genesis = PromptTemplates().get_genesis_prompt()
+        history = decide._extract_history(
+            [
+                {"role": "system", "content": genesis},
+                {"role": "user", "content": "hello"},
+            ],
+            limit=10,
+        )
+
+        assert len(history) == 1
+        assert history[0]["role"] == "user"
+        assert history[0]["content"] == "hello"
+
 
 class TestPickNextNode:
     """Tests for the pick_next node."""

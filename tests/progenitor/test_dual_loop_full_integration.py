@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.progenitor.config import ProgenitorConfig
-from app.progenitor.graph_inner_loop import should_iterate
 from app.progenitor.graph_outer_loop import create_progenitor_graph
+from app.progenitor.routing import should_iterate
 from app.progenitor.state.models import (
     ConversationMessage,
     ProgenitorState,

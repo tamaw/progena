@@ -85,7 +85,7 @@ class TestIterationBounds:
         current_iteration: int,
     ):
         """Iteration routing should prevent exceeding max."""
-        from app.progenitor.graph_inner_loop import should_iterate
+        from app.progenitor.routing import should_iterate
 
         state: ProgenitorState = {
             "iteration": {"current": current_iteration},

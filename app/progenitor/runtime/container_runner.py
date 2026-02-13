@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -73,25 +74,25 @@ async def _run_stdio(command: list[str], cwd: str, env: dict[str, str]) -> int:
         stderr=asyncio.subprocess.PIPE,
     )
 
-    assert process.stdin is not None
-    assert process.stdout is not None
+    stdin = process.stdin
+    stdout = process.stdout
+    assert stdin is not None
+    assert stdout is not None
 
     async def pump_stdin() -> None:
         loop = asyncio.get_event_loop()
         while True:
             chunk = await loop.run_in_executor(None, os.read, 0, 65536)
             if not chunk:
-                try:
-                    process.stdin.close()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    stdin.close()
                 return
-            process.stdin.write(chunk)
-            await process.stdin.drain()
+            stdin.write(chunk)
+            await stdin.drain()
 
     async def pump_stdout() -> None:
         while True:
-            chunk = await process.stdout.read(65536)
+            chunk = await stdout.read(65536)
             if not chunk:
                 return
             os.write(1, chunk)
@@ -125,19 +126,21 @@ async def _run_http(
         stderr=asyncio.subprocess.PIPE,
     )
 
-    assert process.stdout is not None
-    assert process.stderr is not None
+    stdout = process.stdout
+    stderr = process.stderr
+    assert stdout is not None
+    assert stderr is not None
 
     async def pump_stdout() -> None:
         while True:
-            chunk = await process.stdout.read(65536)
+            chunk = await stdout.read(65536)
             if not chunk:
                 return
             os.write(1, chunk)
 
     async def pump_stderr() -> None:
         while True:
-            chunk = await process.stderr.read(65536)
+            chunk = await stderr.read(65536)
             if not chunk:
                 return
             os.write(2, chunk)

@@ -10,8 +10,6 @@ import logging
 
 import pytest
 
-from tests.integration.helpers import is_progenitor_running
-
 logger = logging.getLogger(__name__)
 
 
@@ -35,7 +33,7 @@ def pytest_collection_modifyitems(config, items):
     """Skip integration tests if Progenitor is not running."""
     # Check if we should skip integration tests
     skip_integration = config.getoption("--skip-integration", default=False)
-    
+
     if skip_integration:
         skip_marker = pytest.mark.skip(reason="Integration tests skipped (--skip-integration)")
         for item in items:

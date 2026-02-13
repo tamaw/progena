@@ -14,12 +14,12 @@ async def check_tool_context():
     registry_path = PROJECT_ROOT / "data" / "state" / "registry.json"
     registry = ToolRegistry(registry_path=registry_path)
     await registry.load()
-    
+
     context = registry.get_tool_context()
     print("=== Tool Context ===\n")
     print(context)
     print("\n=== End Context ===")
-    
+
     # Check if primer is mentioned
     if "primer" in context.lower():
         print("\n✓ 'primer' IS in the tool context")
