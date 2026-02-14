@@ -8,7 +8,7 @@ and validated before being used in the application.
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DecisionAction(StrEnum):
@@ -126,6 +126,27 @@ class DecisionResponse(BaseModel):
         if isinstance(v, list):
             return [str(c) for c in v]
         return []
+
+    @model_validator(mode='after')
+    def validate_user_response_for_action(self):
+        """Require a non-empty user_response for non-direct actions."""
+        non_direct_actions = {
+            DecisionAction.DELEGATE_A2A.value,
+            DecisionAction.USE_MCP.value,
+            DecisionAction.BUILD_AGENT.value,
+            DecisionAction.BUILD_TOOL.value,
+            DecisionAction.UPGRADE.value,
+            DecisionAction.MIXED.value,
+        }
+
+        if self.action in non_direct_actions:
+            user_response = (self.user_response or "").strip()
+            if not user_response:
+                raise ValueError(
+                    f"user_response is required and must be non-empty when action is '{self.action}'"
+                )
+
+        return self
 
 
 class WorkItemSpec(BaseModel):

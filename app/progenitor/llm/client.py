@@ -251,6 +251,9 @@ class LLMClient:
 
     def _merge_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         """Merge caller-supplied tools with MCP tools, de-duplicated by name."""
+        if tools is not None and len(tools) == 0:
+            return []
+
         merged: list[dict[str, Any]] = []
         seen_names: set[str] = set()
 
@@ -272,19 +275,35 @@ class LLMClient:
 
         return merged
 
+    def _resolve_request_tools(
+        self,
+        tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Resolve effective tools for a request.
+
+        For structured-output requests, tools are disabled by default unless
+        explicitly provided by the caller.
+        """
+        if response_format is not None and tools is None:
+            return []
+        return self._merge_tools(tools)
+
     def _extract_tool_calls(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract tool calls from a Responses API payload.
 
         Tool calls can appear in:
         - data["output"] as {"type": "tool_call", ...}
+        - data["output"] as {"type": "function_call", ...}
         - data["output"] > message > content as tool_call items
         - data["tool_calls"] as direct list
         """
         tool_calls: list[dict[str, Any]] = []
+        tool_call_types = {"tool_call", "function_call"}
 
         # Check output array
         for item in data.get("output", []):
-            if item.get("type") == "tool_call":
+            if item.get("type") in tool_call_types:
                 tool_calls.append(item)
                 continue
 
@@ -293,7 +312,7 @@ class LLMClient:
                 content = item.get("content")
                 if isinstance(content, list):
                     for part in content:
-                        if isinstance(part, dict) and part.get("type") == "tool_call":
+                        if isinstance(part, dict) and part.get("type") in tool_call_types:
                             tool_calls.append(part)
 
         # Check top-level tool_calls
@@ -339,7 +358,7 @@ class LLMClient:
 
         request = {
             "jsonrpc": "2.0",
-            "id": tool_call.get("id") or tool_call.get("tool_call_id") or 1,
+            "id": tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id") or 1,
             "method": "tools/call",
             "params": {
                 "name": name,
@@ -475,9 +494,28 @@ class LLMClient:
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
 
+        def _append_text_candidate(candidate: Any) -> None:
+            if candidate is None:
+                return
+            if isinstance(candidate, str):
+                if candidate.strip():
+                    text_parts.append(candidate)
+                return
+            if isinstance(candidate, list):
+                for item in candidate:
+                    _append_text_candidate(item)
+                return
+            if isinstance(candidate, dict):
+                for key in ("text", "value", "content", "output_text", "refusal", "message", "parts"):
+                    if key in candidate:
+                        _append_text_candidate(candidate.get(key))
+
         # Primary text response
         if output_text := data.get("output_text"):
-            text_parts.append(str(output_text))
+            _append_text_candidate(output_text)
+
+        # Some providers return final text in top-level `text`
+        _append_text_candidate(data.get("text"))
 
         # Structured output items
         for item in data.get("output", []):
@@ -486,29 +524,33 @@ class LLMClient:
             if item_type == "message":
                 content = item.get("content", "")
                 if isinstance(content, str):
-                    text_parts.append(content)
-                elif isinstance(content, dict) and content.get("text"):
-                    text_parts.append(str(content["text"]))
+                    _append_text_candidate(content)
+                elif isinstance(content, dict):
+                    _append_text_candidate(content)
                 elif isinstance(content, list):
                     for part in content:
                         if not isinstance(part, dict):
                             continue
                         part_type = part.get("type")
                         if part_type in ("output_text", "text"):
-                            text_parts.append(part.get("text", ""))
+                            _append_text_candidate(part.get("text"))
+                            _append_text_candidate(part.get("value"))
+                            _append_text_candidate(part.get("content"))
                         elif part_type == "refusal":
-                            text_parts.append(part.get("refusal") or part.get("text", ""))
+                            _append_text_candidate(part.get("refusal") or part.get("text"))
                         elif part_type in ("reasoning", "reasoning_text", "reasoning_summary"):
                             reasoning_parts.append(part.get("text", ""))
 
             elif item_type in ("output_text", "text"):
-                text_parts.append(str(item.get("text", "")))
+                _append_text_candidate(item.get("text"))
+                _append_text_candidate(item.get("value"))
+                _append_text_candidate(item.get("content"))
 
             elif item_type in ("reasoning", "reasoning_text", "reasoning_summary"):
                 reasoning_parts.append(str(item.get("content") or item.get("text", "")))
 
             elif item_type == "refusal":
-                text_parts.append(str(item.get("refusal") or item.get("text", "")))
+                _append_text_candidate(item.get("refusal") or item.get("text"))
 
         # Top-level reasoning
         if reasoning := data.get("reasoning"):
@@ -518,7 +560,64 @@ class LLMClient:
         reasoning = "".join(reasoning_parts).strip()
 
         if not text:
-            logger.warning("Empty LLM response - keys present: %s", list(data.keys()))
+            error_payload = data.get("error")
+            status = data.get("status")
+            incomplete_details = data.get("incomplete_details")
+            truncation = data.get("truncation")
+            top_text = data.get("text")
+            output_items = data.get("output") if isinstance(data.get("output"), list) else []
+
+            output_summaries: list[dict[str, Any]] = []
+            for item in output_items[:5]:
+                if not isinstance(item, dict):
+                    output_summaries.append({"type": type(item).__name__})
+                    continue
+                content = item.get("content")
+                content_shape: Any
+                if isinstance(content, list):
+                    content_shape = [
+                        {
+                            "type": c.get("type") if isinstance(c, dict) else type(c).__name__,
+                            "keys": list(c.keys())[:8] if isinstance(c, dict) else None,
+                        }
+                        for c in content[:5]
+                    ]
+                elif isinstance(content, dict):
+                    content_shape = {"keys": list(content.keys())[:12]}
+                else:
+                    content_shape = type(content).__name__
+
+                output_summaries.append(
+                    {
+                        "type": item.get("type"),
+                        "role": item.get("role"),
+                        "status": item.get("status"),
+                        "keys": list(item.keys())[:12],
+                        "content_shape": content_shape,
+                    }
+                )
+
+            if error_payload:
+                logger.warning(
+                    "Empty LLM response with provider error - status=%s error=%s incomplete_details=%s truncation=%s keys=%s top_text=%r output_summaries=%s",
+                    status,
+                    error_payload,
+                    incomplete_details,
+                    truncation,
+                    list(data.keys()),
+                    top_text,
+                    output_summaries,
+                )
+            else:
+                logger.info(
+                    "Empty LLM response without provider error - status=%s incomplete_details=%s truncation=%s keys=%s top_text=%r output_summaries=%s",
+                    status,
+                    incomplete_details,
+                    truncation,
+                    list(data.keys()),
+                    top_text,
+                    output_summaries,
+                )
 
         return text, reasoning
 
@@ -588,7 +687,7 @@ class LLMClient:
         # Check token usage before making the call
         self._check_token_usage(input_messages)
 
-        merged_tools = self._merge_tools(tools)
+        merged_tools = self._resolve_request_tools(tools, response_format)
 
         if (
             response_format
@@ -642,23 +741,51 @@ class LLMClient:
 
         while tool_calls and tool_round < max_tool_rounds:
             logger.info("Executing %d MCP tool call(s) - round %d", len(tool_calls), tool_round + 1)
+            assistant_tool_call_items: list[dict[str, Any]] = []
             tool_messages: list[dict[str, Any]] = []
+            function_call_outputs: list[dict[str, Any]] = []
 
             for tool_call in tool_calls:
                 result = await self._call_mcp_tool(tool_call)
-                tool_message = {
-                    "role": "tool",
-                    "content": json.dumps(result, default=str),
-                }
-                if tool_call_id := tool_call.get("id") or tool_call.get("tool_call_id"):
-                    tool_message["tool_call_id"] = tool_call_id
-                if tool_name := tool_call.get("name") or tool_call.get("tool_name"):
-                    tool_message["name"] = tool_name
-                tool_messages.append(tool_message)
+                tool_call_type = tool_call.get("type")
+                tool_call_id = tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
+                tool_name = (
+                    tool_call.get("name")
+                    or tool_call.get("tool_name")
+                    or tool_call.get("function", {}).get("name")
+                )
+
+                if tool_call_type == "function_call":
+                    if tool_call_id:
+                        function_call_outputs.append(
+                            {
+                                "type": "function_call_output",
+                                "call_id": tool_call_id,
+                                "output": json.dumps(result, default=str),
+                            }
+                        )
+                    else:
+                        logger.warning("Function call missing call_id; falling back to tool message format")
+
+                if tool_call_type != "function_call" or not tool_call_id:
+                    tool_message = {
+                        "role": "tool",
+                        "content": json.dumps(result, default=str),
+                    }
+                    if tool_call_id:
+                        tool_message["tool_call_id"] = tool_call_id
+                    if tool_name:
+                        tool_message["name"] = tool_name
+                    tool_messages.append(tool_message)
+
+                if tool_call_type != "function_call":
+                    assistant_tool_call_items.append(tool_call)
 
             # Add assistant response with tool calls + tool results
-            input_messages.append({"role": "assistant", "content": tool_calls})
+            if assistant_tool_call_items:
+                input_messages.append({"role": "assistant", "content": assistant_tool_call_items})
             input_messages.extend(tool_messages)
+            input_messages.extend(function_call_outputs)
             payload["input"] = input_messages
 
             # Next round
@@ -751,9 +878,10 @@ class LLMClient:
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
         """Stream not supported, returns full response as single chunk."""
-        response = await self.chat(messages, system_prompt, temperature, max_tokens)
+        response = await self.chat(messages, system_prompt, temperature, max_tokens, tools=tools)
         yield response
 
     async def decide(

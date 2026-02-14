@@ -167,6 +167,7 @@ async def _request_decision_data(
                 schema_name="decision_response",
                 system_prompt=system_prompt,
                 temperature=0.3,
+                tools=[],
             )
             validated = validate_decision_response(parsed.model_dump())
             decision = validated.model_dump()
@@ -184,6 +185,7 @@ async def _request_decision_data(
             system_prompt=system_prompt,
             temperature=0.3,
             response_format=response_format,
+            tools=[],
         )
         parsed = json.loads(response)
         validated = validate_decision_response(parsed)
@@ -425,19 +427,59 @@ async def _respond_with_context(
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.7,
+            tools=[],
         ):
             streamed += token
             await loop.stream_token(token)
-        loop._streamed_response_content = streamed
-        loop._response_was_streamed = True
-        return streamed, True
+        if streamed.strip():
+            loop._streamed_response_content = streamed
+            loop._response_was_streamed = True
+            return streamed, True
+
+        logger.warning(
+            "Streaming returned empty content for context_label=%s; falling back to non-stream response",
+            context_label,
+        )
+        try:
+            fallback = await llm_client.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+                temperature=0.7,
+                tools=[],
+            )
+            if isinstance(fallback, str) and fallback.strip():
+                loop._streamed_response_content = ""
+                loop._response_was_streamed = False
+                return fallback, False
+        except Exception as fallback_exc:
+            logger.warning("Non-stream fallback failed for context_label=%s: %s", context_label, fallback_exc)
+
+        loop._streamed_response_content = ""
+        loop._response_was_streamed = False
+        return context_data, False
     else:
         response = await llm_client.chat(
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.7,
+            tools=[],
         )
         return response, False
+
+
+async def _push_activity_event(
+    event_type: str,
+    content: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Push a lightweight activity event to connected clients, if available."""
+    try:
+        from ..runtime.loop import get_current_loop
+        loop = get_current_loop()
+        if loop and hasattr(loop, "_push_event"):
+            await loop._push_event(event_type, content, metadata)
+    except Exception as exc:
+        logger.debug("Failed to push activity event %s: %s", event_type, exc)
 
 
 async def _execute_and_respond(
@@ -448,6 +490,8 @@ async def _execute_and_respond(
     tool_registry,
     state_manager,
     memory_context: str | None = None,
+    execution_source: str = "unspecified",
+    progress_message: str | None = None,
 ) -> tuple["ProgenitorState | None", bool]:
     """Execute a system tool via the registry and generate an LLM-enriched response.
 
@@ -462,6 +506,16 @@ async def _execute_and_respond(
         If should_retry_slow_path is True, the fast-path failed and should fall back
         to the slow path. In this case, state will be None.
     """
+    await _push_activity_event(
+        event_type="activity_started",
+        content=((progress_message or "").strip() or f"Running tool: {tool_name}"),
+        metadata={
+            "activity": "system_tool",
+            "tool_name": tool_name,
+            "source": execution_source,
+        },
+    )
+
     result, error, state_updates, should_retry_slow_path = await execute_system_tool(
         tool_name, tool_registry, llm_client, state, state_manager,
         user_input=user_input,
@@ -481,10 +535,12 @@ async def _execute_and_respond(
         response_text, was_streamed = await _respond_with_context(
             user_input, tool_name, context_data, state, llm_client, memory_context
         )
+        llm_enriched = True
     except Exception as e:
         logger.warning("LLM enrichment failed for %s, using raw result: %s", tool_name, e)
         response_text = context_data
         was_streamed = False
+        llm_enriched = False
 
     decision = Decision(
         action=DecisionAction.ANSWER_DIRECTLY,
@@ -497,7 +553,7 @@ async def _execute_and_respond(
         await state_manager.log_decision({
             "event": "system_tool_executed",
             "tool_name": tool_name,
-            "llm_enriched": True,
+            "llm_enriched": llm_enriched,
             "timestamp": utcnow_isoformat(),
         })
 
@@ -637,7 +693,14 @@ def create_node(
         if matched_tool:
             logger.info("Fast-path match: tool=%s for input=%r", matched_tool, user_input[:80])
             result, should_retry_slow = await _execute_and_respond(
-                matched_tool, user_input, state, llm_client, tool_registry, state_manager, memory_context
+                matched_tool,
+                user_input,
+                state,
+                llm_client,
+                tool_registry,
+                state_manager,
+                memory_context,
+                execution_source="fast_path",
             )
             if should_retry_slow:
                 logger.info("Fast-path failed, falling back to slow path")
@@ -678,6 +741,7 @@ def create_node(
             action_str = decision_data.get("action", "answer_directly")
             confidence = decision_data.get("confidence", 0.5)
             user_response = decision_data.get("user_response") or decision_data.get("direct_response")
+            progress_message = user_response
 
             llm_action = str(action_str).lower().strip()
             is_build_action = llm_action in ("build_agent", "build_tool", "upgrade")
@@ -706,7 +770,15 @@ def create_node(
                 if tool_name:
                     logger.info("Slow-path: LLM selected system_tool=%s", tool_name)
                     result, should_retry_slow = await _execute_and_respond(
-                        tool_name, user_input, state, llm_client, tool_registry, state_manager, memory_context
+                        tool_name,
+                        user_input,
+                        state,
+                        llm_client,
+                        tool_registry,
+                        state_manager,
+                        memory_context,
+                        execution_source="slow_path",
+                        progress_message=progress_message,
                     )
                     # If slow path also requests retry, we can't retry again - just use the result
                     if not should_retry_slow and result:
@@ -721,7 +793,7 @@ def create_node(
             if action == DecisionAction.DELEGATE_A2A:
                 result = await _handle_a2a(
                     user_input, state, llm_client, tool_registry, state_manager,
-                    decision_data, memory_context,
+                    decision_data, memory_context, progress_message,
                 )
                 return _merge_updates(result)
 
@@ -729,7 +801,7 @@ def create_node(
             if action == DecisionAction.USE_MCP:
                 result = await _handle_mcp(
                     user_input, state, llm_client, tool_registry, state_manager,
-                    decision_data, memory_context,
+                    decision_data, memory_context, progress_message,
                 )
                 return _merge_updates(result)
 
@@ -778,8 +850,26 @@ def create_node(
                     raise
 
                 loop._streamed_response_content = streamed_text
-                direct_resp = None
-                loop._response_was_streamed = True
+                if streamed_text.strip():
+                    direct_resp = None
+                    loop._response_was_streamed = True
+                else:
+                    logger.warning("Direct-response streaming returned empty content; falling back to non-stream response")
+                    loop._streamed_response_content = ""
+                    loop._response_was_streamed = False
+                    direct_resp = user_response or decision_data.get("direct_response")
+                    try:
+                        generated = await llm_client.chat(
+                            messages=msgs,
+                            system_prompt=_compose_user_response_system_prompt(),
+                            temperature=0.7,
+                        )
+                        if isinstance(generated, str) and generated.strip():
+                            direct_resp = generated
+                    except Exception as e:
+                        logger.warning("Failed non-stream fallback for direct response: %s", e)
+                    if not direct_resp:
+                        direct_resp = "I’ve processed your request."
             elif action == DecisionAction.ANSWER_DIRECTLY:
                 direct_resp = user_response or decision_data.get("direct_response")
                 msgs = _extract_history(
@@ -827,7 +917,7 @@ def create_node(
             logger.warning("Recoverable LLM error in decide node: %s", e)
 
             error_message = (
-                "⚠️ **Temporary Issue**\n\n"
+                "⚠️ Temporary Issue\n\n"
                 f"I encountered an issue connecting to the AI service: {type(e).__name__}\n\n"
                 "This is usually temporary. Please try again in a moment."
             )
@@ -854,9 +944,9 @@ def create_node(
             logger.error("Unexpected error in decide node: %s", e, exc_info=True)
 
             error_message = (
-                "❌ **Error Processing Request**\n\n"
+                "❌ Error Processing Request\n\n"
                 f"I encountered an unexpected error while processing your request:\n"
-                f"```\n{type(e).__name__}: {str(e)[:200]}\n```\n\n"
+                f"{type(e).__name__}: {str(e)[:200]}\n\n"
                 "This has been logged. You can try rephrasing your request or ask for help."
             )
 
@@ -916,7 +1006,7 @@ async def _handle_build_action(
             direct_response=(
                 f"I'm not certain you want me to build an agent. "
                 f"(Confidence: {confidence:.0%})\n\n"
-                f"If you'd like me to **build a new agent**, please say something like:\n"
+                f"If you'd like me to build a new agent, please say something like:\n"
                 f"- \"Build me a hello world agent\"\n"
                 f"- \"Create a new agent that [does X]\"\n\n"
                 f"Otherwise, let me know what you'd like me to do and I'll help!"
@@ -943,10 +1033,10 @@ async def _handle_build_action(
             reasoning="Build already in progress - rejecting new build request.",
             requires_planning=False,
             direct_response=(
-                f"⚠️ **Build Already In Progress**\n\n"
-                f"I'm currently working on: *{current_task}*\n"
-                f"Current phase: `{phase}`\n\n"
-                f"Please wait for the current build to complete, or ask me for `build status` to check progress."
+                f"⚠️ Build Already In Progress\n\n"
+                f"I'm currently working on: {current_task}\n"
+                f"Current phase: {phase}\n\n"
+                f"Please wait for the current build to complete, or ask me for build status to check progress."
             ),
         )
 
@@ -1032,9 +1122,9 @@ async def _handle_build_action(
                 reasoning="Build already in progress",
                 requires_planning=False,
                 direct_response=(
-                    f"⚠️ **Build Already In Progress**\n\n"
+                    f"⚠️ Build Already In Progress\n\n"
                     f"{str(e)}\n\n"
-                    f"Ask for `build status` to check progress."
+                    f"Ask for build status to check progress."
                 ),
             )
             return {"current_decision": decision}
@@ -1045,7 +1135,7 @@ async def _handle_build_action(
             reasoning="Background build runner unavailable",
             requires_planning=False,
             direct_response=(
-                "⚠️ **Background Build Unavailable**\n\n"
+                "⚠️ Background Build Unavailable\n\n"
                 "I couldn't start the build because the background runner isn't available. "
                 "Please try again in a moment."
             ),
@@ -1061,6 +1151,7 @@ async def _handle_a2a(
     state_manager,
     decision_data: dict,
     memory_context: str | None,
+    progress_message: str | None = None,
 ) -> "ProgenitorState":
     """Handle delegate_a2a action from LLM."""
     target_capabilities = decision_data.get("target_capabilities", [])
@@ -1077,6 +1168,16 @@ async def _handle_a2a(
     capability = target_capabilities[0]
     agent_config = tool_registry.find_agent_by_capability(capability)
     agent_name = agent_config.get("name", capability) if agent_config else capability
+
+    await _push_activity_event(
+        event_type="activity_started",
+        content=((progress_message or "").strip() or f"Calling agent: {agent_name}"),
+        metadata={
+            "activity": "a2a_call",
+            "agent_name": agent_name,
+            "capability": capability,
+        },
+    )
 
     # Execute agent call
     result, error = await _execute_a2a_agent_inline(
@@ -1130,6 +1231,7 @@ async def _handle_mcp(
     state_manager,
     decision_data: dict,
     memory_context: str | None,
+    progress_message: str | None = None,
 ) -> "ProgenitorState":
     """Handle use_mcp action from LLM."""
     target_capabilities = decision_data.get("target_capabilities", [])
@@ -1145,6 +1247,15 @@ async def _handle_mcp(
 
     capability = target_capabilities[0]
     tool_config = tool_registry.find_tool_by_capability(capability)
+
+    await _push_activity_event(
+        event_type="activity_started",
+        content=((progress_message or "").strip() or f"Invoking MCP capability: {capability}"),
+        metadata={
+            "activity": "mcp_call",
+            "capability": capability,
+        },
+    )
 
     if not tool_config:
         context_data = f"No MCP tool found for capability: {capability}"

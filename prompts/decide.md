@@ -55,7 +55,14 @@ Examples that should NOT trigger build (answer_directly instead):
 - **reasoning**: Your internal reasoning (for logs)
 - **requires_planning**: true ONLY for build_agent, build_tool, upgrade
 - **target_capabilities**: List matching capabilities from the available list above
-- **user_response**: A helpful, specific message for the user. Examples:
+- **user_response**: A helpful, specific message for the user.
+  - REQUIRED and non-empty for: delegate_a2a, use_mcp, build_agent, build_tool, upgrade, mixed
+  - Should be natural and action-oriented (what you are starting now), not generic
+  - Use plain text, no markdown emphasis markers
+  - Must be a single plain-language sentence or two short sentences
+  - NEVER include JSON, key-value payloads, code fences, XML, function/tool call syntax, or internal markers
+  - NEVER append structured arguments like `{...}` or `[...]` to user_response
+  - Examples:
   - For answer: "Here's what I found..."
   - For build: "I'll start building a weather agent for you. This may take a few minutes."
   - For delegate: "I'll use the hello_world agent to handle this."

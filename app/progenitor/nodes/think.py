@@ -401,9 +401,9 @@ def _build_thinking_prompt(
         )
         iteration_context = (
             f"## Previous Iteration (#{iteration})\n\n"
-            f"**Score:** {verif_dict.get('overall_score', 0):.2f}\n"
-            f"**Passed:** {verif_dict.get('passed', False)}\n\n"
-            f"**Gaps identified:**\n{gap_lines}"
+            f"Score: {verif_dict.get('overall_score', 0):.2f}\n"
+            f"Passed: {verif_dict.get('passed', False)}\n\n"
+            f"Gaps identified:\n{gap_lines}"
         )
 
     # Build lessons context
@@ -418,9 +418,9 @@ def _build_thinking_prompt(
             iter_num = lesson.get("iteration", "?")
             parts.append(f"### Iteration {iter_num}")
             for key, label in [
-                ("what_worked", "**What worked:**"),
-                ("what_failed", "**What failed:**"),
-                ("adjustments", "**Recommended adjustments:**"),
+                ("what_worked", "What worked:"),
+                ("what_failed", "What failed:"),
+                ("adjustments", "Recommended adjustments:"),
             ]:
                 items = lesson.get(key, [])
                 if items:
@@ -429,7 +429,7 @@ def _build_thinking_prompt(
                         parts.append(f"  - {item}")
             insights = lesson.get("insights", [])
             if insights:
-                parts.append("**Key insights:**")
+                parts.append("Key insights:")
                 for item in insights[:2]:
                     parts.append(f"  - {item}")
         lessons_context = "\n".join(parts)
@@ -450,7 +450,7 @@ def _build_thinking_prompt(
         if isinstance(constraints, dict) and constraints:
             parts = ["## Constraints\n"]
             for key, val in constraints.items():
-                parts.append(f"- **{key}:** {val}")
+                parts.append(f"- {key}: {val}")
             constraints_context = "\n".join(parts)
 
     # Build dependencies context

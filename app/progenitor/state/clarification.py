@@ -325,7 +325,7 @@ class ClarificationDetector:
 
         # Add context about what we're building
         message_parts = [
-            "**Clarification Needed**",
+            "Clarification Needed",
             "",
             "While building your request, I need some additional information:",
             "",
@@ -335,13 +335,13 @@ class ClarificationDetector:
 
         # Add category-specific guidance
         if clarification.category == "requirements":
-            message_parts.append("_Please describe what specific behavior or functionality you need._")
+            message_parts.append("Please describe what specific behavior or functionality you need.")
         elif clarification.category == "technical":
-            message_parts.append("_Please specify any technical constraints or preferences._")
+            message_parts.append("Please specify any technical constraints or preferences.")
         elif clarification.category == "design":
-            message_parts.append("_Please describe your preferred approach or design._")
+            message_parts.append("Please describe your preferred approach or design.")
         elif clarification.category == "scope":
-            message_parts.append("_Please clarify what should or shouldn't be included._")
+            message_parts.append("Please clarify what should or shouldn't be included.")
 
         message_parts.extend([
             "",

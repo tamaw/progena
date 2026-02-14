@@ -5,8 +5,10 @@ Handles the full flow: LLM parses the user request, extracts time/instruction,
 and creates a ScheduleEntry via the scheduler.
 """
 
-import json
 import logging
+from inspect import iscoroutinefunction
+
+from pydantic import BaseModel
 
 from ..llm.prompts import PromptTemplates
 from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
@@ -14,6 +16,12 @@ from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResul
 logger = logging.getLogger(__name__)
 
 _prompts = PromptTemplates()
+
+
+class _ScheduleExtractionResponse(BaseModel):
+    time_expression: str | None = None
+    instruction: str | None = None
+    description: str | None = None
 
 
 class ScheduleTaskTool(BaseSystemTool):
@@ -59,31 +67,38 @@ class ScheduleTaskTool(BaseSystemTool):
         messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
 
         try:
-            response = await context.llm_client.chat(
-                messages=messages,
-                system_prompt=system_prompt,
-                temperature=0.3,
-                response_format={"type": "json_object"},
-            )
-
-            if not response or not response.strip():
-                logger.warning("Empty LLM response for schedule extraction")
+            chat_structured = getattr(context.llm_client, "chat_structured", None)
+            if not (callable(chat_structured) and iscoroutinefunction(chat_structured)):
                 return ToolResult.fail(
-                    "Unable to process schedule request. Please try rephrasing your request.",
-                    should_retry_slow_path=True,
+                    "Structured scheduling is required, but chat_structured is unavailable. "
+                    "Please configure the Azure structured output path."
                 )
 
-            parsed = json.loads(response)
+            structured = await chat_structured(
+                messages=messages,
+                response_model=_ScheduleExtractionResponse,
+                schema_name="schedule_task_extraction",
+                system_prompt=system_prompt,
+                temperature=0.3,
+                tools=[],
+            )
 
-            time_expr = parsed.get("time_expression", "")
-            instruction = parsed.get("instruction", user_input)
-            description = parsed.get("description", f"Scheduled: {user_input[:50]}")
+            time_expr = (structured.time_expression or "").strip()
+            instruction = (structured.instruction or "").strip()
+            description = (structured.description or "").strip()
 
             if not time_expr:
                 return ToolResult.fail(
                     "Could not extract time from your request. "
                     "Please specify when (e.g., 'in 5 minutes', 'at 9am')."
                 )
+            if not instruction:
+                return ToolResult.fail(
+                    "Could not extract instruction from your request. "
+                    "Please restate what should happen at that time."
+                )
+            if not description:
+                description = instruction[:60].strip() or f"Scheduled: {user_input[:50]}"
 
             # Add the scheduled task
             result, entry_data = await add_scheduled_task(
@@ -128,21 +143,6 @@ class ScheduleTaskTool(BaseSystemTool):
                     )
 
             return ToolResult.ok(tool_data, state_updates=state_updates)
-
-        except json.JSONDecodeError as e:
-            logger.warning("Failed to parse schedule LLM response: %s", e)
-            return ToolResult.fail(
-                "Unable to process schedule request. Please try rephrasing your request.",
-                should_retry_slow_path=True,
-            )
         except Exception as e:
             logger.error("Error executing schedule task: %s", e, exc_info=True)
-            # For LLM timeouts or connection errors, retry with slow path
-            error_type = type(e).__name__
-            if "Timeout" in error_type or "Connection" in error_type or "408" in str(e):
-                logger.info("LLM timeout/connection error - signaling slow path retry")
-                return ToolResult.fail(
-                    "Unable to process schedule request due to temporary issue. Retrying...",
-                    should_retry_slow_path=True,
-                )
             return ToolResult.fail(f"Error scheduling task: {e}")

@@ -205,7 +205,7 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
     iteration = state.get("iteration", {}).get("current", 0)
 
     # Build compact summary
-    summary_parts = ["---", "**Verification Summary**"]
+    summary_parts = ["---", "Verification Summary"]
 
     # Score and status
     status_emoji = "✓" if passed else "○"
@@ -260,16 +260,16 @@ def _generate_response(decision, current_item, state: ProgenitorState) -> str | 
             entrypoint = new_agent_info.get("entrypoint", "")
 
             if test_passed:
-                agent_info = "\n\n**Agent Ready for Interaction**\n"
-                agent_info += f"✓ Agent `{agent_name}` is built, tested, and registered.\n"
-                agent_info += f"  - Entrypoint: `{entrypoint}`\n"
+                agent_info = "\n\nAgent Ready for Interaction\n"
+                agent_info += f"✓ Agent {agent_name} is built, tested, and registered.\n"
+                agent_info += f"  - Entrypoint: {entrypoint}\n"
                 if test_response:
                     response_preview = str(test_response)[:200]
                     agent_info += f"  - Test response: {response_preview}\n"
                 agent_info += "\nYou can now invoke this agent directly!"
             else:
-                agent_info = "\n\n**Agent Built (with warnings)**\n"
-                agent_info += f"○ Agent `{agent_name}` is built and registered.\n"
+                agent_info = "\n\nAgent Built (with warnings)\n"
+                agent_info += f"○ Agent {agent_name} is built and registered.\n"
                 test_error = new_agent_info.get("test_error")
                 if test_error:
                     agent_info += f"  - Test failed: {test_error[:200]}\n"
