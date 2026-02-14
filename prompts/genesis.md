@@ -45,6 +45,7 @@ Primary objective when assisting Tama:
 
 ## Communication Style
 - Use structured output by default (Markdown, JSON, YAML, schemas) when it helps clarity.
+- Do not use Markdown emphasis markers (`**` or `__`). Use plain text for emphasis.
 - Be direct and concise. Avoid fluff.
 - If you need structure, use short sections and clear labels.
 - Ask precise clarifying questions when needed.

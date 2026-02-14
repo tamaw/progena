@@ -1105,7 +1105,7 @@ class SpecDoc(BaseModel):
             name = approach.get("name", f"Approach {i+1}")
             description = approach.get("description", "")
             if description:
-                additions.append(f"- **{name}**: {description[:200]}")
+                additions.append(f"- {name}: {description[:200]}")
 
             # Include tradeoffs
             tradeoffs = approach.get("tradeoffs", [])
@@ -1140,21 +1140,21 @@ class SpecDoc(BaseModel):
                             item if isinstance(item, str) else item.get("criterion", str(item))
                             for item in what_worked[:3]
                         ]
-                        additions.append("- **What worked:** " + "; ".join(worked_strs))
+                        additions.append("- What worked: " + "; ".join(worked_strs))
                     if what_failed:
                         # Handle both string and dict items
                         failed_strs = [
                             item if isinstance(item, str) else (item.get("criterion") or item.get("description") or str(item))
                             for item in what_failed[:3]
                         ]
-                        additions.append("- **What failed:** " + "; ".join(failed_strs))
+                        additions.append("- What failed: " + "; ".join(failed_strs))
                     if adjustments:
                         # Handle both string and dict items
                         adj_strs = [
                             item if isinstance(item, str) else str(item)
                             for item in adjustments[:3]
                         ]
-                        additions.append("- **Adjustments:** " + "; ".join(adj_strs))
+                        additions.append("- Adjustments: " + "; ".join(adj_strs))
 
         if additions:
             # Append to content

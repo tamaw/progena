@@ -255,6 +255,75 @@ class TestScheduleTaskTool:
         """Should have correct name."""
         assert tool.name == "schedule_task"
 
+    async def test_execute_fails_without_structured_extraction(self, tool):
+        """Should fail when chat_structured is unavailable."""
+        mock_llm = MagicMock()
+        mock_state_manager = AsyncMock()
+
+        ctx = ToolContext(
+            tool_registry=MagicMock(),
+            llm_client=mock_llm,
+            state=cast(ProgenitorState, {"schedule": []}),
+            state_manager=mock_state_manager,
+            user_input="can you schedule to say hi to me in 2 minutes please",
+        )
+
+        result = await tool.execute(ctx)
+
+        assert result.success is False
+        assert "chat_structured" in str(result.error)
+
+    async def test_execute_fails_when_structured_output_missing_time(self, tool):
+        """Should fail when structured extraction does not include time_expression."""
+        mock_llm = MagicMock()
+        structured = MagicMock(
+            time_expression="",
+            instruction="Stretch",
+            description="Stretch reminder",
+        )
+        mock_llm.chat_structured = AsyncMock(return_value=structured)
+        mock_state_manager = AsyncMock()
+
+        ctx = ToolContext(
+            tool_registry=MagicMock(),
+            llm_client=mock_llm,
+            state=cast(ProgenitorState, {"schedule": []}),
+            state_manager=mock_state_manager,
+            user_input="remind me to stretch in 5 minutes",
+        )
+
+        result = await tool.execute(ctx)
+
+        assert result.success is False
+        assert "extract time" in str(result.error).lower()
+
+    async def test_execute_prefers_structured_extraction(self, tool):
+        """Should use chat_structured when available."""
+        mock_llm = MagicMock()
+        structured = MagicMock(
+            time_expression="in 2 minutes",
+            instruction="Say hi to the user",
+            description="Say hi reminder",
+        )
+        mock_llm.chat_structured = AsyncMock(return_value=structured)
+        mock_llm.chat = AsyncMock(return_value='{"time_expression":"in 99 minutes"}')
+        mock_state_manager = AsyncMock()
+
+        ctx = ToolContext(
+            tool_registry=MagicMock(),
+            llm_client=mock_llm,
+            state=cast(ProgenitorState, {"schedule": []}),
+            state_manager=mock_state_manager,
+            user_input="can you schedule to say hi to me in 2 minutes please",
+        )
+
+        result = await tool.execute(ctx)
+
+        assert result.success is True
+        mock_llm.chat_structured.assert_awaited_once()
+        assert mock_llm.chat_structured.await_args.kwargs.get("tools") == []
+        mock_llm.chat.assert_not_awaited()
+
 
 class TestRediscoverAgentsTool:
     """Tests for RediscoverAgentsTool implementation."""

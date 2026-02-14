@@ -202,9 +202,9 @@ def create_node(
 
                     # If we have a refined description, use it to enhance the task
                     if bs_description and bs_description != task:
-                        task = f"{task}\n\n**Build Description:** {bs_description}"
+                        task = f"{task}\n\nBuild Description: {bs_description}"
                     if bs_project_name:
-                        task = f"{task}\n\n**Project Name:** {bs_project_name}"
+                        task = f"{task}\n\nProject Name: {bs_project_name}"
 
                     logger.info("Enriched task with build_settings: project=%s", bs_project_name)
 

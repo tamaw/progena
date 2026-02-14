@@ -94,9 +94,9 @@ class AgentFolderInfo:
             if len(content) > 3000:
                 content = content[:3000] + "\n... (truncated)"
             lines.append(f"### {filename}")
-            lines.append("```python")
+            lines.append("BEGIN FILE CONTENT")
             lines.append(content)
-            lines.append("```")
+            lines.append("END FILE CONTENT")
             lines.append("")
 
         return "\n".join(lines)

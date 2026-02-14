@@ -145,7 +145,7 @@ class ToolRegistry:
         for tool in system_tools:
             name = tool.get("name", "unknown")
             desc = tool.get("description", "No description")
-            lines.append(f"- **{name}**: {desc}")
+            lines.append(f"- {name}: {desc}")
         sections.append("\n".join(lines))
 
         # A2A agents from registry
@@ -157,7 +157,7 @@ class ToolRegistry:
                 desc = agent.get("description", "No description")
                 status = agent.get("status", "unknown")
                 caps = agent.get("capabilities", [])
-                lines.append(f"- **{name}** [{status}]: {desc}")
+                lines.append(f"- {name} [{status}]: {desc}")
                 if caps:
                     lines.append(f"  Capabilities: {', '.join(caps)}")
             sections.append("\n".join(lines))
@@ -176,7 +176,7 @@ class ToolRegistry:
                 name = tool.get("name", "unknown")
                 desc = tool.get("description", "No description")
                 caps = tool.get("capabilities", [])
-                lines.append(f"- **{name}**: {desc}")
+                lines.append(f"- {name}: {desc}")
                 if caps:
                     lines.append(f"  Capabilities: {', '.join(caps)}")
             sections.append("\n".join(lines))

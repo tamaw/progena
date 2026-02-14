@@ -1,5 +1,8 @@
 """Tests for LLM response validation models."""
 
+import pytest
+from pydantic import ValidationError
+
 from app.progenitor.llm.client import _build_json_schema_format
 from app.progenitor.llm.response_models import (
     BuildSpec,
@@ -129,10 +132,23 @@ class TestDecisionResponse:
             "reasoning": "User wants a new agent",
             "requires_planning": True,
             "target_capabilities": ["code_generation", "testing"],
+            "user_response": "I'll start building that agent now.",
         }
         result = validate_decision_response(data)
         assert result.action == "build_agent"
         assert result.requires_planning is True
+
+    def test_non_direct_action_requires_user_response(self):
+        """Test non-direct actions fail validation without user_response."""
+        data = {
+            "action": "use_mcp",
+            "reasoning": "Need MCP tool",
+            "target_capabilities": ["web_search"],
+            "user_response": "   ",
+        }
+
+        with pytest.raises(ValidationError):
+            validate_decision_response(data)
 
 
 class TestPlannerResponse:

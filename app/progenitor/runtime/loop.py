@@ -286,7 +286,6 @@ class ProgenitorLoop:
         for pending work and processing it. This is the TRUE perpetual loop.
         """
         runtime = self.config.runtime
-        backoff = runtime.idle_backoff_seconds
         max_backoff = runtime.max_backoff_seconds
         backoff_multiplier = runtime.backoff_multiplier
         last_idle_log_backoff: float | None = None
@@ -312,6 +311,8 @@ class ProgenitorLoop:
                         has_work = await self._check_pending_work(self._state)
                         if not has_work:
                             continue
+
+                        messages_before = len(self._state.get("messages") or [])
 
                         # Reset backoff when work is available
                         backoff = runtime.idle_backoff_seconds
@@ -356,6 +357,21 @@ class ProgenitorLoop:
 
                         await self._run_graph_cycle(run_id, source="scheduled_input")
 
+                        scheduled_response = self._extract_scheduled_response(
+                            messages_before=messages_before,
+                            schedule_id=schedule_id,
+                        )
+                        if scheduled_response:
+                            await self._push_event(
+                                "scheduled_response",
+                                scheduled_response,
+                                {
+                                    "schedule_id": schedule_id,
+                                    "schedule_description": entry.get("description"),
+                                    "schedule_run_at": entry.get("run_at"),
+                                },
+                            )
+
                         # Disable streaming mode after scheduled input
                         self._streaming_enabled = False
                         self._response_was_streamed = False
@@ -373,22 +389,25 @@ class ProgenitorLoop:
                 else:
                     # No work - increase backoff exponentially
                     self._state["idle_cycles"] = self._state.get("idle_cycles", 0) + 1
-                    backoff = min(backoff * backoff_multiplier, max_backoff)
-                    self._state["current_backoff_seconds"] = backoff
+                    current_backoff = float(
+                        self._state.get("current_backoff_seconds", runtime.idle_backoff_seconds)
+                    )
+                    next_backoff = min(current_backoff * backoff_multiplier, max_backoff)
+                    self._state["current_backoff_seconds"] = next_backoff
 
                     # Update health periodically even when idle
                     await self._update_health_file(self._state)
 
-                    if backoff >= 60 and backoff != last_idle_log_backoff:
+                    if next_backoff >= 60 and next_backoff != last_idle_log_backoff:
                         logger.info(
                             "Background worker idle; next check in %.1f s (idle_cycles=%d)",
-                            backoff,
+                            next_backoff,
                             self._state.get("idle_cycles", 0),
                         )
-                        last_idle_log_backoff = backoff
+                        last_idle_log_backoff = next_backoff
                     else:
-                        logger.debug("Background worker idle, sleeping %.1f s", backoff)
-                    await asyncio.sleep(backoff)
+                        logger.debug("Background worker idle, sleeping %.1f s", next_backoff)
+                    await asyncio.sleep(next_backoff)
 
             except asyncio.CancelledError:
                 logger.info("Background worker cancelled")
@@ -397,7 +416,10 @@ class ProgenitorLoop:
                 logger.error("Background worker error: %s", e, exc_info=True)
                 await self._push_event("error", f"Background worker error: {e}")
                 await self._update_health_file(self._state, status="error", error=str(e))
-                await asyncio.sleep(backoff)
+                error_backoff = float(
+                    self._state.get("current_backoff_seconds", runtime.idle_backoff_seconds)
+                )
+                await asyncio.sleep(error_backoff)
 
         logger.info("Background worker stopped")
 
@@ -456,10 +478,17 @@ class ProgenitorLoop:
             content: Human-readable description.
             metadata: Additional event data.
         """
+        metadata_safe: dict[str, Any] = {}
+        if metadata:
+            try:
+                metadata_safe = json.loads(json.dumps(metadata, default=str))
+            except Exception:
+                metadata_safe = {"raw": str(metadata)}
+
         event = {
             "event_type": event_type,
             "content": content,
-            "metadata": metadata or {},
+            "metadata": metadata_safe,
             "timestamp": utcnow_isoformat(),
         }
         try:
@@ -719,6 +748,33 @@ class ProgenitorLoop:
         prefix = self._load_scheduled_prefix()
         instruction = entry.get("instruction") or entry.get("description") or "Scheduled task"
         return f"{prefix}\n\n{instruction}"
+
+    def _extract_scheduled_response(self, messages_before: int, schedule_id: str) -> str | None:
+        """Extract assistant response text generated by a scheduled cycle."""
+        messages = self._state.get("messages") or []
+        if not isinstance(messages, list) or messages_before >= len(messages):
+            return None
+
+        new_messages = messages[messages_before:]
+        for msg in reversed(new_messages):
+            if hasattr(msg, "model_dump"):
+                msg_dict = msg.model_dump()
+            elif isinstance(msg, dict):
+                msg_dict = msg
+            else:
+                continue
+
+            if msg_dict.get("role") != "assistant":
+                continue
+            metadata = msg_dict.get("metadata") or {}
+            if isinstance(metadata, dict) and metadata.get("type") == "scheduled":
+                if str(metadata.get("schedule_id") or "") != str(schedule_id):
+                    continue
+            content = msg_dict.get("content")
+            if isinstance(content, str) and content.strip():
+                return content
+
+        return None
 
     def _load_scheduled_prefix(self) -> str:
         """Load the scheduled prefix text from prompts with fallback."""

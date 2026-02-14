@@ -302,10 +302,10 @@ class BackgroundBuildRunner:
             logger.warning("Failed to generate LLM acknowledgment: %s", e)
             # Fallback to template response
             return (
-                f"🚀 **Build Started**\n\n"
-                f"I've started working on your request: *{task_description}*\n\n"
+                f"🚀 Build Started\n\n"
+                f"I've started working on your request: {task_description}\n\n"
                 f"This is running in the background, so you can continue chatting. "
-                f"Ask for `build status` anytime to check progress."
+                f"Ask for build status anytime to check progress."
             )
 
     async def _run_build(
