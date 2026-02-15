@@ -1,6 +1,6 @@
 [submodule "app/agents"]
 	path = app/agents
-	url = D:/progenitor-agents
+	url = https://github.com/tamaw/progentior.agents.git
 [submodule "app/mcp"]
 	path = app/mcp
-	url = D:/progenitor-mcp
+	url = https://github.com/tamaw/progenitor.mcp.git
