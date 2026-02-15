@@ -307,6 +307,21 @@ class TestDecideNode:
         assert history[0]["role"] == "user"
         assert history[0]["content"] == "hello"
 
+    def test_summarize_tool_context_compacts_and_drops_json_lines(self):
+        """Tool context summary should avoid raw JSON-like lines and stay compact."""
+        from app.progenitor.nodes import decide
+
+        raw = """
+        {"tool":"schedule_task","args":{"message":"Say hi","delay_minutes":1}}
+        ✅ Scheduled: Say hi
+        Run time: 2026-02-15T23:55:24.943020+00:00.
+        """
+        summary = decide._summarize_tool_context("schedule_task", raw)
+
+        assert "schedule_task" in summary
+        assert "Scheduled: Say hi" in summary
+        assert '{"tool"' not in summary
+
 
 class TestPickNextNode:
     """Tests for the pick_next node."""

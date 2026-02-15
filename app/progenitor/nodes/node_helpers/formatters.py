@@ -35,9 +35,35 @@ def format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
         return _format_compress_conversation(result)
     elif tool_name == "memory":
         return _format_memory(result)
+    elif tool_name == "schedule_task":
+        return _format_schedule_task(result)
     else:
         # Default: return JSON-like representation
         return f"Result:\n{json.dumps(result, indent=2)}"
+
+
+def _format_schedule_task(result: dict[str, Any]) -> str:
+    """Format schedule_task result."""
+    if not result.get("success"):
+        message = result.get("message") or result.get("error") or "Unable to schedule the task."
+        return f"Could not schedule that reminder: {message}"
+
+    description = (result.get("description") or "Reminder").strip()
+    next_run = (result.get("next_run") or "").strip()
+    recurring = bool(result.get("recurring", False))
+
+    if recurring and next_run:
+        return f"✅ Scheduled: {description}\nNext run: {next_run} (recurring)."
+    if recurring:
+        return f"✅ Scheduled: {description} (recurring)."
+    if next_run:
+        return f"✅ Scheduled: {description}\nRun time: {next_run}."
+    return f"✅ Scheduled: {description}."
+
+
+def format_schedule_result(result: dict[str, Any]) -> str:
+    """Backward-compatible wrapper for schedule task formatting."""
+    return _format_schedule_task(result)
 
 
 def _format_list_tools(result: dict[str, Any]) -> str:
@@ -325,25 +351,3 @@ def _format_memory(result: dict[str, Any]) -> str:
         return f"🧠 Memory Skipped\n\n{reason}"
 
     return f"🧠 Memory\n\n{json.dumps(result, indent=2)}"
-
-
-async def format_schedule_result(result: dict[str, Any], llm_client) -> str:
-    """Format a schedule task result as a short, plain-English response."""
-    instruction = result.get("instruction", "complete your scheduled request")
-    prompt = _prompts.get(
-        "formatters.schedule_confirmation.md",
-        task_details=json.dumps(result, ensure_ascii=False),
-    )
-
-    try:
-        response = await llm_client.complete(
-            prompt=prompt,
-            system_prompt=_prompts.get("formatters.schedule_confirmation_system.md"),
-            temperature=0.2,
-        )
-        if response:
-            return response.strip()
-    except Exception:
-        pass
-
-    return f"Got it. I'll {instruction}."

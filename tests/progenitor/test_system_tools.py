@@ -388,6 +388,19 @@ class TestFormatToolResult:
         assert "Result" in formatted
         assert "value" in formatted
 
+    def test_format_schedule_task(self):
+        """Should format schedule_task result without JSON fallback."""
+        result = {
+            "success": True,
+            "description": "Funny reminder to dance dance dance",
+            "next_run": "2026-02-14T06:15:53.910668+00:00",
+            "recurring": False,
+        }
+        formatted = format_tool_result("schedule_task", result)
+        assert "Scheduled" in formatted
+        assert "Funny reminder to dance dance dance" in formatted
+        assert "Result:" not in formatted
+
 
 class TestExecuteSystemTool:
     """Tests for execute_system_tool registry function."""

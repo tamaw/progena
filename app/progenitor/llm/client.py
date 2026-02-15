@@ -8,6 +8,7 @@ LiteLLM handles retries, provider routing, and observability upstream.
 import json
 import logging
 import os
+import re
 from collections.abc import AsyncIterator
 from typing import Any, TypeVar
 from urllib.parse import urlparse
@@ -52,6 +53,8 @@ MODEL_CONTEXT_WINDOWS = {
     # Fallback
     "default": 8192,
 }
+
+INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
 
 
 def _build_json_schema_format(response_model: type, schema_name: str) -> dict[str, Any]:
@@ -556,7 +559,7 @@ class LLMClient:
         if reasoning := data.get("reasoning"):
             reasoning_parts.append(str(reasoning))
 
-        text = "".join(text_parts).strip()
+        text = self._sanitize_user_visible_text("".join(text_parts).strip())
         reasoning = "".join(reasoning_parts).strip()
 
         if not text:
@@ -620,6 +623,20 @@ class LLMClient:
                 )
 
         return text, reasoning
+
+    @staticmethod
+    def _sanitize_user_visible_text(text: str) -> str:
+        """Remove provider/tool markup artifacts from user-visible text."""
+        if not text:
+            return text
+
+        # Some providers emit inline tool-call traces (e.g.
+        # "tool_name{...json...}") as plain text. Strip these blocks so
+        # user-facing responses remain clean.
+        cleaned = INLINE_TOOL_MARKUP_PATTERN.sub("", text)
+
+        # Normalize accidental leading blank lines introduced by stripping.
+        return cleaned.lstrip()
 
     def _supports_temperature(self) -> bool:
         """Return True if temperature parameter is supported for the current model."""

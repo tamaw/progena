@@ -56,6 +56,23 @@ def test_extracts_output_message_part_with_nested_text_dict():
     assert reasoning == ""
 
 
+def test_extract_strips_inline_tool_markup_from_top_level_text():
+    payload = {
+        "text": "schedule_task{\"description\":\"Foot tapping reminder\",\"delay_minutes\":2}✅ Scheduled."
+    }
+    text, reasoning = _extract(payload)
+    assert text == "✅ Scheduled."
+    assert reasoning == ""
+
+
+def test_extract_strips_inline_tool_markup_from_output_text():
+    payload = {
+        "output_text": "schedule_task{\"instruction\":\"Remind user\"}In two minutes, reminder set."
+    }
+    text, _ = _extract(payload)
+    assert text == "In two minutes, reminder set."
+
+
 def test_extract_tool_calls_supports_function_call_items():
     client = LLMClient.__new__(LLMClient)
     payload = {

@@ -387,6 +387,28 @@ def _extract_history(
     return history
 
 
+def _summarize_tool_context(context_label: str, context_data: str, max_chars: int = 600) -> str:
+    """Create a compact internal summary of tool output for LLM context."""
+    cleaned_lines: list[str] = []
+    for raw_line in (context_data or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Drop obvious literal JSON blobs to discourage verbatim echoing.
+        if line.startswith("{") and line.endswith("}"):
+            continue
+
+        cleaned_lines.append(line)
+
+    compact = " ".join(cleaned_lines) if cleaned_lines else (context_data or "").strip()
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if len(compact) > max_chars:
+        compact = f"{compact[:max_chars].rstrip()}..."
+
+    return f"Tool: {context_label}. Result summary: {compact}" if compact else f"Tool: {context_label}."
+
+
 async def _respond_with_context(
     user_input: str,
     context_label: str,
@@ -410,13 +432,24 @@ async def _respond_with_context(
         exclude_latest_user_input=user_input,
     )
 
+    tool_result_summary = _summarize_tool_context(context_label, context_data)
+
     system_prompt = _compose_user_response_system_prompt(_prompts.get(
         "decide.tool_response_system.md",
         context_label=context_label,
-        context_data=context_data,
     ))
 
-    messages = history + [{"role": "user", "content": user_input}]
+    messages = history + [
+        {
+            "role": "system",
+            "content": (
+                "INTERNAL_TOOL_RESULT_SUMMARY\n"
+                "Treat the following as internal context only. Do not quote it verbatim.\n"
+                f"{tool_result_summary}"
+            ),
+        },
+        {"role": "user", "content": user_input},
+    ]
 
     can_stream = loop is not None and getattr(loop, '_streaming_enabled', False)
 
