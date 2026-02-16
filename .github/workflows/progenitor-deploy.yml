@@ -26,10 +26,10 @@ jobs:
         run: |
           cat > .progenitor.env <<EOF
           LITELLM_MASTER_KEY=${{ secrets.LITELLM_MASTER_KEY }}
-          LITELLM_BASE_URL=${{ secrets.LITELLM_BASE_URL }}
-          PROGENITOR_MODEL_DEFAULT=${{ secrets.PROGENITOR_MODEL_DEFAULT }}
-          PROGENITOR_TIMEZONE=${{ secrets.PROGENITOR_TIMEZONE }}
           EOF
+          if [ -n "${{ secrets.LITELLM_BASE_URL }}" ]; then echo "LITELLM_BASE_URL=${{ secrets.LITELLM_BASE_URL }}" >> .progenitor.env; fi
+          if [ -n "${{ secrets.PROGENITOR_MODEL_DEFAULT }}" ]; then echo "PROGENITOR_MODEL_DEFAULT=${{ secrets.PROGENITOR_MODEL_DEFAULT }}" >> .progenitor.env; fi
+          if [ -n "${{ secrets.PROGENITOR_TIMEZONE }}" ]; then echo "PROGENITOR_TIMEZONE=${{ secrets.PROGENITOR_TIMEZONE }}" >> .progenitor.env; fi
 
       - name: Ensure external network
         run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
