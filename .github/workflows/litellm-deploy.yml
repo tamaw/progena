@@ -48,6 +48,16 @@ jobs:
       - name: Pull and restart litellm stack
         run: |
           docker pull ghcr.io/tamaw/progenitor-litellm:latest
-          docker compose -f docker/docker-compose.litellm.yml pull litellm
-          docker compose -f docker/docker-compose.litellm.yml up -d
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            docker/compose:2.27.0 \
+            -f docker/docker-compose.litellm.yml pull litellm
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            docker/compose:2.27.0 \
+            -f docker/docker-compose.litellm.yml up -d
 
