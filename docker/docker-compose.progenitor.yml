@@ -21,7 +21,6 @@ services:
       TZ: UTC
     volumes:
       - ../data/state:/app/data/state
-      - ../prompts:/app/prompts:ro
       - ../logs:/app/logs
       - ../worktrees:/app/worktrees
       - ../tmp:/app/tmp
