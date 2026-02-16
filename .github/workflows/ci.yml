@@ -122,8 +122,26 @@ jobs:
 
       - name: Liveness checks
         run: |
-          docker exec progenitor-backend curl -fsS --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/health >/dev/null
-          docker exec progenitor python /app/scripts/healthcheck.py
+          wait_healthy() {
+            local name="$1"
+            local attempts="${2:-60}"
+            local i status
+            for i in $(seq 1 "$attempts"); do
+              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name" 2>/dev/null || true)"
+              if [ "$status" = "healthy" ]; then
+                echo "$name is healthy"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for $name to become healthy (status=$status)"
+            docker ps -a || true
+            docker logs "$name" --tail 200 || true
+            return 1
+          }
+
+          wait_healthy progenitor-backend 90
+          wait_healthy progenitor 120
 
       - name: Build backend image
         uses: docker/build-push-action@v6
