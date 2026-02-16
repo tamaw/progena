@@ -8,34 +8,6 @@ x-progenitor-llm-env: &progenitor-llm-env
 
 services:
   # =============================================================================
-  # LiteLLM Proxy (LLM routing + Langfuse observability)
-  # =============================================================================
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: litellm
-    restart: unless-stopped
-    volumes:
-      - ../litellm-config.yaml:/app/config.yaml:ro
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
-    ports:
-      - "4000:4000"
-    networks:
-      - progenitor-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1.0'
-        reservations:
-          memory: 256M
-
-  # =============================================================================
   # Progenitor Application Stack
   # =============================================================================
   progenitor:
@@ -44,9 +16,6 @@ services:
       dockerfile: docker/progenitor/Dockerfile
     container_name: progenitor
     restart: unless-stopped
-    depends_on:
-      litellm:
-        condition: service_healthy
     environment:
       <<: *progenitor-llm-env
       TZ: UTC
@@ -60,6 +29,7 @@ services:
     tty: true
     networks:
       - progenitor-net
+      - langfuse_network
     healthcheck:
       test: ["CMD", "python", "/app/scripts/healthcheck.py"]
       interval: 30s
@@ -84,8 +54,6 @@ services:
     depends_on:
       progenitor:
         condition: service_started
-      litellm:
-        condition: service_healthy
     environment:
       <<: *progenitor-llm-env
       CHAT_SERVER_HOST: 0.0.0.0
@@ -99,6 +67,7 @@ services:
       - ../tmp:/app/tmp
     networks:
       - progenitor-net
+      - langfuse_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -116,3 +85,6 @@ services:
 networks:
   progenitor-net:
     driver: bridge
+  # Shared external network used by docker-compose.litellm.yml (so "litellm" resolves by name).
+  langfuse_network:
+    external: true
