@@ -122,7 +122,7 @@ jobs:
 
       - name: Liveness checks
         run: |
-          curl -fsS http://127.0.0.1:8000/health >/dev/null
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/health >/dev/null
           docker exec progenitor python /app/scripts/healthcheck.py
 
       - name: Build backend image
