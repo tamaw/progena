@@ -43,3 +43,5 @@ mcp_servers:
 #    allowed_tools:
 #      - jina_mcp.search_web
 #
+
+# NOTE: This file is baked into the custom LiteLLM image built by the `litellm-deploy` workflow.
