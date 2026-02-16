@@ -1,4 +1,22 @@
 services:
+  caddy:
+    container_name: litellm-caddy
+    build:
+      context: ..
+      dockerfile: docker/caddy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - litellm
+    ports:
+      - "80:80"
+    volumes:
+      # Allow hot-editing without rebuild if desired (but we still build in CI for consistency).
+      - ../docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - langfuse_network
+
   litellm-db:
     container_name: litellm-db
     image: docker.io/postgres:16
@@ -52,6 +70,10 @@ services:
 
 volumes:
   litellm_postgres_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
     driver: local
 
 networks:
