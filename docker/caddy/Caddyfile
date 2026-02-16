@@ -1,0 +1,10 @@
+# Reverse proxy for LiteLLM so you can use a hostname without ":4000".
+#
+# Point your DNS (e.g., Pi-hole) to the host IP (192.168.0.2), then browse:
+#   http://litellm.your-domain/
+#
+# This catches *any* Host header on port 80 and proxies to the litellm service.
+:80 {
+	reverse_proxy litellm:4000
+}
+
