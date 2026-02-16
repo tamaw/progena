@@ -10,8 +10,6 @@ services:
     ports:
       - "80:80"
     volumes:
-      # Allow hot-editing without rebuild if desired (but we still build in CI for consistency).
-      - ../docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
