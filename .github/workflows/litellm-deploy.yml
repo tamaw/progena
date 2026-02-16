@@ -38,6 +38,7 @@ jobs:
 
   deploy:
     runs-on: [self-hosted, Linux, X64]
+    environment: cronix
     needs: [build-and-push]
     steps:
       - uses: actions/checkout@v4
@@ -47,26 +48,25 @@ jobs:
 
       - name: Pull and restart litellm stack
         env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          AZURE_RESPONSES_API_BASE: ${{ secrets.AZURE_RESPONSES_API_BASE }}
-          AZURE_RESPONSES_API_KEY: ${{ secrets.AZURE_RESPONSES_API_KEY }}
-          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+          LITELLM_DB_PASSWORD: ${{ secrets.LITELLM_DB_PASSWORD || vars.LITELLM_DB_PASSWORD }}
+          AZURE_RESPONSES_API_BASE: ${{ secrets.AZURE_RESPONSES_API_BASE || vars.AZURE_RESPONSES_API_BASE }}
+          AZURE_RESPONSES_API_KEY: ${{ secrets.AZURE_RESPONSES_API_KEY || vars.AZURE_RESPONSES_API_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY || vars.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY || vars.LANGFUSE_SECRET_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY || vars.JINA_API_KEY }}
         run: |
-          echo "LITELLM_MASTER_KEY_len=${#LITELLM_MASTER_KEY}"
-          echo "AZURE_RESPONSES_API_BASE_len=${#AZURE_RESPONSES_API_BASE}"
-          echo "AZURE_RESPONSES_API_KEY_len=${#AZURE_RESPONSES_API_KEY}"
-          echo "JINA_API_KEY_len=${#JINA_API_KEY}"
           test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
           docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
           docker pull ghcr.io/tamaw/progenitor-litellm:latest
           cat > .litellm.env <<EOF
-          LITELLM_DB_PASSWORD=${{ secrets.LITELLM_DB_PASSWORD }}
-          LITELLM_MASTER_KEY=${{ secrets.LITELLM_MASTER_KEY }}
-          AZURE_RESPONSES_API_BASE=${{ secrets.AZURE_RESPONSES_API_BASE }}
-          AZURE_RESPONSES_API_KEY=${{ secrets.AZURE_RESPONSES_API_KEY }}
-          LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}
-          JINA_API_KEY=${{ secrets.JINA_API_KEY }}
+          LITELLM_DB_PASSWORD=${LITELLM_DB_PASSWORD}
+          LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+          AZURE_RESPONSES_API_BASE=${AZURE_RESPONSES_API_BASE}
+          AZURE_RESPONSES_API_KEY=${AZURE_RESPONSES_API_KEY}
+          LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+          LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+          JINA_API_KEY=${JINA_API_KEY}
           EOF
           docker compose --env-file .litellm.env -f docker/docker-compose.litellm.yml pull litellm
           docker compose --env-file .litellm.env -f docker/docker-compose.litellm.yml up -d --build
