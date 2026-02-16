@@ -15,7 +15,7 @@ services:
     container_name: litellm
     restart: unless-stopped
     volumes:
-      - ./config/litellm_config.yaml:/app/config.yaml:ro
+      - ../litellm-config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     ports:
       - "4000:4000"
@@ -39,7 +39,9 @@ services:
   # Progenitor Application Stack
   # =============================================================================
   progenitor:
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/progenitor/Dockerfile
     container_name: progenitor
     restart: unless-stopped
     depends_on:
@@ -49,12 +51,11 @@ services:
       <<: *progenitor-llm-env
       TZ: UTC
     volumes:
-      - ./data/state:/app/data/state
-      - ./prompts:/app/prompts:ro
-      - ./logs:/app/logs
-      - ./worktrees:/app/worktrees
-      - ./config:/app/config:ro
-      - ./tmp:/app/tmp
+      - ../data/state:/app/data/state
+      - ../prompts:/app/prompts:ro
+      - ../logs:/app/logs
+      - ../worktrees:/app/worktrees
+      - ../tmp:/app/tmp
     stdin_open: true
     tty: true
     networks:
@@ -74,7 +75,9 @@ services:
           memory: 512M
 
   backend:
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/backend/Dockerfile
     container_name: progenitor-backend
     restart: unless-stopped
     command: ["python", "-m", "uvicorn", "app.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -91,10 +94,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data/state:/app/data/state
-      - ./logs:/app/logs
-      - ./config:/app/config:ro
-      - ./tmp:/app/tmp
+      - ../data/state:/app/data/state
+      - ../logs:/app/logs
+      - ../tmp:/app/tmp
     networks:
       - progenitor-net
     healthcheck:
