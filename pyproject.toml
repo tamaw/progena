@@ -27,6 +27,7 @@ dependencies = [
     "tiktoken>=0.7.0",
     "langfuse>=2.0.0",
     "fastapi>=0.109.0",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.27.0",
     "agent-client-protocol>=0.1.0",
 ]
