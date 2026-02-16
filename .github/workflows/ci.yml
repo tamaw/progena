@@ -9,20 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  secrets-smoke:
-    # Safe diagnostic: verifies GitHub is providing secrets (length only) on a hosted runner.
-    runs-on: ubuntu-latest
-    steps:
-      - name: Print secret lengths (hosted)
-        env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          AZURE_RESPONSES_API_KEY: ${{ secrets.AZURE_RESPONSES_API_KEY }}
-          PROGENITOR_MCP_API_KEY: ${{ secrets.PROGENITOR_MCP_API_KEY }}
-        run: |
-          echo "hosted_LITELLM_MASTER_KEY_len=${#LITELLM_MASTER_KEY}"
-          echo "hosted_AZURE_RESPONSES_API_KEY_len=${#AZURE_RESPONSES_API_KEY}"
-          echo "hosted_PROGENITOR_MCP_API_KEY_len=${#PROGENITOR_MCP_API_KEY}"
-
   python:
     runs-on: ubuntu-latest
     steps:
@@ -99,6 +85,7 @@ jobs:
   deploy-cronix:
     # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
     runs-on: [self-hosted, Linux, X64]
+    environment: cronix
     needs: [python, frontend]
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
@@ -106,25 +93,24 @@ jobs:
 
       - name: Verify required secrets
         env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          PROGENITOR_MCP_API_KEY: ${{ secrets.PROGENITOR_MCP_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
+          # Allow values to come from Environment secrets/vars (cronix) or repo-level secrets.
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: |
-          echo "LITELLM_MASTER_KEY_len=${#LITELLM_MASTER_KEY}"
-          echo "PROGENITOR_MCP_API_KEY_len=${#PROGENITOR_MCP_API_KEY}"
-          echo "PROGENITOR_AZURE_STRUCTURED_API_KEY_len=${#PROGENITOR_AZURE_STRUCTURED_API_KEY}"
-          echo "PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL_len=${#PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL}"
           test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
 
       - name: Write env file
+        env:
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
+          PROGENITOR_MODEL_DEFAULT: ${{ secrets.PROGENITOR_MODEL_DEFAULT || vars.PROGENITOR_MODEL_DEFAULT }}
+          PROGENITOR_TIMEZONE: ${{ secrets.PROGENITOR_TIMEZONE || vars.PROGENITOR_TIMEZONE }}
         run: |
           cat > .progenitor.env <<EOF
-          LITELLM_MASTER_KEY=${{ secrets.LITELLM_MASTER_KEY }}
+          LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
           EOF
-          if [ -n "${{ secrets.LITELLM_BASE_URL }}" ]; then echo "LITELLM_BASE_URL=${{ secrets.LITELLM_BASE_URL }}" >> .progenitor.env; fi
-          if [ -n "${{ secrets.PROGENITOR_MODEL_DEFAULT }}" ]; then echo "PROGENITOR_MODEL_DEFAULT=${{ secrets.PROGENITOR_MODEL_DEFAULT }}" >> .progenitor.env; fi
-          if [ -n "${{ secrets.PROGENITOR_TIMEZONE }}" ]; then echo "PROGENITOR_TIMEZONE=${{ secrets.PROGENITOR_TIMEZONE }}" >> .progenitor.env; fi
+          if [ -n "${LITELLM_BASE_URL}" ]; then echo "LITELLM_BASE_URL=${LITELLM_BASE_URL}" >> .progenitor.env; fi
+          if [ -n "${PROGENITOR_MODEL_DEFAULT}" ]; then echo "PROGENITOR_MODEL_DEFAULT=${PROGENITOR_MODEL_DEFAULT}" >> .progenitor.env; fi
+          if [ -n "${PROGENITOR_TIMEZONE}" ]; then echo "PROGENITOR_TIMEZONE=${PROGENITOR_TIMEZONE}" >> .progenitor.env; fi
 
       - name: Ensure external network
         run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
