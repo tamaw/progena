@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from acp import (
     PROTOCOL_VERSION,
@@ -50,7 +50,10 @@ from acp.schema import (
     WaitForTerminalExitResponse,
     WriteTextFileResponse,
 )
-from acp.terminal import TerminalHandle
+if TYPE_CHECKING:
+    from acp.terminal import TerminalHandle
+else:
+    TerminalHandle = Any  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
