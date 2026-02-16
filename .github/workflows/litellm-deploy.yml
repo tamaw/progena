@@ -49,6 +49,15 @@ jobs:
         run: |
           docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
           docker pull ghcr.io/tamaw/progenitor-litellm:latest
-          docker compose -f docker/docker-compose.litellm.yml pull litellm
-          docker compose -f docker/docker-compose.litellm.yml up -d
+          cat > .litellm.env <<EOF
+          LITELLM_DB_PASSWORD=${{ secrets.LITELLM_DB_PASSWORD }}
+          LITELLM_MASTER_KEY=${{ secrets.LITELLM_MASTER_KEY }}
+          AZURE_RESPONSES_API_BASE=${{ secrets.AZURE_RESPONSES_API_BASE }}
+          AZURE_RESPONSES_API_KEY=${{ secrets.AZURE_RESPONSES_API_KEY }}
+          LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}
+          JINA_API_KEY=${{ secrets.JINA_API_KEY }}
+          EOF
+          docker compose --env-file .litellm.env -f docker/docker-compose.litellm.yml pull litellm
+          docker compose --env-file .litellm.env -f docker/docker-compose.litellm.yml up -d
 
