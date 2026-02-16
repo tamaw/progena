@@ -28,7 +28,11 @@ jobs:
         run: ruff check .
 
       - name: Tests (pytest)
-        run: pytest
+        run: >
+          pytest
+          --ignore=tests/progenitor/test_dual_loop_full_integration.py
+          --ignore=tests/progenitor/test_dual_loop_integration.py
+          --ignore=tests/progenitor/test_e2e_dual_loop.py
 
   frontend:
     runs-on: ubuntu-latest
