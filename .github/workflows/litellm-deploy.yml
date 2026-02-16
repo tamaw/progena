@@ -46,7 +46,11 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Pull and restart litellm stack
+        env:
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
         run: |
+          echo "LITELLM_MASTER_KEY_len=${#LITELLM_MASTER_KEY}"
+          test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
           docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
           docker pull ghcr.io/tamaw/progenitor-litellm:latest
           cat > .litellm.env <<EOF
