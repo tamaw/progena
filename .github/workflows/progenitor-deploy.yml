@@ -1,0 +1,49 @@
+name: progenitor-deploy
+
+on:
+  workflow_run:
+    workflows: ["ci"]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Verify required secrets
+        run: |
+          test -n "${{ secrets.LITELLM_MASTER_KEY }}" || (echo "Missing secret: LITELLM_MASTER_KEY" && exit 1)
+
+      - name: Write env file
+        run: |
+          cat > .progenitor.env <<EOF
+          LITELLM_MASTER_KEY=${{ secrets.LITELLM_MASTER_KEY }}
+          LITELLM_BASE_URL=${{ secrets.LITELLM_BASE_URL }}
+          PROGENITOR_MODEL_DEFAULT=${{ secrets.PROGENITOR_MODEL_DEFAULT }}
+          PROGENITOR_TIMEZONE=${{ secrets.PROGENITOR_TIMEZONE }}
+          EOF
+
+      - name: Ensure external network
+        run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
+
+      - name: Build frontend image (sanity)
+        run: docker build -f docker/frontend/Dockerfile app/frontend -t progenitor-frontend:cronix
+
+      - name: Deploy progenitor stack
+        run: |
+          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml up -d --build
+          docker compose -f docker/docker-compose.progenitor.yml ps
+
+      - name: Liveness checks
+        run: |
+          curl -fsS http://127.0.0.1:8000/health >/dev/null
+          docker exec progenitor python /app/scripts/healthcheck.py
+
