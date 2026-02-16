@@ -4,14 +4,15 @@ The project ships compose stacks under `docker/`.
 
 ## Compose Files
 
-- `docker/docker-compose.progenitor.yml` - Full stack (`litellm`, `progenitor`, `backend`)
-- `docker/docker-compose.litellm.yml` - LiteLLM-focused stack
+- `docker/docker-compose.litellm.yml` - LiteLLM stack (db + litellm + caddy reverse proxy)
+- `docker/docker-compose.progenitor.yml` - Progenitor stack (progenitor + backend) that connects to the external LiteLLM stack
 
 ## Start Full Stack
 
 From repository root:
 
 ```bash
+docker compose -f docker/docker-compose.litellm.yml up --build -d
 docker compose -f docker/docker-compose.progenitor.yml up --build -d
 ```
 
@@ -27,12 +28,12 @@ docker compose -f docker/docker-compose.progenitor.yml down
 docker compose -f docker/docker-compose.progenitor.yml logs -f
 docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 docker compose -f docker/docker-compose.progenitor.yml logs -f backend
-docker compose -f docker/docker-compose.progenitor.yml logs -f litellm
+docker compose -f docker/docker-compose.litellm.yml logs -f litellm
 ```
 
 ## Exposed Services
 
-- LiteLLM: `http://localhost:4000`
+- LiteLLM: `http://localhost/` (via caddy) or `http://localhost:4000`
 - Backend API: `http://localhost:8000`
 
 Health checks:
@@ -47,7 +48,7 @@ curl http://localhost:8000/health
 Set values in your shell or `.env` before startup:
 
 - `LITELLM_MASTER_KEY`
-- `LITELLM_BASE_URL` (defaults to `http://litellm:4000` inside compose network)
+- `LITELLM_BASE_URL` (defaults to `http://litellm:4000` on the shared external network)
 - `PROGENITOR_MODEL_DEFAULT` (optional override)
 
 ## Notes
