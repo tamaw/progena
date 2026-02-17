@@ -417,6 +417,50 @@ class LLMClient:
             logger.warning("MCP tool call failed: %s", exc)
             return {"error": f"MCP call failed: {exc}"}
 
+    async def _execute_tool_call(
+        self,
+        tool_call: dict[str, Any],
+        tool_name: str,
+        tool_args: dict[str, Any],
+        system_tool_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute either a system tool or an MCP tool call."""
+        if system_tool_context:
+            try:
+                from ..nodes.node_helpers.registry import get_system_tool, execute_system_tool
+            except Exception:
+                get_system_tool = None
+                execute_system_tool = None
+
+            if get_system_tool and execute_system_tool and get_system_tool(tool_name):
+                tool_registry = system_tool_context.get("tool_registry")
+                state_manager = system_tool_context.get("state_manager")
+                state = system_tool_context.get("state")
+                default_user_input = system_tool_context.get("default_user_input", "")
+                tool_user_input = str(tool_args.get("request") or default_user_input or "")
+
+                data_out, err, state_updates, _retry = await execute_system_tool(
+                    tool_name=tool_name,
+                    tool_registry=tool_registry,
+                    llm_client=self,
+                    state=state,
+                    state_manager=state_manager,
+                    user_input=tool_user_input,
+                    tool_args=tool_args,
+                )
+
+                if state_updates and isinstance(system_tool_context.get("state_updates"), dict):
+                    system_tool_context["state_updates"].update(state_updates)
+                if state_updates and isinstance(state, dict):
+                    state.update(state_updates)
+
+                if err:
+                    return {"error": err}
+                return {"result": data_out}
+
+        # Default: call MCP tool
+        return await self._call_mcp_tool({**tool_call, "arguments": tool_args})
+
     def _get_json_response_format(self, response_model: type, schema_name: str) -> dict[str, Any]:
         """Return a response_format payload for structured output."""
         return _build_json_schema_format(response_model, schema_name)
@@ -729,6 +773,7 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         max_tool_rounds: int = 4,
+        system_tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call LiteLLM /responses endpoint with optional tool calling loop.
 
@@ -795,17 +840,19 @@ class LLMClient:
             else:
                 raise
 
-        # Tool calling loop (MCP tools)
+        # Tool calling loop (MCP + system tools)
         tool_round = 0
         tool_calls = self._extract_tool_calls(data)
+        seen_calls: set[str] = set()
 
         while tool_calls and tool_round < max_tool_rounds:
-            logger.info("Executing %d MCP tool call(s) - round %d", len(tool_calls), tool_round + 1)
+            logger.info("Executing %d tool call(s) - round %d", len(tool_calls), tool_round + 1)
             await self._push_event(
                 event_type="mcp_tool_round_started",
-                content=f"Executing {len(tool_calls)} MCP tool call(s) (round {tool_round + 1})",
+                content=f"Executing {len(tool_calls)} tool call(s) (round {tool_round + 1})",
                 metadata={"round": tool_round + 1, "count": len(tool_calls)},
             )
+
             tool_result_messages: list[dict[str, Any]] = []
 
             for tool_call in tool_calls:
@@ -817,9 +864,32 @@ class LLMClient:
                     or "(unknown)"
                 )
 
+                raw_args = (
+                    tool_call.get("arguments")
+                    or tool_call.get("input")
+                    or tool_call.get("params")
+                    or tool_call.get("function", {}).get("arguments")
+                    or {}
+                )
+                if isinstance(raw_args, str):
+                    try:
+                        tool_args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        tool_args = {"raw": raw_args}
+                elif isinstance(raw_args, dict):
+                    tool_args = raw_args
+                else:
+                    tool_args = {"raw": raw_args}
+
+                # Safety: detect repeated identical tool calls.
+                try:
+                    sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
+                except Exception:
+                    sig = f"{tool_name}:{str(tool_args)}"
+
                 await self._push_event(
                     event_type="mcp_tool_call_started",
-                    content=f"Calling MCP tool: {tool_name}",
+                    content=f"Calling tool: {tool_name}",
                     metadata={
                         "tool": tool_name,
                         "tool_call_id": tool_call_id,
@@ -827,13 +897,21 @@ class LLMClient:
                     },
                 )
 
-                result = await self._call_mcp_tool(tool_call)
-                tool_call_type = tool_call.get("type")
+                if sig in seen_calls:
+                    result: dict[str, Any] = {"error": f"Repeated tool call detected: {tool_name}"}
+                else:
+                    seen_calls.add(sig)
+                    result = await self._execute_tool_call(
+                        tool_call=tool_call,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        system_tool_context=system_tool_context,
+                    )
 
                 success = not (isinstance(result, dict) and result.get("error"))
                 await self._push_event(
                     event_type="mcp_tool_call_finished",
-                    content=f"MCP tool {tool_name} {'succeeded' if success else 'failed'}",
+                    content=f"Tool {tool_name} {'succeeded' if success else 'failed'}",
                     metadata={
                         "tool": tool_name,
                         "tool_call_id": tool_call_id,
@@ -842,15 +920,11 @@ class LLMClient:
                     },
                 )
 
-                # LiteLLM /responses input validation rejects replaying
-                # content items with type='function_call' in subsequent turns.
-                # To continue the conversation, inject tool results as plain
-                # text so the model can use them in its next response.
                 result_text = json.dumps(result, default=str)
                 tool_result_messages.append(
                     {
                         "role": "user",
-                        "content": f"[MCP_TOOL_RESULT tool={tool_name} id={tool_call_id}] {result_text}",
+                        "content": f"[TOOL_RESULT tool={tool_name} id={tool_call_id}] {result_text}",
                     }
                 )
 
@@ -887,15 +961,15 @@ class LLMClient:
 
             await self._push_event(
                 event_type="mcp_tool_round_finished",
-                content=f"Finished MCP tool round {tool_round}",
+                content=f"Finished tool round {tool_round}",
                 metadata={"round": tool_round, "remaining_calls": len(tool_calls)},
             )
 
         if tool_calls:
-            logger.warning("MCP tool call loop reached max rounds (%d)", max_tool_rounds)
+            logger.warning("Tool call loop reached max rounds (%d)", max_tool_rounds)
             await self._push_event(
                 event_type="mcp_tool_round_limit_reached",
-                content=f"MCP tool call loop reached max rounds ({max_tool_rounds})",
+                content=f"Tool call loop reached max rounds ({max_tool_rounds})",
                 metadata={"max_tool_rounds": max_tool_rounds, "remaining_calls": len(tool_calls)},
             )
 
@@ -909,6 +983,8 @@ class LLMClient:
         max_tokens: int = 4096,
         response_format: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
+        max_tool_rounds: int = 4,
+        system_tool_context: dict[str, Any] | None = None,
     ) -> str:
         """Call /responses endpoint and return text response."""
         if response_format:
@@ -923,6 +999,8 @@ class LLMClient:
             temperature=temperature,
             max_tokens=max_tokens,
             tools=tools,
+            max_tool_rounds=max_tool_rounds,
+            system_tool_context=system_tool_context,
         )
         text, _reasoning = self._extract_text_and_reasoning(data)
         return text

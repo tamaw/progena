@@ -14,7 +14,7 @@ from typing import Any, TypedDict
 from ..runtime.port_utils import find_available_port
 from ..runtime.time_utils import utcnow
 from ..state.models import AgentRegistryEntry, AgentStatus
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ List Tools - Lists all available tools including system tools, agents, and MCP t
 
 import logging
 
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

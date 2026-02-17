@@ -4,7 +4,7 @@ Current Time - Return the current UTC time.
 
 import logging
 
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ..runtime.time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)

@@ -13,7 +13,7 @@ from typing import Any
 
 from ..env_utils import env_int
 from ..llm.prompts import PromptTemplates
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ..runtime.time_utils import format_timestamp, utcnow_isoformat
 
 logger = logging.getLogger(__name__)

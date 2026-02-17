@@ -14,6 +14,7 @@ full ProgenitorState objects. LangGraph merges these into the full state.
 from . import (
     act,
     build,  # Extracted from graph_inner_loop.py
+    chat,
     commit_core,
     cycle_limit,
     decide,
@@ -70,6 +71,7 @@ __all__ = [
     # Node modules
     "intake",
     "time_check",
+    "chat",
     "decide",
     "planner",
     "pick_next",

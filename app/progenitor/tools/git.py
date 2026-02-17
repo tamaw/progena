@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..runtime.time_utils import format_timestamp, utcnow
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

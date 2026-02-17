@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from ..llm.client import LLMClient
 
 from ..llm.prompts import PromptTemplates
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ New Conversation - Start a new conversation by resetting run_id and clearing ses
 import logging
 from typing import Any
 
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ..state.models import generate_run_id
 
 logger = logging.getLogger(__name__)

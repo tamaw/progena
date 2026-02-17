@@ -7,7 +7,7 @@ Central registry for all progenitor system tools with lookup, matching, and exec
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from .protocol import SystemTool, ToolContext
+from ...tools.protocol import SystemTool, ToolContext
 
 if TYPE_CHECKING:
     from ...state.models import ProgenitorState
@@ -21,6 +21,7 @@ _SYSTEM_TOOLS: dict[str, SystemTool] = {}
 def _init_registry() -> dict[str, SystemTool]:
     """Initialize the tools registry (lazy imports to avoid circular deps)."""
     from ...tools.agent_discovery import AgentDiscoveryTool
+    from ...tools.build import BuildTool
     from ...tools.build_status import BuildStatusTool
     from ...tools.copilot import CopilotTool
     from ...tools.copilot_acp import CopilotACPTool
@@ -44,6 +45,7 @@ def _init_registry() -> dict[str, SystemTool]:
     from ...tools.user_communication import UserCommunicationTool
 
     tools = [
+        BuildTool(),
         ListToolsTool(),
         RediscoverAgentsTool(),
         ListAgentsTool(),
@@ -97,25 +99,6 @@ def get_system_tool_names() -> list[str]:
     return list(_ensure_registry().keys())
 
 
-def match_tool_by_input(user_input: str) -> str | None:
-    """Fast-path: find a system tool matching user input by keywords/patterns.
-
-    Iterates over all registered system tools and checks each tool's
-    keywords and trigger_patterns against the user input.
-
-    Returns:
-        The tool name if a match is found, otherwise None.
-    """
-    if not user_input or not user_input.strip():
-        return None
-
-    for tool in _ensure_registry().values():
-        if tool.matches_input(user_input):
-            return tool.name
-
-    return None
-
-
 async def execute_system_tool(
     tool_name: str,
     tool_registry: Any,
@@ -123,6 +106,7 @@ async def execute_system_tool(
     state: Optional["ProgenitorState"] = None,
     state_manager: Any = None,
     user_input: str = "",
+    tool_args: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, bool]:
     """Execute a tool by name and return (result, error, state_updates, should_retry_slow_path).
 
@@ -139,7 +123,7 @@ async def execute_system_tool(
     Returns:
         Tuple of (result_dict, error_string, state_updates, should_retry_slow_path).
         state_updates is a dict of state keys to merge, or None.
-        should_retry_slow_path indicates if this failed fast-path should retry via slow path.
+        should_retry_slow_path indicates if the caller should retry via a different strategy.
     """
     tool = get_system_tool(tool_name)
 
@@ -152,6 +136,7 @@ async def execute_system_tool(
         state=state,
         state_manager=state_manager,
         user_input=user_input,
+        tool_args=tool_args,
     )
 
     try:

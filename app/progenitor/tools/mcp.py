@@ -14,7 +14,7 @@ from typing import Any, cast
 import httpx
 
 from ..config import MCPConfig
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

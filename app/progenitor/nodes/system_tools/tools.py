@@ -12,7 +12,7 @@ from ...env_utils import env_bool, env_int
 from ...runtime.time_utils import utcnow_isoformat
 from ...state.helpers import get_ideal_state
 from ...state.models import generate_run_id
-from ..node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from ...tools.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
