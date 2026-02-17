@@ -2,13 +2,10 @@
 LangGraph Topology for Progenitor Agent - Outer Loop.
 
 Implements the outer loop for handling user interactions:
-Intake → TimeCheck → Decide → PickNext → Act → Respond → CycleLimit → [Idle]
+Intake → Chat → Respond → CycleLimit → [Idle]
 
-Build tasks are handled directly by Decide which starts BackgroundBuildRunner.
-The inner loop (with its own Planner) then runs:
-OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
-
-No planner in the outer loop - decide handles all routing directly.
+Tool execution is handled via:
+PickNext → WorktreePrep → Act → [Validate] → CommitCore → Respond
 """
 
 import logging
@@ -25,7 +22,6 @@ from .nodes import (
     intake,
     pick_next,
     respond,
-    time_check,
     validate,
     worktree_prep,
 )
@@ -54,13 +50,8 @@ def create_progenitor_graph(
     """Create the outer loop LangGraph for Progenitor.
 
     Outer Loop Flow:
-    Intake → TimeCheck → Decide → PickNext → WorktreePrep →
-    Act → [Validate] → CommitCore → Respond → CycleLimit → [Idle]
-
-    No planner in outer loop. Decide handles all routing:
-    - Direct answers go to respond
-    - Builds start BackgroundBuildRunner (inner loop has its own planner)
-    - Tool calls/agent calls go to pick_next for execution
+    Intake → Chat → Respond → CycleLimit → [Idle]
+    PickNext → WorktreePrep → Act → [Validate] → CommitCore → Respond
 
     Args:
         state_manager: StateManager instance for persistence.
@@ -77,7 +68,6 @@ def create_progenitor_graph(
     # Create node functions with dependencies injected
     nodes = {
         "intake": intake.create_node(state_manager),
-        "time_check": time_check.create_node(config.runtime.timezone, state_manager),
         "chat": chat.create_node(llm_client, tool_registry, state_manager, config),
         "pick_next": pick_next.create_node(),
         "worktree_prep": worktree_prep.create_node(worktrees_dir),
@@ -103,8 +93,7 @@ def create_progenitor_graph(
     builder.set_entry_point("intake")
 
     # Define edges
-    builder.add_edge("intake", "time_check")
-    builder.add_edge("time_check", "chat")
+    builder.add_edge("intake", "chat")
     builder.add_edge("chat", "respond")
 
     # Conditional routing after pick_next

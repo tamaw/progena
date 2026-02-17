@@ -143,7 +143,7 @@ class TestDualLoopEndToEnd:
         nodes = set(graph.get_graph().nodes.keys()) - {"__start__"}
 
         expected_outer_nodes = {
-            "intake", "time_check", "chat", "pick_next",
+            "intake", "chat", "pick_next",
             "worktree_prep", "act", "validate", "commit_core",
             "respond", "cycle_limit", "idle",
         }

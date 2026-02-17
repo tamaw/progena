@@ -1,7 +1,7 @@
 """Coverage test to ensure all system tools are registered.
 
 System tools are implemented as BaseSystemTool subclasses under
-app/progenitor/tools/*.py and must be registered in
+app/progenitor/tools/*.py and must be discoverable/registered by
 app/progenitor/nodes/node_helpers/registry.py.
 """
 
@@ -26,7 +26,7 @@ def _iter_tool_modules() -> list[ModuleType]:
 
 
 def test_all_base_system_tools_are_registered():
-    from app.progenitor.nodes.node_helpers.protocol import BaseSystemTool
+    from app.progenitor.tools.protocol import BaseSystemTool
     from app.progenitor.nodes.node_helpers.registry import get_system_tool_names
 
     registered = set(get_system_tool_names())

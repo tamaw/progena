@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ProgenitorConfig, get_config, setup_logging
+from .graph_background_loop import create_background_graph
 from .graph_outer_loop import create_progenitor_graph
 from .llm.client import LLMClient
 from .runtime.copilot_acp import CopilotACPManager
@@ -76,11 +77,33 @@ class Progenitor:
         # Warm system tool registry so tools are discovered at startup
         from .nodes.node_helpers.registry import get_system_tool_names
         system_tool_names = get_system_tool_names()
-        logger.info("System tools discovered: %d (%s)", len(system_tool_names), ", ".join(system_tool_names))
+        system_tool_count = len(system_tool_names)
+        logger.info(
+            "System tools discovered: %d (%s)",
+            system_tool_count,
+            ", ".join(system_tool_names),
+        )
 
         # Initialize MCP tools and register with tool registry
         await setup_mcp_for_llm_client(self.llm_client, self.config.mcp)
         await self._register_mcp_tools()
+
+        agent_count = len(self.tool_registry.get_agents())
+        mcp_tool_count = len(self.tool_registry.get_tools())
+        local_mcp_count = 0
+        if hasattr(self.tool_registry, "get_local_mcp_tools"):
+            try:
+                local_mcp_count = len(self.tool_registry.get_local_mcp_tools())
+            except Exception:
+                local_mcp_count = 0
+
+        logger.info(
+            "Startup discovery: system_tools=%d, agents=%d, mcp_tools=%d (local_mcp=%d)",
+            system_tool_count,
+            agent_count,
+            mcp_tool_count,
+            local_mcp_count,
+        )
 
         # Initialize Copilot ACP manager
         # The manager spawns copilot processes per-request via stdio (no persistent service)
@@ -120,9 +143,20 @@ class Progenitor:
             copilot_acp_manager=self._copilot_acp_manager,
         )
 
+        # Create the background job graph (scheduled tasks)
+        logger.info("Creating background job graph")
+        background_graph = create_background_graph(
+            state_manager=self.state_manager,
+            llm_client=self.llm_client,
+            tool_registry=self.tool_registry,
+            config=self.config,
+            event_pusher=deferred_push_event,
+        )
+
         # Create loop runner
         self.loop_runner = ProgenitorLoop(
             graph=self.graph,
+            background_graph=background_graph,
             state_manager=self.state_manager,
             config=self.config,
             llm_client=self.llm_client,

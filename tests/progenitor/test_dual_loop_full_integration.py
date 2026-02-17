@@ -169,7 +169,6 @@ class TestDualLoopGraphCreation:
 
         # Outer loop nodes (no planner - only in inner loop)
         assert "intake" in node_names
-        assert "time_check" in node_names
         assert "chat" in node_names
         assert "pick_next" in node_names
         assert "act" in node_names

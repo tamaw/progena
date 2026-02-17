@@ -301,10 +301,7 @@ Core JSON contains:
 ### Nodes
 
 * **Intake**: append user message to conversation log; update current context
-* **TimeCheck**: read current time (configured timezone); identify due scheduled items
-* **EnqueueDue**: convert due schedule items into backlog work (idempotent)
-* **Decide**: choose action path: Answer | A2A Delegate | Build/Upgrade | Build/Upgrade MCP | Mixed
-* **Planner**: produce/refresh backlog items in state (build tasks + delegation tasks + scheduled tasks)
+* **Chat**: main LLM tool-calling interaction for user input
 * **PickNext**: select next backlog item
 * **WorktreePrep**: create/checkout worktree for build items
 * **Act**:
@@ -319,12 +316,26 @@ Core JSON contains:
 * **Idle**: if backlog empty and nothing scheduled is due soon, prompt *“Anything to do?”* and back off/sleep until input or next due time
 * **CycleLimit**: cap actions per cycle to avoid runaway loops
 
+Background scheduling graph nodes:
+
+* **PickDueSchedule**: find the next due schedule entry and materialize its instruction into `current_input`
+* **AdvanceSchedule**: update `schedule.json` (set `last_run`, and next `run_at` for recurring entries)
+
 ### Flow
 
-* Intake → TimeCheck → EnqueueDue → Decide → (Planner optional) → PickNext → Act → (Validate/Register if build) → CommitCore → Respond → CycleLimit → PickNext
-* If backlog empty: Respond → Idle → Intake
+User outer loop:
 
-The **Planner produces backlog** into state. The loop consumes backlog continuously. Scheduled items inject work into the backlog when due; otherwise Progenitor idles and asks if there’s anything to do.
+* Intake → Chat → Respond → CycleLimit → (PickNext | Idle)
+
+Execution path (when work is required):
+
+* PickNext → WorktreePrep → Act → Validate → (PickNext | CommitCore) → Respond
+
+Background scheduled jobs (separate graph):
+
+* PickDueSchedule → Intake → Chat → Respond → AdvanceSchedule
+
+The loop consumes backlog continuously for build/tool work. Scheduled items are executed by the background job graph (they do not inject scheduled work into the backlog).
 
 ---
 
@@ -440,10 +451,10 @@ No silent retries. No pretending it worked.
 
 Progenitor is time-aware and maintains a simple internal scheduler.
 
-* Wall-clock time is read each cycle (container time + configured timezone)
+* Wall-clock time is read by the background scheduler (container time + configured timezone)
 * Time-based intents ("every day at 9am", "next Tuesday") create or modify schedule entries
-* **TimeCheck** evaluates due schedules on each cycle
-* Due schedules enqueue backlog work items, executed like normal tasks
+* Due schedules are executed in a dedicated background job graph
+* After execution, `schedule.json` is advanced (set `last_run`, and next `run_at` for recurring entries)
 
 Scheduled items may:
 
@@ -532,7 +543,7 @@ This is the baseline instruction set Progenitor must load on startup (versioned 
 **Scheduling**
 
 * If the user expresses a time-based intent ("every day at 9am", "next Tuesday"), create/modify a schedule entry.
-* On each loop cycle, run TimeCheck and enqueue due items.
+* Scheduled entries are executed by the background job graph and advanced after running.
 
 **Build discipline (Copilot CLI)**
 
