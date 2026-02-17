@@ -135,7 +135,7 @@ class TestValidationAction:
             action_id="act_1",
             tool="pytest",
             command="python -m pytest app/",
-            project_directory="app/agents/weather",
+            project_directory="build/agents/weather",
         )
         assert a.tool == "pytest"
         assert a.success is False
@@ -146,7 +146,7 @@ class TestValidationAction:
             action_id="act_2",
             tool="pyright",
             command="python -m pyright app/",
-            project_directory="app/agents/weather",
+            project_directory="build/agents/weather",
             exit_code=0,
             stdout="0 errors",
             stderr="",
@@ -587,15 +587,15 @@ class TestGetProjectDirectory:
     """Tests for _get_project_directory."""
 
     def test_from_build_settings(self):
-        state = {"build_settings": {"project_directory": "app/agents/weather"}}
+        state = {"build_settings": {"project_directory": "build/agents/weather"}}
         result = _get_project_directory({}, state)
-        assert result == "app/agents/weather"
+        assert result == "build/agents/weather"
 
     def test_from_work_item_context(self):
-        item = {"context": {"project_directory": "app/mcp/tools"}}
+        item = {"context": {"project_directory": "build/mcp/tools"}}
         state = {}
         result = _get_project_directory(item, state)
-        assert result == "app/mcp/tools"
+        assert result == "build/mcp/tools"
 
     def test_no_directory_found(self):
         result = _get_project_directory({}, {})

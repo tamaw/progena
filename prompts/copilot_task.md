@@ -3,12 +3,12 @@
 Create the following component now. Do not ask for clarification - just build it:
 
 ## Task
-Create a new {kind} named "{agent_name}" in `app/agents/{agent_name}/`
+Create a new {kind} named "{agent_name}" in `build/agents/{agent_name}/`
 
 ## What to create
-1. Create directory: `app/agents/{agent_name}/`
-2. Create `app/agents/{agent_name}/agent.py` with the main implementation
-3. Create `app/agents/{agent_name}/__init__.py` that exports the main class
+1. Create directory: `build/agents/{agent_name}/`
+2. Create `build/agents/{agent_name}/agent.py` with the main implementation
+3. Create `build/agents/{agent_name}/__init__.py` that exports the main class
 
 ## Description
 {description}
