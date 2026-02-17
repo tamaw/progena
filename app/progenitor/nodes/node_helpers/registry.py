@@ -20,18 +20,28 @@ _SYSTEM_TOOLS: dict[str, SystemTool] = {}
 
 def _init_registry() -> dict[str, SystemTool]:
     """Initialize the tools registry (lazy imports to avoid circular deps)."""
+    from ...tools.agent_discovery import AgentDiscoveryTool
     from ...tools.build_status import BuildStatusTool
+    from ...tools.copilot import CopilotTool
+    from ...tools.copilot_acp import CopilotACPTool
     from ...tools.compress_conversation import CompressConversationTool
     from ...tools.current_time import CurrentTimeTool
+    from ...tools.git import GitTool
     from ...tools.list_agents import ListAgentsTool
     from ...tools.list_schedule import ListScheduleTool
     from ...tools.list_tools import ListToolsTool
+    from ...tools.mcp import MCPTool
     from ...tools.memory import MemoryTool
     from ...tools.new_conversation import NewConversationTool
     from ...tools.rediscover_agents import RediscoverAgentsTool
+    from ...tools.registry import RegistryTool
+    from ...tools.schedule import ScheduleTool
     from ...tools.schedule_task import ScheduleTaskTool
     from ...tools.shell import ShellCheckTool, ShellExecTool
+    from ...tools.semantic_registry import SemanticRegistryTool
+    from ...tools.self_reflect import SelfReflectModuleTool
     from ...tools.self_reflect_tool import SelfReflectTool
+    from ...tools.user_communication import UserCommunicationTool
 
     tools = [
         ListToolsTool(),
@@ -47,6 +57,19 @@ def _init_registry() -> dict[str, SystemTool]:
         MemoryTool(),
         ShellCheckTool(),
         ShellExecTool(),
+        ShellCheckTool(),
+        ShellExecTool(),
+        # Module-level/system wrappers (status/diagnostic/tools/* coverage)
+        RegistryTool(),
+        MCPTool(),
+        ScheduleTool(),
+        SemanticRegistryTool(),
+        UserCommunicationTool(),
+        GitTool(),
+        CopilotTool(),
+        CopilotACPTool(),
+        AgentDiscoveryTool(),
+        SelfReflectModuleTool(),
     ]
     return {tool.name: tool for tool in tools}
 

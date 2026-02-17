@@ -27,6 +27,7 @@ from .response_models import (
     validate_planner_response,
 )
 from .tokenizer import count_message_tokens
+from ..tools.user_communication import EventPusher
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,28 @@ class LLMClient:
         self.mcp_client: httpx.AsyncClient | None = None
         self.mcp_tools: list[dict[str, Any]] = []
 
+        # Optional event pusher for realtime progress updates via IPC
+        self._event_pusher: EventPusher | None = None
+
         logger.info("LLM client configured (endpoint=%s, model=%s)", self.endpoint_url, self.model)
+
+    def set_event_pusher(self, event_pusher: EventPusher | None) -> None:
+        """Attach an event pusher used to stream progress updates to clients."""
+        self._event_pusher = event_pusher
+
+    async def _push_event(
+        self,
+        event_type: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if not self._event_pusher:
+            return
+        try:
+            await self._event_pusher(event_type, content, metadata)
+        except Exception:
+            # Never let event delivery break the main LLM/tool flow
+            logger.debug("Failed to push event %s", event_type, exc_info=True)
 
     async def close(self):
         """Close the HTTP client."""
@@ -292,11 +314,15 @@ class LLMClient:
     ) -> list[dict[str, Any]]:
         """Resolve effective tools for a request.
 
-        For structured-output requests, tools are disabled by default unless
-        explicitly provided by the caller.
+        For structured-output requests, we still include the tool list in the
+        upstream payload (so providers like Azure/OpenAI via LiteLLM can see
+        the full tool registry), but the call site should typically force
+        tool_choice='none' to avoid tool calls breaking strict JSON outputs.
         """
         if response_format is not None and tools is None:
-            return []
+            # Default tools for structured outputs: include for context/contract,
+            # but rely on tool_choice='none' during the call.
+            return self._merge_tools(None)
         return self._merge_tools(tools)
 
     def _extract_tool_calls(self, data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -701,6 +727,7 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         max_tool_rounds: int = 4,
     ) -> dict[str, Any]:
         """Call LiteLLM /responses endpoint with optional tool calling loop.
@@ -737,6 +764,16 @@ class LLMClient:
             payload["response_format"] = response_format
         if merged_tools:
             payload["tools"] = merged_tools
+            # When requesting strict structured output, prevent tool calling while
+            # still sending tool definitions upstream.
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+            elif response_format is not None:
+                payload["tool_choice"] = "none"
+            else:
+                # Be explicit: some providers default tool calling off unless
+                # tool_choice is set.
+                payload["tool_choice"] = "auto"
         if include_reasoning:
             payload["reasoning"] = {"summary": "auto"}
         if self._supports_temperature():
@@ -764,62 +801,103 @@ class LLMClient:
 
         while tool_calls and tool_round < max_tool_rounds:
             logger.info("Executing %d MCP tool call(s) - round %d", len(tool_calls), tool_round + 1)
-            assistant_tool_call_items: list[dict[str, Any]] = []
-            tool_messages: list[dict[str, Any]] = []
-            function_call_outputs: list[dict[str, Any]] = []
+            await self._push_event(
+                event_type="mcp_tool_round_started",
+                content=f"Executing {len(tool_calls)} MCP tool call(s) (round {tool_round + 1})",
+                metadata={"round": tool_round + 1, "count": len(tool_calls)},
+            )
+            tool_result_messages: list[dict[str, Any]] = []
 
             for tool_call in tool_calls:
-                result = await self._call_mcp_tool(tool_call)
-                tool_call_type = tool_call.get("type")
                 tool_call_id = tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
                 tool_name = (
                     tool_call.get("name")
                     or tool_call.get("tool_name")
                     or tool_call.get("function", {}).get("name")
+                    or "(unknown)"
                 )
 
-                if tool_call_type == "function_call":
-                    if tool_call_id:
-                        function_call_outputs.append(
-                            {
-                                "type": "function_call_output",
-                                "call_id": tool_call_id,
-                                "output": json.dumps(result, default=str),
-                            }
-                        )
-                    else:
-                        logger.warning("Function call missing call_id; falling back to tool message format")
+                await self._push_event(
+                    event_type="mcp_tool_call_started",
+                    content=f"Calling MCP tool: {tool_name}",
+                    metadata={
+                        "tool": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "type": tool_call.get("type"),
+                    },
+                )
 
-                if tool_call_type != "function_call" or not tool_call_id:
-                    tool_message = {
-                        "role": "tool",
-                        "content": json.dumps(result, default=str),
+                result = await self._call_mcp_tool(tool_call)
+                tool_call_type = tool_call.get("type")
+
+                success = not (isinstance(result, dict) and result.get("error"))
+                await self._push_event(
+                    event_type="mcp_tool_call_finished",
+                    content=f"MCP tool {tool_name} {'succeeded' if success else 'failed'}",
+                    metadata={
+                        "tool": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "success": success,
+                        "error": (result.get("error") if isinstance(result, dict) else None),
+                    },
+                )
+
+                # LiteLLM /responses input validation rejects replaying
+                # content items with type='function_call' in subsequent turns.
+                # To continue the conversation, inject tool results as plain
+                # text so the model can use them in its next response.
+                result_text = json.dumps(result, default=str)
+                tool_result_messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[MCP_TOOL_RESULT tool={tool_name} id={tool_call_id}] {result_text}",
                     }
-                    if tool_call_id:
-                        tool_message["tool_call_id"] = tool_call_id
-                    if tool_name:
-                        tool_message["name"] = tool_name
-                    tool_messages.append(tool_message)
+                )
 
-                if tool_call_type != "function_call":
-                    assistant_tool_call_items.append(tool_call)
-
-            # Add assistant response with tool calls + tool results
-            if assistant_tool_call_items:
-                input_messages.append({"role": "assistant", "content": assistant_tool_call_items})
-            input_messages.extend(tool_messages)
-            input_messages.extend(function_call_outputs)
+            # Feed tool results back into the next round as plain-text input.
+            input_messages.extend(tool_result_messages)
             payload["input"] = input_messages
 
             # Next round
             response = await self.client.post(self.endpoint_url, json=payload)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body_preview = (exc.response.text or "").strip()
+                if len(body_preview) > 2000:
+                    body_preview = body_preview[:2000] + "..."
+                logger.error(
+                    "Tool-loop follow-up /responses request failed (status=%s): %s",
+                    exc.response.status_code,
+                    body_preview,
+                )
+                await self._push_event(
+                    event_type="mcp_tool_followup_failed",
+                    content=f"Tool-loop follow-up request failed ({exc.response.status_code})",
+                    metadata={
+                        "status_code": exc.response.status_code,
+                        "body": body_preview,
+                    },
+                )
+                raise
+
             data = response.json()
             tool_calls = self._extract_tool_calls(data)
             tool_round += 1
 
+            await self._push_event(
+                event_type="mcp_tool_round_finished",
+                content=f"Finished MCP tool round {tool_round}",
+                metadata={"round": tool_round, "remaining_calls": len(tool_calls)},
+            )
+
         if tool_calls:
             logger.warning("MCP tool call loop reached max rounds (%d)", max_tool_rounds)
+            await self._push_event(
+                event_type="mcp_tool_round_limit_reached",
+                content=f"MCP tool call loop reached max rounds ({max_tool_rounds})",
+                metadata={"max_tool_rounds": max_tool_rounds, "remaining_calls": len(tool_calls)},
+            )
 
         return cast(dict[str, Any], data)
 

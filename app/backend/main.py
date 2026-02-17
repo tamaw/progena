@@ -41,6 +41,10 @@ from .conversation import (
 )
 from .ipc_client import IPCProgenitorClient, get_ipc_client
 from .models import (
+    ChatCompletionChunk,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatMessage,
     ErrorDetail,
     ErrorResponse,
     ModelInfo,
@@ -944,6 +948,61 @@ async def responses(request: Request, body: ResponseRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
+async def chat_completions(request: Request, body: ChatCompletionRequest):
+    """OpenAI-compatible Chat Completions endpoint.
+
+    The frontend currently expects this endpoint and the chat.completion.chunk
+    streaming shape.
+
+    Note: Progenitor handles its own internal tool execution; `tools` provided by
+    clients are accepted for compatibility but are not forwarded/executed.
+    """
+    if not client:
+        raise HTTPException(status_code=503, detail="Client not initialized")
+
+    request_id = getattr(request.state, "request_id", None)
+
+    try:
+        last_user_msg, all_inputs = _extract_chat_input(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+
+    try:
+        if body.stream:
+            return StreamingResponse(
+                stream_chat_completions(last_user_msg, body.model, completion_id, request_id),
+                media_type="text/event-stream",
+            )
+
+        response_text = await client.send_message(last_user_msg, request_id=request_id)
+
+        return ChatCompletionResponse(
+            id=completion_id,
+            model=body.model,
+            choices=[
+                {
+                    "index": 0,
+                    "message": ChatMessage(role="assistant", content=response_text),
+                    "finish_reason": "stop",
+                }
+            ],
+            usage=Usage(
+                prompt_tokens=len(" ".join(all_inputs).split()),
+                completion_tokens=len(response_text.split()),
+                total_tokens=len(" ".join(all_inputs).split()) + len(response_text.split()),
+            ),
+        )
+
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
+    except Exception as e:
+        logger.error(f"Chat Completions API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
     """Normalize Responses API input to a single user string."""
@@ -963,6 +1022,77 @@ def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
         raise ValueError("No input provided")
 
     return inputs[-1], inputs
+
+
+def _extract_chat_input(request: ChatCompletionRequest) -> tuple[str, list[str]]:
+    """Extract the last user message from a Chat Completions request."""
+    inputs: list[str] = []
+
+    if not request.messages:
+        raise ValueError("No messages provided")
+
+    for msg in request.messages:
+        # Keep a simple linear history for token estimation.
+        if msg.content:
+            inputs.append(msg.content)
+        else:
+            inputs.append("")
+
+    # Find the last user message to send to the agent.
+    for msg in reversed(request.messages):
+        if msg.role == "user" and (msg.content and msg.content.strip()):
+            return msg.content, inputs
+
+    raise ValueError("At least one non-empty user message is required")
+
+
+async def stream_chat_completions(
+    message: str,
+    model: str,
+    completion_id: str,
+    request_id: str | None = None,
+) -> AsyncIterator[str]:
+    """Stream SSE events using the Chat Completions chunk shape."""
+    assert client is not None, "Client must be initialized"
+
+    created = int(time.time())
+
+    try:
+        async for chunk in client.send_message_stream(message, request_id=request_id):
+            chunk_event = ChatCompletionChunk(
+                id=completion_id,
+                model=model,
+                created=created,
+                choices=[
+                    {
+                        "index": 0,
+                        "delta": {"content": chunk},
+                        "finish_reason": None,
+                    }
+                ],
+            ).model_dump()
+            yield f"data: {json.dumps(chunk_event)}\n\n"
+
+        # Final chunk
+        final_event = ChatCompletionChunk(
+            id=completion_id,
+            model=model,
+            created=created,
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }
+            ],
+        ).model_dump()
+        yield f"data: {json.dumps(final_event)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    except Exception as e:
+        logger.error(f"Chat Completions streaming error: {e}", exc_info=True)
+        error_event = {"error": str(e)}
+        yield f"data: {json.dumps(error_event)}\n\n"
 
 
 async def stream_response_unified(

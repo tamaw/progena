@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ..runtime.scheduler import Scheduler
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
     pass
@@ -170,6 +171,36 @@ async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str,
         })
 
     return result
+
+
+class ScheduleTool(BaseSystemTool):
+    """Expose schedule status and entries (read-only)."""
+
+    @property
+    def name(self) -> str:
+        return "schedule"
+
+    @property
+    def description(self) -> str:
+        return "List scheduled tasks and their next run time (read-only)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        if context.state_manager and hasattr(context.state_manager, "get_schedule"):
+            schedule_entries = await context.state_manager.get_schedule()
+            # state_manager may return Pydantic models
+            schedule_dicts = [e.model_dump() if hasattr(e, "model_dump") else e for e in schedule_entries]
+        else:
+            schedule_dicts = []
+
+        listed = await list_scheduled_tasks(schedule_dicts)
+        return ToolResult.ok({
+            "count": len(listed),
+            "schedule": listed,
+        })
 
 
 # Tool registration for use by decide/planner nodes

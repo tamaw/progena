@@ -12,10 +12,13 @@ Includes logging for observability of build operations.
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
 
+from ..config import CopilotConfig
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 from ..runtime.copilot_acp import ACPLogCapture, CopilotACPManager
 from ..runtime.time_utils import utcnow_isoformat
 
@@ -82,6 +85,43 @@ class CopilotCLI:
             self.model or "default",
             timeout,
         )
+
+
+class CopilotTool(BaseSystemTool):
+    """Expose Copilot builder configuration/status.
+
+    Note: the actual build pipeline uses Copilot internally (builder actuator).
+    This tool is intentionally status-oriented and does not directly execute
+    builds.
+    """
+
+    @property
+    def name(self) -> str:
+        return "copilot"
+
+    @property
+    def description(self) -> str:
+        return "Show Copilot (ACP) configuration used for build operations"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        cfg = CopilotConfig.from_env()
+        return ToolResult.ok({
+            "bin_path": cfg.bin_path,
+            "model": cfg.model,
+            "timeout_seconds": cfg.timeout_seconds,
+            "default_flags": cfg.default_flags,
+            "acp_port": cfg.acp_port,
+            "acp_allowed_dirs": cfg.acp_allowed_dirs,
+            "env": {
+                "PROGENITOR_COPILOT_BIN": os.getenv("PROGENITOR_COPILOT_BIN"),
+                "PROGENITOR_COPILOT_MODEL": os.getenv("PROGENITOR_COPILOT_MODEL"),
+            },
+            "note": "Copilot is used internally by the build actuator; this tool reports configuration.",
+        })
 
     async def build(
         self,

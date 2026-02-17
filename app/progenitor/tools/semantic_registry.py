@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from ..runtime.time_utils import utcnow
 from ..state.models import AgentRegistryEntry
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,49 @@ class SemanticRegistry:
                     break
 
         return results
+
+
+class SemanticRegistryTool(BaseSystemTool):
+    """Expose semantic tool discovery status and optional query."""
+
+    @property
+    def name(self) -> str:
+        return "semantic_registry"
+
+    @property
+    def description(self) -> str:
+        return "Semantic discovery over registry capabilities (if sentence-transformers installed)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        registry_path = getattr(context.tool_registry, "registry_path", None)
+        if not registry_path:
+            return ToolResult.fail("Tool registry has no registry_path")
+
+        semantic = SemanticRegistry(Path(registry_path))
+        await semantic.load()
+
+        # Optional query: allow "semantic_registry: <query>" in user_input
+        raw = (context.user_input or "").strip()
+        query = ""
+        if ":" in raw:
+            _prefix, query = raw.split(":", 1)
+            query = query.strip()
+
+        payload: dict[str, Any] = {
+            "semantic_available": SEMANTIC_AVAILABLE,
+            "model": semantic._model_name,
+            "capability_count": len(semantic.get_all_capabilities()),
+        }
+
+        if query:
+            payload["query"] = query
+            payload["results"] = semantic.find_by_capability_semantic(query)
+
+        return ToolResult.ok(payload)
 
     def compute_similarity(
         self,

@@ -257,8 +257,13 @@ class TestDecideNode:
         assert mock_llm.chat.await_count >= 1
 
     @pytest.mark.asyncio
-    async def test_decide_slow_path_structured_disables_tools(self):
-        """Structured decide routing should explicitly disable tools for JSON stability."""
+    async def test_decide_slow_path_structured_omits_tools_param(self):
+        """Structured decide routing should not force tools=[] at the call site.
+
+        The LLM client is responsible for suppressing tool calling for structured
+        outputs (e.g., via tool_choice='none') while still sending the tool list
+        upstream.
+        """
         from app.progenitor.llm.response_models import DecisionResponse
         from app.progenitor.nodes import decide
 
@@ -287,7 +292,7 @@ class TestDecideNode:
         decision = result.get("current_decision")
         assert decision is not None
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
-        assert mock_llm.chat_structured.await_args.kwargs.get("tools") == []
+        assert mock_llm.chat_structured.await_args.kwargs.get("tools") is None
 
     def test_extract_history_excludes_genesis_system_message(self):
         """History extraction should not include genesis bootstrap prompt."""

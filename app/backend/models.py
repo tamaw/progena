@@ -15,8 +15,15 @@ class ChatMessage(BaseModel):
     """A message in the chat conversation."""
 
     role: Literal["system", "user", "assistant", "tool"] = "user"
-    content: str
+    # OpenAI-compatible: assistant tool-call messages may have null/empty content.
+    content: str | None = None
     name: str | None = None
+
+    # OpenAI tool calling compatibility fields (accepted/ignored by this backend).
+    # - tool messages often include tool_call_id
+    # - assistant messages may include tool_calls
+    tool_call_id: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -29,6 +36,12 @@ class ChatCompletionRequest(BaseModel):
     stream: bool | None = False
     user: str | None = None
 
+    # Tool calling (OpenAI Chat Completions)
+    # We accept these for client compatibility; the Progenitor agent manages its
+    # own internal tool registry/execution.
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+
     # Additional fields we ignore but accept for compatibility
     top_p: float | None = None
     n: int | None = None
@@ -36,6 +49,11 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     logit_bias: dict[str, float] | None = None
+
+    # Common compatibility fields that some SDKs send.
+    response_format: dict[str, Any] | None = None
+    seed: int | None = None
+    stream_options: dict[str, Any] | None = None
 
 
 class ChatCompletionChoice(BaseModel):
@@ -82,7 +100,7 @@ class ResponseInputMessage(BaseModel):
     """Message format for the Responses API."""
 
     role: Literal["system", "user", "assistant", "tool"] = "user"
-    content: str
+    content: str | None = None
 
 
 class ResponseOutputText(BaseModel):
