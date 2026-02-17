@@ -20,7 +20,7 @@ from .nodes import (
     act,
     commit_core,
     cycle_limit,
-    decide,
+    chat,
     idle,
     intake,
     pick_next,
@@ -79,7 +79,7 @@ def create_progenitor_graph(
     nodes = {
         "intake": intake.create_node(state_manager),
         "time_check": time_check.create_node(config.runtime.timezone, state_manager),
-        "decide": decide.create_node(llm_client, tool_registry, state_manager, config),
+        "chat": chat.create_node(llm_client, tool_registry, state_manager, config),
         "pick_next": pick_next.create_node(),
         "worktree_prep": worktree_prep.create_node(worktrees_dir),
         "act": act.create_node(
@@ -105,17 +105,8 @@ def create_progenitor_graph(
 
     # Define edges
     builder.add_edge("intake", "time_check")
-    builder.add_edge("time_check", "decide")
-
-    # Conditional routing after decide
-    builder.add_conditional_edges(
-        "decide",
-        route_after_decide,
-        {
-            "pick_next": "pick_next",
-            "respond": "respond",
-        }
-    )
+    builder.add_edge("time_check", "chat")
+    builder.add_edge("chat", "respond")
 
     # Conditional routing after pick_next
     builder.add_conditional_edges(

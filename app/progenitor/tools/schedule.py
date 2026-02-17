@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ..runtime.scheduler import Scheduler
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
     pass

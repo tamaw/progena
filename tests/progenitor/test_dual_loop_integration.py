@@ -32,6 +32,7 @@ def test_outer_loop_graph_compiles():
     state_manager.log_decision = AsyncMock()
 
     llm_client = Mock()
+    llm_client.chat = AsyncMock(return_value="Test response")
     llm_client.generate = AsyncMock(return_value="Test response")
 
     tool_registry = Mock()
@@ -59,7 +60,7 @@ def test_outer_loop_graph_compiles():
     # Check outer loop nodes (no planner - only in inner loop)
     assert "intake" in node_names
     assert "time_check" in node_names
-    assert "decide" in node_names
+    assert "chat" in node_names
     assert "pick_next" in node_names
     assert "act" in node_names
     assert "validate" in node_names

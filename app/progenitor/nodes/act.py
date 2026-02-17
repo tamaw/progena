@@ -713,7 +713,7 @@ async def _execute_system_tool(
     elif tool_name == "list_tools":
         # Delegate to the canonical system tool implementation so this matches
         # decide-node fast/slow path output (and includes MCP discovery sources).
-        from ..nodes.node_helpers.protocol import ToolContext as SystemToolContext
+        from ..tools.protocol import ToolContext as SystemToolContext
         from ..tools.list_tools import ListToolsTool
 
         ctx = SystemToolContext(

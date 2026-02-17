@@ -229,34 +229,6 @@ class TestDecideNode:
         assert called_kwargs["system_prompt"] == expected_genesis
 
     @pytest.mark.asyncio
-    async def test_decide_fast_path_current_time_uses_llm_enrichment(self):
-        """Fast-path current_time should go through LLM enrichment path."""
-        from app.progenitor.nodes import decide
-
-        mock_llm = MagicMock()
-        mock_llm.chat = AsyncMock(return_value="The current UTC time is 2026-02-13T05:00:00+00:00")
-        mock_llm.chat_stream = AsyncMock()
-
-        mock_registry = MagicMock()
-        mock_state_manager = AsyncMock()
-
-        node = decide.create_node(mock_llm, mock_registry, mock_state_manager)
-
-        state: ProgenitorState = {
-            "current_input": "current time please",
-            "messages": [],
-        }
-
-        result = await node(state)
-        decision = result.get("current_decision")
-
-        assert decision is not None
-        assert decision.action == DecisionAction.ANSWER_DIRECTLY
-        assert decision.direct_response is not None
-        assert "current UTC time" in decision.direct_response
-        assert mock_llm.chat.await_count >= 1
-
-    @pytest.mark.asyncio
     async def test_decide_slow_path_structured_omits_tools_param(self):
         """Structured decide routing should not force tools=[] at the call site.
 

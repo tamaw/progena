@@ -48,12 +48,7 @@ def mock_llm_client():
     client = MagicMock()
 
     # Default responses
-    client.decide = AsyncMock(return_value={
-        "action": "answer_directly",
-        "reasoning": "Simple question",
-        "requires_planning": False,
-        "direct_response": "This is a test response.",
-    })
+    client.chat = AsyncMock(return_value="This is a test response.")
 
     client.generate = AsyncMock(return_value="Generated text")
 
@@ -175,7 +170,7 @@ class TestDualLoopGraphCreation:
         # Outer loop nodes (no planner - only in inner loop)
         assert "intake" in node_names
         assert "time_check" in node_names
-        assert "decide" in node_names
+        assert "chat" in node_names
         assert "pick_next" in node_names
         assert "act" in node_names
         assert "validate" in node_names
@@ -216,7 +211,7 @@ class TestDualLoopGraphCreation:
         # Check key outer loop transitions
         edge_sources = [e[0] for e in edges]
         assert "intake" in edge_sources
-        assert "decide" in edge_sources
+        assert "chat" in edge_sources
         assert "respond" in edge_sources
         assert "cycle_limit" in edge_sources
 

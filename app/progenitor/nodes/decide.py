@@ -20,7 +20,7 @@ from ..llm.conversation_compressor import ConversationCompressor
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import DecisionResponse, validate_decision_response
 from ..nodes.node_helpers.formatters import format_tool_result
-from ..nodes.node_helpers.registry import execute_system_tool, match_tool_by_input
+from ..nodes.node_helpers.registry import execute_system_tool
 from ..runtime.time_utils import utcnow_isoformat
 from ..state.helpers import is_work_item_actionable
 from ..state.models import (
@@ -337,7 +337,7 @@ async def _generate_build_settings(
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers used by both fast and slow paths
+# Shared helpers used by Decide/build helpers
 # ---------------------------------------------------------------------------
 
 def _extract_history(
@@ -526,16 +526,14 @@ async def _execute_and_respond(
 ) -> tuple["ProgenitorState | None", bool]:
     """Execute a system tool via the registry and generate an LLM-enriched response.
 
-    This is the unified fast/slow path for system tools:
-    1. Execute tool via node_helpers.execute_system_tool (dynamic dispatch)
-    2. Format result via node_helpers.format_tool_result (dynamic dispatch)
+    Flow:
+    1. Execute tool via node_helpers.execute_system_tool
+    2. Format result via node_helpers.format_tool_result
     3. Feed result to LLM for a natural response to the user
     4. Merge any state_updates from the tool into the returned state
 
     Returns:
-        Tuple of (state, should_retry_slow_path).
-        If should_retry_slow_path is True, the fast-path failed and should fall back
-        to the slow path. In this case, state will be None.
+        Tuple of (state, retry_requested). If retry_requested is True, state is None.
     """
     await _push_activity_event(
         event_type="activity_started",
@@ -552,9 +550,9 @@ async def _execute_and_respond(
         user_input=user_input,
     )
 
-    # If the tool explicitly requests slow path retry, return early
+    # If the tool explicitly requests a retry by caller strategy, return early.
     if should_retry_slow_path:
-        logger.info("Tool %s requested slow path fallback: %s", tool_name, error or "unknown reason")
+        logger.info("Tool %s requested caller retry: %s", tool_name, error or "unknown reason")
         return None, True
 
     if error or result is None:
@@ -725,31 +723,6 @@ def create_node(
             memory_context = format_memory_context(memories, max_chars=mem_max_chars)
 
         # ============================================================
-        # FAST-PATH: Dynamic keyword/pattern match on registered tools
-        # ============================================================
-        matched_tool = match_tool_by_input(user_input)
-        if matched_tool:
-            logger.info("Fast-path match: tool=%s for input=%r", matched_tool, user_input[:80])
-            result, should_retry_slow = await _execute_and_respond(
-                matched_tool,
-                user_input,
-                state,
-                llm_client,
-                tool_registry,
-                state_manager,
-                memory_context,
-                execution_source="fast_path",
-            )
-            if should_retry_slow:
-                logger.info("Fast-path failed, falling back to slow path")
-                # Continue to slow path below instead of returning
-            elif result is not None:
-                return _merge_updates(result)
-            else:
-                # This shouldn't happen, but handle gracefully
-                logger.warning("Fast-path returned None result without retry flag")
-
-        # ============================================================
         # SLOW PATH: Use LLM for routing decision
         # Tool context fills the context window so the LLM knows
         # available tools/agents to call
@@ -818,7 +791,7 @@ def create_node(
                         execution_source="slow_path",
                         progress_message=progress_message,
                     )
-                    # If slow path also requests retry, we can't retry again - just use the result
+                    # If the tool execution requests retry, don't retry again here - just use the result
                     if not should_retry_slow and result:
                         return _merge_updates(result)
                     elif should_retry_slow:

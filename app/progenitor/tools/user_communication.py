@@ -12,7 +12,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 
 # Type alias for event pusher callback

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
 
 from ..llm.prompts import PromptTemplates
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +450,7 @@ class AgentDiscoveryTool(BaseSystemTool):
 
     @property
     def keywords(self) -> list[str]:
-        # Keep this empty to avoid competing with rediscover_agents fast-path.
+        # Keep this empty to avoid competing with rediscover_agents.
         return []
 
     async def execute(self, context: ToolContext) -> ToolResult:

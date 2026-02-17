@@ -5,7 +5,7 @@ Compress Conversation - Compress conversation history to reduce context window s
 import logging
 
 from ..env_utils import env_bool, env_int
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import CopilotConfig
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ..runtime.copilot_acp import ACPLogCapture, CopilotACPManager
 from ..runtime.time_utils import utcnow_isoformat
 
