@@ -14,8 +14,44 @@ from typing import Any, cast
 import httpx
 
 from ..config import MCPConfig
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class MCPTool(BaseSystemTool):
+    """Expose MCP integration status and discovered tool list."""
+
+    @property
+    def name(self) -> str:
+        return "mcp"
+
+    @property
+    def description(self) -> str:
+        return "Show MCP integration status and list discovered MCP tools"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        llm_client = context.llm_client
+        mcp_config = getattr(llm_client, "mcp_config", None)
+        mcp_tools = getattr(llm_client, "mcp_tools", None) or []
+
+        return ToolResult.ok({
+            "enabled": bool(getattr(mcp_config, "enabled", False)) if mcp_config else False,
+            "base_url": getattr(mcp_config, "base_url", None) if mcp_config else None,
+            "tool_count": len(mcp_tools),
+            "tools": [
+                {
+                    "name": t.get("name"),
+                    "description": t.get("description") or t.get("summary"),
+                }
+                for t in mcp_tools
+                if isinstance(t, dict)
+            ],
+        })
 
 # Allowlist of safe command prefixes for MCP servers
 # Commands must start with one of these to be executed

@@ -204,6 +204,22 @@ class TestChatServerAPI:
         )
         assert response.status_code in (400, 503)
 
+    def test_chat_completions_endpoint(self, test_client):
+        """Test Chat Completions endpoint exists.
+
+        Typically returns 503 when the Progenitor client isn't initialized.
+        If it is initialized, may return 400 for invalid/empty user input.
+        """
+        response = test_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test",
+                "messages": [{"role": "user", "content": ""}],
+                "stream": False,
+            },
+        )
+        assert response.status_code in (400, 503)
+
     def test_simple_chat_no_message(self, test_client):
         """Test simple chat with no message."""
         response = test_client.post("/chat", json={})

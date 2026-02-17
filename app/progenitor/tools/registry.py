@@ -14,6 +14,7 @@ from typing import Any, TypedDict
 from ..runtime.port_utils import find_available_port
 from ..runtime.time_utils import utcnow
 from ..state.models import AgentRegistryEntry, AgentStatus
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,36 @@ class ToolRegistry:
     def get_agents(self) -> list[dict[str, Any]]:
         """Get all registered agents."""
         return self._registry.get("agents", [])
+
+
+class RegistryTool(BaseSystemTool):
+    """Expose the current agent/tool registry summary."""
+
+    @property
+    def name(self) -> str:
+        return "registry"
+
+    @property
+    def description(self) -> str:
+        return "Show registry.json summary (agents, tools, capabilities)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        registry = context.tool_registry
+        agents = registry.get_agents() if hasattr(registry, "get_agents") else []
+        tools = registry.get_tools() if hasattr(registry, "get_tools") else []
+        capabilities = registry.get_all_capabilities() if hasattr(registry, "get_all_capabilities") else []
+
+        return ToolResult.ok({
+            "registry_path": str(getattr(registry, "registry_path", None)),
+            "agent_count": len(agents),
+            "tool_count": len(tools),
+            "capability_count": len(capabilities),
+            "capabilities": sorted(capabilities),
+        })
 
     def get_tools(self) -> list[dict[str, Any]]:
         """Get all registered tools."""

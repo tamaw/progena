@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..llm.client import LLMClient
 
 from ..llm.prompts import PromptTemplates
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,31 @@ class SelfReflection:
 
         if not target.exists():
             raise FileNotFoundError(f"File not found: {relative_path}")
+
+
+class SelfReflectModuleTool(BaseSystemTool):
+    """Module-level wrapper for self_reflect operations (read-only)."""
+
+    @property
+    def name(self) -> str:
+        return "self_reflect_module"
+
+    @property
+    def description(self) -> str:
+        return "Read-only self-reflection helpers (module listing/search/read)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        reflection = SelfReflection(llm_client=context.llm_client)
+        modules = reflection.list_modules()
+        return ToolResult.ok({
+            "root_path": str(reflection.root),
+            "modules": [m.model_dump() for m in modules],
+            "tip": "Use the 'self_reflect' system tool for the common entry point; this is a module-level wrapper.",
+        })
 
         if not target.is_file():
             raise ValueError(f"Not a file: {relative_path}")
@@ -739,3 +765,28 @@ async def execute_self_reflect(
 
     else:
         raise ValueError(f"Unknown operation: {operation}")
+
+
+class SelfReflectModuleTool(BaseSystemTool):
+    """Module-level wrapper for self_reflect operations (read-only)."""
+
+    @property
+    def name(self) -> str:
+        return "self_reflect_module"
+
+    @property
+    def description(self) -> str:
+        return "Read-only self-reflection helpers (module listing/search/read)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        reflection = SelfReflection(llm_client=context.llm_client)
+        modules = reflection.list_modules()
+        return ToolResult.ok({
+            "root_path": str(reflection.root),
+            "modules": [m.model_dump() for m in modules],
+            "tip": "Use the 'self_reflect' system tool for the common entry point; this is a module-level wrapper.",
+        })

@@ -14,11 +14,15 @@ import asyncio
 import contextlib
 import importlib.util
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from ..config import CopilotConfig
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -555,3 +559,33 @@ class ACPLogCapture:
             logger.exception("COPILOT_ACP_LOG: Error capturing session: %s", e)
 
         return "".join(output_parts), chunks
+
+
+class CopilotACPTool(BaseSystemTool):
+    """Expose Copilot ACP configuration and basic diagnostics."""
+
+    @property
+    def name(self) -> str:
+        return "copilot_acp"
+
+    @property
+    def description(self) -> str:
+        return "Show Copilot ACP configuration and how the ACP service is used"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        cfg = CopilotConfig.from_env()
+        return ToolResult.ok({
+            "acp_port": cfg.acp_port,
+            "acp_allowed_dirs": cfg.acp_allowed_dirs,
+            "model": cfg.model,
+            "bin_path": cfg.bin_path,
+            "note": "ACP server is managed by CopilotACPManager during build operations.",
+            "env": {
+                "PROGENITOR_COPILOT_ACP_PORT": os.getenv("PROGENITOR_COPILOT_ACP_PORT"),
+                "PROGENITOR_COPILOT_ACP_ALLOWED_DIRS": os.getenv("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS"),
+            },
+        })

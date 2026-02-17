@@ -167,7 +167,6 @@ async def _request_decision_data(
                 schema_name="decision_response",
                 system_prompt=system_prompt,
                 temperature=0.3,
-                tools=[],
             )
             validated = validate_decision_response(parsed.model_dump())
             decision = validated.model_dump()
@@ -185,7 +184,6 @@ async def _request_decision_data(
             system_prompt=system_prompt,
             temperature=0.3,
             response_format=response_format,
-            tools=[],
         )
         parsed = json.loads(response)
         validated = validate_decision_response(parsed)

@@ -73,6 +73,11 @@ class Progenitor:
         # Load tool/agent registry
         await self.tool_registry.load()
 
+        # Warm system tool registry so tools are discovered at startup
+        from .nodes.node_helpers.registry import get_system_tool_names
+        system_tool_names = get_system_tool_names()
+        logger.info("System tools discovered: %d (%s)", len(system_tool_names), ", ".join(system_tool_names))
+
         # Initialize MCP tools and register with tool registry
         await setup_mcp_for_llm_client(self.llm_client, self.config.mcp)
         await self._register_mcp_tools()
@@ -98,6 +103,10 @@ class Progenitor:
                 await self.loop_runner._push_event(event_type, content, metadata)
             else:
                 logger.warning("Event pusher called before loop_runner available: %s", event_type)
+
+        # Allow the LLM client to emit realtime progress updates (e.g., tool calls)
+        # through the same IPC event channel.
+        self.llm_client.set_event_pusher(deferred_push_event)
 
         # Create the outer loop graph
         logger.info("Creating outer loop graph")

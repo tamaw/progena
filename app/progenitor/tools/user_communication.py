@@ -12,6 +12,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+
 
 # Type alias for event pusher callback
 EventPusher = Callable[
@@ -246,3 +248,42 @@ USER_COMMUNICATION_TOOLS = [
         },
     },
 ]
+
+
+class UserCommunicationTool(BaseSystemTool):
+    """Send a one-way message event to connected clients (via IPC events)."""
+
+    @property
+    def name(self) -> str:
+        return "user_communication"
+
+    @property
+    def description(self) -> str:
+        return "Send a message event to the user via IPC (one-way notification)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        raw = (context.user_input or "").strip()
+        if ":" in raw:
+            _prefix, message = raw.split(":", 1)
+            message = message.strip()
+        else:
+            message = raw
+
+        if not message:
+            return ToolResult.fail("Provide a message, e.g. 'user_communication: hello'")
+
+        push = getattr(context.llm_client, "_push_event", None)
+        if not callable(push):
+            return ToolResult.fail("LLM client has no IPC event pusher configured")
+
+        await push(
+            "agent_message",
+            message,
+            {"tool": "user_communication"},
+        )
+
+        return ToolResult.ok({"status": "sent", "message": message})

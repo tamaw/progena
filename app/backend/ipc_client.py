@@ -173,8 +173,8 @@ class IPCProgenitorClient:
         if not self._ipc_client:
             raise RuntimeError("IPC client not initialized")
 
-        # The Progenitor loop emits responses via the stream queue; collect the stream
-        # for stream=false HTTP calls to return a single string response.
+        # The Progenitor loop primarily emits responses via the streaming queue.
+        # To keep the HTTP API usable for stream=false calls, collect the stream.
         chunks: list[str] = []
         async for chunk in self._ipc_client.send_message_stream(message, request_id):
             if chunk:
