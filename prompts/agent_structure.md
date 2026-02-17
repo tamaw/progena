@@ -2,15 +2,15 @@
 
 ## Directory Structure (CRITICAL - MUST FOLLOW EXACTLY)
 
-**DO NOT create files directly in app/agents/. ALL agent files MUST go in a subdirectory.**
+**DO NOT create files directly in build/agents/. ALL agent files MUST go in a subdirectory.**
 
-Create the agent in the subdirectory `app/agents/{agent_name}/` with these EXACT paths:
-- `app/agents/{agent_name}/__init__.py` - Export the main agent class
-- `app/agents/{agent_name}/agent.py` - Main agent implementation (REQUIRED)
-- `app/agents/{agent_name}/README.md` - Documentation
+Create the agent in the subdirectory `build/agents/{agent_name}/` with these EXACT paths:
+- `build/agents/{agent_name}/__init__.py` - Export the main agent class
+- `build/agents/{agent_name}/agent.py` - Main agent implementation (REQUIRED)
+- `build/agents/{agent_name}/README.md` - Documentation
 
-WRONG: `app/agents/{agent_name}_agent.py` or `app/agents/{agent_name}.py`
-CORRECT: `app/agents/{agent_name}/agent.py`
+WRONG: `build/agents/{agent_name}_agent.py` or `build/agents/{agent_name}.py`
+CORRECT: `build/agents/{agent_name}/agent.py`
 
 ## HTTP Agent Requirements (CRITICAL)
 
@@ -256,7 +256,7 @@ Every agent (HTTP or stdio) MUST have these class attributes:
 
 ## Testing Requirements
 
-Create tests in `app/agents/{agent_name}/tests/`:
+Create tests in `build/agents/{agent_name}/tests/`:
 
 ### tests/test_{agent_name}.py
 
@@ -312,7 +312,7 @@ def agent_url():
 
 ## Integration with FastMCP Tools
 
-Agents can use FastMCP tools from `app/mcp/` by:
+Agents can use FastMCP tools from `build/mcp/` by:
 
 ```python
 from mcp import ClientSession, StdioServerParameters
@@ -322,7 +322,7 @@ async def call_tool(tool_name: str, args: dict) -> str:
     """Call a FastMCP tool."""
     params = StdioServerParameters(
         command="python",
-        args=["-m", f"app.mcp.{tool_name}.server"],
+        args=[f"build/mcp/{tool_name}/server.py"],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

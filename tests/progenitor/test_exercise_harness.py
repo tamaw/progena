@@ -66,12 +66,12 @@ if __name__ == "__main__":
         """Test AgentProcessRunner initialization."""
         runner = AgentProcessRunner(
             project_root=project_root,
-            agent_entrypoint="app/agents/test/agent.py",
+            agent_entrypoint="build/agents/test/agent.py",
             port=8080,
         )
 
         assert runner.project_root == project_root
-        assert runner.agent_entrypoint == "app/agents/test/agent.py"
+        assert runner.agent_entrypoint == "build/agents/test/agent.py"
         assert runner.port == 8080
         assert runner.process is None
         assert runner.stdout_lines == []
@@ -482,7 +482,7 @@ class TestExerciseAgentFunction:
         from app.progenitor.nodes.execute import _exercise_agent
         from app.progenitor.state.models import ProgenitorState
 
-        build_output = {"agent_entrypoint": "app/agents/test/agent.py"}
+        build_output = {"agent_entrypoint": "build/agents/test/agent.py"}
         state: ProgenitorState = {"agents": [], "task_id": "task_001"}
 
         await _exercise_agent(

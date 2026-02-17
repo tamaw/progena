@@ -198,8 +198,8 @@ pytest tests/test_dual_loop.py -v
 
 ### Adding New Capabilities
 
-1. Create an agent in `app/agents/<agent_name>/`
-2. Or create an MCP server in `app/mcp/`
+1. Create an agent in `build/agents/<agent_name>/`
+2. Or create an MCP server in `build/mcp/`
 3. Register in `data/state/registry.json`
 
 Or simply ask Progenitor to build it for you!

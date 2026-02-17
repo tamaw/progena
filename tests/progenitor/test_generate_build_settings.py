@@ -42,7 +42,7 @@ class TestBuildTypeDetection:
         )
 
         assert settings.build_type == "mcp"
-        assert settings.project_directory.startswith("app/mcp/")
+        assert settings.project_directory.startswith("build/mcp/")
 
     @pytest.mark.asyncio
     async def test_detects_agent_type_by_default(self, mock_llm_client):
@@ -54,7 +54,7 @@ class TestBuildTypeDetection:
         )
 
         assert settings.build_type == "agent"
-        assert settings.project_directory.startswith("app/agents/")
+        assert settings.project_directory.startswith("build/agents/")
 
     @pytest.mark.asyncio
     async def test_detects_fastmcp_tool_keyword(self, mock_llm_client):
@@ -155,7 +155,7 @@ class TestBuildSettingsStructure:
             llm_action="build_agent",
         )
 
-        assert settings.project_directory.startswith("app/agents/")
+        assert settings.project_directory.startswith("build/agents/")
         assert settings.project_name in settings.project_directory
 
     @pytest.mark.asyncio
