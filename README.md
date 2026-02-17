@@ -72,9 +72,14 @@ docker compose -f docker/docker-compose.progenitor.yml down
 ### LangGraph Topology
 
 ```
-Intake → TimeCheck → EnqueueDue → Decide → Planner → PickNext →
-WorktreePrep → Act → Validate → Register → CommitCore → Respond →
-CycleLimit → (PickNext | Idle)
+User (outer loop):
+Intake → Chat → Respond → CycleLimit → (PickNext | Idle)
+
+Execution path (when tools/work items are needed):
+PickNext → WorktreePrep → Act → Validate → CommitCore → Respond
+
+Background (scheduled jobs):
+PickDueSchedule → Intake → Chat → Respond → AdvanceSchedule
 ```
 
 ### Directory Structure

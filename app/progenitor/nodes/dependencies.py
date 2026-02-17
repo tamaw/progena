@@ -148,7 +148,6 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         commit_core,
         cycle_limit,
         decide,
-        enqueue_due,
         execute,
         idle,
         intake,
@@ -158,7 +157,6 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         planner,
         respond,
         think,
-        time_check,
         validate,
         verify_loop,
         worktree_prep,
@@ -177,11 +175,6 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
             deps.state_manager,
         ),
         "intake": intake.create_node(deps.state_manager),
-        # CQ-012: time_check requires timezone parameter
-        "time_check": time_check.create_node(
-            timezone=deps.config.runtime.timezone
-        ),
-        "enqueue_due": enqueue_due.create_node(deps.state_manager),
         "pick_next": pick_next.create_node(),
         # CQ-012: cycle_limit expects full config object
         "cycle_limit": cycle_limit.create_node(deps.config),
@@ -194,7 +187,7 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         "commit_core": commit_core.create_node(deps.state_manager),
 
         # Inner loop nodes (loop.spec.md)
-        "observe": observe.create_node(deps.llm_client),
+        "observe": observe.create_node(deps.llm_client, deps.state_manager, deps.config),
         "think": think.create_node(deps.llm_client),
         "act": act.create_node(
             deps.llm_client,

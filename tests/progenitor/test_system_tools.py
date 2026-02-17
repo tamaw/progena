@@ -1,7 +1,7 @@
-"""
-Tests for app/progenitor/nodes/system_tools/
+"""System tool tests.
 
-Verifies system tool protocol, implementations, and registry.
+System tool implementations live in :mod:`app.progenitor.tools` and are
+registered/executed via :mod:`app.progenitor.nodes.node_helpers`.
 """
 
 from typing import cast

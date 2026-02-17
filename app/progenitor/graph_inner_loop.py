@@ -92,7 +92,7 @@ def create_inner_loop_graph(
     # Create node functions for inner loop
     # Use the new build.create_node from nodes/build.py
     nodes = {
-        "observe": observe.create_node(llm_client, state_manager),
+        "observe": observe.create_node(llm_client, state_manager, config),
         "think": think.create_node(llm_client, state_manager),
         "plan": planner.create_node(llm_client, state_manager),
         "build": build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager, git_manager),

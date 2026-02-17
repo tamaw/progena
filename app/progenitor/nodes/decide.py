@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 from openai import APIConnectionError, RateLimitError
 from pydantic import BaseModel, Field
 
+from ..config import DEFAULT_BUILD_CONFIDENCE_THRESHOLD
 from ..env_utils import env_bool, env_float, env_int
 from ..llm.conversation_compressor import ConversationCompressor
 from ..llm.prompts import PromptTemplates
@@ -617,9 +618,6 @@ def _format_a2a_response(result: dict, agent_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Default confidence threshold (used when config not provided)
 # ---------------------------------------------------------------------------
-DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
-
-
 def create_node(
     llm_client,
     tool_registry,

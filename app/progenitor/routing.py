@@ -15,10 +15,7 @@ import logging
 import time
 from typing import Any, Literal
 
-from .constants import (
-    DEFAULT_MAX_INNER_ITERATIONS,
-    DEFAULT_VERIFICATION_TARGET_SCORE,
-)
+from .config import DEFAULT_MAX_INNER_ITERATIONS, DEFAULT_VERIFICATION_TARGET_SCORE
 from .state.helpers import get_actionable_items, get_ideal_state
 from .state.ideal_state import IdealState
 from .state.models import BuildPhase, ProgenitorState
@@ -29,6 +26,10 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Inner Loop Routing
 # =============================================================================
+
+# Keep these defaults aligned with RuntimeConfig.from_env() keys.
+_DEFAULT_MAX_INNER_ITERATIONS = DEFAULT_MAX_INNER_ITERATIONS
+_DEFAULT_TARGET_SCORE = DEFAULT_VERIFICATION_TARGET_SCORE
 
 def ensure_ideal_state(ideal_state: Any) -> IdealState | None:
     """Convert ideal_state dict to IdealState object if needed."""
@@ -49,7 +50,7 @@ def ensure_ideal_state(ideal_state: Any) -> IdealState | None:
 
 def should_iterate(
     state: ProgenitorState,
-    max_iterations: int = DEFAULT_MAX_INNER_ITERATIONS
+    max_iterations: int = _DEFAULT_MAX_INNER_ITERATIONS
 ) -> Literal["observe", "respond"]:
     """Determine if inner loop should continue iterating.
 
@@ -134,7 +135,7 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
     # Check iteration limit
     iter_info = state.get("iteration", {})
     current_iteration = iter_info.get("current", 0)
-    max_iterations = iter_info.get("max", DEFAULT_MAX_INNER_ITERATIONS)
+    max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
 
     if current_iteration >= max_iterations:
         logger.info("Max iterations (%d) reached, exiting inner loop", max_iterations)
@@ -154,7 +155,7 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
     # Check verification score
     verification = state.get("verification", {})
     verification_score: float = verification.get("current_score") or 0.0
-    target_score: float = verification.get("target_score") or DEFAULT_VERIFICATION_TARGET_SCORE
+    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
 
     if verification_score >= target_score:
         logger.info(
@@ -180,11 +181,11 @@ def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "d
     """Route after verification - publish if passed, learn if continuing, done on error/cancel."""
     verification = state.get("verification", {})
     verification_score: float = verification.get("current_score") or 0.0
-    target_score: float = verification.get("target_score") or DEFAULT_VERIFICATION_TARGET_SCORE
+    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
 
     iter_info = state.get("iteration", {})
     current_iteration = iter_info.get("current", 0)
-    max_iterations = iter_info.get("max", DEFAULT_MAX_INNER_ITERATIONS)
+    max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
 
     # Cancel / error → exit without publishing
     if state.get("build_cancelled", False):
@@ -347,7 +348,7 @@ def get_verification_state(state: ProgenitorState) -> dict[str, Any]:
     return {
         "score": verification.get("current_score", 0.0),
         "passed": verification.get("current_passed", False),
-        "target": verification.get("target_score", DEFAULT_VERIFICATION_TARGET_SCORE),
+        "target": verification.get("target_score", _DEFAULT_TARGET_SCORE),
         "report": verification.get("current_report"),
         "gaps": verification.get("gaps", []),
     }
@@ -359,7 +360,7 @@ def get_iteration_info(state: ProgenitorState) -> dict[str, Any]:
     verification = get_verification_state(state)
 
     current = iter_info.get("current", 0)
-    max_iter = iter_info.get("max", DEFAULT_MAX_INNER_ITERATIONS)
+    max_iter = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
 
     # Get build phase - use enum value if possible
     build_phase = state.get("build_phase")

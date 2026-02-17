@@ -31,7 +31,6 @@ from . import (
     planner,
     respond,
     think,
-    time_check,
     validate,
     verify_loop,
     worktree_prep,
@@ -70,7 +69,6 @@ __all__ = [
     "NodeFactory",
     # Node modules
     "intake",
-    "time_check",
     "chat",
     "decide",
     "planner",

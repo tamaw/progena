@@ -374,6 +374,16 @@ class SchedulingState(TypedDict, total=False):
     agents: list[AgentRegistryEntry]
 
 
+class BackgroundJobState(TypedDict, total=False):
+    """Background job execution state.
+
+    Used by the dedicated background job graph.
+    """
+    bg_had_work: bool
+    bg_schedule_id: str | None
+    last_cycle_response: str | None
+
+
 class LoopControlState(TypedDict, total=False):
     """Loop control and metadata."""
     cycle_count: int
@@ -605,6 +615,7 @@ class ProgenitorState(
     ConversationState,
     WorkState,
     SchedulingState,
+    BackgroundJobState,
     LoopControlState,
     InnerLoopState,
     ExecutionState,
