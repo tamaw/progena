@@ -9,21 +9,33 @@ permissions:
 jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64]
+    environment: cronix
     steps:
       - uses: actions/checkout@v4
 
       - name: Verify required secrets
+        env:
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
         run: |
-          test -n "${{ secrets.LITELLM_MASTER_KEY }}" || (echo "Missing secret: LITELLM_MASTER_KEY" && exit 1)
+          test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
+          test -n "$LITELLM_API_KEY" || (echo "Missing/empty secret: LITELLM_API_KEY" && exit 1)
 
       - name: Write env file
+        env:
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
+          PROGENITOR_MODEL_DEFAULT: ${{ secrets.PROGENITOR_MODEL_DEFAULT }}
+          PROGENITOR_TIMEZONE: ${{ secrets.PROGENITOR_TIMEZONE }}
         run: |
           cat > .progenitor.env <<EOF
-          LITELLM_MASTER_KEY=${{ secrets.LITELLM_MASTER_KEY }}
+          LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
           EOF
-          if [ -n "${{ secrets.LITELLM_BASE_URL }}" ]; then echo "LITELLM_BASE_URL=${{ secrets.LITELLM_BASE_URL }}" >> .progenitor.env; fi
-          if [ -n "${{ secrets.PROGENITOR_MODEL_DEFAULT }}" ]; then echo "PROGENITOR_MODEL_DEFAULT=${{ secrets.PROGENITOR_MODEL_DEFAULT }}" >> .progenitor.env; fi
-          if [ -n "${{ secrets.PROGENITOR_TIMEZONE }}" ]; then echo "PROGENITOR_TIMEZONE=${{ secrets.PROGENITOR_TIMEZONE }}" >> .progenitor.env; fi
+          if [ -n "${LITELLM_API_KEY}" ]; then echo "LITELLM_API_KEY=${LITELLM_API_KEY}" >> .progenitor.env; fi
+          if [ -n "${LITELLM_BASE_URL}" ]; then echo "LITELLM_BASE_URL=${LITELLM_BASE_URL}" >> .progenitor.env; fi
+          if [ -n "${PROGENITOR_MODEL_DEFAULT}" ]; then echo "PROGENITOR_MODEL_DEFAULT=${PROGENITOR_MODEL_DEFAULT}" >> .progenitor.env; fi
+          if [ -n "${PROGENITOR_TIMEZONE}" ]; then echo "PROGENITOR_TIMEZONE=${PROGENITOR_TIMEZONE}" >> .progenitor.env; fi
 
       - name: Ensure external network
         run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
@@ -38,6 +50,25 @@ jobs:
 
       - name: Liveness checks
         run: |
-          curl -fsS http://127.0.0.1:8000/health >/dev/null
-          docker exec progenitor python /app/scripts/healthcheck.py
+          wait_healthy() {
+            local name="$1"
+            local attempts="${2:-60}"
+            local i status
+            for i in $(seq 1 "$attempts"); do
+              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name" 2>/dev/null || true)"
+              if [ "$status" = "healthy" ]; then
+                echo "$name is healthy"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for $name to become healthy (status=$status)"
+            docker ps -a || true
+            docker logs "$name" --tail 200 || true
+            return 1
+          }
 
+          wait_healthy progenitor-backend 90
+          wait_healthy progenitor 120
+          # Self-hosted runner may be containerized; validate from inside the backend container.
+          docker exec progenitor-backend curl -fsS http://localhost:8000/health >/dev/null

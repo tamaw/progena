@@ -448,13 +448,14 @@ class ProgenitorLoop:
 
                 # Check for response to send - stream it if not already streamed
                 pending = self._state.get("pending_response")
-                if self._response_was_streamed and not self._stream_final_sent:
+                # Prefer explicit pending_response (final user response) even if some node streamed tokens.
+                if pending:
+                    await self._stream_response(str(pending))
+                    self._state["pending_response"] = None
+                elif self._response_was_streamed and not self._stream_final_sent:
                     # Response was already streamed by a node, just send final marker ONCE
                     await self.stream_final()
                     self._stream_final_sent = True
-                    self._state["pending_response"] = None
-                elif pending:
-                    await self._stream_response(str(pending))
                     self._state["pending_response"] = None
 
             # Checkpoint state after cycle

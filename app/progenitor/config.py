@@ -46,7 +46,8 @@ class LLMConfig:
         """Load LLM config from environment."""
         return cls(
             base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
-            api_key=os.getenv("LITELLM_MASTER_KEY"),
+            # Prefer a client/virtual key for runtime requests; fall back to master key if provided.
+            api_key=os.getenv("LITELLM_API_KEY") or os.getenv("LITELLM_MASTER_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
