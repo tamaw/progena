@@ -26,8 +26,8 @@ progenitor/
 app/
 ├── progenitor/                  # Core perpetual agent
 │   ├── main.py                  # Service entrypoint
-│   ├── graph_outer_loop.py      # Outer loop graph topology
-│   ├── graph_inner_loop.py      # Inner loop graph topology
+│   ├── graph_chat_loop.py       # Chat loop graph topology
+│   ├── graph_build_loop.py      # Build loop graph topology
 │   ├── routing.py               # Graph routing helpers
 │   ├── nodes/                   # Node implementations (intake, decide, act, validate, etc.)
 │   ├── state/                   # State models, persistence, verification

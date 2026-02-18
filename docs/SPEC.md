@@ -484,8 +484,8 @@ Keep it boring. Boring survives.
   * `progenitor/`
 
     * `main.py` (service entrypoint)
-    * `graph_outer_loop.py` (outer loop LangGraph topology)
-    * `graph_inner_loop.py` (inner loop LangGraph topology)
+    * `graph_chat_loop.py` (chat loop LangGraph topology)
+    * `graph_build_loop.py` (build loop LangGraph topology)
     * `llm/` (OpenAI Responses wrapper + prompt templates)
     * `tools/` (Codex wrapper, git/worktree helpers, MCP runner/client)
     * `runtime/` (loop, idle/backoff, time, scheduler)

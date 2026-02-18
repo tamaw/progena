@@ -1,7 +1,7 @@
 """Integration test for graph compilation.
 
-- Outer loop (user chat): Intake → Chat → Respond → CycleLimit → Idle
-- Background jobs: scheduled tasks run in a separate background job graph
+- Outer loop (user chat): Intake → Chat → Respond → CommitCore → END
+- Background jobs: scheduled tasks + backlog execution run in background graph
 - Inner loop: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
 """
 
@@ -12,8 +12,8 @@ import pytest
 
 from app.progenitor.config import ProgenitorConfig
 from app.progenitor.graph_background_loop import create_background_graph
-from app.progenitor.graph_inner_loop import create_inner_loop_graph
-from app.progenitor.graph_outer_loop import create_progenitor_graph
+from app.progenitor.graph_build_loop import create_inner_loop_graph
+from app.progenitor.graph_chat_loop import create_progenitor_graph
 
 
 def _create_mock_copilot_acp_manager():
@@ -58,16 +58,19 @@ def test_outer_loop_graph_compiles():
     nodes = graph.get_graph().nodes
     node_names = {n for n in nodes if n != "__start__"}
 
-    # Check outer loop nodes (no planner - only in inner loop)
+    # Check outer loop nodes (chat-only; no planner - only in inner loop)
     assert "intake" in node_names
     assert "chat" in node_names
-    assert "pick_next" in node_names
-    assert "act" in node_names
-    assert "validate" in node_names
-    assert "commit_core" in node_names
     assert "respond" in node_names
-    assert "cycle_limit" in node_names
-    assert "idle" in node_names
+    assert "commit_core" in node_names
+
+    # Backlog execution nodes are NOT in the user-chat outer graph
+    assert "pick_next" not in node_names
+    assert "worktree_prep" not in node_names
+    assert "act" not in node_names
+    assert "validate" not in node_names
+    assert "cycle_limit" not in node_names
+    assert "idle" not in node_names
     # planner is NOT in outer loop - only in inner loop
     assert "planner" not in node_names
 
@@ -97,6 +100,8 @@ def test_background_graph_compiles():
         llm_client=llm_client,
         tool_registry=tool_registry,
         config=config,
+        worktrees_dir=Path("./worktrees"),
+        copilot_acp_manager=_create_mock_copilot_acp_manager(),
     )
 
     assert graph is not None
@@ -107,6 +112,13 @@ def test_background_graph_compiles():
     assert "chat" in node_names
     assert "respond" in node_names
     assert "advance_schedule" in node_names
+
+    # Backlog execution nodes also exist in background graph
+    assert "pick_next" in node_names
+    assert "worktree_prep" in node_names
+    assert "act" in node_names
+    assert "validate" in node_names
+    assert "commit_core" in node_names
 
 
 def test_inner_loop_graph_compiles():

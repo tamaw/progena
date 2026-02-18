@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # Import the function under test
-from app.progenitor.nodes.decide import _extract_history, _generate_build_settings
+from app.progenitor.runtime.decide import _extract_history, _generate_build_settings
 
 
 @pytest.fixture
