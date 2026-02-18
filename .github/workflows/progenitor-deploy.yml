@@ -67,5 +67,6 @@ jobs:
 
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
-          curl -fsS http://127.0.0.1:8000/health >/dev/null
+          # Self-hosted runner may be containerized; validate from inside the backend container.
+          docker exec progenitor-backend curl -fsS http://localhost:8000/health >/dev/null
 
