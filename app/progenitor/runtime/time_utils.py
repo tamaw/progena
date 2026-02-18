@@ -4,6 +4,7 @@ Time utilities for Progenitor.
 
 import logging
 from datetime import UTC, datetime
+from typing import cast
 
 import pytz
 
@@ -78,7 +79,7 @@ class TimeManager:
         for fmt in formats:
             try:
                 dt = datetime.strptime(time_str, fmt)
-                return self.tz.localize(dt)
+                return cast(datetime, self.tz.localize(dt))
             except ValueError:
                 continue
 

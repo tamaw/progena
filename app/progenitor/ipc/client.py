@@ -17,7 +17,7 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from .protocol import (
     IPCMessage,
@@ -112,6 +112,7 @@ class IPCClient:
                 )
 
                 # Wait for ready message
+                assert self._reader is not None
                 msg = await read_message(self._reader, timeout=10)
                 if msg is None or msg.type != MessageType.READY:
                     raise ConnectionError("Did not receive ready message from server")
@@ -523,11 +524,11 @@ class IPCClient:
         """
         try:
             if timeout:
-                return await asyncio.wait_for(
+                return cast(dict[str, Any] | None, await asyncio.wait_for(
                     self._event_queue.get(),
                     timeout=timeout
-                )
-            return await self._event_queue.get()
+                ))
+            return cast(dict[str, Any] | None, await self._event_queue.get())
         except TimeoutError:
             return None
 

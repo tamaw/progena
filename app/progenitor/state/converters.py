@@ -6,7 +6,7 @@ reduce duplication across the codebase.
 """
 
 import logging
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from .models import (
     AgentRegistryEntry,
@@ -64,7 +64,6 @@ def to_work_item(value: Any) -> WorkItem | None:
                 target_agent=value.get("target_agent"),
                 target_tool=value.get("target_tool"),
                 worktree_path=value.get("worktree_path"),
-                submodule_path=value.get("submodule_path"),
                 retry_count=value.get("retry_count", 0),
                 max_retries=value.get("max_retries", 3),
                 error_message=value.get("error_message"),
@@ -241,7 +240,7 @@ def to_dict(value: Any) -> dict[str, Any] | None:
         return value
 
     if hasattr(value, "model_dump"):
-        return value.model_dump()
+        return cast(dict[str, Any], value.model_dump())
 
     return None
 

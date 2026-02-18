@@ -380,7 +380,7 @@ class ProgenitorConfig:
 
     def to_dict(self, redact_secrets: bool = True) -> dict[str, Any]:
         """Convert config to dictionary for logging."""
-        result = {
+        result: dict[str, Any] = {
             "llm": {
                 "base_url": self.llm.base_url,
                 "model_default": self.llm.model_default,

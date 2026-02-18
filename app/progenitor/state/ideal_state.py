@@ -14,7 +14,7 @@ import json
 import logging
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, Field
 
@@ -287,7 +287,7 @@ class IdealStateBuilder:
         if callable(response_format_fn) and not inspect.iscoroutinefunction(response_format_fn):
             response_format = response_format_fn(response_model, schema_name)
             if not inspect.isawaitable(response_format) and isinstance(response_format, dict):
-                return response_format
+                return cast(dict[str, Any], response_format)
         return _build_json_schema_format(response_model, schema_name)
 
     async def _structured_call(
@@ -304,7 +304,7 @@ class IdealStateBuilder:
         guaranteed schema compliance. Falls back gracefully on parse errors.
         """
         if hasattr(self.llm_client, "chat_structured"):
-            return await self.llm_client.chat_structured(
+            return await self.llm_client.chat_structured(  # type: ignore[no-any-return]
                 messages=[{"role": "user", "content": prompt}],
                 response_model=response_model,
                 schema_name=schema_name,

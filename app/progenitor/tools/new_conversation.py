@@ -67,7 +67,7 @@ class NewConversationTool(BaseSystemTool):
 
         # Update in-memory state directly (will be persisted by checkpoint)
         if context.state is not None:
-            context.state.update(reset_state)  # type: ignore[arg-type]
+            context.state.update(reset_state)  # type: ignore[typeddict-item]
 
         logger.info(
             "New conversation started (previous_run_id=%s, new_run_id=%s, messages_cleared=%d)",

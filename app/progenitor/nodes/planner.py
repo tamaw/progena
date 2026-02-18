@@ -16,7 +16,7 @@ import os
 import uuid
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import PlannerResponse, validate_planner_response
@@ -807,7 +807,7 @@ async def _generate_copilot_prompt(
         except ValueError:
             rel_path = spec_file_path
     else:
-        rel_path = f"{base_dir}/{safe_name}/spec.md"
+        rel_path = Path(f"{base_dir}/{safe_name}/spec.md")
 
     # Check if entity already exists
     project_root = Path(__file__).parent.parent.parent.parent
@@ -1273,7 +1273,7 @@ def _extract_expected_outcome(response: str, approach: dict) -> str:
             return line.split(":", 1)[-1].strip() if ":" in line else line.strip()
 
     # Fall back to approach expected outcome
-    return approach.get("expected_outcome", "Agent responds correctly to all test prompts")
+    return cast(str, approach.get("expected_outcome", "Agent responds correctly to all test prompts"))
 
 
 def _select_best_approach(approaches: list[dict], last_verification) -> dict:

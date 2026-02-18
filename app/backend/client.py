@@ -17,6 +17,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import IO, cast
 
 from .config import ChatServerConfig
 
@@ -39,7 +40,7 @@ class ProgenitorClient:
         self._process: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
         self._started = False
-        self._stderr_log = None
+        self._stderr_log: IO[str] | None = None
         self._log_stack: contextlib.ExitStack | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._last_heartbeat: float = 0
@@ -269,7 +270,7 @@ class ProgenitorClient:
                 self._last_heartbeat = time.time()
 
                 response = json.loads(response_line.decode())
-                return response.get("content", str(response))
+                return cast(str, response.get("content", str(response)))
 
             except TimeoutError:
                 raise TimeoutError(

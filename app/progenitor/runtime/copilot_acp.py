@@ -50,6 +50,7 @@ from acp.schema import (
     WaitForTerminalExitResponse,
     WriteTextFileResponse,
 )
+
 if TYPE_CHECKING:
     from acp.terminal import TerminalHandle
 else:

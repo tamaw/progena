@@ -10,7 +10,7 @@ Refines ideal state, adds anti-criteria, tightens criteria based on:
 
 import logging
 import time
-from typing import cast
+from typing import Any, cast
 
 from ..constants import DEFAULT_MAX_INNER_ITERATIONS, DEFAULT_VERIFICATION_TARGET_SCORE
 from ..runtime.time_utils import utcnow_isoformat
@@ -69,7 +69,7 @@ def create_node(
         state_updates = {}
         if iteration == 0 and not state.get("task_id"):
             import uuid
-            task_description = state.get("current_input") or state.get("task_description", "Build task")
+            task_description = str(state.get("current_input") or state.get("task_description", "Build task"))
             task_id = f"task_{uuid.uuid4().hex[:8]}"
             now_time = time.time()
             now_iso = utcnow_isoformat()
@@ -155,7 +155,7 @@ def create_node(
                 logger.info("Incorporating clarification response into ideal state")
 
                 # Update the clarification history to mark it as resolved
-                history = list(state.get("clarification_history", []))
+                history: list[Any] = list(state.get("clarification_history") or [])  # type: ignore[call-overload]
                 if history and not history[-1].get("resolved"):
                     history[-1]["user_response"] = clarification_response
                     history[-1]["resolved"] = True
@@ -190,7 +190,7 @@ def create_node(
 
             elif iteration == 0 or ideal_state is None:
                 # First iteration - build initial ideal state
-                task = state.get("current_input") or state.get("task_description", "")
+                task = str(state.get("current_input") or state.get("task_description", ""))
 
                 # Enrich task context with build_settings if available
                 # This provides the LLM-refined description from the decide step

@@ -98,7 +98,7 @@ def create_progenitor_graph(
 
     # Add all nodes
     for name, node_fn in nodes.items():
-        builder.add_node(name, node_fn)  # type: ignore[arg-type]
+        builder.add_node(name, node_fn)
 
     # Set entry point
     builder.set_entry_point("intake")

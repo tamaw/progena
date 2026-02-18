@@ -192,10 +192,10 @@ class TestBuildSettingsStatusTransitions:
         assert settings.completed_at is None  # Suspended != completed
 
 
-class TestBuildSettingsSubmodule:
-    """Test BuildSettings submodule tracking."""
+class TestBuildSettingsWorktree:
+    """Test BuildSettings worktree tracking."""
 
-    def test_initial_submodule_state(self):
+    def test_initial_worktree_state(self):
         settings = BuildSettings.create_from_llm_output(
             build_id="test",
             project_name="test",
@@ -203,10 +203,10 @@ class TestBuildSettingsSubmodule:
             user_request="test",
         )
 
-        assert settings.submodule_path is None
-        assert settings.submodule_initialized is False
+        assert settings.worktree_path is None
+        assert settings.worktree_branch is None
 
-    def test_set_submodule(self):
+    def test_set_worktree(self):
         settings = BuildSettings.create_from_llm_output(
             build_id="test",
             project_name="test_agent",
@@ -214,10 +214,10 @@ class TestBuildSettingsSubmodule:
             user_request="test",
         )
 
-        settings.set_submodule("app/agents/test_agent")
+        settings.set_worktree("/worktrees/test_agent", "progenitor/build/wi-123")
 
-        assert settings.submodule_path == "app/agents/test_agent"
-        assert settings.submodule_initialized is True
+        assert settings.worktree_path == "/worktrees/test_agent"
+        assert settings.worktree_branch == "progenitor/build/wi-123"
 
 
 class TestBuildSettingsSerialization:
@@ -250,7 +250,7 @@ class TestBuildSettingsSerialization:
             user_request="test",
         )
         original.mark_in_progress()
-        original.set_submodule("app/agents/test_agent")
+        original.set_worktree("/worktrees/wi-123", "progenitor/build/wi-123")
 
         data = original.model_dump()
         restored = BuildSettings(**data)
@@ -259,5 +259,5 @@ class TestBuildSettingsSerialization:
         assert restored.project_name == original.project_name
         assert restored.build_type == original.build_type
         assert restored.status == original.status
-        assert restored.submodule_path == original.submodule_path
-        assert restored.submodule_initialized == original.submodule_initialized
+        assert restored.worktree_path == original.worktree_path
+        assert restored.worktree_branch == original.worktree_branch

@@ -45,7 +45,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         new_schedule_entry = state.get("new_schedule_entry")
 
         # Save schedule - merge with any new entries
-        schedule = list(state.get("schedule", []))
+        schedule: list[Any] = list(state.get("schedule", []))
 
         # Add new entry if present (from planner)
         if new_schedule_entry:

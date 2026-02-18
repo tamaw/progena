@@ -1,5 +1,6 @@
 """State models for Progenitor using Pydantic v2."""
 
+import logging
 import uuid
 from datetime import datetime
 from enum import StrEnum
@@ -8,6 +9,8 @@ from typing import Any, TypedDict
 from pydantic import BaseModel, Field, field_validator
 
 from ..runtime.time_utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 
 def generate_run_id() -> str:
@@ -143,7 +146,6 @@ class WorkItem(BaseModel):
     target_agent: str | None = None
     target_tool: str | None = None
     worktree_path: str | None = None
-    submodule_path: str | None = None  # BL-007: Path to git submodule for build isolation
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     retry_count: int = 0
@@ -161,7 +163,9 @@ class WorkItem(BaseModel):
             try:
                 return WorkItemType(v)
             except ValueError:
+                logger.warning("Unknown WorkItemType %r, defaulting to DIRECT_ANSWER", v)
                 return WorkItemType.DIRECT_ANSWER
+        logger.warning("Unexpected WorkItem item_type type %s, defaulting to DIRECT_ANSWER", type(v).__name__)
         return WorkItemType.DIRECT_ANSWER
 
     @field_validator('status', mode='before')
@@ -174,18 +178,20 @@ class WorkItem(BaseModel):
             try:
                 return WorkItemStatus(v)
             except ValueError:
+                logger.warning("Unknown WorkItemStatus %r, defaulting to PENDING", v)
                 return WorkItemStatus.PENDING
+        logger.warning("Unexpected WorkItem status type %s, defaulting to PENDING", type(v).__name__)
         return WorkItemStatus.PENDING
 
     @property
     def status_value(self) -> str:
         """Get status as string value for comparisons."""
-        return self.status if isinstance(self.status, str) else self.status.value
+        return self.status
 
     @property
     def item_type_value(self) -> str:
         """Get item_type as string value for comparisons."""
-        return self.item_type if isinstance(self.item_type, str) else self.item_type.value
+        return self.item_type
 
     @property
     def is_pending(self) -> bool:

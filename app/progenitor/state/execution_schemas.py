@@ -71,9 +71,9 @@ class BuildSettings(BaseModel):
     status: BuildStatus = Field(default=BuildStatus.PENDING, description="Current build status")
     error_message: str | None = Field(default=None, description="Error message if status is ERROR/FAILED")
 
-    # Git submodule info (for isolated commits)
-    submodule_path: str | None = Field(default=None, description="Path to git submodule if initialized")
-    submodule_initialized: bool = Field(default=False, description="Whether submodule was created")
+    # Git worktree info (for isolated builds)
+    worktree_path: str | None = Field(default=None, description="Path to git worktree for this build")
+    worktree_branch: str | None = Field(default=None, description="Branch name in the worktree")
 
     # Timestamps
     created_at: datetime = Field(default_factory=utcnow, description="When build was initiated")
@@ -124,25 +124,28 @@ class BuildSettings(BaseModel):
 
     def mark_completed(self) -> "BuildSettings":
         """Mark build as completed."""
+        now = utcnow()
         self.status = BuildStatus.COMPLETED
-        self.updated_at = utcnow()
-        self.completed_at = utcnow()
+        self.updated_at = now
+        self.completed_at = now
         return self
 
     def mark_failed(self, error: str) -> "BuildSettings":
         """Mark build as failed with error message."""
+        now = utcnow()
         self.status = BuildStatus.FAILED
         self.error_message = error
-        self.updated_at = utcnow()
-        self.completed_at = utcnow()
+        self.updated_at = now
+        self.completed_at = now
         return self
 
     def mark_error(self, error: str) -> "BuildSettings":
         """Mark build as error (unrecoverable) with error message."""
+        now = utcnow()
         self.status = BuildStatus.ERROR
         self.error_message = error
-        self.updated_at = utcnow()
-        self.completed_at = utcnow()
+        self.updated_at = now
+        self.completed_at = now
         return self
 
     def mark_suspended(self, reason: str = "Cancelled by signal") -> "BuildSettings":
@@ -152,10 +155,10 @@ class BuildSettings(BaseModel):
         self.updated_at = utcnow()
         return self
 
-    def set_submodule(self, submodule_path: str) -> "BuildSettings":
-        """Set submodule path after initialization."""
-        self.submodule_path = submodule_path
-        self.submodule_initialized = True
+    def set_worktree(self, worktree_path: str, branch: str) -> "BuildSettings":
+        """Set worktree path after creation."""
+        self.worktree_path = worktree_path
+        self.worktree_branch = branch
         self.updated_at = utcnow()
         return self
 

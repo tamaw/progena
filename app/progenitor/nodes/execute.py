@@ -18,7 +18,7 @@ and clean separation of concerns.
 
 import logging
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, cast
 
 from ..runtime.port_utils import (
     TEST_HARNESS_PORT_END,
@@ -405,7 +405,7 @@ async def _exercise_agent(
     # Try to discover entrypoint from build settings or experiment plan
     if not agent_entrypoint:
         # Look for common agent entrypoint patterns
-        agent_name = experiment_plan.agent_name
+        agent_name: str | None = experiment_plan.agent_name
         if not agent_name and isinstance(build_output, dict):
             agent_name = build_output.get("agent_name")
 
@@ -472,7 +472,7 @@ async def _exercise_agent(
             iteration=iteration,
             task_id=state.get("task_id"),
         )
-        return result
+        return cast(ExecutionResult, result)
 
     elif agent_endpoint:
         # Traditional HTTP exercise against running agent
@@ -484,13 +484,12 @@ async def _exercise_agent(
             iteration=iteration,
             task_id=state.get("task_id"),
         )
-        return result
+        return cast(ExecutionResult, result)
 
     else:
         # No endpoint or entrypoint - create failed result
         logger.warning("No agent endpoint or entrypoint available for exercise")
         from ..runtime.time_utils import utcnow
-        from ..state.execution_schemas import ExecutionResult, ExecutionStatus
 
         result = ExecutionResult(
             iteration=iteration,
@@ -532,10 +531,10 @@ async def _execute_tool(tool_name: str, tool_args: dict, tool_registry) -> Any:
     elif tool_type == "a2a":
         # Execute via A2A
         from ..tools.mcp import A2AClient
-        client = A2AClient()
+        a2a_client = A2AClient()
         endpoint = tool.get("endpoint", "")
         request = tool_args.get("request", "")
-        return await client.call_agent(endpoint, str(request))
+        return await a2a_client.call_agent(endpoint, str(request))
 
     elif tool_type == "function":
         # Execute local function
