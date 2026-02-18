@@ -9,16 +9,11 @@ import json
 import logging
 import shlex
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from ..config import MCPConfig
-from ..runtime.container_spawner import (
-    ContainerMount,
-    ContainerSpawner,
-    RunnerSpawnConfig,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +132,6 @@ class MCPClient:
     def __init__(self, project_root: Path | None = None):
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self.project_root = Path(project_root) if project_root else Path.cwd()
-        self.container_spawner = ContainerSpawner(self.project_root)
 
     async def call_tool(
         self,
@@ -177,50 +171,20 @@ class MCPClient:
         # Safely parse and validate command (prevents command injection)
         cmd_parts = _validate_command(command)
 
-        process: asyncio.subprocess.Process
-        handle = None
-
-        if self.container_spawner.enabled and not tool_config.get("disable_container", False):
-            mounts = [
-                ContainerMount(
-                    source=mount.get("source", ""),
-                    target=mount.get("target", ""),
-                    read_only=bool(mount.get("read_only", False)),
-                )
-                for mount in tool_config.get("mounts", [])
-                if mount.get("source") and mount.get("target")
-            ]
-            spawn_config = RunnerSpawnConfig(
-                name=tool_config.get("name", "mcp-tool"),
-                mode="mcp",
-                transport="stdio",
-                command=cmd_parts,
-                timeout_seconds=float(tool_config.get("timeout", 30)),
-                env_allowlist=tool_config.get("env_allowlist", []),
-                env=tool_config.get("env", {}),
-                network=tool_config.get("network", "bridge"),
-                mounts=mounts,
-            )
-            handle = await self.container_spawner.spawn_mcp(spawn_config)
-            process = handle.process
-        else:
-            process = await asyncio.create_subprocess_exec(
-                *cmd_parts,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+        # Start MCP server process directly (no container isolation)
+        process = await asyncio.create_subprocess_exec(
+            *cmd_parts,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
         # Send request and get response
         request_bytes = json.dumps(request).encode() + b"\n"
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(input=request_bytes),
-                timeout=float(tool_config.get("timeout", 30)),
-            )
-        finally:
-            if handle is not None:
-                await self.container_spawner.stop(handle)
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(input=request_bytes),
+            timeout=float(tool_config.get("timeout", 30)),
+        )
 
         if process.returncode != 0:
             return {
@@ -231,7 +195,7 @@ class MCPClient:
         # Parse response
         try:
             response = json.loads(stdout.decode())
-            return response.get("result", response)
+            return cast(dict[str, Any], response.get("result", response))
         except json.JSONDecodeError as e:
             return {
                 "error": f"Invalid JSON response: {e}",
@@ -273,21 +237,21 @@ class MCPClient:
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 result = await response.json()
-                return result.get("result", result)
+                return cast(dict[str, Any], result.get("result", result))
         except Exception as e:
             return {"error": str(e)}
 
     async def list_tools(self, tool_config: dict[str, Any]) -> list[dict[str, Any]]:
         """List available tools from an MCP server."""
         result = await self.call_tool(tool_config, "tools/list")
-        return result.get("tools", []) if isinstance(result, dict) else []
+        return cast(list[dict[str, Any]], result.get("tools", []) if isinstance(result, dict) else [])
 
     async def healthcheck(self, tool_config: dict[str, Any]) -> bool:
         """Check if an MCP server is healthy."""
         try:
             result = await self.call_tool(tool_config, "ping")
             return not isinstance(result, dict) or "error" not in result
-        except (OSError, asyncio.TimeoutError, ValueError) as e:
+        except (TimeoutError, OSError, ValueError) as e:
             logger.debug("MCP healthcheck failed: %s", e)
             return False
 
@@ -365,7 +329,7 @@ class A2AClient:
                         "success": False,
                         "error": f"HTTP {response.status}: {text[:200]}",
                     }
-                return await response.json()
+                return cast(dict[str, Any], await response.json())
         except aiohttp.ClientConnectorError as e:
             return {
                 "success": False,
@@ -409,7 +373,7 @@ class A2AClient:
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as response:
                 if response.status == 200:
-                    return await response.json()
+                    return cast(dict[str, Any], await response.json())
         except Exception as e:
             logger.debug("Failed to fetch agent card: %s", e)
 

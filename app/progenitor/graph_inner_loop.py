@@ -3,6 +3,8 @@ Inner Loop Graph for Build Operations.
 
 Implements the build loop per loop.spec.md:
 OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN → (repeat until done)
+                                                 ↓ (on pass)
+                                              PUBLISH → DONE (raise PR)
 
 This graph runs asynchronously from the main loop, managing build_state.json.
 The outer loop continues to handle user interactions while builds run in background.
@@ -51,6 +53,7 @@ def create_inner_loop_graph(
         merge,
         observe,
         planner,
+        publish,
         think,
         verify_loop,
     )
@@ -95,6 +98,7 @@ def create_inner_loop_graph(
         "merge": merge.create_node(llm_client, git_manager, state_manager),
         "execute": execute.create_node(tool_registry, state_manager, project_root),
         "verify": verify_loop.create_node(llm_client, state_manager),
+        "publish": publish.create_node(state_manager, worktrees_dir),
         "learn": learn.create_node(llm_client, state_manager),
     }
 
@@ -117,15 +121,19 @@ def create_inner_loop_graph(
     builder.add_edge("merge", "execute")
     builder.add_edge("execute", "verify")
 
-    # After verify, either learn (continue) or done (exit)
+    # After verify: publish (pass/max-iter), learn (continue), or done (cancel/error)
     builder.add_conditional_edges(
         "verify",
         route_after_verify,
         {
+            "publish": "publish",
             "learn": "learn",
             "done": END,
         }
     )
+
+    # After publish, we're done
+    builder.add_edge("publish", END)
 
     # After learn, check if we should continue
     builder.add_conditional_edges(

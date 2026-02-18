@@ -22,7 +22,7 @@ import logging
 import random
 import uuid
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import ThinkResponse
@@ -69,7 +69,7 @@ _TRADEOFF_PENALTY = {"low": 0.0, "medium": 0.03, "high": 0.08}
 def _get_response_format(llm_client) -> dict[str, Any]:
     """Get structured output response format for ThinkResponse."""
     if hasattr(llm_client, '_get_json_response_format'):
-        return llm_client._get_json_response_format(ThinkResponse, "think_response")
+        return cast(dict[str, Any], llm_client._get_json_response_format(ThinkResponse, "think_response"))
     # Fallback: import the builder from the client module
     from ..llm.client import _build_json_schema_format
     return _build_json_schema_format(ThinkResponse, "think_response")
@@ -85,7 +85,7 @@ def _extract_gaps(last_verification) -> list[str]:
         verif_dict = last_verification
     else:
         return []
-    return verif_dict.get("gaps", [])[:5]
+    return cast(list[str], verif_dict.get("gaps", [])[:5])
 
 
 # ---------------------------------------------------------------------------

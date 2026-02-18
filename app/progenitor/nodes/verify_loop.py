@@ -77,7 +77,7 @@ def create_node(
         logger.info(f"Verifying iteration {iteration} output")
 
         # Initialize clarification state updates
-        clarification_updates = {
+        clarification_updates: dict[str, Any] = {
             "clarification": {
                 "needed": False,
                 "question": None,
@@ -123,8 +123,8 @@ def create_node(
                         )
 
                         # Update clarification history
-                        history = list(state.get("clarification_history", []))
-                        history.append(create_clarification_history_entry(clarification_result))
+                        clar_history: list[Any] = list(state.get("clarification_history") or [])  # type: ignore[call-overload]
+                        clar_history.append(create_clarification_history_entry(clarification_result))
 
                         clarification_updates = {
                             "clarification": {
@@ -132,7 +132,7 @@ def create_node(
                                 "question": formatted_question,
                                 "context": clarification_result.context,
                                 "awaiting": True,
-                                "history": history,
+                                "history": clar_history,
                             },
                         }
 
@@ -151,7 +151,7 @@ def create_node(
             # Check both top-level and phases.execute.result for execution data
             execution_result = state.get("execution_result") or state.get("phases", {}).get("execute", {}).get("result")
             # BL-006 FIX: validate node stores as validation_result_v2, not validation_result
-            validation_result = state.get("validation_result_v2") or state.get("validation_result")
+            validation_result: Any = state.get("validation_result_v2") or state.get("validation_result")
 
             if execution_result or validation_result:
                 # Use new structured verification method
@@ -178,8 +178,8 @@ def create_node(
                 verification_report_dict = verification_report.model_dump()
 
             # Track artefacts (loop.spec.md Task State requirement)
-            history = state.get("history", {})
-            artefacts = list(history.get("artefacts", []))
+            build_history: Any = state.get("history", {})
+            artefacts = list(build_history.get("artefacts", []))
             current_artefact: dict[str, Any] = {
                 "iteration": iteration,
                 "output": str(output)[:1000] if output else None,  # Truncate for storage
@@ -205,7 +205,7 @@ def create_node(
                 logger.info(f"New best artefact at iteration {iteration}: score={best_score:.2f}")
 
             # Track all verification reports (loop.spec.md Task State)
-            verification_reports: list[dict[str, Any]] = list(history.get("verification_reports", []))
+            verification_reports: list[dict[str, Any]] = list(build_history.get("verification_reports", []))
             if verification_report_dict:
                 # Use the V2 dict we already prepared
                 if isinstance(verification_report_dict, dict):
@@ -260,7 +260,7 @@ def create_node(
             # Merge verification results with clarification updates
             # Use nested structure for state updates
             # Note: TypedDict doesn't support dynamic spread, but this is valid for LangGraph
-            return {  # type: ignore[return-value]
+            return {
                 # Nested structure updates
                 "phases": {
                     "verify": phases_verify,
@@ -279,7 +279,7 @@ def create_node(
                 "iteration": {
                     "current": current_iter,
                 },
-                **clarification_updates,
+                **clarification_updates,  # type: ignore[typeddict-item]
             }
 
         except Exception as e:

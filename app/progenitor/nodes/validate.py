@@ -15,7 +15,7 @@ import re
 import time
 from collections import Counter
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..runtime.time_utils import utcnow
 from ..state.execution_schemas import (
@@ -44,7 +44,7 @@ _PYTEST_LOCATION_RE = re.compile(r"([^\s:]+\.py):(\d+):")
 # pyright output format: "  path/to/file.py:12:5 - error: ..."
 _PYRIGHT_LOCATION_RE = re.compile(r"^\s*(.+\.py):(\d+):\d+\s*-\s*(error|warning|information):", re.MULTILINE)
 
-# mypy: "path/to/file.py:12: error: ..."
+# Mypy output format: "path/to/file.py:12: error: ..."
 _MYPY_LOCATION_RE = re.compile(r"^(.+\.py):(\d+):\s*(error|warning|note):", re.MULTILINE)
 
 # ruff: "path/to/file.py:12:5: E501 ..."
@@ -573,7 +573,7 @@ def _get_previous_validation(state: Mapping[str, Any]) -> dict[str, Any] | None:
         if isinstance(history, dict):
             verification_reports = history.get("verification_reports", [])
             if verification_reports:
-                return verification_reports[-1]
+                return cast(dict[str, Any], verification_reports[-1])
     except Exception as e:
         logger.debug(f"Could not load previous validation: {e}")
     return None
@@ -736,7 +736,7 @@ def _analyze_build_output(
     make_id,
 ) -> list[ValidationFinding]:
     """Analyze build output for issues."""
-    findings = []
+    findings: list[ValidationFinding] = []
 
     if not isinstance(build_output, dict):
         return findings
@@ -960,7 +960,7 @@ def _get_project_directory(current_item: Any, state: Mapping[str, Any]) -> str |
     if isinstance(build_settings, dict):
         project_dir = build_settings.get("project_directory")
         if project_dir:
-            return project_dir
+            return cast(str, project_dir)
 
     # Try work item context
     if isinstance(current_item, dict):
@@ -968,6 +968,6 @@ def _get_project_directory(current_item: Any, state: Mapping[str, Any]) -> str |
         if isinstance(context, dict):
             project_dir = context.get("project_directory")
             if project_dir:
-                return project_dir
+                return cast(str, project_dir)
 
     return None

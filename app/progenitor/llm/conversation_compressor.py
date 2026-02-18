@@ -13,6 +13,7 @@ Usage:
 """
 
 import logging
+from typing import cast
 
 from ..runtime.time_utils import utcnow
 from ..state.models import ConversationMessage
@@ -135,7 +136,7 @@ class ConversationCompressor:
                 prompt,
                 system_prompt=_prompts.get("conversation_compressor.summarize_system.md"),
             )
-            return summary.strip()
+            return cast(str, summary.strip())
         except Exception as e:
             logger.warning("Failed to generate summary: %s", e)
             # Fallback: simple truncation
@@ -153,7 +154,7 @@ class ConversationCompressor:
         Returns:
             Simple text summary.
         """
-        topics = set()
+        topics: set[str] = set()
         for msg in messages:
             # Extract simple keywords
             words = msg.content.lower().split()
@@ -310,10 +311,10 @@ class IncrementalCompressor(ConversationCompressor):
         )
 
         try:
-            return await self._llm_client.generate(
+            return cast(str, await self._llm_client.generate(
                 prompt,
                 system_prompt=_prompts.get("conversation_compressor.update_summary_system.md"),
-            )
+            ))
         except Exception as e:
             logger.warning("Failed to update summary: %s", e)
             # Fallback: keep current summary

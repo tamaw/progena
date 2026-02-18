@@ -12,7 +12,7 @@ import json
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
@@ -283,7 +283,7 @@ async def _resolve_conflict_with_llm(
             target_branch="main",
         )
 
-        return merge_success
+        return cast(bool, merge_success)
 
     except Exception as e:
         logger.error(f"MERGE: LLM conflict resolution failed: {e}", exc_info=True)
@@ -398,7 +398,7 @@ async def _get_commit_hash(
         ["rev-parse", "HEAD"],
         cwd=repo_path
     )
-    return result["stdout"].strip()
+    return cast(str, result["stdout"].strip())
 
 
 def _mark_item_completed(backlog: list, work_item_id: str) -> None:

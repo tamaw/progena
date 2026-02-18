@@ -890,8 +890,8 @@ def _status_changed(current: dict, previous: dict) -> bool:
             return True
 
     # Check memory change > 10MB
-    curr_mem = current.get("memory_mb") or 0
-    prev_mem = previous.get("memory_mb") or 0
+    curr_mem: float = current.get("memory_mb") or 0
+    prev_mem: float = previous.get("memory_mb") or 0
     return abs(curr_mem - prev_mem) > 10
 
 

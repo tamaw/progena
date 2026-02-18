@@ -21,7 +21,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ..llm.prompts import PromptTemplates
 from .scheduler import Scheduler
@@ -97,7 +97,7 @@ class ProgenitorLoop:
         self._streamed_response_content: str = ""  # Accumulated streamed text for saving to messages
 
         # Background build runner (initialized in run_forever)
-        self._background_runner = None
+        self._background_runner: Any = None
 
         # Lock to prevent concurrent graph cycles
         self._graph_lock = asyncio.Lock()
@@ -549,11 +549,11 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                return await asyncio.wait_for(
+                return cast(dict[str, Any] | None, await asyncio.wait_for(
                     self._event_queue.get(),
                     timeout=timeout
-                )
-            return await self._event_queue.get()
+                ))
+            return cast(dict[str, Any] | None, await self._event_queue.get())
         except TimeoutError:
             return None
 
@@ -691,11 +691,11 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                return await asyncio.wait_for(
+                return cast(dict[str, Any] | None, await asyncio.wait_for(
                     self._stream_queue.get(),
                     timeout=timeout
-                )
-            return await self._stream_queue.get()
+                ))
+            return cast(dict[str, Any] | None, await self._stream_queue.get())
         except TimeoutError:
             return None
 
@@ -767,9 +767,8 @@ class ProgenitorLoop:
             if msg_dict.get("role") != "assistant":
                 continue
             metadata = msg_dict.get("metadata") or {}
-            if isinstance(metadata, dict) and metadata.get("type") == "scheduled":
-                if str(metadata.get("schedule_id") or "") != str(schedule_id):
-                    continue
+            if isinstance(metadata, dict) and metadata.get("type") == "scheduled" and str(metadata.get("schedule_id") or "") != str(schedule_id):
+                continue
             content = msg_dict.get("content")
             if isinstance(content, str) and content.strip():
                 return content
@@ -943,7 +942,7 @@ class ProgenitorLoop:
         if decision is None:
             return None
         if hasattr(decision, "model_dump"):
-            return decision.model_dump()
+            return cast(dict, decision.model_dump())
         elif isinstance(decision, dict):
             return decision
         return None
@@ -992,11 +991,11 @@ class ProgenitorLoop:
         """Get output from the agent."""
         try:
             if timeout:
-                return await asyncio.wait_for(
+                return cast(str | None, await asyncio.wait_for(
                     self._output_queue.get(),
                     timeout=timeout
-                )
-            return await self._output_queue.get()
+                ))
+            return cast(str | None, await self._output_queue.get())
         except TimeoutError:
             return None
 

@@ -424,7 +424,7 @@ def create_llm_client(
     """
     if force_mock or is_mock_mode_enabled():
         logger.info("Using MockLLMClient (demo mode)")
-        return MockLLMClient()  # type: ignore[return-value]
+        return MockLLMClient()
 
     # Import real client only when needed
     from .client import LLMClient

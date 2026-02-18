@@ -218,7 +218,7 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
     # Apply any custom node overrides
     nodes.update(deps.custom_nodes)
 
-    return nodes
+    return nodes  # type: ignore[return-value]
 
 
 def create_node_subset(

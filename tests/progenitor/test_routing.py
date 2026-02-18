@@ -200,21 +200,21 @@ class TestRouteAfterVerify:
         result = route_after_verify(state)
         assert result == "done"
 
-    def test_score_met_returns_done(self):
-        """Should return done when score met."""
+    def test_score_met_returns_publish(self):
+        """Should return publish when score met."""
         state = make_state(
             verification={"current_score": 0.96, "target_score": 0.95},
         )
         result = route_after_verify(state)
-        assert result == "done"
+        assert result == "publish"
 
-    def test_max_iterations_returns_done(self):
-        """Should return done at max iterations."""
+    def test_max_iterations_returns_publish(self):
+        """Should return publish at max iterations (best-effort PR)."""
         state = make_state(
             iteration={"current": 10, "max": 10},
         )
         result = route_after_verify(state)
-        assert result == "done"
+        assert result == "publish"
 
     def test_continues_to_learn(self):
         """Should continue to learn when not done."""
@@ -469,13 +469,13 @@ class TestNestedStateKeyCompatibility:
         assert result == "learn"  # Score not met, continue
 
     def test_route_after_verify_nested_score_met(self):
-        """Should return done when nested verification.current_score meets target."""
+        """Should return publish when nested verification.current_score meets target."""
         state = make_state(
             verification={"current_score": 0.9, "target_score": 0.8},
             iteration={"current": 2, "max": 10},
         )
         result = route_after_verify(state)
-        assert result == "done"
+        assert result == "publish"
 
     def test_nested_verification_score_determines_routing(self):
         """Nested verification.current_score determines routing decision."""
@@ -484,5 +484,5 @@ class TestNestedStateKeyCompatibility:
             verification={"current_score": 0.95, "target_score": 0.8},  # Score meets target
         )
         result = route_after_verify(state)
-        # Should use verification.current_score (0.95 >= 0.8), so done
-        assert result == "done"
+        # Should use verification.current_score (0.95 >= 0.8), so publish PR
+        assert result == "publish"

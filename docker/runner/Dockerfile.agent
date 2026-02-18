@@ -1,19 +1,29 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Generic Dockerfile for self-contained agents living in app/agents/<name>/
+# Build context must be the repo root.
+# Pass --build-arg AGENT_NAME=<name> to select which agent to package.
 
-RUN addgroup --system progenitor && adduser --system --ingroup progenitor runner
+ARG AGENT_NAME
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    AGENT_NAME=${AGENT_NAME}
+
+RUN addgroup --system agent && adduser --system --ingroup agent runner
 
 WORKDIR /app
 
-COPY pyproject.toml README.md /app/
-COPY app /app/app
+# Copy only the specific agent package
+COPY app/agents/${AGENT_NAME}/ /app/agent/
 
+# Install agent-specific requirements
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir -r /app/agent/requirements.txt
 
 USER runner
-WORKDIR /workspace
 
-ENTRYPOINT ["python", "-m", "app.progenitor.runtime.container_runner"]
+EXPOSE 8080
+
+# Agent must expose a FastAPI/ASGI app in agent.py:app
+ENTRYPOINT ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8080"]
+WORKDIR /app/agent

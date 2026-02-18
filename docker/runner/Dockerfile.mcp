@@ -1,19 +1,29 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Generic Dockerfile for self-contained MCP servers living in app/mcp/<name>/
+# Build context must be the repo root.
+# Pass --build-arg MCP_NAME=<name> to select which MCP server to package.
 
-RUN addgroup --system progenitor && adduser --system --ingroup progenitor runner
+ARG MCP_NAME
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MCP_NAME=${MCP_NAME}
+
+RUN addgroup --system mcp && adduser --system --ingroup mcp runner
 
 WORKDIR /app
 
-COPY pyproject.toml README.md /app/
-COPY app /app/app
+# Copy only the specific MCP server package
+COPY app/mcp/${MCP_NAME}/ /app/server/
 
+# Install MCP-specific requirements
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir -r /app/server/requirements.txt
 
 USER runner
-WORKDIR /workspace
 
-ENTRYPOINT ["python", "-m", "app.progenitor.runtime.container_runner"]
+EXPOSE 8080
+
+# MCP server must expose an ASGI app in server.py:app
+ENTRYPOINT ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+WORKDIR /app/server

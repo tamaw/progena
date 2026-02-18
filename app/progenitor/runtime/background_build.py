@@ -345,7 +345,7 @@ class BackgroundBuildRunner:
                 build_settings["status"] = "in_progress"
                 build_settings["updated_at"] = utcnow_isoformat()
 
-            build_state: dict[str, Any] = {
+            build_state = {
                 # Build identification
                 "build_in_progress": True,
                 "build_started_at": utcnow_isoformat(),

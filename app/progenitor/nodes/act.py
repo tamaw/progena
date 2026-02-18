@@ -679,22 +679,22 @@ async def _execute_system_tool(
 
         tool_params = work_item.context.get("tool_params", {})
 
-        result, entry_data = await add_scheduled_task(
+        schedule_result, entry_data = await add_scheduled_task(
             user_request=tool_params.get("user_request", ""),
             time_expression=tool_params.get("time_expression", ""),
             instruction=tool_params.get("instruction", ""),
             description=tool_params.get("description"),
         )
 
-        if result.success and entry_data:
+        if schedule_result.success and entry_data:
             # Return the entry data to be added to schedule by the caller
             return {
-                "result": result.model_dump(),
+                "result": schedule_result.model_dump(),
                 "schedule_entry": entry_data,
                 "add_to_schedule": True,  # Signal to add this entry
             }, None
         else:
-            return {"result": result.model_dump()}, None if result.success else result.message
+            return {"result": schedule_result.model_dump()}, None if schedule_result.success else schedule_result.message
 
     elif tool_name == "list_schedule":
 

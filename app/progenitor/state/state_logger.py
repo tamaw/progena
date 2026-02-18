@@ -14,7 +14,7 @@ For persistence, uses StatePersistence.
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 from ..runtime.time_utils import utcnow_isoformat
 from .models import ConversationMessage, redact_secrets
@@ -287,7 +287,7 @@ class StateLogger:
 
             return value
 
-        return sanitize_value(state)
+        return cast(dict[str, Any], sanitize_value(state))
 
     async def read_recent(
         self,
