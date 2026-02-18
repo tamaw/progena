@@ -55,7 +55,7 @@ def is_work_item_actionable(item: Any) -> bool:
 
     # Generic object with status attribute
     if hasattr(item, "is_actionable"):
-        return item.is_actionable
+        return cast(bool, item.is_actionable)
 
     if hasattr(item, "status"):
         status = item.status
@@ -203,7 +203,7 @@ def to_dict(item: Any) -> dict[str, Any]:
         return {}
 
     if hasattr(item, "model_dump"):
-        return item.model_dump()
+        return cast(dict[str, Any], item.model_dump())
 
     if isinstance(item, dict):
         return item
@@ -273,13 +273,13 @@ def get_status_value(item: Any) -> str:
     if isinstance(item, dict):
         status = item.get("status", "unknown")
         if hasattr(status, "value"):
-            return status.value
+            return cast(str, status.value)
         return str(status)
 
     if hasattr(item, "status"):
         status = item.status
         if hasattr(status, "value"):
-            return status.value
+            return cast(str, status.value)
         return str(status)
 
     return "unknown"
@@ -300,13 +300,13 @@ def get_item_type_value(item: Any) -> str:
     if isinstance(item, dict):
         item_type = item.get("item_type", "unknown")
         if hasattr(item_type, "value"):
-            return item_type.value
+            return cast(str, item_type.value)
         return str(item_type)
 
     if hasattr(item, "item_type"):
         item_type = item.item_type
         if hasattr(item_type, "value"):
-            return item_type.value
+            return cast(str, item_type.value)
         return str(item_type)
 
     return "unknown"

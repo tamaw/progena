@@ -280,6 +280,6 @@ class CopilotCLI:
             )
             await asyncio.wait_for(process.communicate(), timeout=10.0)
             return process.returncode == 0
-        except (OSError, FileNotFoundError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError, FileNotFoundError) as e:
             logger.debug("Copilot CLI validation failed: %s", e)
             return False

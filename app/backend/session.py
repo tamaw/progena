@@ -19,7 +19,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiofiles
 import yaml
@@ -281,9 +281,9 @@ class SessionManager:
                     expired.append(session_id)
 
             for session_id in expired:
-                session = self._sessions.pop(session_id, None)
+                session = self._sessions.pop(session_id, None)  # type: ignore[arg-type]
                 if session and session.user_id:
-                    self._user_sessions.pop(session.user_id, None)
+                    self._user_sessions.pop(session.user_id, "")
 
             if expired:
                 logger.debug("Cleaned up %d expired sessions", len(expired))
@@ -402,7 +402,7 @@ class SettingsManager:
                 for key, value in ext_state.items():
                     settings[f"{ext_name}-{key}"] = value
 
-        return yaml.dump(settings, default_flow_style=False, sort_keys=False)
+        return cast(str, yaml.dump(settings, default_flow_style=False, sort_keys=False))
 
     @staticmethod
     def import_settings(yaml_content: str) -> tuple[UserPreferences, dict[str, dict[str, Any]]]:

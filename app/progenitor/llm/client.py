@@ -10,7 +10,7 @@ import logging
 import os
 import re
 from collections.abc import AsyncIterator
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -57,7 +57,7 @@ MODEL_CONTEXT_WINDOWS = {
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
 
 
-def _build_json_schema_format(response_model: type, schema_name: str) -> dict[str, Any]:
+def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str, Any]:
     """Build response_format dict for structured output using Pydantic model.
 
     Args:
@@ -174,7 +174,7 @@ class LLMClient:
                     "tool_call",
                     "tool_result",
                 }:
-                    wrapped_content = content
+                    wrapped_content: Any = content
                 else:
                     text_parts = []
                     for part in content:
@@ -377,8 +377,8 @@ class LLMClient:
             if isinstance(payload, dict):
                 if error := payload.get("error"):
                     return {"error": error}
-                return payload.get("result", payload)
-            return payload
+                return cast(dict[str, Any], payload.get("result", payload))
+            return cast(dict[str, Any], payload)
 
         except Exception as exc:
             logger.warning("MCP tool call failed: %s", exc)
@@ -461,22 +461,23 @@ class LLMClient:
         if self._supports_temperature():
             payload["temperature"] = temperature
 
-        headers = {
+        headers: dict[str, str] = {
             "Content-Type": "application/json",
-            "api-key": self.structured_override_api_key,
         }
+        if self.structured_override_api_key:
+            headers["api-key"] = self.structured_override_api_key
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0), headers=headers) as azure_client:
             try:
                 response = await azure_client.post(override_url, json=payload)
                 response.raise_for_status()
-                return response.json()
+                return cast(dict[str, Any], response.json())
             except httpx.HTTPStatusError as exc:
                 if self._is_temperature_unsupported(exc.response):
                     payload.pop("temperature", None)
                     retry_response = await azure_client.post(override_url, json=payload)
                     retry_response.raise_for_status()
-                    return retry_response.json()
+                    return cast(dict[str, Any], retry_response.json())
                 raise
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
@@ -526,9 +527,7 @@ class LLMClient:
 
             if item_type == "message":
                 content = item.get("content", "")
-                if isinstance(content, str):
-                    _append_text_candidate(content)
-                elif isinstance(content, dict):
+                if isinstance(content, (str, dict)):
                     _append_text_candidate(content)
                 elif isinstance(content, list):
                     for part in content:
@@ -568,7 +567,7 @@ class LLMClient:
             incomplete_details = data.get("incomplete_details")
             truncation = data.get("truncation")
             top_text = data.get("text")
-            output_items = data.get("output") if isinstance(data.get("output"), list) else []
+            output_items: list[Any] = data.get("output") if isinstance(data.get("output"), list) else []  # type: ignore[assignment]
 
             output_summaries: list[dict[str, Any]] = []
             for item in output_items[:5]:
@@ -815,7 +814,7 @@ class LLMClient:
         if tool_calls:
             logger.warning("MCP tool call loop reached max rounds (%d)", max_tool_rounds)
 
-        return data
+        return cast(dict[str, Any], data)
 
     async def chat(
         self,

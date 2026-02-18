@@ -16,6 +16,7 @@ Features:
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 from ..progenitor.ipc import IPCClient
 from .config import ChatServerConfig
@@ -49,6 +50,8 @@ class IPCProgenitorClient:
         self._started = False
         self._lock = asyncio.Lock()
         self._event_callback = event_callback
+        self._process: asyncio.subprocess.Process | None = None
+        self._stderr_log: Any = None
 
     async def start(self) -> None:
         """Start the client and optionally the Progenitor subprocess."""

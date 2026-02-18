@@ -14,6 +14,7 @@ import json
 import logging
 import signal
 from pathlib import Path
+from typing import Any
 
 from .config import ProgenitorConfig, get_config, setup_logging
 from .graph_outer_loop import create_progenitor_graph
@@ -52,9 +53,9 @@ class Progenitor:
         self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
         self.tool_registry = ToolRegistry(self.state_dir / "registry.json")
         self.graph = None
-        self.loop_runner = None
+        self.loop_runner: Any = None
         self._background_tasks: list[asyncio.Task] = []
-        self._ipc_server = None  # Socket-based IPC server
+        self._ipc_server: Any = None  # Socket-based IPC server
         self._copilot_acp_manager: CopilotACPManager | None = None
 
     async def initialize(self) -> None:
@@ -158,7 +159,7 @@ class Progenitor:
         await self.initialize()
         logger.info("Progenitor initialized. Entering perpetual loop.")
 
-        loop_task = asyncio.create_task(self.loop_runner.run_forever())  # type: ignore[arg-type]
+        loop_task = asyncio.create_task(self.loop_runner.run_forever())
         self._background_tasks = [loop_task]
 
         # Start IPC server for communication

@@ -274,7 +274,7 @@ def wrap_recoverable(
 
             for attempt in range(max_retries):
                 try:
-                    return await func(*args, **kwargs)  # type: ignore[misc]
+                    return await func(*args, **kwargs)
                 except RecoverableError as e:
                     last_error = e
 
@@ -307,7 +307,7 @@ def wrap_recoverable(
                 raise last_error
             raise RuntimeError(f"{operation} failed without error")  # Should never happen
 
-        return wrapper  # type: ignore
+        return wrapper
     return decorator
 
 

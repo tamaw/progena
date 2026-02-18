@@ -657,7 +657,7 @@ def create_node(
 
         def _merge_updates(payload: dict[str, Any] | ProgenitorState) -> ProgenitorState:
             if auto_updates:
-                payload = {**payload, **auto_updates}
+                payload = {**payload, **auto_updates}  # type: ignore[typeddict-item]
             return cast(ProgenitorState, payload)
 
         def _coerce_messages(raw_messages: list[Any]) -> list[ConversationMessage]:

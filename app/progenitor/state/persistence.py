@@ -22,7 +22,7 @@ import sys
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiofiles
 
@@ -114,7 +114,7 @@ class StatePersistence:
 
         async with aiofiles.open(filepath, encoding='utf-8') as f:
             content = await f.read()
-            return json.loads(content)
+            return cast(dict[str, Any], json.loads(content))
 
     async def write(
         self,

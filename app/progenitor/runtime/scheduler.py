@@ -65,7 +65,7 @@ class Scheduler:
         - description: Human-readable description
         """
         expression = expression.lower().strip()
-        result = {}
+        result: dict[str, Any] = {}
 
         # "every day at 9am" -> daily = 1440 minutes
         match = re.search(r"every day at (\d{1,2})(:\d{2})?\s*(am|pm)?", expression)

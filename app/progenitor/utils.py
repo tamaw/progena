@@ -4,7 +4,7 @@ Utility functions for Progenitor.
 Helpers for working with data structures.
 """
 
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
 
@@ -47,7 +47,7 @@ def get_attr_or_default(obj: Any, name: str, default: T) -> T:
     value = get_attr(obj, name, default)
     if value is None:
         return default
-    return value
+    return cast(T, value)
 
 
 def get_enum_value(obj: Any, default: str = "") -> str:

@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ class CircuitBreaker:
 
             # Success - record it
             await self._record_success()
-            return result
+            return cast(T, result)
 
         except Exception:
             await self._record_failure()

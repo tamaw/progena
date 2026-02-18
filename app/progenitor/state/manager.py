@@ -18,7 +18,7 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiofiles
 
@@ -499,7 +499,7 @@ class StateManager:
         to disk when the cache is empty (e.g. first access before init).
         """
         if "build_state" in self._state_cache:
-            return self._state_cache["build_state"]
+            return cast(dict[str, Any], self._state_cache["build_state"])
         async with self._file_lock("build_state"):
             data = await self._read_json(
                 self.state_dir / self.CORE_FILES["build_state"]
@@ -590,7 +590,7 @@ class StateManager:
         to disk when the cache is empty (e.g. first access before init).
         """
         if "current_state" in self._state_cache:
-            return self._state_cache["current_state"]
+            return cast(dict[str, Any], self._state_cache["current_state"])
         async with self._file_lock("current_state"):
             data = await self._read_json(
                 self.state_dir / self.CORE_FILES["current_state"]
@@ -722,7 +722,7 @@ class StateManager:
     async def get_tool_calls(self) -> list[dict[str, Any]]:
         """Get tool calls from current_state."""
         state = await self.get_current_state()
-        return state.get("tool_calls", [])
+        return cast(list[dict[str, Any]], state.get("tool_calls", []))
 
     async def add_tool_call(self, tool_call: dict[str, Any]) -> None:
         """Add a tool call to current_state."""
@@ -739,7 +739,7 @@ class StateManager:
     async def get_attachments(self) -> list[dict[str, Any]]:
         """Get attachments from current_state."""
         state = await self.get_current_state()
-        return state.get("attachments", [])
+        return cast(list[dict[str, Any]], state.get("attachments", []))
 
     async def add_attachment(self, attachment: dict[str, Any]) -> None:
         """Add an attachment reference to current_state."""
