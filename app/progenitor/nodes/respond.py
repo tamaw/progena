@@ -36,7 +36,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         clarification_updates: dict[str, Any] = {}
         if state.get("clarification", {}).get("needed") and state.get("clarification_question"):
             # This is a clarification request - present question to user
-            response_text = state.get("clarification_question", "")
+            response_text = str(state.get("clarification_question", ""))
             clarification_updates = {
                 "awaiting_clarification": True,
                 "clarification_needed": False,  # Reset for next iteration
@@ -115,22 +115,22 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 "current_input": None,
             })
 
-        response_text = _generate_response(decision, current_item, state)
+        response_text_out: str | None = _generate_response(decision, current_item, state)
 
         # Don't respond if no meaningful response
-        if not response_text:
+        if not response_text_out:
             return {}
 
         # Add verification summary if we were in inner loop (loop.spec.md requirement)
         verification_summary = _generate_verification_summary(state)
         if verification_summary:
-            response_text = f"{response_text}\n\n{verification_summary}"
+            response_text_out = f"{response_text_out}\n\n{verification_summary}"
 
         # Log assistant response
         message = ConversationMessage(
             id=str(uuid.uuid4()),
             role="assistant",
-            content=response_text,
+            content=response_text_out,
             timestamp=utcnow(),
             metadata={
                 "decision_action": _get_decision_action(decision),
@@ -168,7 +168,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             await state_manager.clear_spec_doc()
 
         return cast(ProgenitorState, {
-            "pending_response": response_text,
+            "pending_response": response_text_out,
             "messages": messages,
             "current_input": None,  # Clear input after responding
             **build_clear_updates,
@@ -222,7 +222,7 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
             summary_parts.append(f"  (+{len(gaps) - 3} more)")
 
     # Best artefact info if stopped early (loop.spec.md Stop Conditions requirement)
-    best_artefact = state.get("best_artefact")
+    best_artefact: dict[str, Any] | None = state.get("best_artefact")  # type: ignore[assignment]
     if best_artefact and not passed:
         best_score = state.get("best_artefact_score", 0)
         best_iteration = best_artefact.get("iteration", "?")
@@ -245,14 +245,14 @@ def _generate_response(decision, current_item, state: ProgenitorState) -> str | 
         decision_dict = decision.model_dump() if hasattr(decision, "model_dump") else decision
         direct_response = decision_dict.get("direct_response")
         if direct_response:
-            return direct_response
+            return cast(str, direct_response)
 
     # Generate response based on completed work
     if current_item:
         response = _format_work_item_response(current_item)
 
         # Add newly built agent info if available
-        new_agent_info = state.get("new_agent_ready")
+        new_agent_info: dict[str, Any] | None = state.get("new_agent_ready")  # type: ignore[assignment]
         if new_agent_info:
             agent_name = new_agent_info.get("name", "unknown")
             test_passed = new_agent_info.get("test_passed", False)
@@ -322,16 +322,16 @@ def _format_work_item_response(current_item) -> str | None:
         if response_text:
             response_lower = response_text.strip().lower()
             if response_lower.startswith("say:"):
-                return response_text[4:].strip()
+                return cast(str, response_text[4:].strip())
             if response_lower.startswith("ask:"):
-                return response_text[4:].strip()
+                return cast(str, response_text[4:].strip())
             if response_lower.startswith("notify:"):
                 # Strip directive and level if present: "NOTIFY: level | message"
                 notify_body = response_text[7:].strip()
                 if "|" in notify_body:
                     notify_body = notify_body.split("|", 1)[1].strip()
-                return notify_body
-            return response_text
+                return cast(str, notify_body)
+            return cast(str, response_text)
         elif result.get("message"):
             return f"✓ {result['message']}"
         else:

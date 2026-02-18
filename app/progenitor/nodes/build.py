@@ -128,7 +128,7 @@ def create_node(
                 result = build_results[result_idx]
                 result_idx += 1
 
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     build_info["status"] = "failed"
                     build_info["error_message"] = str(result)
                     build_info["completed_at"] = utcnow_isoformat()
@@ -174,7 +174,7 @@ def create_node(
         current_iteration = iteration_state.get("current", 0) if isinstance(iteration_state, dict) else getattr(iteration_state, "current", 0)
 
         # Update build state
-        result: dict[str, Any] = {
+        build_output: dict[str, Any] = {
             "build_phase": "build",
             "concurrent_builds": concurrent_builds,
             "merge_queue": merge_queue,
@@ -194,10 +194,10 @@ def create_node(
         # Save checkpoint to build_state.json
         await state_manager.save_build_state({
             **state,
-            **result,
+            **build_output,
         })
 
-        return cast(ProgenitorState, result)
+        return cast(ProgenitorState, build_output)
 
     return build_node
 

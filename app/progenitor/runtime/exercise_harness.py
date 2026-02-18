@@ -84,7 +84,6 @@ class AgentProcessRunner:
         self._reader_task: asyncio.Task[None] | None = None
         # Track the actual port used (may differ from requested if port was in use)
         self.actual_port: int | None = None
-        self._reader_task: asyncio.Task[None] | None = None
 
     async def start(self, timeout: float = DEFAULT_STARTUP_TIMEOUT) -> tuple[bool, str]:
         """

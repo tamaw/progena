@@ -194,7 +194,7 @@ class ProgenitorService:
         try:
             if self.graph is None:
                 raise RuntimeError("Graph not initialized")
-            result = await self.graph.ainvoke(initial_state, config)  # type: ignore[arg-type]
+            result = await self.graph.ainvoke(initial_state, config)
 
             # Extract response
             response = result.get("pending_response", "")
@@ -271,7 +271,7 @@ class ProgenitorService:
                 raise RuntimeError("Graph not initialized")
             # Use astream for streaming
             full_response = ""
-            async for event in self.graph.astream(initial_state, config):  # type: ignore[arg-type]
+            async for event in self.graph.astream(initial_state, config):
                 # Extract any response updates
                 for _node_name, node_output in event.items():
                     if isinstance(node_output, dict) and (chunk := node_output.get("pending_response")):

@@ -11,7 +11,7 @@ as a fallback for cross-iteration analysis.
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import LearningResult
@@ -42,7 +42,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
     Collects: ideal state, experiment plan, execution results,
     verification reports, previous lessons, and iteration info.
     """
-    context = {}
+    context: dict[str, Any] = {}
 
     # Iteration info
     context["iteration"] = state.get("iteration", {}).get("current", 0)
@@ -64,7 +64,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
     experiment_plan = plan_phase.get("experiment_plan")
     if experiment_plan:
         if hasattr(experiment_plan, "model_dump"):
-            context["experiment_plan"] = experiment_plan.model_dump()  # type: ignore[union-attr]
+            context["experiment_plan"] = experiment_plan.model_dump()
         else:
             context["experiment_plan"] = experiment_plan
 
@@ -101,7 +101,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
 
     if verification_report:
         if hasattr(verification_report, "model_dump"):
-            context["verification_report"] = verification_report.model_dump()  # type: ignore[union-attr]
+            context["verification_report"] = verification_report.model_dump()
         else:
             context["verification_report"] = verification_report
 
@@ -176,7 +176,7 @@ def _detect_local_patterns(all_lessons: list[dict[str, Any]]) -> list[dict[str, 
 def _get_response_format(llm_client) -> dict[str, Any]:
     """Get structured output response format for LearningResult."""
     if hasattr(llm_client, '_get_json_response_format'):
-        return llm_client._get_json_response_format(LearningResult, "learning_result")
+        return cast(dict[str, Any], llm_client._get_json_response_format(LearningResult, "learning_result"))
     # Fallback: import the builder from the client module
     from ..llm.client import _build_json_schema_format
     return _build_json_schema_format(LearningResult, "learning_result")
@@ -313,13 +313,13 @@ async def _generate_lessons_via_llm(
 
     try:
         if hasattr(llm_client, "chat_structured"):
-            return await llm_client.chat_structured(
+            return cast(LearningResult, await llm_client.chat_structured(
                 messages=[{"role": "user", "content": prompt}],
                 response_model=LearningResult,
                 schema_name="learning_result",
                 system_prompt=system_prompt,
                 temperature=0.3,
-            )
+            ))
 
         # Fallback for test doubles / alternate clients
         response_format = _get_response_format(llm_client)

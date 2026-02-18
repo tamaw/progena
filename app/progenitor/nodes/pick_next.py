@@ -78,7 +78,6 @@ def _to_work_item(item) -> WorkItem | None:
                 target_agent=item.get("target_agent"),
                 target_tool=item.get("target_tool"),
                 worktree_path=item.get("worktree_path"),
-                submodule_path=item.get("submodule_path"),
             )
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("Failed to convert item to WorkItem: %s", e)

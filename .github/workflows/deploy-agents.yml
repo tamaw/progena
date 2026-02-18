@@ -1,0 +1,218 @@
+name: deploy-agents
+
+# Deploy only the agents/MCP servers that changed on merge to main.
+# Each changed agent/mcp gets its own Docker container and is registered
+# with the LiteLLM proxy.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/agents/**"
+      - "app/mcp/**"
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------ detect
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.diff.outputs.agents }}
+      mcps: ${{ steps.diff.outputs.mcps }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed agents and MCP servers
+        id: diff
+        run: |
+          # Compare HEAD^ to HEAD for the merge commit
+          CHANGED=$(git diff --name-only HEAD^ HEAD)
+
+          # Extract unique agent names from changed paths
+          AGENTS=$(echo "$CHANGED" \
+            | grep -oP '^app/agents/\K[^/]+' \
+            | sort -u \
+            | jq -Rc '[., inputs]' || echo '[]')
+
+          MCPS=$(echo "$CHANGED" \
+            | grep -oP '^app/mcp/\K[^/]+' \
+            | sort -u \
+            | jq -Rc '[., inputs]' || echo '[]')
+
+          echo "agents=$AGENTS" >> "$GITHUB_OUTPUT"
+          echo "mcps=$MCPS"     >> "$GITHUB_OUTPUT"
+          echo "Changed agents: $AGENTS"
+          echo "Changed mcps:   $MCPS"
+
+  # ------------------------------------------------------------------ agents
+  deploy-agent:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
+    runs-on: [self-hosted, Linux, X64]
+    environment: cronix
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate agent directory exists
+        run: |
+          test -d "app/agents/${{ matrix.agent }}" \
+            || { echo "Agent directory app/agents/${{ matrix.agent }} not found"; exit 1; }
+
+      - name: Build agent image
+        run: |
+          docker build \
+            --build-arg AGENT_NAME=${{ matrix.agent }} \
+            -f docker/runner/Dockerfile.agent \
+            -t progenitor-agent-${{ matrix.agent }}:latest \
+            .
+
+      - name: Stop existing container (if any)
+        run: docker rm -f progenitor-agent-${{ matrix.agent }} 2>/dev/null || true
+
+      - name: Run agent container
+        env:
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+        run: |
+          docker run -d \
+            --name progenitor-agent-${{ matrix.agent }} \
+            --restart unless-stopped \
+            --network langfuse_network \
+            -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
+            -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+            -e TEST_MODE=false \
+            progenitor-agent-${{ matrix.agent }}:latest
+
+      - name: Wait for agent to become healthy
+        run: |
+          echo "Waiting for agent container to start..."
+          for i in $(seq 1 30); do
+            if docker exec progenitor-agent-${{ matrix.agent }} \
+              python -c "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()" 2>/dev/null; then
+              echo "Agent ${{ matrix.agent }} is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Agent ${{ matrix.agent }} failed health check"
+          docker logs progenitor-agent-${{ matrix.agent }} --tail 50
+          exit 1
+
+      - name: Register agent with LiteLLM
+        env:
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+        run: |
+          # Determine the container's internal address on the docker network
+          AGENT_HOST="progenitor-agent-${{ matrix.agent }}"
+          AGENT_URL="http://${AGENT_HOST}:8080/v1"
+
+          curl -fsS -X POST "${LITELLM_BASE_URL:-http://localhost:4000}/model/new" \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model_name\": \"agent/${{ matrix.agent }}\",
+              \"litellm_params\": {
+                \"model\": \"openai/${{ matrix.agent }}\",
+                \"api_base\": \"${AGENT_URL}\",
+                \"api_key\": \"${LITELLM_MASTER_KEY}\"
+              },
+              \"model_info\": {
+                \"description\": \"Self-contained agent: ${{ matrix.agent }}\",
+                \"id\": \"agent-${{ matrix.agent }}\"
+              }
+            }"
+          echo ""
+          echo "Registered agent/${{ matrix.agent }} with LiteLLM at ${AGENT_URL}"
+
+  # ------------------------------------------------------------------ mcps
+  deploy-mcp:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
+    runs-on: [self-hosted, Linux, X64]
+    environment: cronix
+    strategy:
+      fail-fast: false
+      matrix:
+        mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate MCP directory exists
+        run: |
+          test -d "app/mcp/${{ matrix.mcp }}" \
+            || { echo "MCP directory app/mcp/${{ matrix.mcp }} not found"; exit 1; }
+
+      - name: Build MCP image
+        run: |
+          docker build \
+            --build-arg MCP_NAME=${{ matrix.mcp }} \
+            -f docker/runner/Dockerfile.mcp \
+            -t progenitor-mcp-${{ matrix.mcp }}:latest \
+            .
+
+      - name: Stop existing container (if any)
+        run: docker rm -f progenitor-mcp-${{ matrix.mcp }} 2>/dev/null || true
+
+      - name: Run MCP container
+        env:
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+        run: |
+          docker run -d \
+            --name progenitor-mcp-${{ matrix.mcp }} \
+            --restart unless-stopped \
+            --network langfuse_network \
+            -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
+            -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+            -e TEST_MODE=false \
+            progenitor-mcp-${{ matrix.mcp }}:latest
+
+      - name: Wait for MCP server to become healthy
+        run: |
+          echo "Waiting for MCP container to start..."
+          for i in $(seq 1 30); do
+            if docker exec progenitor-mcp-${{ matrix.mcp }} \
+              python -c "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()" 2>/dev/null; then
+              echo "MCP ${{ matrix.mcp }} is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MCP ${{ matrix.mcp }} failed health check"
+          docker logs progenitor-mcp-${{ matrix.mcp }} --tail 50
+          exit 1
+
+      - name: Register MCP with LiteLLM
+        env:
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+        run: |
+          MCP_HOST="progenitor-mcp-${{ matrix.mcp }}"
+          MCP_URL="http://${MCP_HOST}:8080/v1"
+
+          curl -fsS -X POST "${LITELLM_BASE_URL:-http://localhost:4000}/model/new" \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model_name\": \"mcp/${{ matrix.mcp }}\",
+              \"litellm_params\": {
+                \"model\": \"openai/${{ matrix.mcp }}\",
+                \"api_base\": \"${MCP_URL}\",
+                \"api_key\": \"${LITELLM_MASTER_KEY}\"
+              },
+              \"model_info\": {
+                \"description\": \"MCP server: ${{ matrix.mcp }}\",
+                \"id\": \"mcp-${{ matrix.mcp }}\"
+              }
+            }"
+          echo ""
+          echo "Registered mcp/${{ matrix.mcp }} with LiteLLM at ${MCP_URL}"

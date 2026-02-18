@@ -21,7 +21,7 @@ class TestCopilotExceptionHandling:
             content = f.read()
 
         # Should use specific exceptions instead of bare except
-        assert "(OSError, asyncio.TimeoutError)" in content or "(OSError, FileNotFoundError, asyncio.TimeoutError)" in content
+        assert "(TimeoutError, OSError)" in content or "(TimeoutError, OSError, FileNotFoundError)" in content
         assert "logger.debug" in content
 
     @pytest.mark.asyncio
@@ -70,7 +70,7 @@ class TestMCPExceptionHandling:
             content = f.read()
 
         # Should use specific exceptions
-        assert "(OSError, asyncio.TimeoutError, ValueError)" in content
+        assert "(TimeoutError, OSError, ValueError)" in content
         assert "logger.debug" in content
 
     @pytest.mark.asyncio

@@ -16,7 +16,7 @@ Usage:
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..runtime.time_utils import utcnow
 from ..state.models import AgentRegistryEntry
@@ -287,24 +287,24 @@ class SemanticRegistry:
         """Find an agent that provides a capability (exact match)."""
         for agent in self._registry.get("agents", []):
             if capability in agent.get("capabilities", []):
-                return agent
+                return cast(dict[str, Any], agent)
         return None
 
     def find_tool_by_capability(self, capability: str) -> dict[str, Any] | None:
         """Find a tool that provides a capability (exact match)."""
         for tool in self._registry.get("tools", []):
             if capability in tool.get("capabilities", []):
-                return tool
+                return cast(dict[str, Any], tool)
         return None
 
     def find_by_name(self, name: str) -> dict[str, Any] | None:
         """Find an agent or tool by name."""
         for agent in self._registry.get("agents", []):
             if agent.get("name") == name:
-                return agent
+                return cast(dict[str, Any], agent)
         for tool in self._registry.get("tools", []):
             if tool.get("name") == name:
-                return tool
+                return cast(dict[str, Any], tool)
         return None
 
     async def register_agent(self, entry: AgentRegistryEntry) -> None:
@@ -363,11 +363,11 @@ class SemanticRegistry:
 
     def get_agents(self) -> list[dict[str, Any]]:
         """Get all registered agents."""
-        return self._registry.get("agents", [])
+        return cast(list[dict[str, Any]], self._registry.get("agents", []))
 
     def get_tools(self) -> list[dict[str, Any]]:
         """Get all registered tools."""
-        return self._registry.get("tools", [])
+        return cast(list[dict[str, Any]], self._registry.get("tools", []))
 
     def capability_exists(self, capability: str) -> bool:
         """Check if a capability is registered."""

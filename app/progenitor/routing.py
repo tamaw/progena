@@ -176,8 +176,8 @@ def _count_pending_backlog_items(backlog: list) -> int:
     return len(get_actionable_items(backlog))
 
 
-def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:
-    """Route after verification - learn if continuing, done if complete."""
+def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "done"]:
+    """Route after verification - publish if passed, learn if continuing, done on error/cancel."""
     verification = state.get("verification", {})
     verification_score: float = verification.get("current_score") or 0.0
     target_score: float = verification.get("target_score") or DEFAULT_VERIFICATION_TARGET_SCORE
@@ -186,17 +186,27 @@ def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:
     current_iteration = iter_info.get("current", 0)
     max_iterations = iter_info.get("max", DEFAULT_MAX_INNER_ITERATIONS)
 
-    # Stop conditions
+    # Cancel / error → exit without publishing
     if state.get("build_cancelled", False):
         return "done"
     if state.get("build_error"):
         return "done"
+
+    # Verification passed → publish PR from worktree
     if verification_score >= target_score:
-        logger.info("Verification score %.2f meets target %.2f, exiting to done", verification_score, target_score)
-        return "done"
+        logger.info(
+            "Verification score %.2f meets target %.2f, routing to publish",
+            verification_score, target_score,
+        )
+        return "publish"
+
+    # Max iterations exhausted → still publish (best-effort PR)
     if current_iteration >= max_iterations:
-        logger.info("Max iterations %d reached, exiting to done", max_iterations)
-        return "done"
+        logger.info(
+            "Max iterations %d reached, routing to publish (best-effort)",
+            max_iterations,
+        )
+        return "publish"
 
     # Continue to learn phase
     logger.info("Continuing to learn phase: iteration=%d, score=%.2f/%.2f", current_iteration, verification_score, target_score)
