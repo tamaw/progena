@@ -30,6 +30,7 @@ def _init_registry() -> dict[str, SystemTool]:
     from ...tools.new_conversation import NewConversationTool
     from ...tools.rediscover_agents import RediscoverAgentsTool
     from ...tools.schedule_task import ScheduleTaskTool
+    from ...tools.shell import ShellCheckTool, ShellExecTool
     from ...tools.self_reflect_tool import SelfReflectTool
 
     tools = [
@@ -44,6 +45,8 @@ def _init_registry() -> dict[str, SystemTool]:
         ScheduleTaskTool(),
         CompressConversationTool(),
         MemoryTool(),
+        ShellCheckTool(),
+        ShellExecTool(),
     ]
     return {tool.name: tool for tool in tools}
 
