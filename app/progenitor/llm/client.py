@@ -107,12 +107,19 @@ class LLMClient:
         base_url = self.config.base_url.rstrip('/')
         self.endpoint_url = f"{base_url}/responses"
 
+        # LiteLLM expects an API key in the `x-litellm-api-key` header.
+        # Keep `Authorization: Bearer` as a compatibility fallback when a key is set.
+        api_key = self.config.api_key or ""
+        headers = {
+            "Content-Type": "application/json",
+            "x-litellm-api-key": api_key,
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.config.api_key or 'unused'}",
-            }
+            headers=headers,
         )
 
         self.structured_override_url = self._resolve_structured_override_url()

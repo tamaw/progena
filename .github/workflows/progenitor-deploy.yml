@@ -17,12 +17,15 @@ jobs:
         env:
           # Allow values to come from Environment secrets/vars (cronix) or repo-level secrets.
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY || vars.LITELLM_API_KEY }}
         run: |
           test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
+          test -n "$LITELLM_API_KEY" || (echo "Missing/empty secret: LITELLM_API_KEY" && exit 1)
 
       - name: Write env file
         env:
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY || vars.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           PROGENITOR_MODEL_DEFAULT: ${{ secrets.PROGENITOR_MODEL_DEFAULT || vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_TIMEZONE: ${{ secrets.PROGENITOR_TIMEZONE || vars.PROGENITOR_TIMEZONE }}
@@ -30,6 +33,7 @@ jobs:
           cat > .progenitor.env <<EOF
           LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
           EOF
+          if [ -n "${LITELLM_API_KEY}" ]; then echo "LITELLM_API_KEY=${LITELLM_API_KEY}" >> .progenitor.env; fi
           if [ -n "${LITELLM_BASE_URL}" ]; then echo "LITELLM_BASE_URL=${LITELLM_BASE_URL}" >> .progenitor.env; fi
           if [ -n "${PROGENITOR_MODEL_DEFAULT}" ]; then echo "PROGENITOR_MODEL_DEFAULT=${PROGENITOR_MODEL_DEFAULT}" >> .progenitor.env; fi
           if [ -n "${PROGENITOR_TIMEZONE}" ]; then echo "PROGENITOR_TIMEZONE=${PROGENITOR_TIMEZONE}" >> .progenitor.env; fi
@@ -69,4 +73,3 @@ jobs:
           wait_healthy progenitor 120
           # Self-hosted runner may be containerized; validate from inside the backend container.
           docker exec progenitor-backend curl -fsS http://localhost:8000/health >/dev/null
-
