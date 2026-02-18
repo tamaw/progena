@@ -170,7 +170,13 @@ class IPCProgenitorClient:
         if not self._ipc_client:
             raise RuntimeError("IPC client not initialized")
 
-        return await self._ipc_client.send_message(message, request_id)
+        # The Progenitor loop emits responses via the stream queue; collect the stream
+        # for stream=false HTTP calls to return a single string response.
+        chunks: list[str] = []
+        async for chunk in self._ipc_client.send_message_stream(message, request_id):
+            if chunk:
+                chunks.append(chunk)
+        return "".join(chunks)
 
     async def send_message_stream(
         self,
