@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.progenitor.config import ProgenitorConfig
-from app.progenitor.graph_outer_loop import create_progenitor_graph
+from app.progenitor.graph_chat_loop import create_progenitor_graph
 from app.progenitor.routing import should_iterate
 from app.progenitor.state.models import (
     ConversationMessage,
@@ -39,6 +39,7 @@ def mock_state_manager():
     manager.get_current_state = AsyncMock(return_value={})
     manager.update_current_state = AsyncMock()
     manager.save_current_schedule = AsyncMock()
+    manager.save_schedule = AsyncMock()
     return manager
 
 
@@ -170,13 +171,16 @@ class TestDualLoopGraphCreation:
         # Outer loop nodes (no planner - only in inner loop)
         assert "intake" in node_names
         assert "chat" in node_names
-        assert "pick_next" in node_names
-        assert "act" in node_names
-        assert "validate" in node_names
         assert "commit_core" in node_names
         assert "respond" in node_names
-        assert "cycle_limit" in node_names
-        assert "idle" in node_names
+
+        # Backlog execution nodes are handled by background graph
+        assert "pick_next" not in node_names
+        assert "worktree_prep" not in node_names
+        assert "act" not in node_names
+        assert "validate" not in node_names
+        assert "cycle_limit" not in node_names
+        assert "idle" not in node_names
 
         # Planner is NOT in outer loop - only in inner loop
         assert "planner" not in node_names
@@ -212,7 +216,7 @@ class TestDualLoopGraphCreation:
         assert "intake" in edge_sources
         assert "chat" in edge_sources
         assert "respond" in edge_sources
-        assert "cycle_limit" in edge_sources
+        assert "commit_core" in edge_sources
 
 
 class TestShouldIterateLogic:

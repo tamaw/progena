@@ -68,7 +68,7 @@ class TestDecideNode:
     @pytest.mark.asyncio
     async def test_decide_direct_answer(self):
         """Test decision for direct answer."""
-        from app.progenitor.nodes import decide
+        from app.progenitor.runtime import decide
 
         mock_llm = AsyncMock()
         mock_llm.decide.return_value = {
@@ -98,7 +98,7 @@ class TestDecideNode:
     @pytest.mark.asyncio
     async def test_decide_forces_build_agent_for_explicit_agent_request(self):
         """Explicit build-agent requests should trigger background build flow."""
-        from app.progenitor.nodes import decide
+        from app.progenitor.runtime import decide
 
         # Use MagicMock as base so sync methods like _get_json_response_format don't return coroutines
         mock_llm = MagicMock()
@@ -139,7 +139,7 @@ class TestDecideNode:
     @pytest.mark.asyncio
     async def test_decide_rejects_low_confidence_build(self):
         """Test that build actions with low confidence are rejected."""
-        from app.progenitor.nodes import decide
+        from app.progenitor.runtime import decide
 
         mock_llm = AsyncMock()
         # Simulate an LLM response with build action but LOW confidence
@@ -175,7 +175,7 @@ class TestDecideNode:
     @pytest.mark.asyncio
     async def test_decide_no_input(self):
         """Test decision with no input."""
-        from app.progenitor.nodes import decide
+        from app.progenitor.runtime import decide
 
         mock_llm = AsyncMock()
         mock_registry = MagicMock()
@@ -192,10 +192,9 @@ class TestDecideNode:
         assert result.get("current_decision") is None
 
     @pytest.mark.asyncio
-    async def test_decide_answer_direct_uses_genesis_system_prompt(self):
-        """Direct user answers should be generated with genesis as system prompt."""
-        from app.progenitor.llm.prompts import PromptTemplates
-        from app.progenitor.nodes import decide
+    async def test_decide_answer_direct_pass_through(self):
+        """ANSWER_DIRECTLY should be a pass-through: direct_response=None so the chat loop responds."""
+        from app.progenitor.runtime import decide
 
         mock_llm = MagicMock()
         mock_llm.decide = AsyncMock(return_value={
@@ -204,7 +203,6 @@ class TestDecideNode:
             "requires_planning": False,
             "target_capabilities": [],
         })
-        mock_llm.chat = AsyncMock(return_value="Genesis-based response")
 
         mock_registry = MagicMock()
         mock_registry.get_tool_context.return_value = ""
@@ -222,11 +220,8 @@ class TestDecideNode:
         decision = result.get("current_decision")
         assert decision is not None
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
-        assert decision.direct_response == "Genesis-based response"
-
-        called_kwargs = mock_llm.chat.await_args.kwargs
-        expected_genesis = PromptTemplates().get_genesis_prompt().strip()
-        assert called_kwargs["system_prompt"] == expected_genesis
+        # Pass-through: decide node does NOT generate a response — the chat loop does.
+        assert decision.direct_response is None
 
     @pytest.mark.asyncio
     async def test_decide_slow_path_structured_omits_tools_param(self):
@@ -237,7 +232,7 @@ class TestDecideNode:
         upstream.
         """
         from app.progenitor.llm.response_models import DecisionResponse
-        from app.progenitor.nodes import decide
+        from app.progenitor.runtime import decide
 
         mock_llm = MagicMock()
         mock_llm.chat_structured = AsyncMock(return_value=DecisionResponse(
@@ -266,38 +261,21 @@ class TestDecideNode:
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
         assert mock_llm.chat_structured.await_args.kwargs.get("tools") is None
 
-    def test_extract_history_excludes_genesis_system_message(self):
-        """History extraction should not include genesis bootstrap prompt."""
-        from app.progenitor.llm.prompts import PromptTemplates
-        from app.progenitor.nodes import decide
+    def test_extract_history_includes_system_messages(self):
+        """History extraction should include system messages passed in the message list."""
+        from app.progenitor.runtime import decide
 
-        genesis = PromptTemplates().get_genesis_prompt()
         history = decide._extract_history(
             [
-                {"role": "system", "content": genesis},
+                {"role": "system", "content": "You are helpful."},
                 {"role": "user", "content": "hello"},
             ],
             limit=10,
         )
 
-        assert len(history) == 1
-        assert history[0]["role"] == "user"
-        assert history[0]["content"] == "hello"
-
-    def test_summarize_tool_context_compacts_and_drops_json_lines(self):
-        """Tool context summary should avoid raw JSON-like lines and stay compact."""
-        from app.progenitor.nodes import decide
-
-        raw = """
-        {"tool":"schedule_task","args":{"message":"Say hi","delay_minutes":1}}
-        ✅ Scheduled: Say hi
-        Run time: 2026-02-15T23:55:24.943020+00:00.
-        """
-        summary = decide._summarize_tool_context("schedule_task", raw)
-
-        assert "schedule_task" in summary
-        assert "Scheduled: Say hi" in summary
-        assert '{"tool"' not in summary
+        assert len(history) == 2
+        assert history[0]["role"] == "system"
+        assert history[1]["role"] == "user"
 
 
 class TestPickNextNode:

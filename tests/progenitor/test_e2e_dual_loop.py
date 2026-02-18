@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 from app.progenitor.config import ProgenitorConfig
-from app.progenitor.graph_outer_loop import create_progenitor_graph
+from app.progenitor.graph_chat_loop import create_progenitor_graph
 from app.progenitor.state.models import (
     ProgenitorState,
     WorkItem,
@@ -143,13 +143,16 @@ class TestDualLoopEndToEnd:
         nodes = set(graph.get_graph().nodes.keys()) - {"__start__"}
 
         expected_outer_nodes = {
-            "intake", "chat", "pick_next",
-            "worktree_prep", "act", "validate", "commit_core",
-            "respond", "cycle_limit", "idle",
+            "intake", "chat", "respond", "commit_core",
         }
 
         for node in expected_outer_nodes:
             assert node in nodes, f"Missing outer loop node: {node}"
+
+        # Backlog execution nodes should not be in the user-chat outer loop
+        unexpected = {"pick_next", "worktree_prep", "act", "validate", "cycle_limit", "idle"}
+        for node in unexpected:
+            assert node not in nodes, f"Unexpected outer loop node: {node}"
 
         # Planner is NOT in outer loop - only in inner loop
         assert "planner" not in nodes, "planner should only be in inner loop"

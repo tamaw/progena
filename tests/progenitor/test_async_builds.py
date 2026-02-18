@@ -149,6 +149,21 @@ class TestBackgroundBuildRunner:
             copilot_acp_manager=None,
         )
 
+    @pytest.fixture(autouse=True)
+    async def cancel_background_tasks(self, runner):
+        """Ensure any background build tasks are cancelled after each test.
+
+        On Windows, uncancelled asyncio Tasks cause the IOCP event loop to hang
+        during teardown when pytest-asyncio closes the loop.
+        """
+        yield
+        if runner._current_task and not runner._current_task.done():
+            runner._current_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(runner._current_task), timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
     def test_initial_state(self, runner):
         """Runner should start with no active build."""
         assert runner.get_build_status() is None

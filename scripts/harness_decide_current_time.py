@@ -8,7 +8,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.progenitor.llm.client import LLMClient
-from app.progenitor.nodes.decide import create_node
+from app.progenitor.runtime.decide import create_node
 from app.progenitor.runtime import loop as loop_module
 from app.progenitor.tools.registry import ToolRegistry
 

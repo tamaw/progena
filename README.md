@@ -88,8 +88,8 @@ PickDueSchedule → Intake → Chat → Respond → AdvanceSchedule
 app/
   progenitor/
     main.py          # Service entrypoint
-    graph_outer_loop.py  # Outer loop topology
-    graph_inner_loop.py  # Inner loop topology
+    graph_chat_loop.py   # Chat loop topology
+    graph_build_loop.py  # Build loop topology
     llm/             # OpenAI wrapper + prompts
     tools/           # Copilot, git, MCP clients
     runtime/         # Loop, scheduler, time
