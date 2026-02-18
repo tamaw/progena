@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from app.progenitor.tools.protocol import ToolContext
+from app.progenitor.nodes.node_helpers import ToolContext
 from app.progenitor.tools.shell import ShellCheckTool, ShellExecTool
 
 
@@ -40,4 +40,3 @@ async def test_shell_exec_runs_command_when_enabled(monkeypatch):
     assert result.data is not None
     assert result.data.get("returncode") == 0
     assert "progenitor_shell_test" in (result.data.get("stdout") or "")
-

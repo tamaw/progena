@@ -11,11 +11,12 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 from typing import Any
 
-from .protocol import BaseSystemTool, ToolContext, ToolResult
+from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +81,24 @@ def _extract_command_from_request(request: str) -> str:
         return (m.group(1) or "").strip()
 
     # Common prefixes.
-    for prefix in ("command:", "cmd:", "bash:", "sh:"):
+    for prefix in ("command:", "cmd:"):
         if text.lower().startswith(prefix):
             return text[len(prefix) :].strip()
+
+    # Drop explicit tool/shell invocation prefixes (optionally followed by separators).
+    for prefix in (
+        "shell_exec",
+        "shell exec",
+        "shell_check",
+        "shell check",
+        "shell",
+        "bash",
+        "sh",
+    ):
+        if text.lower().startswith(prefix):
+            text = text[len(prefix) :].lstrip()
+            text = text.lstrip(":>-").lstrip()
+            break
 
     # If the user said "run <cmd>" / "execute <cmd>", drop the verb.
     for prefix in ("run ", "execute ", "shell "):
@@ -106,6 +122,10 @@ class ShellCheckTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return "Check whether shell command tools are enabled and which shell is available"
+
+    @property
+    def keywords(self) -> list[str]:
+        return ["shell_check", "shell check"]
 
     async def execute(self, _context: ToolContext) -> ToolResult:
         shell = _resolve_shell()
@@ -131,6 +151,16 @@ class ShellExecTool(BaseSystemTool):
             "(requires PROGENITOR_ENABLE_SHELL_TOOLS=true; uses bash if available)"
         )
 
+    @property
+    def keywords(self) -> list[str]:
+        # Intentionally requires explicit intent to run shell commands.
+        return ["shell_exec", "shell exec"]
+
+    @property
+    def trigger_patterns(self) -> list[str]:
+        # Allow "bash:" / "sh:" / "shell:" only when it looks like an invocation.
+        return [r"^\s*(?:bash|sh|shell)\s*[:>-]\s*\S+"]
+
     async def execute(self, context: ToolContext) -> ToolResult:
         if not _shell_tools_enabled():
             return ToolResult.fail(
@@ -140,26 +170,48 @@ class ShellExecTool(BaseSystemTool):
         if os.name == "nt":
             return ToolResult.fail("shell_exec is only supported on POSIX (Linux) containers.")
 
-        tool_args = context.tool_args or {}
-        request = str(tool_args.get("command") or tool_args.get("request") or context.user_input or "")
-        command = _extract_command_from_request(request)
+        request = str(context.user_input or "")
+
+        # Optional CLI-ish flags before a required "--" delimiter:
+        #   shell_exec --timeout 60 --cwd /tmp -- ls -la
+        timeout = _coerce_timeout(os.getenv("PROGENITOR_SHELL_TIMEOUT_SECONDS") or _DEFAULT_TIMEOUT_SECONDS)
+        cwd: Path | None = None
+        if " -- " in request:
+            prefix, cmd_part = request.split(" -- ", 1)
+            prefix = _extract_command_from_request(prefix)
+            try:
+                tokens = shlex.split(prefix)
+            except Exception:
+                tokens = []
+
+            i = 0
+            while i < len(tokens):
+                tok = tokens[i]
+                if tok == "--timeout" and i + 1 < len(tokens):
+                    timeout = _coerce_timeout(tokens[i + 1])
+                    i += 2
+                    continue
+                if tok == "--cwd" and i + 1 < len(tokens):
+                    try:
+                        candidate = Path(tokens[i + 1]).expanduser().resolve()
+                        if not candidate.exists() or not candidate.is_dir():
+                            return ToolResult.fail(f"cwd does not exist or is not a directory: {candidate}")
+                        cwd = candidate
+                    except Exception as e:
+                        return ToolResult.fail(f"Invalid cwd: {tokens[i + 1]} ({e})")
+                    i += 2
+                    continue
+                i += 1
+
+            command = cmd_part.strip()
+        else:
+            command = _extract_command_from_request(request)
         if not command:
             return ToolResult.fail("No shell command provided.")
 
         shell = _resolve_shell()
         if not shell:
             return ToolResult.fail("No shell found (expected bash or sh).")
-
-        timeout = _coerce_timeout(tool_args.get("timeout_seconds"))
-        cwd_raw = tool_args.get("cwd")
-        cwd = None
-        if cwd_raw:
-            try:
-                cwd = Path(str(cwd_raw)).expanduser().resolve()
-                if not cwd.exists() or not cwd.is_dir():
-                    return ToolResult.fail(f"cwd does not exist or is not a directory: {cwd}")
-            except Exception as e:
-                return ToolResult.fail(f"Invalid cwd: {cwd_raw} ({e})")
 
         logger.info("SHELL: %s -lc %s (cwd=%s)", shell, command, cwd or os.getcwd())
         process = await asyncio.create_subprocess_exec(
@@ -196,4 +248,3 @@ class ShellExecTool(BaseSystemTool):
                 "stderr": _truncate(stderr),
             }
         )
-

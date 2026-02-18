@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from ...tools.new_conversation import NewConversationTool
     from ...tools.rediscover_agents import RediscoverAgentsTool
     from ...tools.schedule_task import ScheduleTaskTool
+    from ...tools.shell import ShellCheckTool, ShellExecTool
     from ...tools.self_reflect_tool import SelfReflectTool
 
 
@@ -45,6 +46,8 @@ def __getattr__(name: str):
         "NewConversationTool": "...tools.new_conversation",
         "CompressConversationTool": "...tools.compress_conversation",
         "MemoryTool": "...tools.memory",
+        "ShellCheckTool": "...tools.shell",
+        "ShellExecTool": "...tools.shell",
     }
     if name in _tool_map:
         import importlib
@@ -61,6 +64,8 @@ def __getattr__(name: str):
             "NewConversationTool": "app.progenitor.tools.new_conversation",
             "CompressConversationTool": "app.progenitor.tools.compress_conversation",
             "MemoryTool": "app.progenitor.tools.memory",
+            "ShellCheckTool": "app.progenitor.tools.shell",
+            "ShellExecTool": "app.progenitor.tools.shell",
         }
         mod = importlib.import_module(_abs_map[name])
         return getattr(mod, name)
@@ -94,4 +99,6 @@ __all__ = [
     "NewConversationTool",
     "CompressConversationTool",
     "MemoryTool",
+    "ShellCheckTool",
+    "ShellExecTool",
 ]
