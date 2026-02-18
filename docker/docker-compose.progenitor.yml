@@ -64,6 +64,12 @@ services:
       # Backend runs in a separate container; connect to IPC via service DNS.
       CHAT_SERVER_IPC_HOST: progenitor
       CHAT_SERVER_IPC_PORT: 9500
+      # Telegram integration (backend only)
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-true}
     ports:
       - "8000:8000"
     volumes:
