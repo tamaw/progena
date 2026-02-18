@@ -9,6 +9,10 @@ on:
       - litellm-config.yaml
       - docker/docker-compose.litellm.yml
 
+concurrency:
+  group: litellm-deploy-cronix
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
