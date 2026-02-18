@@ -3,6 +3,10 @@ name: progenitor-deploy
 on:
   workflow_dispatch:
 
+concurrency:
+  group: progenitor-deploy-cronix
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
