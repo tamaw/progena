@@ -2,14 +2,14 @@
 Chat Node - main user interaction path using LLM tool-calling.
 
 Replaces Decide routing for normal chat turns:
-Intake -> TimeCheck -> Chat -> Respond
+Intake -> Chat -> Respond
 """
 
 import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, cast
 
-from ..env_utils import env_int
+from ..utils import env_int
 from ..llm.prompts import PromptTemplates
 from ..state.models import Decision, DecisionAction, ProgenitorState
 

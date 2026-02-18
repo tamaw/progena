@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ProgenitorConfig, get_config
-from .graph_outer_loop import create_progenitor_graph
+from .graph_chat_loop import create_progenitor_graph
 from .llm.client import LLMClient
 from .state.manager import StateManager
 from .state.models import ConversationMessage, ProgenitorState

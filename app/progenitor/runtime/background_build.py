@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import BaseModel, Field
 
-from ..env_utils import env_bool
+from ..utils import env_bool
 from ..tools.gh import gh_pr_create
 from .time_utils import utcnow, utcnow_isoformat
 
@@ -346,7 +346,7 @@ class BackgroundBuildRunner:
     def _get_inner_loop_graph(self):
         """Lazily create the inner loop graph."""
         if self._inner_loop_graph is None:
-            from ..graph_inner_loop import create_inner_loop_graph
+            from ..graph_build_loop import create_inner_loop_graph
             self._inner_loop_graph = create_inner_loop_graph(
                 state_manager=self.state_manager,
                 llm_client=self.llm_client,

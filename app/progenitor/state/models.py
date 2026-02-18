@@ -381,6 +381,7 @@ class BackgroundJobState(TypedDict, total=False):
     """
     bg_had_work: bool
     bg_schedule_id: str | None
+    bg_work_type: str | None  # "scheduled" | "backlog" | None
     last_cycle_response: str | None
 
 
