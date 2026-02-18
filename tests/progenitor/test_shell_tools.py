@@ -9,30 +9,27 @@ from app.progenitor.tools.shell import ShellCheckTool, ShellExecTool
 
 
 @pytest.mark.asyncio
-async def test_shell_check_reports_state(monkeypatch):
-    monkeypatch.delenv("PROGENITOR_ENABLE_SHELL_TOOLS", raising=False)
+async def test_shell_check_reports_state():
     tool = ShellCheckTool()
     result = await tool.execute(ToolContext(tool_registry=object(), llm_client=object()))
     assert result.success is True
     assert result.data is not None
-    assert "enabled" in result.data
     assert "shell" in result.data
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_disabled(monkeypatch):
-    monkeypatch.delenv("PROGENITOR_ENABLE_SHELL_TOOLS", raising=False)
+@pytest.mark.skipif(os.name != "nt", reason="This test asserts Windows behavior")
+async def test_shell_exec_rejects_on_windows():
     tool = ShellExecTool()
     ctx = ToolContext(tool_registry=object(), llm_client=object(), user_input="echo hi")
     result = await tool.execute(ctx)
     assert result.success is False
-    assert "disabled" in (result.error or "").lower()
+    assert "posix" in (result.error or "").lower()
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.name == "nt", reason="shell_exec only supports POSIX shells")
-async def test_shell_exec_runs_command_when_enabled(monkeypatch):
-    monkeypatch.setenv("PROGENITOR_ENABLE_SHELL_TOOLS", "true")
+async def test_shell_exec_runs_command():
     tool = ShellExecTool()
     ctx = ToolContext(tool_registry=object(), llm_client=object(), user_input="echo progenitor_shell_test")
     result = await tool.execute(ctx)

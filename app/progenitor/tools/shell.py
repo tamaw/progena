@@ -1,8 +1,8 @@
 """
 Shell access tools.
 
-These tools are intentionally gated behind an environment variable because they
-enable arbitrary command execution inside the running container.
+WARNING: These tools enable arbitrary command execution in the runtime
+environment (typically a Docker container). Use with care.
 """
 
 from __future__ import annotations
@@ -23,16 +23,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _MAX_TIMEOUT_SECONDS = 300.0
 _MAX_OUTPUT_CHARS = 10_000
-
-
-def _shell_tools_enabled() -> bool:
-    return os.getenv("PROGENITOR_ENABLE_SHELL_TOOLS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
 
 def _detect_docker() -> bool:
     # Fast path commonly present in containers.
@@ -121,7 +111,7 @@ class ShellCheckTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Check whether shell command tools are enabled and which shell is available"
+        return "Check whether a POSIX shell is available and whether we're running in Docker"
 
     @property
     def keywords(self) -> list[str]:
@@ -131,7 +121,6 @@ class ShellCheckTool(BaseSystemTool):
         shell = _resolve_shell()
         return ToolResult.ok(
             {
-                "enabled": _shell_tools_enabled(),
                 "platform": os.name,
                 "in_docker": _detect_docker(),
                 "shell": shell,
@@ -148,7 +137,7 @@ class ShellExecTool(BaseSystemTool):
     def description(self) -> str:
         return (
             "Execute a non-interactive shell command inside the container "
-            "(requires PROGENITOR_ENABLE_SHELL_TOOLS=true; uses bash if available)"
+            "(uses bash if available)"
         )
 
     @property
@@ -162,11 +151,6 @@ class ShellExecTool(BaseSystemTool):
         return [r"^\s*(?:bash|sh|shell)\s*[:>-]\s*\S+"]
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        if not _shell_tools_enabled():
-            return ToolResult.fail(
-                "Shell tools are disabled. Set PROGENITOR_ENABLE_SHELL_TOOLS=true to enable."
-            )
-
         if os.name == "nt":
             return ToolResult.fail("shell_exec is only supported on POSIX (Linux) containers.")
 
