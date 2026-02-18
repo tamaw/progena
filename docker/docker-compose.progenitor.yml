@@ -3,6 +3,7 @@
 # ==============================================================================
 x-progenitor-llm-env: &progenitor-llm-env
   LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+  LITELLM_API_KEY: ${LITELLM_API_KEY:-}
   LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
   PROGENITOR_MODEL_DEFAULT: ${PROGENITOR_MODEL_DEFAULT:-gpt-5.1-codex-max}
 
@@ -19,6 +20,8 @@ services:
     environment:
       <<: *progenitor-llm-env
       TZ: UTC
+      # Bind IPC on all interfaces so other containers (backend) can connect.
+      PROGENITOR_IPC_HOST: 0.0.0.0
     volumes:
       - ../data/state:/app/data/state
       - ../logs:/app/logs
@@ -58,6 +61,9 @@ services:
       CHAT_SERVER_HOST: 0.0.0.0
       CHAT_SERVER_PORT: 8000
       CHAT_SERVER_PROGENITOR_TIMEOUT: 300
+      # Backend runs in a separate container; connect to IPC via service DNS.
+      CHAT_SERVER_IPC_HOST: progenitor
+      CHAT_SERVER_IPC_PORT: 9500
     ports:
       - "8000:8000"
     volumes:
