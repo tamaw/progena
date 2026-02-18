@@ -302,13 +302,6 @@ class ProgenitorLoop:
 
         while self.running:
             try:
-                # Prioritize user input responsiveness: if a user message is queued,
-                # don't start a background cycle that would contend for the graph lock.
-                if not self._input_queue.empty():
-                    logger.debug("User input queued; yielding background cycle")
-                    await asyncio.sleep(0.1)
-                    continue
-
                 # Try to acquire lock (non-blocking check first)
                 if self._graph_lock.locked():
                     # User input is being processed, wait a bit

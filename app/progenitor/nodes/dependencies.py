@@ -147,7 +147,6 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         act,
         commit_core,
         cycle_limit,
-        decide,
         execute,
         idle,
         intake,
@@ -161,6 +160,7 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         verify_loop,
         worktree_prep,
     )
+    from ..runtime import decide
 
     nodes = {
         # Outer loop nodes

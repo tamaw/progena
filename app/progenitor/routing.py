@@ -1,12 +1,22 @@
 """
 Routing Module - Centralized Graph Routing Decisions.
 
-Extracts common routing logic from inner and outer loops to reduce duplication.
 All routing functions return typed Literal strings for LangGraph compatibility.
 
 Note: We import ProgenitorState directly (not via TYPE_CHECKING) because
 LangGraph's get_type_hints() evaluates type annotations at runtime for
 conditional edge routing functions.
+
+Routing functions by graph:
+  Build loop (BackgroundBuildRunner / graph_build_loop):
+    - should_continue_inner_loop  : continue iterating or exit build loop
+    - route_after_verify          : learn phase or done
+    - should_iterate              : deprecated iteration-level check
+
+  Background graph (graph_background_loop):
+    - route_after_decide          : respond or pick_next
+    - route_after_act             : validate or commit_core
+    - route_after_validate        : commit_core or pick_next
 """
 
 from __future__ import annotations
@@ -110,138 +120,86 @@ def should_iterate(
     return "observe"
 
 
-def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "done"]:
-    """Determine if inner loop should continue or exit.
+def _check_build_stop(
+    state: ProgenitorState,
+    context: str = "inner loop",
+) -> tuple[bool, str]:
+    """Check shared stop conditions for the inner build loop.
 
-    Exit conditions (per spec):
-    - Minimum verification score reached AND no more pending backlog items
-    - Max iterations hit
-    - Build cancelled/error
-
-    Continue conditions:
-    - Pending backlog items exist (process all items)
-    - Verification score not yet met
+    Returns (should_stop, reason). Used by both should_continue_inner_loop
+    and route_after_verify to avoid duplicate logic.
     """
-    # Check for cancellation
     if state.get("build_cancelled", False):
-        logger.info("Build cancelled, exiting inner loop")
-        return "done"
+        return True, "build cancelled"
 
-    # Check for error
     if state.get("build_error"):
-        logger.info("Build error, exiting inner loop")
-        return "done"
+        return True, f"build error: {state['build_error']}"
 
-    # Check iteration limit
     iter_info = state.get("iteration", {})
     current_iteration = iter_info.get("current", 0)
     max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
-
     if current_iteration >= max_iterations:
-        logger.info("Max iterations (%d) reached, exiting inner loop", max_iterations)
-        return "done"
+        return True, f"max iterations ({max_iterations}) reached"
 
-    # Check for pending backlog items - process all items before exiting
-    backlog = state.get("backlog", [])
-    pending_items = _count_pending_backlog_items(backlog)
-
-    if pending_items > 0:
-        logger.info(
-            "Found %d pending backlog items, continuing inner loop",
-            pending_items
-        )
-        return "observe"
-
-    # Check verification score
     verification = state.get("verification", {})
     verification_score: float = verification.get("current_score") or 0.0
     target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
-
     if verification_score >= target_score:
-        logger.info(
-            "Verification score %.2f meets target %.2f, no pending items, exiting inner loop",
-            verification_score, target_score
-        )
+        return True, f"score {verification_score:.2f} meets target {target_score:.2f}"
+
+    return False, ""
+
+
+def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "done"]:
+    """Determine if the inner build loop should continue or exit.
+
+    The inner loop (BackgroundBuildRunner) operates without a backlog —
+    it runs directly against its own build_state. Stop conditions are:
+    - Build cancelled or errored
+    - Max iterations reached
+    - Verification score meets target
+    """
+    should_stop, reason = _check_build_stop(state)
+    if should_stop:
+        logger.info("Exiting inner loop: %s", reason)
         return "done"
 
-    # Continue iterating (score not met, no pending items - may need new plan)
+    iter_info = state.get("iteration", {})
+    current_iteration = iter_info.get("current", 0)
+    max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
+    verification = state.get("verification", {})
+    verification_score: float = verification.get("current_score") or 0.0
+    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
     logger.info(
-        "Continuing inner loop: iteration=%d/%d, score=%.2f/%.2f, pending=%d",
-        current_iteration, max_iterations, verification_score, target_score, pending_items
+        "Continuing inner loop: iteration=%d/%d, score=%.2f/%.2f",
+        current_iteration, max_iterations, verification_score, target_score,
     )
     return "observe"
 
+def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:
+    """Route after verification - learn if continuing, done if complete."""
+    should_stop, reason = _check_build_stop(state)
+    if should_stop:
+        logger.info("route_after_verify → done: %s", reason)
+        return "done"
 
-def _count_pending_backlog_items(backlog: list) -> int:
-    """Count the number of pending (not completed) backlog items."""
-    return len(get_actionable_items(backlog))
-
-
-def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "done"]:
-    """Route after verification - publish if passed, learn if continuing, done on error/cancel."""
-    verification = state.get("verification", {})
-    verification_score: float = verification.get("current_score") or 0.0
-    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
-
+    # Continue to learn phase
     iter_info = state.get("iteration", {})
     current_iteration = iter_info.get("current", 0)
     max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
-
-    # Cancel / error → exit without publishing
-    if state.get("build_cancelled", False):
-        return "done"
-    if state.get("build_error"):
-        return "done"
-
-    # Verification passed → publish PR from worktree
-    if verification_score >= target_score:
-        logger.info(
-            "Verification score %.2f meets target %.2f, routing to publish",
-            verification_score, target_score,
-        )
-        return "publish"
-
-    # Max iterations exhausted → still publish (best-effort PR)
-    if current_iteration >= max_iterations:
-        logger.info(
-            "Max iterations %d reached, routing to publish (best-effort)",
-            max_iterations,
-        )
-        return "publish"
-
-    # Continue to learn phase
-    logger.info("Continuing to learn phase: iteration=%d, score=%.2f/%.2f", current_iteration, verification_score, target_score)
+    verification = state.get("verification", {})
+    verification_score: float = verification.get("current_score") or 0.0
+    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
+    logger.info(
+        "Continuing to learn phase: iteration=%d/%d, score=%.2f/%.2f",
+        current_iteration, max_iterations, verification_score, target_score,
+    )
     return "learn"
 
 
 # =============================================================================
-# Outer Loop Routing
+# Background Graph Routing
 # =============================================================================
-
-def should_continue_outer_loop(state: ProgenitorState) -> Literal["pick_next", "idle", "end"]:
-    """Determine if we should continue processing, idle, or shutdown.
-
-    Returns:
-        'pick_next': More work items to process
-        'idle': No pending work, enter idle state
-        'end': Shutdown requested or no pending work (allows loop runner to check input)
-    """
-    if state.get("shutdown_requested", False):
-        logger.info("Shutdown requested, ending loop")
-        return "end"
-
-    backlog = state.get("backlog", [])
-    pending = get_actionable_items(backlog)
-
-    if pending:
-        logger.debug("%d actionable items in backlog", len(pending))
-        return "pick_next"
-
-    # No pending work - end this graph cycle so the loop runner
-    # can check for new user input
-    logger.debug("No pending work, ending graph cycle to check for input")
-    return "end"
-
 
 def route_after_decide(state: ProgenitorState) -> Literal["pick_next", "respond"]:
     """Route based on decision type.
@@ -311,22 +269,12 @@ def route_after_validate(state: ProgenitorState) -> Literal["commit_core", "pick
     return "pick_next"
 
 
-def route_after_pick_next(state: ProgenitorState) -> Literal["worktree_prep", "respond"]:
-    """Route after picking next item - skip to respond if no work."""
-    current_item = state.get("current_work_item")
-
-    if current_item is None:
-        return "respond"
-
-    return "worktree_prep"
-
-
 # =============================================================================
 # Utility Functions
 # =============================================================================
 
 def has_pending_work(state: ProgenitorState) -> bool:
-    """Check if there's actionable work in backlog."""
+    """Check if there's actionable work in the backlog (used by background graph)."""
     backlog = state.get("backlog", [])
     return len(get_actionable_items(backlog)) > 0
 

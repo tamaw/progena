@@ -18,7 +18,7 @@ from typing import Any
 
 from .config import ProgenitorConfig, get_config, setup_logging
 from .graph_background_loop import create_background_graph
-from .graph_outer_loop import create_progenitor_graph
+from .graph_chat_loop import create_progenitor_graph
 from .llm.client import LLMClient
 from .runtime.copilot_acp import CopilotACPManager
 from .runtime.loop import ProgenitorLoop
@@ -150,6 +150,8 @@ class Progenitor:
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             config=self.config,
+            worktrees_dir=self.worktrees_dir,
+            copilot_acp_manager=self._copilot_acp_manager,
             event_pusher=deferred_push_event,
         )
 

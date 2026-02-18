@@ -8,7 +8,7 @@ confidence gating and build-settings extraction.
 import logging
 from typing import Any
 
-from ..env_utils import env_float
+from ..utils import env_float
 from ..runtime.time_utils import utcnow_isoformat
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -39,7 +39,7 @@ class BuildTool(BaseSystemTool):
             return ToolResult.fail("Missing required argument: request")
 
         # Lazy imports to avoid circular deps (tools registry <-> decide node).
-        from ..nodes import decide as decide_node
+        from ..runtime import decide as decide_node
         from ..runtime.background_build import get_background_runner
 
         tool_context = ""

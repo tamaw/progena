@@ -2,7 +2,7 @@
 Build Node - Produces candidate outputs via concurrent Copilot CLI runs.
 
 This is the core build step that generates code artifacts in the inner loop.
-Extracted from graph_inner_loop.py for consistency with other node patterns.
+Extracted from graph_build_loop.py for consistency with other node patterns.
 
 The build node picks pending backlog items and processes them concurrently,
 marking each as in_progress during the build. Items are marked completed after
