@@ -1,6 +1,7 @@
 name: litellm-deploy
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -70,4 +71,3 @@ jobs:
           EOF
           docker compose --env-file .litellm.env -f docker/docker-compose.litellm.yml pull litellm
           docker compose --env-file .litellm.env -f docker/docker-compose.litellm.yml up -d --build
-
