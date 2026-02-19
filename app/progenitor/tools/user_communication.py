@@ -8,7 +8,7 @@ Provides tools for the agent to communicate with the user through IPC:
 
 import logging
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, cast
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -267,11 +267,7 @@ class UserCommunicationTool(BaseSystemTool):
 
     async def execute(self, context: ToolContext) -> ToolResult:
         raw = (context.user_input or "").strip()
-        if ":" in raw:
-            _prefix, message = raw.split(":", 1)
-            message = message.strip()
-        else:
-            message = raw
+        message = raw.split(":", 1)[1].strip() if ":" in raw else raw
 
         if not message:
             return ToolResult.fail("Provide a message, e.g. 'user_communication: hello'")
@@ -280,7 +276,7 @@ class UserCommunicationTool(BaseSystemTool):
         if not callable(push):
             return ToolResult.fail("LLM client has no IPC event pusher configured")
 
-        await push(
+        await cast(EventPusher, push)(
             "agent_message",
             message,
             {"tool": "user_communication"},
