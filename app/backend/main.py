@@ -343,6 +343,19 @@ class ShutdownManager:
 
 shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
+async def _send_telegram_connected_message(telegram: TelegramClient) -> None:
+    """Send a friendly 'connected' message when Telegram is successfully initialized."""
+    message = "👋 Progenitor connected to Telegram."
+
+    try:
+        sent = await telegram.send_message(message)
+    except Exception as e:
+        logger.warning("Failed to send Telegram connected message: %s", e)
+        return
+
+    if not sent:
+        logger.warning("Telegram connected message send returned False")
+
 
 async def _send_telegram_message(
     telegram: TelegramClient,
@@ -422,6 +435,8 @@ async def lifespan(app: FastAPI):
             "Telegram integration enabled (chat_id=%s)",
             config.telegram_chat_id[:8] + "..." if len(config.telegram_chat_id) > 8 else config.telegram_chat_id
         )
+        # Friendly confirmation for users who expect a Telegram message when connected.
+        asyncio.create_task(_send_telegram_connected_message(telegram_client))
         # Register Telegram shutdown callback
         graceful_shutdown.register_callback(
             "stop_telegram_client",
