@@ -36,10 +36,41 @@ async def initialize_mcp_tools(
         logger.info("MCP integration disabled")
         return None, []
 
+    def _parse_jsonrpc_response(text: str) -> dict[str, Any] | None:
+        """Parse either JSON or SSE('data: {json}') JSON-RPC responses."""
+        raw = (text or "").strip()
+        if not raw:
+            return None
+
+        # Plain JSON
+        if raw.startswith("{"):
+            try:
+                data = json.loads(raw)
+                return cast(dict[str, Any], data) if isinstance(data, dict) else None
+            except Exception:
+                return None
+
+        # SSE: find first data: line
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[len("data:"):].strip()
+            if not payload:
+                continue
+            try:
+                data = json.loads(payload)
+                return cast(dict[str, Any], data) if isinstance(data, dict) else None
+            except Exception:
+                return None
+
+        return None
+
     try:
         headers = {
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            # LiteLLM MCP requires clients to accept both JSON and SSE.
+            "Accept": "application/json, text/event-stream",
         }
         if mcp_config.api_key:
             headers["Authorization"] = f"Bearer {mcp_config.api_key}"
@@ -49,18 +80,37 @@ async def initialize_mcp_tools(
             headers=headers,
         )
 
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/list",
-            "params": {},
-        }
         logger.info("Fetching MCP tools from %s", mcp_config.base_url)
 
-        response = await mcp_client.post(mcp_config.base_url, json=request)
+        # LiteLLM MCP is session-based; initialize to obtain mcp-session-id.
+        init_request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "progenitor", "version": "0.0.0"},
+            },
+        }
+        init_response = await mcp_client.post(mcp_config.base_url, json=init_request)
+        init_response.raise_for_status()
+
+        session_id = init_response.headers.get("mcp-session-id")
+        if session_id:
+            mcp_client.headers["mcp-session-id"] = session_id
+
+        # Now list tools (session header required for LiteLLM MCP).
+        list_request = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        }
+        response = await mcp_client.post(mcp_config.base_url, json=list_request)
         response.raise_for_status()
-        data = response.json()
-        result = data.get("result", data) if isinstance(data, dict) else {}
+
+        parsed = _parse_jsonrpc_response(response.text) or {}
+        result = parsed.get("result", parsed) if isinstance(parsed, dict) else {}
 
         tools = result.get("tools", []) if isinstance(result, dict) else []
         logger.info("Loaded %d MCP tools", len(tools))
