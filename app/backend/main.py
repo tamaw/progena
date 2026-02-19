@@ -41,6 +41,7 @@ from .conversation import (
 )
 from .ipc_client import IPCProgenitorClient, get_ipc_client
 from .models import (
+    ChatCompletionChoice,
     ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -983,11 +984,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             id=completion_id,
             model=body.model,
             choices=[
-                {
-                    "index": 0,
-                    "message": ChatMessage(role="assistant", content=response_text),
-                    "finish_reason": "stop",
-                }
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatMessage(role="assistant", content=response_text),
+                    finish_reason="stop",
+                )
             ],
             usage=Usage(
                 prompt_tokens=len(" ".join(all_inputs).split()),
@@ -1016,7 +1017,7 @@ def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
             if isinstance(item, str):
                 inputs.append(item)
             else:
-                inputs.append(item.content)
+                inputs.append(item.content or "")
 
     if not inputs:
         raise ValueError("No input provided")

@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import BaseModel, Field
 
-from ..utils import env_bool
 from ..tools.gh import gh_pr_create
+from ..utils import env_bool
 from .time_utils import utcnow, utcnow_isoformat
 
 
@@ -244,15 +244,21 @@ async def _commit_push_pr_in_submodule(
             body = drafted.body.strip() or body
 
     draft = env_bool("PROGENITOR_AUTO_PR_DRAFT", True)
-    pr_info = await gh_pr_create(
-        repo_path=sub_repo,
-        head_branch=branch,
-        base_branch="main",
+    success, pr_url_or_error = await gh_pr_create(
         title=title,
         body=body,
+        base="main",
+        head=branch,
+        cwd=sub_repo,
         draft=draft,
     )
-    pr_info.update({"submodule_root": submodule_root, "branch": branch})
+    pr_info: dict[str, Any] = {
+        "status": "created" if success else "failed",
+        "url": pr_url_or_error if success else None,
+        "error": None if success else pr_url_or_error,
+        "submodule_root": submodule_root,
+        "branch": branch,
+    }
     return pr_info
 
 

@@ -186,9 +186,9 @@ class StreamingChatRequest(ChatCompletionRequest):
             raise ValueError("Messages cannot be empty for streaming")
 
         # Validate message content isn't too large for streaming
-        total_content_length = sum(
-            len(msg.content) for msg in request.messages
-        )
+        total_content_length = 0
+        for msg in request.messages:
+            total_content_length += len(msg.content or "")
         if total_content_length > 500000:  # 500KB limit
             raise ValueError(
                 f"Total message content ({total_content_length} chars) exceeds "
@@ -217,10 +217,13 @@ class StreamingResponseRequest(ResponseRequest):
             if not request.input.strip():
                 raise ValueError("Input cannot be empty")
         else:
-            total_length = sum(
-                len(m.content) if hasattr(m, 'content') else len(str(m))
-                for m in request.input
-            )
+            total_length = 0
+            for m in request.input:
+                content = getattr(m, "content", None)
+                if content is None:
+                    total_length += len(str(m))
+                else:
+                    total_length += len(content)
             if total_length > 500000:
                 raise ValueError(
                     f"Total input ({total_length} chars) exceeds "

@@ -7,9 +7,8 @@ Reduces duplication and improves type safety across the codebase.
 
 from enum import StrEnum
 
-from .config import (
+from .config import (  # noqa: F401
     DEFAULT_BUILD_CONFIDENCE_THRESHOLD,
-    DEFAULT_MAX_CONVERSATION_HISTORY,
     DEFAULT_MAX_INNER_ITERATIONS,
     DEFAULT_MAX_OUTER_ITERATIONS,
     DEFAULT_VERIFICATION_TARGET_SCORE,

@@ -18,6 +18,10 @@ from .state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
 
+# Backwards-compat exports for tests/older imports.
+# Routing lives in app.progenitor.routing, but some callers import from graph_chat_loop.
+from .routing import route_after_decide  # noqa: E402,F401
+
 
 def create_progenitor_graph(
     state_manager,
@@ -50,10 +54,10 @@ def create_progenitor_graph(
     """
     builder = StateGraph(ProgenitorState)
 
-    builder.add_node("intake", intake.create_node(state_manager))  # type: ignore[arg-type]
-    builder.add_node("chat", chat.create_node(llm_client, tool_registry, state_manager, config))  # type: ignore[arg-type]
-    builder.add_node("respond", respond.create_node(state_manager))  # type: ignore[arg-type]
-    builder.add_node("commit_core", commit_core.create_node(state_manager))  # type: ignore[arg-type]
+    builder.add_node("intake", intake.create_node(state_manager))
+    builder.add_node("chat", chat.create_node(llm_client, tool_registry, state_manager, config))
+    builder.add_node("respond", respond.create_node(state_manager))
+    builder.add_node("commit_core", commit_core.create_node(state_manager))
 
     builder.set_entry_point("intake")
     builder.add_edge("intake", "chat")

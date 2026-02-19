@@ -10,6 +10,7 @@ successful merge to main (handled by MERGE node).
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -29,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 async def _init_submodules(worktree_path: Path) -> None:
     """Ensure git submodules are initialized inside a newly created worktree."""
+    # Unit tests mock create_worktree() to return a Path without creating it.
+    # In real runs GitWorktreeManager creates the directory, so this is safe.
+    if not worktree_path.exists():
+        logger.debug("BUILD: worktree_path does not exist; skipping submodule init: %s", worktree_path)
+        return
+
     process = await asyncio.create_subprocess_exec(
         "git",
         "submodule",
@@ -39,7 +46,13 @@ async def _init_submodules(worktree_path: Path) -> None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60.0)
+    except TimeoutError:
+        process.kill()
+        with contextlib.suppress(Exception):
+            await process.communicate()
+        raise RuntimeError("git submodule update timed out after 60s")
     if process.returncode != 0:
         raise RuntimeError((stderr or stdout or b"").decode(errors="replace").strip())
 

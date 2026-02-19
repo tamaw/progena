@@ -573,6 +573,10 @@ class InnerLoopState(TypedDict, total=False):
     task_id: str | None  # Unique task identifier
     build_task_description: str | None  # Backward-compatible top-level build description
     build_messages: list[dict[str, Any]]  # Build progress messages
+    build_cancelled: bool  # Set when a running build is cancelled
+    build_error: str | None  # Set when a build fails with an error message
+    integration_branch: str | None  # Target integration branch for merges/PRs
+    worktrees_to_cleanup: list[str]  # Best-effort cleanup list for git worktrees
 
     # Nested objects for organization
     task: TaskInfo  # What we're building (description + target_capabilities)

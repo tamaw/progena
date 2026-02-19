@@ -713,8 +713,8 @@ async def _execute_system_tool(
     elif tool_name == "list_tools":
         # Delegate to the canonical system tool implementation so this matches
         # decide-node fast/slow path output (and includes MCP discovery sources).
-        from ..tools.protocol import ToolContext as SystemToolContext
         from ..tools.list_tools import ListToolsTool
+        from ..tools.protocol import ToolContext as SystemToolContext
 
         ctx = SystemToolContext(
             tool_registry=tool_registry,
@@ -724,9 +724,9 @@ async def _execute_system_tool(
             user_input=work_item.description,
         )
 
-        result = await ListToolsTool().execute(ctx)
-        if result.success:
-            return result.data, None
-        return None, result.error or "list_tools failed"
+        tool_result = await ListToolsTool().execute(ctx)
+        if tool_result.success:
+            return tool_result.data, None
+        return None, tool_result.error or "list_tools failed"
 
     return None, f"Unknown system tool: {tool_name}"

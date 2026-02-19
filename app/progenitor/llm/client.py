@@ -433,13 +433,15 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Execute either a system tool or an MCP tool call."""
         if system_tool_context:
+            get_system_tool: Any = None
+            execute_system_tool: Any = None
             try:
                 from ..nodes.node_helpers.registry import execute_system_tool, get_system_tool
             except Exception:
                 get_system_tool = None
                 execute_system_tool = None
 
-            if get_system_tool and execute_system_tool and get_system_tool(tool_name):
+            if callable(get_system_tool) and callable(execute_system_tool) and get_system_tool(tool_name):
                 tool_registry = system_tool_context.get("tool_registry")
                 state_manager = system_tool_context.get("state_manager")
                 state = system_tool_context.get("state")
