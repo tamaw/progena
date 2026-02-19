@@ -651,19 +651,18 @@ class TestTelegramConnectedMessage:
     """Tests for Telegram 'connected' notification."""
 
     @pytest.mark.asyncio
-    async def test_sends_hi_with_version(self):
+    async def test_sends_hi(self):
         from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.send_message.return_value = True
 
-        with patch.object(backend_main, "_get_progenitor_project_version", return_value="9.9.9"):
-            await backend_main._send_telegram_connected_message(telegram)
+        await backend_main._send_telegram_connected_message(telegram)
 
         telegram.send_message.assert_awaited_once()
         sent_text = telegram.send_message.call_args.args[0]
-        assert "connected" in sent_text.lower()
-        assert "9.9.9" in sent_text
+        assert "👋" in sent_text
+        assert "progenitor" in sent_text.lower()
 
     @pytest.mark.asyncio
     async def test_no_exception_on_send_failure(self):
