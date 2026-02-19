@@ -305,10 +305,25 @@ class MCPConfig:
     @classmethod
     def from_env(cls) -> "MCPConfig":
         """Load MCP config from environment."""
+        # If PROGENITOR_MCP_BASE_URL is not set, default to LiteLLM base URL + /mcp/
+        # because Progenitor routes all model/tool calls through LiteLLM in docker.
+        base_url = os.getenv("PROGENITOR_MCP_BASE_URL", "").strip()
+        if not base_url:
+            litellm_base = os.getenv("LITELLM_BASE_URL", "").strip().rstrip("/")
+            if litellm_base:
+                base_url = f"{litellm_base}/mcp/"
+
+        if not base_url:
+            base_url = "http://localhost:4000/mcp/"  # Note trailing slash
+
+        api_key = os.getenv("PROGENITOR_MCP_API_KEY")
+        if not api_key:
+            api_key = os.getenv("LITELLM_API_KEY") or os.getenv("LITELLM_MASTER_KEY")
+
         return cls(
             enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
-            base_url=os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:4000/mcp/"),  # Note trailing slash
-            api_key=os.getenv("PROGENITOR_MCP_API_KEY"),
+            base_url=base_url,
+            api_key=api_key,
         )
 
 
