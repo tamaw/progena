@@ -18,7 +18,6 @@ import inspect
 import json
 import logging
 import time
-import tomllib
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
@@ -344,35 +343,9 @@ class ShutdownManager:
 
 shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
-def _get_progenitor_project_version() -> str:
-    """Best-effort project version for user-facing startup notifications."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version as pkg_version
-
-        return pkg_version("progenitor")
-    except PackageNotFoundError:
-        pass
-    except Exception:
-        # Non-fatal: fall back to reading pyproject.toml (dev/editable runs).
-        logger.debug("Unable to read installed package version for 'progenitor'", exc_info=True)
-
-    try:
-        pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
-        if pyproject_path.exists():
-            data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-            version_val = data.get("project", {}).get("version")
-            if version_val:
-                return str(version_val)
-    except (OSError, tomllib.TOMLDecodeError):
-        logger.debug("Unable to read version from pyproject.toml", exc_info=True)
-
-    return "unknown"
-
-
 async def _send_telegram_connected_message(telegram: TelegramClient) -> None:
     """Send a friendly 'connected' message when Telegram is successfully initialized."""
-    version_str = _get_progenitor_project_version()
-    message = f"👋 Progenitor connected to Telegram (v{version_str})."
+    message = "👋 Progenitor connected to Telegram."
 
     try:
         sent = await telegram.send_message(message)
