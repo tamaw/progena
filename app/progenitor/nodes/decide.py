@@ -564,16 +564,23 @@ async def _execute_and_respond(
     else:
         context_data = format_tool_result(tool_name, result)
 
-    try:
-        response_text, was_streamed = await _respond_with_context(
-            user_input, tool_name, context_data, state, llm_client, memory_context
-        )
-        llm_enriched = True
-    except Exception as e:
-        logger.warning("LLM enrichment failed for %s, using raw result: %s", tool_name, e)
+    # list_tools is a "discovery" output where correctness matters; skip LLM
+    # enrichment to avoid truncation/omissions in the user-visible list.
+    if tool_name == "list_tools":
         response_text = context_data
         was_streamed = False
         llm_enriched = False
+    else:
+        try:
+            response_text, was_streamed = await _respond_with_context(
+                user_input, tool_name, context_data, state, llm_client, memory_context
+            )
+            llm_enriched = True
+        except Exception as e:
+            logger.warning("LLM enrichment failed for %s, using raw result: %s", tool_name, e)
+            response_text = context_data
+            was_streamed = False
+            llm_enriched = False
 
     decision = Decision(
         action=DecisionAction.ANSWER_DIRECTLY,
