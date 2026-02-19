@@ -232,7 +232,7 @@ async def _generate_build_settings(
                 logger.info("Using project_name from decision response: %s", project_name)
 
         if decision_build_type:
-            if decision_build_type.lower() == "mcp":
+            if decision_build_type.lower() in ("mcp", "tool"):
                 build_type = BuildType.MCP
             logger.info("Using build_type from decision response: %s", build_type)
 
