@@ -17,7 +17,9 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import time
+import tomllib
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
@@ -343,6 +345,71 @@ class ShutdownManager:
 
 shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
+TELEGRAM_STARTUP_MARKER_FILE = "telegram_startup_notified.json"
+
+
+def _get_progenitor_state_dir() -> Path:
+    """Resolve Progenitor state dir (shared with the agent process)."""
+    # Keep backend + progenitor aligned: PROGENITOR_STATE_DIR > default data/state
+    return Path(os.getenv("PROGENITOR_STATE_DIR", "data/state"))
+
+
+def _get_progenitor_project_version() -> str:
+    """Best-effort project version for user-facing startup notifications."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version as pkg_version
+
+        return pkg_version("progenitor")
+    except PackageNotFoundError:
+        pass
+    except Exception:
+        # Non-fatal: fall back to reading pyproject.toml (dev/editable runs).
+        logger.debug("Unable to read installed package version for 'progenitor'", exc_info=True)
+
+    try:
+        pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        if pyproject_path.exists():
+            data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+            version_val = data.get("project", {}).get("version")
+            if version_val:
+                return str(version_val)
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.debug("Unable to read version from pyproject.toml", exc_info=True)
+
+    return "unknown"
+
+
+async def _maybe_send_telegram_startup_message(telegram: TelegramClient) -> None:
+    """Send a one-time 'up and running' Telegram message on first fresh startup."""
+    state_dir = _get_progenitor_state_dir()
+    marker_path = state_dir / TELEGRAM_STARTUP_MARKER_FILE
+
+    if marker_path.exists():
+        return
+
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    version_str = _get_progenitor_project_version()
+    message = f"✅ Progenitor is up and running (v{version_str})."
+
+    try:
+        sent = await telegram.send_message(message)
+    except Exception as e:
+        logger.warning("Failed to send Telegram startup message: %s", e)
+        return
+
+    if not sent:
+        logger.warning("Telegram startup message send returned False")
+        return
+
+    try:
+        marker_path.write_text(
+            json.dumps({"notified_at": time.time(), "version": version_str}),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        logger.warning("Failed to write Telegram startup marker (%s): %s", marker_path, e)
+
 
 async def _send_telegram_message(
     telegram: TelegramClient,
@@ -422,6 +489,8 @@ async def lifespan(app: FastAPI):
             "Telegram integration enabled (chat_id=%s)",
             config.telegram_chat_id[:8] + "..." if len(config.telegram_chat_id) > 8 else config.telegram_chat_id
         )
+        # One-time "up and running" message for first fresh startup.
+        asyncio.create_task(_maybe_send_telegram_startup_message(telegram_client))
         # Register Telegram shutdown callback
         graceful_shutdown.register_callback(
             "stop_telegram_client",
