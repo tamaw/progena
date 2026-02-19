@@ -22,14 +22,14 @@ function Start-Progenitor {
 }
 
 function Start-ChatServer {
-    Write-Host "Starting Chat Server (uvicorn @ 0.0.0.0:8000)..." -ForegroundColor Cyan
-    $out = Join-Path $LogsDir "chatserver.out.log"
-    $err = Join-Path $LogsDir "chatserver.err.log"
-    $envMap = @{ CHAT_SERVER_PYTHON = $Python }
+    # NOTE: app.chat_server was removed; the FastAPI backend lives under app.backend.
+    # Keep this script aligned with README/docs so local venv startup doesn't fail.
+    Write-Host "Starting Backend API (uvicorn @ 0.0.0.0:8000)..." -ForegroundColor Cyan
+    $out = Join-Path $LogsDir "backend.out.log"
+    $err = Join-Path $LogsDir "backend.err.log"
     Start-Process -FilePath $Python `
-        -ArgumentList '-m','uvicorn','app.chat_server.main:app','--host','0.0.0.0','--port','8000','--log-level','debug' `
+        -ArgumentList '-m','uvicorn','app.backend.main:app','--host','0.0.0.0','--port','8000','--log-level','debug' `
         -WorkingDirectory $Root `
-        -Environment $envMap `
         -RedirectStandardOutput $out `
         -RedirectStandardError $err `
         -WindowStyle Hidden | Out-Null
@@ -42,4 +42,4 @@ if (-not (Test-Path $LogsDir)) { New-Item -ItemType Directory -Path $LogsDir | O
 Start-Progenitor
 Start-ChatServer
 
-Write-Host "Processes launched. Check logs/ for activity (e.g., logs/decisions.jsonl, progenitor.out.log, chatserver.out.log)." -ForegroundColor Green
+Write-Host "Processes launched. Check logs/ for activity (e.g., logs/decisions.jsonl, progenitor.out.log, backend.out.log)." -ForegroundColor Green

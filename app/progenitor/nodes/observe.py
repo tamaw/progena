@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any, cast
 
-from ..constants import DEFAULT_MAX_INNER_ITERATIONS, DEFAULT_VERIFICATION_TARGET_SCORE
+from ..config import DEFAULT_MAX_INNER_ITERATIONS, DEFAULT_VERIFICATION_TARGET_SCORE
 from ..runtime.time_utils import utcnow_isoformat
 from ..state.helpers import get_ideal_state, set_ideal_state
 from ..state.ideal_state import IdealState, IdealStateBuilder
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 def create_node(
     llm_client,
     state_manager=None,
+    config=None,
 ) -> NodeFunction:
     """Create the observe node function.
 
@@ -33,6 +34,15 @@ def create_node(
     """
 
     ideal_state_builder = IdealStateBuilder(llm_client)
+
+    # Defaults come from config.py (single source of truth)
+    default_max_iterations = DEFAULT_MAX_INNER_ITERATIONS
+    default_target_score = DEFAULT_VERIFICATION_TARGET_SCORE
+
+    if config is not None and hasattr(config, "runtime"):
+        runtime = config.runtime
+        default_max_iterations = getattr(runtime, "max_inner_iterations", default_max_iterations)
+        default_target_score = getattr(runtime, "min_verification_score", default_target_score)
 
     async def observe_node(state: ProgenitorState) -> NodeStateUpdate:
         """
@@ -91,14 +101,14 @@ def create_node(
                 # Nested iteration info (single source of truth)
                 "iteration": {
                     "current": 0,
-                    "max": DEFAULT_MAX_INNER_ITERATIONS,
+                    "max": default_max_iterations,
                     "start_time": now_time,
                 },
                 # Initialize verification state
                 "verification": {
                     "current_score": 0.0,
                     "current_passed": False,
-                    "target_score": DEFAULT_VERIFICATION_TARGET_SCORE,
+                    "target_score": default_target_score,
                     "current_report": None,
                     "gaps": [],
                 },
@@ -131,12 +141,12 @@ def create_node(
             if not state.get("clarification", {}).get("needed", False) and not awaiting_clarification:
                 verification = state.get("verification", {})
                 verification_score: float = verification.get("current_score") or 0.0
-                target_score: float = verification.get("target_score") or DEFAULT_VERIFICATION_TARGET_SCORE
+                target_score: float = verification.get("target_score") or default_target_score
                 if verification_score < target_score and not verification.get("current_passed", False):
                     next_iteration = (iteration or 0) + 1
                     # Preserve max from state (LangGraph shallow-merges, so we need to include it)
                     iter_info = state.get("iteration", {})
-                    max_iter = iter_info.get("max", DEFAULT_MAX_INNER_ITERATIONS)
+                    max_iter = iter_info.get("max", default_max_iterations)
                     state_updates = {
                         # Nested iteration info (single source of truth)
                         "iteration": {

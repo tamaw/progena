@@ -2,7 +2,7 @@
 Build Node - Produces candidate outputs via concurrent Copilot CLI runs.
 
 This is the core build step that generates code artifacts in the inner loop.
-Extracted from graph_inner_loop.py for consistency with other node patterns.
+Extracted from graph_build_loop.py for consistency with other node patterns.
 
 The build node picks pending backlog items and processes them concurrently,
 marking each as in_progress during the build. Items are marked completed after
@@ -10,6 +10,7 @@ successful merge to main (handled by MERGE node).
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -25,6 +26,35 @@ if TYPE_CHECKING:
     from ..tools.git import GitWorktreeManager
 
 logger = logging.getLogger(__name__)
+
+
+async def _init_submodules(worktree_path: Path) -> None:
+    """Ensure git submodules are initialized inside a newly created worktree."""
+    # Unit tests mock create_worktree() to return a Path without creating it.
+    # In real runs GitWorktreeManager creates the directory, so this is safe.
+    if not worktree_path.exists():
+        logger.debug("BUILD: worktree_path does not exist; skipping submodule init: %s", worktree_path)
+        return
+
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+        cwd=str(worktree_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60.0)
+    except TimeoutError:
+        process.kill()
+        with contextlib.suppress(Exception):
+            await process.communicate()
+        raise RuntimeError("git submodule update timed out after 60s")
+    if process.returncode != 0:
+        raise RuntimeError((stderr or stdout or b"").decode(errors="replace").strip())
 
 
 def create_node(
@@ -83,6 +113,9 @@ def create_node(
                     work_item_id=item_id,
                     branch_name=f"progenitor/build/{item_id}"
                 )
+
+                # Worktrees don't automatically init submodules; builds target build/ submodules.
+                await _init_submodules(worktree_path)
 
                 concurrent_builds.append({
                     "work_item_id": item_id,

@@ -30,7 +30,7 @@ class WorkItemStatus(StrEnum):
 class WorkItemType(StrEnum):
     """Type of work item."""
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in build/mcp/
     UPGRADE = "upgrade"
     A2A_CALL = "a2a_call"
     MCP_CALL = "mcp_call"
@@ -45,7 +45,7 @@ class DecisionAction(StrEnum):
     DELEGATE_A2A = "delegate_a2a"
     USE_MCP = "use_mcp"
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in build/mcp/
     UPGRADE = "upgrade"
     MIXED = "mixed"
     SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)
@@ -374,6 +374,17 @@ class SchedulingState(TypedDict, total=False):
     agents: list[AgentRegistryEntry]
 
 
+class BackgroundJobState(TypedDict, total=False):
+    """Background job execution state.
+
+    Used by the dedicated background job graph.
+    """
+    bg_had_work: bool
+    bg_schedule_id: str | None
+    bg_work_type: str | None  # "scheduled" | "backlog" | None
+    last_cycle_response: str | None
+
+
 class LoopControlState(TypedDict, total=False):
     """Loop control and metadata."""
     cycle_count: int
@@ -562,6 +573,10 @@ class InnerLoopState(TypedDict, total=False):
     task_id: str | None  # Unique task identifier
     build_task_description: str | None  # Backward-compatible top-level build description
     build_messages: list[dict[str, Any]]  # Build progress messages
+    build_cancelled: bool  # Set when a running build is cancelled
+    build_error: str | None  # Set when a build fails with an error message
+    integration_branch: str | None  # Target integration branch for merges/PRs
+    worktrees_to_cleanup: list[str]  # Best-effort cleanup list for git worktrees
 
     # Nested objects for organization
     task: TaskInfo  # What we're building (description + target_capabilities)
@@ -605,6 +620,7 @@ class ProgenitorState(
     ConversationState,
     WorkState,
     SchedulingState,
+    BackgroundJobState,
     LoopControlState,
     InnerLoopState,
     ExecutionState,

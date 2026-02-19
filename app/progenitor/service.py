@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ProgenitorConfig, get_config
-from .graph_outer_loop import create_progenitor_graph
+from .graph_chat_loop import create_progenitor_graph
 from .llm.client import LLMClient
 from .state.manager import StateManager
 from .state.models import ConversationMessage, ProgenitorState
@@ -360,9 +360,9 @@ class ProgenitorService:
             from .tools.agent_discovery import discover_agents
 
             # Determine agents directory relative to project root
-            # Assuming we're in app/progenitor/, agents is at app/agents/
+            # Agents are built/deployed from build/agents/
             project_root = Path(__file__).parent.parent.parent
-            agents_dir = project_root / "app" / "agents"
+            agents_dir = project_root / "build" / "agents"
 
             if not agents_dir.exists():
                 logger.warning("Agents directory not found: %s", agents_dir)

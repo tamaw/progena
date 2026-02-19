@@ -19,11 +19,11 @@ NEVER use "unnamed" as the name - always derive from the description.
 - Make it registrable in registry.json
 
 ## Directory Structure for Agents (A2A)
-Agents MUST be created in a subdirectory under `app/agents/<agent_name>/`:
+Agents MUST be created in a subdirectory under `build/agents/<agent_name>/`:
 
 CORRECT structure:
 ```
-app/agents/<agent_name>/
+build/agents/<agent_name>/
 ├── __init__.py          # Exports the main agent class
 ├── agent.py             # Main agent implementation (REQUIRED)
 ├── config.py            # Agent configuration (optional)
@@ -31,15 +31,15 @@ app/agents/<agent_name>/
 └── README.md            # Documentation
 ```
 
-WRONG: Creating files directly in app/agents/ like `app/agents/my_agent.py`
-CORRECT: Creating files in subdirectory like `app/agents/my_agent/agent.py`
+WRONG: Creating files directly in build/agents/ like `build/agents/my_agent.py`
+CORRECT: Creating files in subdirectory like `build/agents/my_agent/agent.py`
 
 ## Directory Structure for Tools (FastMCP)
-Tools MUST be created in a subdirectory under `app/mcp/<tool_name>/`:
+Tools MUST be created in a subdirectory under `build/mcp/<tool_name>/`:
 
 CORRECT structure:
 ```
-app/mcp/<tool_name>/
+build/mcp/<tool_name>/
 ├── __init__.py          # Exports the mcp server and tool functions
 ├── server.py            # FastMCP server implementation (REQUIRED)
 ├── config.py            # Tool configuration (optional)
@@ -118,7 +118,7 @@ See `prompts/tool_structure.md` for complete FastMCP specifications and code exa
         "outputs": []
     },
     "transport": "http|stdio",
-    "entrypoint": "app/agents/<agent_name>/agent.py | app/mcp/<tool_name>/server.py",
+    "entrypoint": "build/agents/<agent_name>/agent.py | build/mcp/<tool_name>/server.py",
     "dependencies": [],
     "implementation_notes": "<guidance for implementation>",
     "test_cases": [

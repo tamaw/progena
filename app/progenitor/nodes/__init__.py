@@ -13,10 +13,10 @@ full ProgenitorState objects. LangGraph merges these into the full state.
 # Submodules
 from . import (
     act,
-    build,  # Extracted from graph_inner_loop.py
+    build,  # Extracted from graph_build_loop.py
+    chat,
     commit_core,
     cycle_limit,
-    decide,
     execute,
     heuristics,
     idle,
@@ -30,7 +30,6 @@ from . import (
     planner,
     respond,
     think,
-    time_check,
     validate,
     verify_loop,
     worktree_prep,
@@ -69,7 +68,7 @@ __all__ = [
     "NodeFactory",
     # Node modules
     "intake",
-    "time_check",
+    "chat",
     "decide",
     "planner",
     "pick_next",
@@ -86,7 +85,7 @@ __all__ = [
     "execute",
     "verify_loop",
     "learn",
-    "build",  # Extracted from graph_inner_loop.py
+    "build",  # Extracted from graph_build_loop.py
     "merge",  # Sequential merge with conflict resolution
     # Submodules
     "heuristics",

@@ -15,11 +15,9 @@ from app.progenitor.routing import (
     is_build_in_progress,
     route_after_act,
     route_after_decide,
-    route_after_pick_next,
     route_after_validate,
     route_after_verify,
     should_continue_inner_loop,
-    should_continue_outer_loop,
     should_iterate,
     should_stop_for_clarification,
 )
@@ -226,30 +224,6 @@ class TestRouteAfterVerify:
         assert result == "learn"
 
 
-class TestShouldContinueOuterLoop:
-    """Tests for should_continue_outer_loop routing function."""
-
-    def test_shutdown_requested_ends(self):
-        """Should end when shutdown requested."""
-        state = make_state(shutdown_requested=True)
-        result = should_continue_outer_loop(state)
-        assert result == "end"
-
-    def test_pending_work_picks_next(self):
-        """Should pick_next when there's pending work."""
-        state = make_state(
-            backlog=[{"status": "pending", "id": "1"}],
-        )
-        result = should_continue_outer_loop(state)
-        assert result == "pick_next"
-
-    def test_empty_backlog_ends(self):
-        """Should end when backlog is empty."""
-        state = make_state(backlog=[])
-        result = should_continue_outer_loop(state)
-        assert result == "end"
-
-
 class TestRouteAfterDecide:
     """Tests for route_after_decide routing function."""
 
@@ -360,24 +334,6 @@ class TestRouteAfterValidate:
         assert result == "pick_next"
 
 
-class TestRouteAfterPickNext:
-    """Tests for route_after_pick_next routing function."""
-
-    def test_no_item_responds(self):
-        """Should respond when no work item."""
-        state = make_state(current_work_item=None)
-        result = route_after_pick_next(state)
-        assert result == "respond"
-
-    def test_with_item_preps_worktree(self):
-        """Should prep worktree when work item exists."""
-        state = make_state(
-            current_work_item=make_work_item(item_type=WorkItemType.BUILD_AGENT, description="test"),
-        )
-        result = route_after_pick_next(state)
-        assert result == "worktree_prep"
-
-
 class TestUtilityFunctions:
     """Tests for utility functions in routing module."""
 
@@ -454,7 +410,6 @@ class TestNestedStateKeyCompatibility:
         state = make_state(
             verification={"current_score": 0.95, "target_score": 0.8},
             iteration={"current": 1, "max": 10},
-            backlog=[],  # No pending items
         )
         result = should_continue_inner_loop(state)
         assert result == "done"  # Score 0.95 >= target 0.8

@@ -60,6 +60,7 @@ def create_node(
         backlog = list(state.get("backlog", []))
         merged_items = []
         failed_items = []
+        worktrees_to_cleanup = list(cast(list[str], state.get("worktrees_to_cleanup") or []))
 
         # Sequential merge to avoid conflicts
         for queue_item in merge_queue:
@@ -75,9 +76,10 @@ def create_node(
 
             try:
                 # Attempt merge
+                target_branch = state.get("integration_branch") or "main"
                 merge_success = await git_manager.merge_to_main(
                     worktree_path=worktree_path,
-                    target_branch="main",
+                    target_branch=target_branch,
                 )
 
                 if merge_success:
@@ -91,6 +93,15 @@ def create_node(
                     _mark_item_completed(backlog, work_item_id)
 
                     logger.info(f"MERGE: Successfully merged {work_item_id}")
+                    try:
+                        await git_manager.remove_worktree(worktree_path)
+                    except Exception as cleanup_exc:
+                        logger.warning(
+                            "MERGE: Failed to remove merged worktree %s: %s",
+                            worktree_path,
+                            cleanup_exc,
+                        )
+                        worktrees_to_cleanup.append(str(worktree_path))
 
                 else:
                     # Merge conflict - attempt LLM resolution
@@ -109,6 +120,15 @@ def create_node(
                         merged_items.append(work_item_id)
                         _mark_item_completed(backlog, work_item_id)
                         logger.info(f"MERGE: Conflict resolved and merged for {work_item_id}")
+                        try:
+                            await git_manager.remove_worktree(worktree_path)
+                        except Exception as cleanup_exc:
+                            logger.warning(
+                                "MERGE: Failed to remove resolved worktree %s: %s",
+                                worktree_path,
+                                cleanup_exc,
+                            )
+                            worktrees_to_cleanup.append(str(worktree_path))
                     else:
                         queue_item["merge_status"] = "failed"
                         queue_item["merge_attempt_count"] = queue_item.get("merge_attempt_count", 0) + 1
@@ -117,10 +137,15 @@ def create_node(
                         # Mark work item as failed
                         _mark_item_failed(backlog, work_item_id, "Merge conflict could not be resolved")
                         logger.error(f"MERGE: Failed to resolve conflict for {work_item_id}")
-
-                # Clean up worktree
-                await git_manager.remove_worktree(worktree_path)
-                logger.info(f"MERGE: Cleaned up worktree for {work_item_id}")
+                        try:
+                            await git_manager.cleanup_failed_worktree(worktree_path)
+                        except Exception as cleanup_exc:
+                            logger.warning(
+                                "MERGE: Failed to cleanup failed worktree %s: %s",
+                                worktree_path,
+                                cleanup_exc,
+                            )
+                            worktrees_to_cleanup.append(str(worktree_path))
 
             except Exception as e:
                 logger.error(f"MERGE: Exception during merge for {work_item_id}: {e}", exc_info=True)
@@ -131,17 +156,22 @@ def create_node(
                 # Mark work item as failed
                 _mark_item_failed(backlog, work_item_id, str(e))
 
-                # Clean up failed worktree
                 try:
                     await git_manager.cleanup_failed_worktree(worktree_path)
-                except Exception as cleanup_error:
-                    logger.warning(f"MERGE: Failed to cleanup worktree for {work_item_id}: {cleanup_error}")
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "MERGE: Failed to cleanup failed worktree %s: %s",
+                        worktree_path,
+                        cleanup_exc,
+                    )
+                    worktrees_to_cleanup.append(str(worktree_path))
 
         # Save updated state
         await state_manager.save_build_state({
             **state,
             "merge_queue": merge_queue,
             "backlog": backlog,
+            "worktrees_to_cleanup": worktrees_to_cleanup,
         })
 
         logger.info(
@@ -153,6 +183,7 @@ def create_node(
             "backlog": backlog,
             "merged_items": merged_items,
             "failed_merge_items": failed_items,
+            "worktrees_to_cleanup": worktrees_to_cleanup,
         }
 
     return merge_node

@@ -5,8 +5,8 @@ Build Status - Check the current build status, progress, and messages.
 import logging
 from typing import Any
 
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
 from ..state.helpers import get_ideal_state
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

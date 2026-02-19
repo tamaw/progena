@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..runtime.time_utils import format_timestamp, utcnow
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -413,3 +414,35 @@ class GitWorktreeManager:
                 "stdout": "",
                 "stderr": str(e),
             }
+
+
+class GitTool(BaseSystemTool):
+    """Report git/worktree status used by the build system."""
+
+    @property
+    def name(self) -> str:
+        return "git"
+
+    @property
+    def description(self) -> str:
+        return "List active git worktrees (used for isolated build operations)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, _context: ToolContext) -> ToolResult:
+        project_root = Path(__file__).parent.parent.parent.parent
+        worktrees_dir = project_root / "worktrees"
+        manager = GitWorktreeManager(
+            worktrees_dir=worktrees_dir,
+            repo_path=project_root,
+            cleanup_on_init=False,
+        )
+        worktrees = await manager.list_worktrees()
+        return ToolResult.ok({
+            "repo_path": str(project_root),
+            "worktrees_dir": str(worktrees_dir),
+            "worktrees": worktrees,
+            "count": len(worktrees),
+        })

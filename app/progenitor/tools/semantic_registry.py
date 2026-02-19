@@ -16,10 +16,9 @@ Usage:
 import json
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from ..runtime.time_utils import utcnow
-from ..state.models import AgentRegistryEntry
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -251,127 +250,45 @@ class SemanticRegistry:
 
         return results
 
-    def compute_similarity(
-        self,
-        query: str,
-        capability: str,
-    ) -> float:
-        """Compute similarity between query and capability.
 
-        Args:
-            query: User query.
-            capability: Capability string.
+class SemanticRegistryTool(BaseSystemTool):
+    """Expose semantic tool discovery status and optional query."""
 
-        Returns:
-            Similarity score (0-1).
-        """
-        self._load_encoder()
+    @property
+    def name(self) -> str:
+        return "semantic_registry"
 
-        if self._encoder is None:
-            # Simple word overlap
-            query_words = set(query.lower().split())
-            cap_words = set(capability.lower().split())
-            overlap = len(query_words & cap_words)
-            total = len(query_words | cap_words)
-            return overlap / total if total > 0 else 0.0
+    @property
+    def description(self) -> str:
+        return "Semantic discovery over registry capabilities (if sentence-transformers installed)"
 
-        try:
-            query_emb = self._encoder.encode(query)
-            cap_emb = self._encoder.encode(capability)
-            return cosine_similarity(query_emb, cap_emb)
-        except Exception:
-            return 0.0
+    @property
+    def keywords(self) -> list[str]:
+        return []
 
-    # Standard registry methods
-    def find_agent_by_capability(self, capability: str) -> dict[str, Any] | None:
-        """Find an agent that provides a capability (exact match)."""
-        for agent in self._registry.get("agents", []):
-            if capability in agent.get("capabilities", []):
-                return cast(dict[str, Any], agent)
-        return None
+    async def execute(self, context: ToolContext) -> ToolResult:
+        registry_path = getattr(context.tool_registry, "registry_path", None)
+        if not registry_path:
+            return ToolResult.fail("Tool registry has no registry_path")
 
-    def find_tool_by_capability(self, capability: str) -> dict[str, Any] | None:
-        """Find a tool that provides a capability (exact match)."""
-        for tool in self._registry.get("tools", []):
-            if capability in tool.get("capabilities", []):
-                return cast(dict[str, Any], tool)
-        return None
+        semantic = SemanticRegistry(Path(registry_path))
+        await semantic.load()
 
-    def find_by_name(self, name: str) -> dict[str, Any] | None:
-        """Find an agent or tool by name."""
-        for agent in self._registry.get("agents", []):
-            if agent.get("name") == name:
-                return cast(dict[str, Any], agent)
-        for tool in self._registry.get("tools", []):
-            if tool.get("name") == name:
-                return cast(dict[str, Any], tool)
-        return None
+        # Optional query: allow "semantic_registry: <query>" in user_input
+        raw = (context.user_input or "").strip()
+        query = ""
+        if ":" in raw:
+            _prefix, query = raw.split(":", 1)
+            query = query.strip()
 
-    async def register_agent(self, entry: AgentRegistryEntry) -> None:
-        """Register a new agent."""
-        # Remove existing with same name
-        self._registry["agents"] = [
-            a for a in self._registry.get("agents", [])
-            if a.get("name") != entry.name
-        ]
+        payload: dict[str, Any] = {
+            "semantic_available": SEMANTIC_AVAILABLE,
+            "model": semantic._model_name,
+            "capability_count": len(semantic.get_all_capabilities()),
+        }
 
-        self._registry["agents"].append(entry.model_dump())
-        await self.save()
+        if query:
+            payload["query"] = query
+            payload["results"] = semantic.find_by_capability_semantic(query)
 
-        # Update embeddings for new capabilities
-        if SEMANTIC_AVAILABLE and entry.capabilities:
-            await self._build_embeddings()
-
-    async def register_tool(self, entry: dict[str, Any]) -> None:
-        """Register a new tool."""
-        self._registry["tools"] = [
-            t for t in self._registry.get("tools", [])
-            if t.get("name") != entry.get("name")
-        ]
-
-        entry["updated_at"] = utcnow().isoformat()
-        self._registry["tools"].append(entry)
-        await self.save()
-
-        # Update embeddings
-        if SEMANTIC_AVAILABLE and entry.get("capabilities"):
-            await self._build_embeddings()
-
-    async def unregister(self, name: str) -> bool:
-        """Unregister an agent or tool by name."""
-        original_agents = len(self._registry.get("agents", []))
-        original_tools = len(self._registry.get("tools", []))
-
-        self._registry["agents"] = [
-            a for a in self._registry.get("agents", [])
-            if a.get("name") != name
-        ]
-        self._registry["tools"] = [
-            t for t in self._registry.get("tools", [])
-            if t.get("name") != name
-        ]
-
-        removed = (
-            len(self._registry.get("agents", [])) < original_agents or
-            len(self._registry.get("tools", [])) < original_tools
-        )
-
-        if removed:
-            await self.save()
-
-        return removed
-
-    def get_agents(self) -> list[dict[str, Any]]:
-        """Get all registered agents."""
-        return cast(list[dict[str, Any]], self._registry.get("agents", []))
-
-    def get_tools(self) -> list[dict[str, Any]]:
-        """Get all registered tools."""
-        return cast(list[dict[str, Any]], self._registry.get("tools", []))
-
-    def capability_exists(self, capability: str) -> bool:
-        """Check if a capability is registered."""
-        return (
-            self.find_agent_by_capability(capability) is not None or
-            self.find_tool_by_capability(capability) is not None
-        )
+        return ToolResult.ok(payload)

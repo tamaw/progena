@@ -1,7 +1,7 @@
 """
 Agent Discovery Tool - Discovers and registers agents from the agents folder.
 
-Scans app/agents/ directory, uses LLM with structured output to understand
+Scans build/agents/ directory, uses LLM with structured output to understand
 each agent's purpose and capabilities, then updates the registry.
 
 This runs on Progenitor startup and can be invoked as a tool to re-scan agents.
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
 
 from ..llm.prompts import PromptTemplates
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -380,7 +381,7 @@ class AgentDiscovery:
         from ..state.models import AgentRegistryEntry, AgentStatus
 
         # Build full entrypoint path
-        entrypoint = f"app/agents/{spec.name}/{spec.entrypoint}"
+        entrypoint = f"build/agents/{spec.name}/{spec.entrypoint}"
 
         # Allocate port for HTTP agents
         port = None
@@ -434,3 +435,38 @@ async def discover_agents(
         host=host,
     )
     return await discovery.discover_and_register()
+
+
+class AgentDiscoveryTool(BaseSystemTool):
+    """Discover and register A2A agents under build/agents/."""
+
+    @property
+    def name(self) -> str:
+        return "agent_discovery"
+
+    @property
+    def description(self) -> str:
+        return "Discover and register A2A agents under build/agents/ (updates registry.json)"
+
+    @property
+    def keywords(self) -> list[str]:
+        # Keep this empty to avoid competing with rediscover_agents.
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        # Mirror RediscoverAgentsTool behavior but keep this module self-contained.
+        project_root = Path(__file__).parent.parent.parent.parent
+        agents_dir = project_root / "build" / "agents"
+
+        logger.info("Executing system tool: agent_discovery")
+        result = await discover_agents(
+            agents_dir=agents_dir,
+            llm_client=context.llm_client,
+            registry=context.tool_registry,
+        )
+
+        return ToolResult.ok({
+            "note": "This is an alias of rediscover_agents implemented in agent_discovery.py.",
+            "agents_dir": str(agents_dir),
+            "result": result,
+        })
