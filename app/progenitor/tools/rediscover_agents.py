@@ -49,7 +49,7 @@ class RediscoverAgentsTool(BaseSystemTool):
 
         # Get agents directory
         project_root = Path(__file__).parent.parent.parent.parent
-        agents_dir = project_root / "app" / "agents"
+        agents_dir = project_root / "build" / "agents"
 
         logger.info("Executing system tool: rediscover_agents")
 

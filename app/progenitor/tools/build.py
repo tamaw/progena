@@ -9,8 +9,8 @@ import logging
 from typing import Any
 
 from ..env_utils import env_float
-from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ..runtime.time_utils import utcnow_isoformat
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +57,8 @@ class BuildTool(BaseSystemTool):
                 role = str(msg.get("role", "user"))
                 content = str(msg.get("content", ""))
             elif hasattr(msg, "role") and hasattr(msg, "content"):
-                role = str(getattr(msg, "role"))
-                content = str(getattr(msg, "content"))
+                role = str(msg.role)
+                content = str(msg.content)
             else:
                 continue
             history.append({"role": role, "content": content})

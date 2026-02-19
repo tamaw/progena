@@ -30,7 +30,7 @@ class WorkItemStatus(StrEnum):
 class WorkItemType(StrEnum):
     """Type of work item."""
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in build/mcp/
     UPGRADE = "upgrade"
     A2A_CALL = "a2a_call"
     MCP_CALL = "mcp_call"
@@ -45,7 +45,7 @@ class DecisionAction(StrEnum):
     DELEGATE_A2A = "delegate_a2a"
     USE_MCP = "use_mcp"
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
+    BUILD_TOOL = "build_tool"  # Build FastMCP tool in build/mcp/
     UPGRADE = "upgrade"
     MIXED = "mixed"
     SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)

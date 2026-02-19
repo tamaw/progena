@@ -702,9 +702,9 @@ async def _ensure_spec_doc(
     BL-007: Now supports project_directory from build_settings for consistent spec file location.
     BL-BUG-002: Now includes lessons_learned from LEARN phase.
 
-    Supports both agents (app/agents/) and tools (app/mcp/) based on item_type:
-    - BUILD_AGENT: Uses agent_structure.md template, saves to app/agents/
-    - BUILD_TOOL: Uses tool_structure.md template, saves to app/mcp/
+    Supports both agents (build/agents/) and tools (build/mcp/) based on item_type:
+    - BUILD_AGENT: Uses agent_structure.md template, saves to build/agents/
+    - BUILD_TOOL: Uses tool_structure.md template, saves to build/mcp/
 
     Persists updates back to build_state.json and saves spec file.
     """
@@ -783,7 +783,7 @@ async def _generate_copilot_prompt(
     2. Provides high-level context about the task
     3. On subsequent iterations, mentions what to fix/improve
     4. Detects if entity already exists and adjusts instructions accordingly
-    5. Handles both agents (app/agents/) and tools (app/mcp/)
+    5. Handles both agents (build/agents/) and tools (build/mcp/)
     """
     # Sanitize name for folder path
     safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
@@ -791,11 +791,11 @@ async def _generate_copilot_prompt(
     # Determine entity type and directories
     if item_type == WorkItemType.BUILD_TOOL:
         entity_type = "FastMCP tool"
-        base_dir = "app/mcp"
+        base_dir = "build/mcp"
         main_file = "server.py"
     else:
         entity_type = "AI agent"
-        base_dir = "app/agents"
+        base_dir = "build/agents"
         main_file = "agent.py"
 
     # Calculate relative path for the prompt (from project root)
@@ -901,8 +901,8 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
 
     The spec file is placed inside the agent's or tool's directory:
     - If project_directory provided: Creates {project_directory}/spec.md
-    - BUILD_TOOL: Creates app/mcp/{tool_name}/spec.md
-    - Otherwise fallback: Creates app/agents/{agent_name}/spec.md
+    - BUILD_TOOL: Creates build/mcp/{tool_name}/spec.md
+    - Otherwise fallback: Creates build/agents/{agent_name}/spec.md
 
     Returns the path to the saved file.
     """
@@ -919,10 +919,10 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
 
             # Select the right base directory based on item type
             if item_type == WorkItemType.BUILD_TOOL:
-                base_dir = project_root / "app" / "mcp"
+                base_dir = project_root / "build" / "mcp"
                 entity_type_name = "tool"
             else:
-                base_dir = project_root / "app" / "agents"
+                base_dir = project_root / "build" / "agents"
                 entity_type_name = "agent"
 
             base_dir.mkdir(parents=True, exist_ok=True)
@@ -971,11 +971,11 @@ async def _seed_spec_doc_from_template(
     if item_type == WorkItemType.BUILD_TOOL:
         template_name = "tool_structure.md"
         entity_type = "tool"
-        output_dir = "app/mcp"
+        output_dir = "build/mcp"
     else:
         template_name = "agent_structure.md"
         entity_type = "agent"
-        output_dir = "app/agents"
+        output_dir = "build/agents"
 
     # Determine path to seed template
     # Try project-relative path first
@@ -1303,4 +1303,3 @@ def _select_best_approach(approaches: list[dict], last_verification) -> dict:
                     return approach
 
     return approaches[0]
-

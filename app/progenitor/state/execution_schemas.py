@@ -24,8 +24,8 @@ from ..runtime.time_utils import utcnow
 
 class BuildType(StrEnum):
     """Type of build - determines directory structure."""
-    AGENT = "agent"  # app/agents/{project_name}/
-    MCP = "mcp"      # app/mcp/{project_name}/
+    AGENT = "agent"  # build/agents/{project_name}/
+    MCP = "mcp"      # build/mcp/{project_name}/
 
 
 class BuildStatus(StrEnum):
@@ -57,7 +57,9 @@ class BuildSettings(BaseModel):
 
     # Derived paths (computed from type + project_name)
     # Note: base_directory removed - focus only on project_directory
-    project_directory: str = Field(description="Full project directory: app/agents/{project_name}/ or app/mcp/{project_name}/")
+    project_directory: str = Field(
+        description="Full project directory: build/agents/{project_name}/ or build/mcp/{project_name}/"
+    )
     allowable_directories: list[str] = Field(
         default_factory=list,
         description="Directories Copilot is allowed to modify (defaults to project_directory)"
@@ -101,7 +103,7 @@ class BuildSettings(BaseModel):
         safe_name = project_name.replace(" ", "_").replace("-", "_").lower()
 
         # Derive directories based on type
-        base_dir = "app/agents" if build_type == BuildType.AGENT else "app/mcp"
+        base_dir = "build/agents" if build_type == BuildType.AGENT else "build/mcp"
 
         project_dir = f"{base_dir}/{safe_name}"
 
@@ -1059,10 +1061,10 @@ class SpecDoc(BaseModel):
     task_id: str | None = Field(default=None, description="Work item ID this spec is for")
     agent_name: str | None = Field(default=None, description="Target agent name if applicable")
 
-    # File path for copilot CLI consumption (now in app/agents/)
+    # File path for copilot CLI consumption (now in build/agents/ or build/mcp/)
     spec_file_path: str | None = Field(
         default=None,
-        description="Path to the spec file in app/agents/ for copilot to reference"
+        description="Path to the spec file under build/ for copilot to reference"
     )
 
     # The prompt that instructs Copilot to read and build from the spec file
