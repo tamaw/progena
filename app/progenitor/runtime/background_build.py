@@ -207,12 +207,10 @@ class BackgroundBuildRunner:
         async with self._lock:
             if self.is_building:
                 task_desc = self._current_build.task_description if self._current_build else "unknown"
-                raise RuntimeError(
-                    f"Build already in progress: {task_desc}"
-                )
+                raise RuntimeError(f"Build already in progress: {task_desc}")
 
             # Use build_id from settings if provided, otherwise generate
-            if build_settings and hasattr(build_settings, 'build_id'):
+            if build_settings and hasattr(build_settings, "build_id"):
                 build_id = build_settings.build_id
             else:
                 build_id = f"build_{uuid.uuid4().hex[:12]}"
@@ -227,31 +225,25 @@ class BackgroundBuildRunner:
             # BL-007: Store build_settings in state for later reference
             if build_settings:
                 initial_state["build_settings"] = (
-                    build_settings.model_dump()
-                    if hasattr(build_settings, "model_dump")
-                    else build_settings
+                    build_settings.model_dump() if hasattr(build_settings, "model_dump") else build_settings
                 )
 
-            # Generate acknowledgment message via LLM
-            ack_message = await self._generate_acknowledgment(
-                task_description=task_description,
-                target_capabilities=target_capabilities,
-                build_settings=build_settings,
-            )
-
-            # Start the build task
+            # Start the build task promptly; do not hold the lock while awaiting the LLM.
             self._current_task = asyncio.create_task(
                 self._run_build(build_id, initial_state),
                 name=f"build_{build_id}",
             )
 
-            logger.info(
-                "Started background build %s: %s",
-                build_id,
-                task_description,
-            )
+            logger.info("Started background build %s: %s", build_id, task_description)
 
-            return build_id, ack_message
+        # Generate acknowledgment message via LLM outside the lock to avoid deadlocks.
+        ack_message = await self._generate_acknowledgment(
+            task_description=task_description,
+            target_capabilities=target_capabilities,
+            build_settings=build_settings,
+        )
+
+        return build_id, ack_message
 
     async def _generate_acknowledgment(
         self,
