@@ -64,6 +64,11 @@ class ListToolsTool(BaseSystemTool):
         ]
         system_tools = system_tools + build_actions
 
+        # Include IPC user-communication system tools that aren't implemented as BaseSystemTool.
+        from .user_communication import USER_COMMUNICATION_TOOLS
+
+        system_tools = system_tools + list(USER_COMMUNICATION_TOOLS)
+
         # Get registered A2A agents from registry
         agents = []
         if hasattr(context.tool_registry, "get_agents"):
