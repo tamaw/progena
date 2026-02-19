@@ -30,7 +30,8 @@ class WorkItemStatus(StrEnum):
 class WorkItemType(StrEnum):
     """Type of work item."""
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
+    BUILD_MCP = "build_mcp"  # Build FastMCP tool in app/mcp/
+    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor core in app/progenitor/
     UPGRADE = "upgrade"
     A2A_CALL = "a2a_call"
     MCP_CALL = "mcp_call"
@@ -42,13 +43,9 @@ class WorkItemType(StrEnum):
 class DecisionAction(StrEnum):
     """Actions that can be decided."""
     ANSWER_DIRECTLY = "answer_directly"
-    DELEGATE_A2A = "delegate_a2a"
-    USE_MCP = "use_mcp"
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool in app/mcp/
-    UPGRADE = "upgrade"
-    MIXED = "mixed"
-    SYSTEM_TOOL = "system_tool"  # For internal system operations (including schedule)
+    BUILD_MCP = "build_mcp"  # Build FastMCP tool in app/mcp/
+    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor core in app/progenitor/
 
 
 class BuildPhase(StrEnum):
@@ -213,8 +210,9 @@ class WorkItem(BaseModel):
         """Check if this is a build-related work item."""
         return self.item_type_value in (
             WorkItemType.BUILD_AGENT.value,
-            WorkItemType.BUILD_TOOL.value,
-            WorkItemType.UPGRADE.value
+            WorkItemType.BUILD_MCP.value,
+            WorkItemType.BUILD_PROGENITOR.value,
+            WorkItemType.UPGRADE.value,
         )
 
     def mark_in_progress(self) -> None:

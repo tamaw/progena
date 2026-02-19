@@ -257,7 +257,7 @@ def route_after_decide(state: ProgenitorState) -> Literal["pick_next", "respond"
 def route_after_act(state: ProgenitorState) -> Literal["validate", "commit_core"]:
     """Route after action - validate if code was changed.
 
-    Build operations (build_agent, build_tool, upgrade) require validation
+    Build operations (build_agent, build_mcp, build_progenitor, upgrade) require validation
     before commit. Other operations skip directly to commit.
     """
     from .state.models import WorkItem
@@ -272,7 +272,7 @@ def route_after_act(state: ProgenitorState) -> Literal["validate", "commit_core"
         else:
             item_type = ""
 
-        if item_type in ("build_agent", "build_tool", "upgrade"):
+        if item_type in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
             return "validate"
 
     return "commit_core"

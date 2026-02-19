@@ -181,8 +181,18 @@ def _build_pr_body(
     score = verification.get("current_score", 0)
     target = verification.get("target_score", 0.8)
 
-    kind = "Agent" if item_type == "build_agent" else "MCP Server" if item_type == "build_tool" else "Upgrade"
-    path = f"app/agents/{project_name}" if item_type == "build_agent" else f"app/mcp/{project_name}"
+    if item_type == "build_agent":
+        kind = "Agent"
+        path = f"app/agents/{project_name}"
+    elif item_type == "build_mcp":
+        kind = "MCP Server"
+        path = f"app/mcp/{project_name}"
+    elif item_type == "build_progenitor":
+        kind = "Progenitor"
+        path = "app/progenitor"
+    else:
+        kind = "Upgrade"
+        path = str(build_settings.get("project_directory") or "unknown")
 
     return f"""## {kind}: {project_name}
 

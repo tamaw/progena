@@ -90,7 +90,7 @@ def create_node(worktrees_dir: Path) -> Callable[[ProgenitorState], Coroutine[An
             item_type = current_item.item_type
             item_id = current_item.id
 
-        build_types = ["build_agent", "build_tool", "upgrade"]
+        build_types = ["build_agent", "build_mcp", "build_progenitor", "upgrade"]
         logger.info("WORKTREE_PREP: item_type=%s, item_id=%s", item_type, item_id)
 
         if item_type not in build_types:

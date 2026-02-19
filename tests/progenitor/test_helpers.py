@@ -107,9 +107,7 @@ class TestNormalizeDecision:
             "target_capabilities": ["capability_1"],
         }
         result = normalize_decision(data)
-        assert isinstance(result, Decision)
-        assert result.action == DecisionAction.DELEGATE_A2A
-        assert result.reasoning == "Use existing agent"
+        assert result is None
 
 
 class TestNormalizeScheduleEntry:

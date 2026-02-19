@@ -228,7 +228,7 @@ class TestBuildPrBody:
 
         body = _build_pr_body(
             item_id="item-2",
-            item_type="build_tool",
+            item_type="build_mcp",
             project_name="search_tool",
             description="Web search MCP server",
             verification={"current_score": 0.88, "target_score": 0.80},

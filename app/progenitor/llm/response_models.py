@@ -14,14 +14,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class DecisionAction(StrEnum):
     """Valid actions for the decide endpoint."""
     ANSWER_DIRECTLY = "answer_directly"
-    ANSWER = "answer"  # Alias for answer_directly
-    DELEGATE_A2A = "delegate_a2a"
-    USE_MCP = "use_mcp"
     BUILD_AGENT = "build_agent"
-    BUILD_TOOL = "build_tool"  # Build FastMCP tool
-    UPGRADE = "upgrade"
-    MIXED = "mixed"
-    # Note: SCHEDULE removed - scheduling is handled via system tools
+    BUILD_MCP = "build_mcp"  # Build FastMCP tool/server in app/mcp/
+    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor core in app/progenitor/
 
 
 class DecisionResponse(BaseModel):
@@ -57,7 +52,7 @@ class DecisionResponse(BaseModel):
         default=None,
         description="Direct response content if action is answer_directly (deprecated, use user_response)"
     )
-    # Build-specific fields (populated when action is build_agent, build_tool, or upgrade)
+    # Build-specific fields (populated when action is build_agent, build_mcp, or build_progenitor)
     project_name: str | None = Field(
         default=None,
         description="For build actions: the agent/project name in snake_case (e.g., 'weather_agent'). "
@@ -66,7 +61,7 @@ class DecisionResponse(BaseModel):
     )
     build_type: str | None = Field(
         default=None,
-        description="For build actions: 'agent' for A2A agents, 'mcp' for MCP servers/tools"
+        description="For build actions: 'agent', 'mcp', or 'progenitor'"
     )
     build_description: str | None = Field(
         default=None,
@@ -95,15 +90,10 @@ class DecisionResponse(BaseModel):
 
         v_lower = str(v).lower().strip()
 
-        # Normalize common variations
-        if v_lower in ("answer", "direct", "direct_answer"):
-            return "answer_directly"
-
         # Check if it's a valid action
         valid_actions = {e.value for e in DecisionAction}
         if v_lower not in valid_actions:
-            # Fall back to answer_directly for unknown actions
-            return "answer_directly"
+            raise ValueError(f"Invalid decide action: {v_lower}")
 
         return v_lower
 
@@ -130,31 +120,24 @@ class DecisionResponse(BaseModel):
     @field_validator('build_type', mode='before')
     @classmethod
     def validate_build_type(cls, v):
-        """Normalize build_type to the canonical values expected by downstream code."""
+        """Validate build_type to the canonical values expected by downstream code."""
         if v is None:
             return None
         v_str = str(v).lower().strip()
         if not v_str:
             return None
 
-        # Normalize common variations from prompts / model output.
-        if v_str in {"tool", "tools", "mcp_tool", "mcp_server", "server"}:
-            return "mcp"
-        if v_str in {"agent", "a2a", "a2a_agent"}:
-            return "agent"
-
+        if v_str not in {"agent", "mcp", "progenitor"}:
+            raise ValueError(f"Invalid build_type: {v_str}")
         return v_str
 
     @model_validator(mode='after')
     def validate_user_response_for_action(self):
         """Require a non-empty user_response for non-direct actions."""
         non_direct_actions = {
-            DecisionAction.DELEGATE_A2A.value,
-            DecisionAction.USE_MCP.value,
             DecisionAction.BUILD_AGENT.value,
-            DecisionAction.BUILD_TOOL.value,
-            DecisionAction.UPGRADE.value,
-            DecisionAction.MIXED.value,
+            DecisionAction.BUILD_MCP.value,
+            DecisionAction.BUILD_PROGENITOR.value,
         }
 
         if self.action in non_direct_actions:
@@ -207,8 +190,9 @@ class WorkItemSpec(BaseModel):
         type_mapping = {
             "build": "build_agent",
             "agent": "build_agent",
-            "mcp": "build_tool",  # Map mcp to build_tool
-            "tool": "build_tool",  # Map tool to build_tool
+            "mcp": "build_mcp",
+            "tool": "build_mcp",
+            "progenitor": "build_progenitor",
             "a2a": "a2a_call",
             "schedule": "scheduled",
             "answer": "direct_answer",
@@ -317,11 +301,11 @@ class BuildSpec(BaseModel):
 
         kind_mapping = {
             "build_agent": "agent",
-            "build_tool": "mcp",
+            "build_mcp": "mcp",
             "mcp_server": "mcp",
             "tool": "mcp",
             "mcp": "mcp",
-            "upgrade": "upgrade",
+            "build_progenitor": "progenitor",
         }
 
         return kind_mapping.get(v_str, v_str)

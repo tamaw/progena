@@ -26,6 +26,7 @@ class BuildType(StrEnum):
     """Type of build - determines directory structure."""
     AGENT = "agent"  # app/agents/{project_name}/
     MCP = "mcp"      # app/mcp/{project_name}/
+    PROGENITOR = "progenitor"  # app/progenitor/
 
 
 class BuildStatus(StrEnum):
@@ -53,12 +54,12 @@ class BuildSettings(BaseModel):
     # Core identification
     build_id: str = Field(description="Unique build identifier")
     project_name: str = Field(description="Name of the project (used for directory and repeatability)")
-    build_type: BuildType = Field(description="Type of build: agent or mcp")
+    build_type: BuildType = Field(description="Type of build: agent, mcp, or progenitor")
 
     # Derived paths (computed from type + project_name)
     # Note: base_directory removed - focus only on project_directory
     project_directory: str = Field(
-        description="Full project directory: app/agents/{project_name}/ or app/mcp/{project_name}/"
+        description="Full project directory: app/agents/{project_name}/, app/mcp/{project_name}/, or app/progenitor/"
     )
     allowable_directories: list[str] = Field(
         default_factory=list,
@@ -103,9 +104,13 @@ class BuildSettings(BaseModel):
         safe_name = project_name.replace(" ", "_").replace("-", "_").lower()
 
         # Derive directories based on type
-        base_dir = "app/agents" if build_type == BuildType.AGENT else "app/mcp"
-
-        project_dir = f"{base_dir}/{safe_name}"
+        if build_type == BuildType.AGENT:
+            project_dir = f"app/agents/{safe_name}"
+        elif build_type == BuildType.MCP:
+            project_dir = f"app/mcp/{safe_name}"
+        else:
+            # Progenitor improvements operate directly on the core codebase directory.
+            project_dir = "app/progenitor"
 
         return cls(
             build_id=build_id,
