@@ -23,9 +23,9 @@ def _init_registry() -> dict[str, SystemTool]:
     from ...tools.agent_discovery import AgentDiscoveryTool
     from ...tools.build import BuildTool
     from ...tools.build_status import BuildStatusTool
+    from ...tools.compress_conversation import CompressConversationTool
     from ...tools.copilot import CopilotTool
     from ...tools.copilot_acp import CopilotACPTool
-    from ...tools.compress_conversation import CompressConversationTool
     from ...tools.current_time import CurrentTimeTool
     from ...tools.git import GitTool
     from ...tools.list_agents import ListAgentsTool
@@ -39,9 +39,9 @@ def _init_registry() -> dict[str, SystemTool]:
     from ...tools.schedule import ScheduleTool
     from ...tools.schedule_task import ScheduleTaskTool
     from ...tools.shell import ShellCheckTool, ShellExecTool
-    from ...tools.semantic_registry import SemanticRegistryTool
     from ...tools.self_reflect import SelfReflectModuleTool
     from ...tools.self_reflect_tool import SelfReflectTool
+    from ...tools.semantic_registry import SemanticRegistryTool
     from ...tools.user_communication import UserCommunicationTool
 
     tools = [
@@ -57,8 +57,6 @@ def _init_registry() -> dict[str, SystemTool]:
         ScheduleTaskTool(),
         CompressConversationTool(),
         MemoryTool(),
-        ShellCheckTool(),
-        ShellExecTool(),
         ShellCheckTool(),
         ShellExecTool(),
         # Module-level/system wrappers (status/diagnostic/tools/* coverage)

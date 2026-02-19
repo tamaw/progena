@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from ..config import CopilotConfig
-from .protocol import BaseSystemTool, ToolContext, ToolResult
 from ..runtime.copilot_acp import ACPLogCapture, CopilotACPManager
 from ..runtime.time_utils import utcnow_isoformat
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class CopilotTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return []
 
-    async def execute(self, context: ToolContext) -> ToolResult:
+    async def execute(self, _context: ToolContext) -> ToolResult:
         cfg = CopilotConfig.from_env()
         return ToolResult.ok({
             "bin_path": cfg.bin_path,

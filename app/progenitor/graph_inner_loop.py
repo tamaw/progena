@@ -82,11 +82,12 @@ def create_inner_loop_graph(
     registry_path = config.storage.state_dir / "registry.json"
     tool_registry = ToolRegistry(registry_path)
 
-    # Git worktree manager for concurrent builds
-    git_manager = GitWorktreeManager(worktrees_dir)
+    # Get project root (repo root; parent of the `app/` directory).
+    project_root = Path(__file__).resolve().parents[2]
 
-    # Get project root (parent of app directory) for agent discovery
-    project_root = Path(__file__).parent.parent.parent
+    # Git worktree manager for concurrent builds
+    # Ensure git operations run against the repo root (not the current working directory).
+    git_manager = GitWorktreeManager(worktrees_dir, repo_path=project_root)
 
     # Create node functions for inner loop
     # Use the new build.create_node from nodes/build.py

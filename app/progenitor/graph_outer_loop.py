@@ -18,9 +18,9 @@ from langgraph.graph import END, StateGraph
 
 from .nodes import (
     act,
+    chat,
     commit_core,
     cycle_limit,
-    chat,
     idle,
     intake,
     pick_next,
@@ -31,7 +31,6 @@ from .nodes import (
 )
 from .routing import (
     route_after_act,
-    route_after_decide,
     route_after_pick_next,
     route_after_validate,
 )

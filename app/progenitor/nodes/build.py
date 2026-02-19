@@ -27,6 +27,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _init_submodules(worktree_path: Path) -> None:
+    """Ensure git submodules are initialized inside a newly created worktree."""
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+        cwd=str(worktree_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError((stderr or stdout or b"").decode(errors="replace").strip())
+
+
 def create_node(
     llm_client,
     copilot_cli: "CopilotCLI",
@@ -83,6 +100,9 @@ def create_node(
                     work_item_id=item_id,
                     branch_name=f"progenitor/build/{item_id}"
                 )
+
+                # Worktrees don't automatically init submodules; builds target build/ submodules.
+                await _init_submodules(worktree_path)
 
                 concurrent_builds.append({
                     "work_item_id": item_id,

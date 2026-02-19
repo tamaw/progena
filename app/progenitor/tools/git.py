@@ -431,7 +431,7 @@ class GitTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return []
 
-    async def execute(self, context: ToolContext) -> ToolResult:
+    async def execute(self, _context: ToolContext) -> ToolResult:
         project_root = Path(__file__).parent.parent.parent.parent
         worktrees_dir = project_root / "worktrees"
         manager = GitWorktreeManager(

@@ -17,6 +17,7 @@ import httpx
 from pydantic import BaseModel
 
 from ..config import LLMConfig, MCPConfig
+from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
 from .response_models import (
     BuildSpec,
@@ -27,7 +28,6 @@ from .response_models import (
     validate_planner_response,
 )
 from .tokenizer import count_message_tokens
-from ..tools.user_communication import EventPusher
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +180,8 @@ class LLMClient:
         """Build Responses API input messages from chat history."""
         input_messages: list[dict[str, Any]] = []
 
+        allowed_roles = {"system", "user", "assistant", "tool"}
+
         if system_prompt:
             input_messages.append({
                 "role": "system",
@@ -187,7 +189,12 @@ class LLMClient:
             })
 
         for msg in messages:
-            role = msg.get("role", "user")
+            role = str(msg.get("role", "user") or "user")
+            if role not in allowed_roles:
+                # Scheduled/background messages may use custom roles like
+                # "scheduler". The OpenAI-compatible Responses API only
+                # accepts standard roles, so coerce unknown roles to "user".
+                role = "user"
             content = msg.get("content", "")
 
             if isinstance(content, list):
@@ -427,7 +434,7 @@ class LLMClient:
         """Execute either a system tool or an MCP tool call."""
         if system_tool_context:
             try:
-                from ..nodes.node_helpers.registry import get_system_tool, execute_system_tool
+                from ..nodes.node_helpers.registry import execute_system_tool, get_system_tool
             except Exception:
                 get_system_tool = None
                 execute_system_tool = None

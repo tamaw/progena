@@ -768,7 +768,11 @@ class ProgenitorLoop:
             if msg_dict.get("role") != "assistant":
                 continue
             metadata = msg_dict.get("metadata") or {}
-            if isinstance(metadata, dict) and metadata.get("type") == "scheduled" and str(metadata.get("schedule_id") or "") != str(schedule_id):
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("type") == "scheduled"
+                and str(metadata.get("schedule_id") or "") != str(schedule_id)
+            ):
                 continue
             content = msg_dict.get("content")
             if isinstance(content, str) and content.strip():

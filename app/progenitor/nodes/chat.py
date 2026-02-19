@@ -25,8 +25,8 @@ def _coerce_messages(raw_messages: list[Any], limit: int = 20) -> list[dict[str,
             role = str(msg.get("role", "user"))
             content = str(msg.get("content", ""))
         elif hasattr(msg, "role") and hasattr(msg, "content"):
-            role = str(getattr(msg, "role"))
-            content = str(getattr(msg, "content"))
+            role = str(msg.role)
+            content = str(msg.content)
         else:
             continue
         if content:

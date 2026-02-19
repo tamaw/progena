@@ -10,9 +10,9 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from .protocol import BaseSystemTool, ToolContext, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 # Type alias for event pusher callback

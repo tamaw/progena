@@ -7,6 +7,7 @@ used by the LangGraph nodes to execute and present tool results.
 
 from typing import TYPE_CHECKING
 
+from ...tools.protocol import BaseSystemTool, SystemTool, ToolContext, ToolResult
 from .formatters import format_schedule_result, format_tool_result
 from .registry import (
     execute_system_tool,
@@ -14,7 +15,6 @@ from .registry import (
     get_system_tool,
     get_system_tool_names,
 )
-from ...tools.protocol import BaseSystemTool, SystemTool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
     from ...tools.build_status import BuildStatusTool

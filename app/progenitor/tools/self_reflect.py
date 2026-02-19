@@ -259,31 +259,6 @@ class SelfReflection:
         if not target.exists():
             raise FileNotFoundError(f"File not found: {relative_path}")
 
-
-class SelfReflectModuleTool(BaseSystemTool):
-    """Module-level wrapper for self_reflect operations (read-only)."""
-
-    @property
-    def name(self) -> str:
-        return "self_reflect_module"
-
-    @property
-    def description(self) -> str:
-        return "Read-only self-reflection helpers (module listing/search/read)"
-
-    @property
-    def keywords(self) -> list[str]:
-        return []
-
-    async def execute(self, context: ToolContext) -> ToolResult:
-        reflection = SelfReflection(llm_client=context.llm_client)
-        modules = reflection.list_modules()
-        return ToolResult.ok({
-            "root_path": str(reflection.root),
-            "modules": [m.model_dump() for m in modules],
-            "tip": "Use the 'self_reflect' system tool for the common entry point; this is a module-level wrapper.",
-        })
-
         if not target.is_file():
             raise ValueError(f"Not a file: {relative_path}")
 
@@ -300,11 +275,11 @@ class SelfReflectModuleTool(BaseSystemTool):
         else:
             content = target.read_text(encoding="utf-8", errors="ignore")
 
-        if max_lines:
-            lines = content.split('\n')
+        if max_lines is not None and max_lines > 0:
+            lines = content.split("\n")
             if len(lines) > max_lines:
                 truncated = True
-                content = '\n'.join(lines[:max_lines])
+                content = "\n".join(lines[:max_lines])
                 content += f"\n\n... (showing first {max_lines} of {len(lines)} lines)"
 
         # Detect language

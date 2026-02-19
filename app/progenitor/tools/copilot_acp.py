@@ -576,7 +576,7 @@ class CopilotACPTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return []
 
-    async def execute(self, context: ToolContext) -> ToolResult:
+    async def execute(self, _context: ToolContext) -> ToolResult:
         cfg = CopilotConfig.from_env()
         return ToolResult.ok({
             "acp_port": cfg.acp_port,
