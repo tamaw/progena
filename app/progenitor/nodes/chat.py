@@ -110,7 +110,7 @@ def create_node(
         )
 
         state_updates = tool_exec_ctx.get("state_updates") or {}
-        return cast(ProgenitorState, {"current_decision": decision, **state_updates})
+        # Ensure tool-provided state resets (e.g., new_conversation) don't wipe out this turn's decision.
+        return cast(ProgenitorState, {**state_updates, "current_decision": decision})
 
     return chat_node
-
