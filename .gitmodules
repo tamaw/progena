@@ -1,6 +1,0 @@
-[submodule "build/agents"]
-	path = build/agents
-	url = https://github.com/tamaw/progentior.agents.git
-[submodule "build/mcp"]
-	path = build/mcp
-	url = https://github.com/tamaw/progenitor.mcp.git

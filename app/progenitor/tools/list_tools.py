@@ -53,13 +53,13 @@ class ListToolsTool(BaseSystemTool):
                 "type": "build_action",
             },
             {
-                "name": "build_tool",
-                "description": "Build a new FastMCP tool in the background (requires explicit user request)",
+                "name": "build_mcp",
+                "description": "Build a new FastMCP tool/server in the background (requires explicit user request)",
                 "type": "build_action",
             },
             {
-                "name": "upgrade",
-                "description": "Upgrade an existing agent/tool in the background (requires explicit user request)",
+                "name": "build_progenitor",
+                "description": "Improve Progenitor core (app/progenitor) in the background (requires explicit user request)",
                 "type": "build_action",
             },
         ]

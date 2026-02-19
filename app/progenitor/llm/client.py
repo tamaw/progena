@@ -124,14 +124,9 @@ class LLMClient:
         )
 
         self.structured_override_url = self._resolve_structured_override_url()
-        self.structured_override_api_key = (
-            os.getenv("PROGENITOR_AZURE_STRUCTURED_API_KEY")
-            or os.getenv("AZURE_OPENAI_API_KEY")
-        )
-        self.structured_override_model = (
-            os.getenv("PROGENITOR_AZURE_STRUCTURED_MODEL")
-            or os.getenv("AZURE_OPENAI_DEPLOYMENT_DEFAULT")
-        )
+        # Structured output bypasses LiteLLM (bug workaround); these env vars are required.
+        self.structured_override_api_key = os.getenv("PROGENITOR_AZURE_STRUCTUED_API_KEY")
+        self.structured_override_model = os.getenv("PROGENITOR_AZURE_STRUCTUED_MODEL")
 
         # MCP context is initialized externally (startup)
         self.mcp_client: httpx.AsyncClient | None = None
@@ -483,17 +478,10 @@ class LLMClient:
         return endpoint.rstrip("/")
 
     def _resolve_structured_override_url(self) -> str | None:
-        explicit_url = os.getenv("PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL")
+        explicit_url = os.getenv("PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL")
         if explicit_url:
             return explicit_url
-
-        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        if not endpoint:
-            return None
-
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "preview")
-        base = self._normalize_azure_base(endpoint)
-        return f"{base}/openai/v1/responses?api-version={api_version}"
+        return None
 
     def _can_use_structured_override(self) -> bool:
         return bool(
@@ -791,13 +779,13 @@ class LLMClient:
         # Check token usage before making the call
         self._check_token_usage(input_messages)
 
-        merged_tools = self._resolve_request_tools(tools, response_format)
-
-        if (
-            response_format
-            and not merged_tools
-            and self._can_use_structured_override()
-        ):
+        # Structured output must bypass LiteLLM (litellm bug workaround).
+        if response_format is not None:
+            if not self._can_use_structured_override():
+                raise RuntimeError(
+                    "Structured output requires PROGENITOR_AZURE_STRUCTUED_* env vars "
+                    "(RESPONSES_URL, API_KEY, MODEL)."
+                )
             return await self._post_structured_response_override(
                 input_messages=input_messages,
                 response_format=response_format,
@@ -805,6 +793,8 @@ class LLMClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+
+        merged_tools = self._resolve_request_tools(tools, response_format)
 
         payload: dict[str, Any] = {
             "model": self.model,

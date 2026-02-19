@@ -118,4 +118,4 @@ If MCP setup is too complex, consider testing **A2A agents** instead, which don'
 message = "Tell me the current BTC price using the BTC Price Agent"
 ```
 
-This uses the local `build/agents/BTC Price Agent/` which is already registered.
+This uses the local `app/agents/BTC Price Agent/` which is already registered.

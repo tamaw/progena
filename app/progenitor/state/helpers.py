@@ -144,7 +144,8 @@ def normalize_decision(item: Any) -> Decision | None:
         try:
             action = DecisionAction(action_str)
         except ValueError:
-            action = DecisionAction.ANSWER_DIRECTLY
+            logger.warning("Unknown DecisionAction %r; dropping decision", action_str)
+            return None
 
         return Decision(
             action=action,

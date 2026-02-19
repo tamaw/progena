@@ -219,7 +219,7 @@ class TestRegisterNode:
                 state = self._make_state(
                     current_work_item={
                         "id": "item-2",
-                        "item_type": "build_tool",
+                        "item_type": "build_mcp",
                         "description": "test",
                         "result": {
                             "spec": {

@@ -110,26 +110,14 @@ def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_override_env() -> dict[str, str | None]:
-    responses_url = os.getenv("PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL")
-    api_key = os.getenv("PROGENITOR_AZURE_STRUCTURED_API_KEY")
-    model = os.getenv("PROGENITOR_AZURE_STRUCTURED_MODEL")
+    responses_url = os.getenv("PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL")
+    api_key = os.getenv("PROGENITOR_AZURE_STRUCTUED_API_KEY")
+    model = os.getenv("PROGENITOR_AZURE_STRUCTUED_MODEL")
 
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    endpoint_key = os.getenv("AZURE_OPENAI_API_KEY")
-    endpoint_model = os.getenv("AZURE_OPENAI_DEPLOYMENT_DEFAULT")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "preview")
-
-    # Prefer explicit override vars; fall back to standard Azure vars
-    final_api_key = api_key or endpoint_key
-    final_model = model or endpoint_model
-
-    if responses_url:
-        final_url = responses_url
-    elif endpoint:
-        base = _normalize_azure_base(endpoint)
-        final_url = f"{base}/openai/v1/responses?api-version={api_version}"
-    else:
-        final_url = None
+    final_api_key = api_key
+    final_model = model
+    final_url = responses_url
+    api_version = None
 
     return {
         "override_url": final_url,
@@ -137,7 +125,7 @@ def _resolve_override_env() -> dict[str, str | None]:
         "override_model": final_model,
         "api_version": api_version,
         "raw_override_url": responses_url,
-        "raw_endpoint": endpoint,
+        "raw_endpoint": None,
     }
 
 
@@ -341,10 +329,8 @@ async def main() -> int:
     print(f"- LITELLM_BASE_URL={os.getenv('LITELLM_BASE_URL', '<missing>')}")
     print(f"- PROGENITOR_MODEL_DEFAULT={os.getenv('PROGENITOR_MODEL_DEFAULT', '<missing>')}")
     print(f"- LITELLM_MASTER_KEY={_mask(os.getenv('LITELLM_MASTER_KEY'))}")
-    print(f"- PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL={os.getenv('PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL', '<missing>')}")
-    print(f"- AZURE_OPENAI_ENDPOINT={os.getenv('AZURE_OPENAI_ENDPOINT', '<missing>')}")
-    print(f"- PROGENITOR_AZURE_STRUCTURED_MODEL={os.getenv('PROGENITOR_AZURE_STRUCTURED_MODEL', '<missing>')}")
-    print(f"- AZURE_OPENAI_DEPLOYMENT_DEFAULT={os.getenv('AZURE_OPENAI_DEPLOYMENT_DEFAULT', '<missing>')}")
+    print(f"- PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL={os.getenv('PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL', '<missing>')}")
+    print(f"- PROGENITOR_AZURE_STRUCTUED_MODEL={os.getenv('PROGENITOR_AZURE_STRUCTUED_MODEL', '<missing>')}")
 
     print("\n[1/3] Probing LLMClient structured output path...")
     llm_probe = await _probe_llm_client(response_format)

@@ -1,7 +1,7 @@
 """
 Agent Discovery Tool - Discovers and registers agents from the agents folder.
 
-Scans build/agents/ directory, uses LLM with structured output to understand
+Scans app/agents/ directory, uses LLM with structured output to understand
 each agent's purpose and capabilities, then updates the registry.
 
 This runs on Progenitor startup and can be invoked as a tool to re-scan agents.
@@ -381,7 +381,7 @@ class AgentDiscovery:
         from ..state.models import AgentRegistryEntry, AgentStatus
 
         # Build full entrypoint path
-        entrypoint = f"build/agents/{spec.name}/{spec.entrypoint}"
+        entrypoint = f"app/agents/{spec.name}/{spec.entrypoint}"
 
         # Allocate port for HTTP agents
         port = None
@@ -438,7 +438,7 @@ async def discover_agents(
 
 
 class AgentDiscoveryTool(BaseSystemTool):
-    """Discover and register A2A agents under build/agents/."""
+    """Discover and register A2A agents under app/agents/."""
 
     @property
     def name(self) -> str:
@@ -446,7 +446,7 @@ class AgentDiscoveryTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Discover and register A2A agents under build/agents/ (updates registry.json)"
+        return "Discover and register A2A agents under app/agents/ (updates registry.json)"
 
     @property
     def keywords(self) -> list[str]:

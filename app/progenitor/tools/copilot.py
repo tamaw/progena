@@ -92,6 +92,7 @@ class CopilotCLI:
         worktree_path: Path,
         prompt: str,
         target_path: str | None = None,
+        allowed_dirs: list[str] | None = None,
     ) -> dict[str, Any]:
         """Execute a build task via Copilot ACP."""
         worktree_path = Path(worktree_path)
@@ -124,6 +125,7 @@ class CopilotCLI:
                 prompt_text=prompt,
                 cwd=worktree_path,
                 work_item_id=work_item_id,
+                allowed_dirs=allowed_dirs if allowed_dirs is not None else self.allowed_dirs,
             )
 
             success = result.get("success", False)

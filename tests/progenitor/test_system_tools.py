@@ -175,7 +175,7 @@ class TestListToolsTool:
         assert {"tool1", "tool2", "local_tool", "litellm_tool"} <= mcp_names
 
         system_names = {t.get("name") for t in result.data["system_tools"]}
-        assert {"build_agent", "build_tool"} <= system_names
+        assert {"build_agent", "build_mcp", "build_progenitor"} <= system_names
 
         agent_names = {a.get("name") for a in result.data["agents"]}
         assert "agent1" in agent_names
