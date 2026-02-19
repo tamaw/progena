@@ -29,6 +29,39 @@ from app.progenitor.runtime.time_utils import utcnow
 from app.progenitor.tools.build_status import BuildStatusTool
 from app.progenitor.tools.list_schedule import ListScheduleTool
 
+# NOTE ABOUT TEST STABILITY (Windows / pytest-asyncio):
+# BackgroundBuildRunner.start_build() always spawns a background asyncio.Task.
+# If a test forgets to cancel/await that task, pytest-asyncio can hang while
+# closing the event loop (especially on Windows' ProactorEventLoop).
+#
+# These tests are validating the runner's *lifecycle* (start/status/cancel) and
+# heuristics, not the full inner-loop build graph (which performs git/worktree
+# operations and can block indefinitely in CI). We therefore stub _run_build to
+# a cancellable "never completes" coroutine, and ensure every test cancels the
+# spawned task with a timeout during teardown.
+
+
+async def _cancel_runner_task(runner: BackgroundBuildRunner, timeout: float = 2.0) -> None:
+    """Cancel any active BackgroundBuildRunner task and wait briefly for it to exit."""
+    task = getattr(runner, "_current_task", None)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _stub_run_build(monkeypatch):
+    """Stub BackgroundBuildRunner._run_build so tests don't execute the real inner-loop graph."""
+
+    async def _run_build_stub(self, build_id: str, initial_state: dict):  # noqa: ARG001
+        # Block until cancelled; cancellation is what these tests exercise.
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(BackgroundBuildRunner, "_run_build", _run_build_stub, raising=True)
+
 # ============================================================================
 # BackgroundBuildRunner Tests
 # ============================================================================
@@ -157,12 +190,7 @@ class TestBackgroundBuildRunner:
         during teardown when pytest-asyncio closes the loop.
         """
         yield
-        if runner._current_task and not runner._current_task.done():
-            runner._current_task.cancel()
-            try:
-                await asyncio.wait_for(asyncio.shield(runner._current_task), timeout=2.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
+        await _cancel_runner_task(runner, timeout=2.0)
 
     def test_initial_state(self, runner):
         """Runner should start with no active build."""
@@ -534,17 +562,19 @@ class TestAsyncBuildIntegration:
             llm_client=mock_llm_client,
             copilot_acp_manager=None,
         )
+        try:
+            build_id, ack = await runner.start_build(
+                user_input="build an agent",
+                task_description="Full lifecycle test",
+                target_capabilities=["code_execution"],
+                initial_state={},
+            )
 
-        build_id, ack = await runner.start_build(
-            user_input="build an agent",
-            task_description="Full lifecycle test",
-            target_capabilities=["code_execution"],
-            initial_state={},
-        )
-
-        assert build_id is not None
-        assert build_id.startswith("build_")
-        assert len(ack) > 0  # LLM acknowledgment
+            assert build_id is not None
+            assert build_id.startswith("build_")
+            assert len(ack) > 0  # LLM acknowledgment
+        finally:
+            await _cancel_runner_task(runner, timeout=2.0)
 
     @pytest.mark.asyncio
     async def test_build_preserves_task_description(
@@ -557,14 +587,17 @@ class TestAsyncBuildIntegration:
             llm_client=mock_llm_client,
             copilot_acp_manager=None,
         )
+        try:
+            build_id, _ = await runner.start_build(
+                user_input="build an agent",
+                task_description="My specific task",
+                target_capabilities=["code_execution"],
+                initial_state={},
+            )
+            assert build_id is not None
 
-        build_id, _ = await runner.start_build(
-            user_input="build an agent",
-            task_description="My specific task",
-            target_capabilities=["code_execution"],
-            initial_state={},
-        )
-
-        status = runner.get_build_status()
-        assert status is not None
-        assert status.task_description == "My specific task"
+            status = runner.get_build_status()
+            assert status is not None
+            assert status.task_description == "My specific task"
+        finally:
+            await _cancel_runner_task(runner, timeout=2.0)
