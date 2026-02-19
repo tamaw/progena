@@ -87,11 +87,11 @@ class ToolRegistry:
         return list(set(capabilities))
 
     def get_local_mcp_tools(self) -> list[dict[str, Any]]:
-        """Discover local FastMCP tools under build/mcp/.
+        """Discover local FastMCP tools under app/mcp/.
 
         These are HTTP MCP tools that may not be registered in registry.json.
         """
-        tools_dir = Path(__file__).resolve().parents[3] / "build" / "mcp"
+        tools_dir = Path(__file__).resolve().parents[3] / "app" / "mcp"
         if not tools_dir.exists():
             return []
 
@@ -107,7 +107,7 @@ class ToolRegistry:
                 continue
 
             spec_path = entry / "spec.md"
-            description = f"Local FastMCP tool (HTTP). Start with: python build/mcp/{entry.name}/server.py"
+            description = f"Local FastMCP tool (HTTP). Start with: python app/mcp/{entry.name}/server.py"
 
             if spec_path.exists():
                 try:
@@ -169,7 +169,7 @@ class ToolRegistry:
                     lines.append(f"  Capabilities: {', '.join(caps)}")
             sections.append("\n".join(lines))
 
-        # MCP tools from registry + local FastMCP tools from build/mcp
+        # MCP tools from registry + local FastMCP tools from app/mcp
         tools = self._registry.get("tools", [])
         local_tools = self.get_local_mcp_tools()
         seen_names = {tool.get("name") for tool in tools}

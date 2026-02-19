@@ -367,11 +367,11 @@ class TestPlanExperiment:
         assert spec.copilot_prompt is None
 
         # Set the copilot_prompt (as PLAN would do)
-        spec.copilot_prompt = "Build based on spec at build/agents/hello_agent_spec.md"
-        spec.spec_file_path = "build/agents/hello_agent_spec.md"
+        spec.copilot_prompt = "Build based on spec at app/agents/hello_agent_spec.md"
+        spec.spec_file_path = "app/agents/hello_agent_spec.md"
 
         assert "Build based on spec" in spec.copilot_prompt
-        assert spec.spec_file_path == "build/agents/hello_agent_spec.md"
+        assert spec.spec_file_path == "app/agents/hello_agent_spec.md"
 
         # Verify it serializes correctly
         spec_dict = spec.model_dump()

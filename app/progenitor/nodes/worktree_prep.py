@@ -22,7 +22,7 @@ async def _setup_worktree_venv(agent_dir: Path) -> bool:
     """Create a venv inside the agent/mcp directory and install its requirements.
 
     Args:
-        agent_dir: Path to the agent package inside the worktree
+         agent_dir: Path to the agent package inside the worktree
                    (e.g. worktrees/<id>/app/agents/my_agent).
 
     Returns:

@@ -20,7 +20,7 @@ class TestCopilotACPManager(unittest.IsolatedAsyncioTestCase):
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
         manager = CopilotACPManager(copilot_cmd="copilot")
-        args = manager._build_args()
+        args = manager._build_args(allowed_dirs=[], cwd=Path("/repo"))
 
         assert "--acp" in args
         assert "--yolo" in args  # Default yolo=True
@@ -30,7 +30,7 @@ class TestCopilotACPManager(unittest.IsolatedAsyncioTestCase):
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
         manager = CopilotACPManager(copilot_cmd="copilot", model="claude-sonnet-4")
-        args = manager._build_args()
+        args = manager._build_args(allowed_dirs=[], cwd=Path("/repo"))
 
         assert "--model" in args
         model_idx = args.index("--model")
@@ -42,20 +42,20 @@ class TestCopilotACPManager(unittest.IsolatedAsyncioTestCase):
 
         manager = CopilotACPManager(
             copilot_cmd="copilot",
-            allowed_dirs=["/path/to/dir1", "/path/to/dir2"]
+            allowed_dirs=["dir1", "dir2"]
         )
-        args = manager._build_args()
+        args = manager._build_args(allowed_dirs=manager.allowed_dirs, cwd=Path("/repo"))
 
         assert args.count("--add-dir") == 2
-        assert "/path/to/dir1" in args
-        assert "/path/to/dir2" in args
+        assert any(a.replace("\\", "/").endswith("/dir1") for a in args)
+        assert any(a.replace("\\", "/").endswith("/dir2") for a in args)
 
     async def test_build_args_no_yolo(self):
         """Test args without yolo flag."""
         from app.progenitor.runtime.copilot_acp import CopilotACPManager
 
         manager = CopilotACPManager(copilot_cmd="copilot", yolo=False)
-        args = manager._build_args()
+        args = manager._build_args(allowed_dirs=[], cwd=Path("/repo"))
 
         assert "--yolo" not in args
         assert "--acp" in args
