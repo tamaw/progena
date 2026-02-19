@@ -645,3 +645,30 @@ class TestTelegramPolling:
         await client_with_polling.stop_polling()
 
         assert client_with_polling._polling_task is None
+
+
+class TestTelegramConnectedMessage:
+    """Tests for Telegram 'connected' notification."""
+
+    @pytest.mark.asyncio
+    async def test_sends_hi(self):
+        from app.backend import main as backend_main
+
+        telegram = AsyncMock()
+        telegram.send_message.return_value = True
+
+        await backend_main._send_telegram_connected_message(telegram)
+
+        telegram.send_message.assert_awaited_once()
+        sent_text = telegram.send_message.call_args.args[0]
+        assert "👋" in sent_text
+        assert "progenitor" in sent_text.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_exception_on_send_failure(self):
+        from app.backend import main as backend_main
+
+        telegram = AsyncMock()
+        telegram.send_message.return_value = False
+
+        await backend_main._send_telegram_connected_message(telegram)
