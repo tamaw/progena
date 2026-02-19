@@ -360,9 +360,9 @@ class ProgenitorService:
             from .tools.agent_discovery import discover_agents
 
             # Determine agents directory relative to project root
-            # Agents are built/deployed from build/agents/
+            # Agents are built/deployed from app/agents/
             project_root = Path(__file__).parent.parent.parent
-            agents_dir = project_root / "build" / "agents"
+            agents_dir = project_root / "app" / "agents"
 
             if not agents_dir.exists():
                 logger.warning("Agents directory not found: %s", agents_dir)

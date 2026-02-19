@@ -21,7 +21,7 @@ class TestAgentFolderInfo:
         """Test conversion to LLM prompt format."""
         info = AgentFolderInfo(
             folder_name="test_agent",
-            folder_path=Path("build/agents/test_agent"),
+            folder_path=Path("app/agents/test_agent"),
             files=["agent.py", "README.md"],
             file_contents={"agent.py": "print('hello')"},
         )
@@ -35,7 +35,7 @@ class TestAgentFolderInfo:
         long_content = "x" * 5000
         info = AgentFolderInfo(
             folder_name="test_agent",
-            folder_path=Path("build/agents/test_agent"),
+            folder_path=Path("app/agents/test_agent"),
             files=["agent.py"],
             file_contents={"agent.py": long_content},
         )

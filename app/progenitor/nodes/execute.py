@@ -417,9 +417,9 @@ async def _exercise_agent(
         if agent_name and project_root:
             # Check for standard agent locations relative to project root
             potential_paths = [
-                project_root / f"build/agents/{agent_name}/agent.py",
-                project_root / f"build/agents/{agent_name}/main.py",
-                project_root / f"build/agents/{agent_name}/__main__.py",
+                project_root / f"app/agents/{agent_name}/agent.py",
+                project_root / f"app/agents/{agent_name}/main.py",
+                project_root / f"app/agents/{agent_name}/__main__.py",
             ]
             for path in potential_paths:
                 if path.exists():

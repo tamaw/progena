@@ -417,7 +417,25 @@ class CopilotACPManager:
             allowed_dirs,
         )
 
-    def _build_args(self) -> list[str]:
+    @staticmethod
+    def _normalize_allowed_dirs(allowed_dirs: list[str], cwd: Path) -> list[str]:
+        """Normalize allowed dirs to absolute paths under cwd when possible."""
+        normalized: list[str] = []
+        cwd_resolved = cwd.resolve()
+        for raw in allowed_dirs:
+            if not raw:
+                continue
+            p = Path(raw)
+            p = (cwd_resolved / p).resolve() if not p.is_absolute() else p.resolve()
+            # Defensive: keep Copilot scoped to the worktree/session directory.
+            try:
+                p.relative_to(cwd_resolved)
+            except Exception:
+                continue
+            normalized.append(str(p))
+        return normalized
+
+    def _build_args(self, *, allowed_dirs: list[str], cwd: Path) -> list[str]:
         """Build command-line arguments for copilot."""
         args = ["--acp"]
 
@@ -427,7 +445,7 @@ class CopilotACPManager:
         if self.yolo:
             args.append("--yolo")
 
-        for dir_path in self.allowed_dirs:
+        for dir_path in self._normalize_allowed_dirs(allowed_dirs, cwd):
             args.extend(["--add-dir", dir_path])
 
         return args
@@ -437,6 +455,7 @@ class CopilotACPManager:
         self,
         work_item_id: str,
         cwd: Path,
+        allowed_dirs: list[str] | None = None,
     ) -> AsyncIterator[tuple["ProgenitorACPClient", Any]]:
         """Connect to copilot ACP and yield the connection.
 
@@ -448,7 +467,8 @@ class CopilotACPManager:
             Tuple of (ProgenitorACPClient, ClientSideConnection).
         """
         client = ProgenitorACPClient(work_item_id=work_item_id)
-        args = self._build_args()
+        dirs = allowed_dirs if allowed_dirs is not None else self.allowed_dirs
+        args = self._build_args(allowed_dirs=dirs, cwd=cwd)
 
         logger.info(
             "COPILOT_ACP [%s]: Spawning copilot with args: %s %s",
@@ -514,6 +534,7 @@ class CopilotACPManager:
         prompt_text: str,
         cwd: Path,
         work_item_id: str = "unknown",
+        allowed_dirs: list[str] | None = None,
     ) -> dict[str, Any]:
         """Send a prompt to copilot and get the response.
 
@@ -539,7 +560,7 @@ class CopilotACPManager:
         start_time = time.perf_counter()
 
         try:
-            async with self.connect(work_item_id, cwd) as (client, conn):
+            async with self.connect(work_item_id, cwd, allowed_dirs=allowed_dirs) as (client, conn):
                 # Create a new session
                 logger.info(
                     "COPILOT_ACP [%s]: Creating new session (cwd=%s)",

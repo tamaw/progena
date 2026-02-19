@@ -10,7 +10,6 @@ successful merge to main (handled by MERGE node).
 """
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -26,35 +25,6 @@ if TYPE_CHECKING:
     from ..tools.git import GitWorktreeManager
 
 logger = logging.getLogger(__name__)
-
-
-async def _init_submodules(worktree_path: Path) -> None:
-    """Ensure git submodules are initialized inside a newly created worktree."""
-    # Unit tests mock create_worktree() to return a Path without creating it.
-    # In real runs GitWorktreeManager creates the directory, so this is safe.
-    if not worktree_path.exists():
-        logger.debug("BUILD: worktree_path does not exist; skipping submodule init: %s", worktree_path)
-        return
-
-    process = await asyncio.create_subprocess_exec(
-        "git",
-        "submodule",
-        "update",
-        "--init",
-        "--recursive",
-        cwd=str(worktree_path),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60.0)
-    except TimeoutError:
-        process.kill()
-        with contextlib.suppress(Exception):
-            await process.communicate()
-        raise RuntimeError("git submodule update timed out after 60s")
-    if process.returncode != 0:
-        raise RuntimeError((stderr or stdout or b"").decode(errors="replace").strip())
 
 
 def create_node(
@@ -113,9 +83,6 @@ def create_node(
                     work_item_id=item_id,
                     branch_name=f"progenitor/build/{item_id}"
                 )
-
-                # Worktrees don't automatically init submodules; builds target build/ submodules.
-                await _init_submodules(worktree_path)
 
                 concurrent_builds.append({
                     "work_item_id": item_id,
@@ -272,10 +239,21 @@ async def _run_single_build(
 
     # Run Copilot CLI
     try:
+        # Keep Copilot scoped to build output directories inside the worktree.
+        allowed_dirs: list[str] | None = None
+        build_settings = state.get("build_settings") or {}
+        if isinstance(build_settings, dict):
+            dirs = build_settings.get("allowable_directories")
+            if isinstance(dirs, list) and all(isinstance(d, str) for d in dirs):
+                allowed_dirs = cast(list[str], dirs)
+        if not allowed_dirs:
+            allowed_dirs = ["app"]
+
         build_result = await copilot_cli.build(
             work_item_id=item_id,
             worktree_path=worktree_path,
             prompt=copilot_prompt,
+            allowed_dirs=allowed_dirs,
         )
 
         logger.info(f"BUILD: Completed build for {item_id}, success={build_result.get('success')}")

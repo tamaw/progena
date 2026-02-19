@@ -113,7 +113,7 @@ class TestAgentRegistryEntry:
             name="email_agent",
             description="Handles email operations",
             capabilities=["send_email", "read_email"],
-            entrypoint="/build/agents/email/main.py",
+            entrypoint="/app/agents/email/main.py",
         )
 
         assert entry.name == "email_agent"
