@@ -142,19 +142,43 @@ class TestListToolsTool:
     async def test_execute_with_registry(self, tool):
         """Should list tools from registry."""
         mock_registry = MagicMock()
+        mock_registry.get_agents.return_value = [
+            {"name": "agent1", "description": "First agent", "status": "running"},
+        ]
         mock_registry.get_tools.return_value = [
             {"name": "tool1", "description": "First tool"},
             {"name": "tool2", "description": "Second tool"},
         ]
+        mock_registry.get_local_mcp_tools.return_value = [
+            {"name": "local_tool", "description": "Local MCP tool"},
+        ]
+
+        mock_llm = MagicMock()
+        mock_llm.get_mcp_tool_registry_entries.return_value = [
+            {"name": "litellm_tool", "description": "LiteLLM MCP tool"},
+        ]
 
         ctx = ToolContext(
             tool_registry=mock_registry,
-            llm_client=MagicMock(),
+            llm_client=mock_llm,
             state={},
             state_manager=MagicMock(),
         )
         result = await tool.execute(ctx)
         assert result.success is True
+        assert result.data is not None
+        assert "system_tools" in result.data
+        assert "agents" in result.data
+        assert "mcp_tools" in result.data
+
+        mcp_names = {t.get("name") for t in result.data["mcp_tools"]}
+        assert {"tool1", "tool2", "local_tool", "litellm_tool"} <= mcp_names
+
+        system_names = {t.get("name") for t in result.data["system_tools"]}
+        assert {"build_agent", "build_tool"} <= system_names
+
+        agent_names = {a.get("name") for a in result.data["agents"]}
+        assert "agent1" in agent_names
 
 
 class TestBuildStatusTool:

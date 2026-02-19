@@ -127,6 +127,24 @@ class DecisionResponse(BaseModel):
             return [str(c) for c in v]
         return []
 
+    @field_validator('build_type', mode='before')
+    @classmethod
+    def validate_build_type(cls, v):
+        """Normalize build_type to the canonical values expected by downstream code."""
+        if v is None:
+            return None
+        v_str = str(v).lower().strip()
+        if not v_str:
+            return None
+
+        # Normalize common variations from prompts / model output.
+        if v_str in {"tool", "tools", "mcp_tool", "mcp_server", "server"}:
+            return "mcp"
+        if v_str in {"agent", "a2a", "a2a_agent"}:
+            return "agent"
+
+        return v_str
+
     @model_validator(mode='after')
     def validate_user_response_for_action(self):
         """Require a non-empty user_response for non-direct actions."""
