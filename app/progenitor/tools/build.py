@@ -78,7 +78,7 @@ class BuildTool(BaseSystemTool):
             confidence = 0.0
 
         threshold = env_float("PROGENITOR_BUILD_CONFIDENCE_THRESHOLD", 0.95)
-        if action not in ("build_agent", "build_tool", "upgrade"):
+        if action not in ("build_agent", "build_mcp", "build_progenitor"):
             return ToolResult.ok(
                 {
                     "started": False,
@@ -153,4 +153,3 @@ class BuildTool(BaseSystemTool):
             },
             state_updates=state_updates,
         )
-

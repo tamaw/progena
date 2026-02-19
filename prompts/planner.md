@@ -4,7 +4,8 @@ Generate work items to fulfill the user's request based on the decision made.
 
 ## Work Item Types
 - **build_agent**: Create a new A2A agent (requires Copilot CLI)
-- **build_tool**: Create a new FastMCP tool (requires Copilot CLI)
+- **build_mcp**: Create a new FastMCP tool/server (requires Copilot CLI)
+- **build_progenitor**: Improve Progenitor core (requires Copilot CLI)
 - **upgrade**: Improve existing capability (requires Copilot CLI)
 - **a2a_call**: Call an existing A2A agent
 - **mcp_call**: Call an existing MCP tool

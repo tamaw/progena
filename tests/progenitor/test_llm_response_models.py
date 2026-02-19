@@ -79,23 +79,18 @@ class TestDecisionResponse:
         assert result.reasoning == "Simple question about time"
         assert result.requires_planning is False
 
-    def test_action_normalization(self):
-        """Test that action values are normalized."""
-        # "answer" should become "answer_directly"
-        data = {"action": "answer"}
-        result = validate_decision_response(data)
-        assert result.action == "answer_directly"
+    def test_action_strictness(self):
+        """Action must be one of the allowed decide actions (no aliases)."""
+        with pytest.raises(ValidationError):
+            validate_decision_response({"action": "answer"})
 
-        # "direct" should become "answer_directly"
-        data = {"action": "direct"}
-        result = validate_decision_response(data)
-        assert result.action == "answer_directly"
+        with pytest.raises(ValidationError):
+            validate_decision_response({"action": "direct"})
 
-    def test_unknown_action_fallback(self):
-        """Test that unknown actions fall back to answer_directly."""
-        data = {"action": "invalid_action_xyz"}
-        result = validate_decision_response(data)
-        assert result.action == "answer_directly"
+    def test_unknown_action_rejected(self):
+        """Unknown actions should fail validation (no fallbacks)."""
+        with pytest.raises(ValidationError):
+            validate_decision_response({"action": "invalid_action_xyz"})
 
     def test_missing_fields_use_defaults(self):
         """Test that missing fields use sensible defaults."""
@@ -141,9 +136,9 @@ class TestDecisionResponse:
     def test_non_direct_action_requires_user_response(self):
         """Test non-direct actions fail validation without user_response."""
         data = {
-            "action": "use_mcp",
-            "reasoning": "Need MCP tool",
-            "target_capabilities": ["web_search"],
+            "action": "build_mcp",
+            "reasoning": "User explicitly asked to build an MCP tool",
+            "target_capabilities": [],
             "user_response": "   ",
         }
 
@@ -206,8 +201,8 @@ class TestPlannerResponse:
         }
         result = validate_planner_response(data)
         assert result.work_items[0].item_type == "build_agent"
-        assert result.work_items[1].item_type == "build_tool"
-        assert result.work_items[2].item_type == "build_tool"
+        assert result.work_items[1].item_type == "build_mcp"
+        assert result.work_items[2].item_type == "build_mcp"
 
 
 class TestBuildSpec:

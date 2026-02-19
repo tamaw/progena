@@ -115,8 +115,11 @@ def create_node(
         try:
             if item_type == "build_agent":
                 await _register_agent(spec, tool_registry, agent_runner, state_manager)
-            elif item_type == "build_tool":
+            elif item_type == "build_mcp":
                 await _register_tool(spec, tool_registry, state_manager)
+            elif item_type == "build_progenitor":
+                # Core changes do not register new capabilities.
+                pass
             elif item_type == "upgrade":
                 await _register_upgrade(spec, tool_registry)
         except Exception as exc:

@@ -272,7 +272,7 @@ async def _execute_work_item(
     elif item_type == WorkItemType.MCP_CALL:
         return await _execute_mcp_call(work_item, tool_registry, mcp_client)
 
-    elif item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_TOOL):
+    elif item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_MCP, WorkItemType.BUILD_PROGENITOR):
         return await _execute_build(work_item, llm_client, copilot_cli, worktrees_dir)
 
     elif item_type == WorkItemType.UPGRADE:

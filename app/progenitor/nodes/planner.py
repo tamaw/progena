@@ -175,7 +175,7 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
         if not decision.requires_planning:
             return {}
 
-        # NOTE: Build actions (build_agent, build_tool, upgrade) are handled by
+        # NOTE: Build actions (build_agent, build_mcp, build_progenitor, upgrade) are handled by
         # the inner loop graph via BackgroundBuildRunner, not by this planner.
         # The decide node starts builds directly and returns ANSWER_DIRECTLY.
 
@@ -406,13 +406,18 @@ async def _plan_from_ideal_state(
     if item_type == WorkItemType.DIRECT_ANSWER and backlog:
         for item in backlog:
             if hasattr(item, "item_type"):
-                if item.item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_TOOL, WorkItemType.UPGRADE):
+                if item.item_type in (
+                    WorkItemType.BUILD_AGENT,
+                    WorkItemType.BUILD_MCP,
+                    WorkItemType.BUILD_PROGENITOR,
+                    WorkItemType.UPGRADE,
+                ):
                     item_type = item.item_type
                     logger.debug(f"PLANNER: Got item_type={item_type} from backlog item")
                     break
             elif isinstance(item, dict) and "item_type" in item:
                 item_type_str = item["item_type"]
-                if item_type_str in ("build_agent", "build_tool", "upgrade"):
+                if item_type_str in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
                     try:
                         item_type = WorkItemType(item_type_str)
                         logger.debug(f"PLANNER: Got item_type={item_type} from backlog dict")
@@ -435,8 +440,10 @@ async def _plan_from_ideal_state(
         # Determine work item type based on decision action
         if decision_action == "build_agent":
             item_type = WorkItemType.BUILD_AGENT
-        elif decision_action == "build_tool":
-            item_type = WorkItemType.BUILD_TOOL
+        elif decision_action == "build_mcp":
+            item_type = WorkItemType.BUILD_MCP
+        elif decision_action == "build_progenitor":
+            item_type = WorkItemType.BUILD_PROGENITOR
         elif decision_action == "upgrade":
             item_type = WorkItemType.UPGRADE
         elif decision_action in ("call_agent", "delegate"):
@@ -482,13 +489,25 @@ async def _plan_from_ideal_state(
     # BL-007: Check build_settings first (most reliable source)
     build_settings = state.get("build_settings")
     if build_settings:
+        build_type_value = ""
         if isinstance(build_settings, dict):
             agent_name = build_settings.get("project_name") or agent_name
             project_directory = build_settings.get("project_directory")
+            build_type_value = str(build_settings.get("build_type") or "").lower().strip()
         elif hasattr(build_settings, "project_name"):
             agent_name = build_settings.project_name or agent_name
             project_directory = getattr(build_settings, "project_directory", None)
+            build_type_value = str(getattr(build_settings, "build_type", "") or "").lower().strip()
         logger.debug(f"PLANNER: Got agent_name={agent_name}, project_directory={project_directory} from build_settings")
+
+        # If we still don't have an item_type, infer it from build_settings.build_type.
+        if item_type == WorkItemType.DIRECT_ANSWER:
+            if build_type_value == "agent":
+                item_type = WorkItemType.BUILD_AGENT
+            elif build_type_value == "mcp":
+                item_type = WorkItemType.BUILD_MCP
+            elif build_type_value == "progenitor":
+                item_type = WorkItemType.BUILD_PROGENITOR
 
     # Try current work item context if not found
     if agent_name == "unknown_agent" and current_item:
@@ -539,7 +558,7 @@ async def _plan_from_ideal_state(
     # =========================================================================
     # SpecDoc Management: Seed or Update the persistent spec artifact
     # BL-007: Pass project_directory from build_settings for consistent spec location
-    # Supports BUILD_AGENT and BUILD_TOOL item types
+    # Supports BUILD_AGENT, BUILD_MCP, and BUILD_PROGENITOR item types
     # =========================================================================
     spec_doc = await _ensure_spec_doc(
         state_manager=state_manager,
@@ -552,7 +571,7 @@ async def _plan_from_ideal_state(
         work_item_id=work_item_id,
         project_directory=project_directory,  # BL-007
         lessons_learned=lessons_learned,  # BL-BUG-002
-        item_type=item_type,  # BUILD_TOOL or BUILD_AGENT
+        item_type=item_type,  # BUILD_MCP / BUILD_AGENT / BUILD_PROGENITOR
     )
 
     # spec_doc contents live on disk; only references are stored in state
@@ -694,7 +713,7 @@ async def _ensure_spec_doc(
     work_item_id: str | None = None,
     project_directory: str | None = None,  # BL-007: From build_settings
     lessons_learned: list[dict] | None = None,  # BL-BUG-002: From LEARN phase
-    item_type: WorkItemType = WorkItemType.BUILD_AGENT,  # BUILD_TOOL or BUILD_AGENT
+    item_type: WorkItemType = WorkItemType.BUILD_AGENT,  # BUILD_MCP / BUILD_AGENT / BUILD_PROGENITOR
 ) -> SpecDoc:
     """
     Ensure a SpecDoc exists for the current build task.
@@ -702,9 +721,8 @@ async def _ensure_spec_doc(
     BL-007: Now supports project_directory from build_settings for consistent spec file location.
     BL-BUG-002: Now includes lessons_learned from LEARN phase.
 
-    Supports both agents (app/agents/) and tools (app/mcp/) based on item_type:
-    - BUILD_AGENT: Uses agent_structure.md template, saves to app/agents/
-    - BUILD_TOOL: Uses tool_structure.md template, saves to app/mcp/
+    Supports agents (app/agents/), MCP tools (app/mcp/), and Progenitor core (app/progenitor/)
+    based on item_type.
 
     Persists updates back to build_state.json and saves spec file.
     """
@@ -789,10 +807,14 @@ async def _generate_copilot_prompt(
     safe_name = agent_name.replace(" ", "_").replace("-", "_").lower()
 
     # Determine entity type and directories
-    if item_type == WorkItemType.BUILD_TOOL:
+    if item_type == WorkItemType.BUILD_MCP:
         entity_type = "FastMCP tool"
         base_dir = "app/mcp"
         main_file = "server.py"
+    elif item_type == WorkItemType.BUILD_PROGENITOR:
+        entity_type = "Progenitor core"
+        base_dir = "app/progenitor"
+        main_file = "__init__.py"
     else:
         entity_type = "AI agent"
         base_dir = "app/agents"
@@ -811,8 +833,12 @@ async def _generate_copilot_prompt(
 
     # Check if entity already exists
     project_root = Path(__file__).parent.parent.parent.parent
-    entity_folder = project_root / base_dir.replace("/", os.sep) / safe_name
-    existing_entity = (entity_folder / main_file).exists()
+    if item_type == WorkItemType.BUILD_PROGENITOR:
+        entity_folder = project_root / "app" / "progenitor"
+        existing_entity = entity_folder.exists()
+    else:
+        entity_folder = project_root / base_dir.replace("/", os.sep) / safe_name
+        existing_entity = (entity_folder / main_file).exists()
 
     # Build context about what iteration we're on and what to focus on
     iteration_context = ""
@@ -832,12 +858,16 @@ This is iteration {iteration} of the build. Focus on addressing these gaps:
 - Preserve existing functionality unless the spec explicitly changes it"""
     else:
         action_verb = "Build"
-        if item_type == WorkItemType.BUILD_TOOL:
+        if item_type == WorkItemType.BUILD_MCP:
             action_details = f"""- Create all required files in {base_dir}/{safe_name}/
 - server.py must use FastMCP with @mcp.tool decorators
 - Include __init__.py with proper exports
 - Create tests/ directory with pytest tests using MCP client
 - Follow the directory structure and file organization in the spec"""
+        elif item_type == WorkItemType.BUILD_PROGENITOR:
+            action_details = """- This is an EXISTING codebase - modify files under app/progenitor/
+- Keep changes minimal and focused on the spec requirements
+- Update or add tests only if required by the spec"""
         else:
             action_details = f"""- Create all required files in {base_dir}/{safe_name}/
 - Follow the directory structure and file organization in the spec
@@ -858,9 +888,9 @@ IMPORTANT:
 {action_details}"""
 
     # Optionally use LLM to enhance the prompt with task-specific guidance
-    if llm_client and iteration == 0:
+    if llm_client and iteration == 0 and item_type != WorkItemType.BUILD_PROGENITOR:
         try:
-            if item_type == WorkItemType.BUILD_TOOL:
+            if item_type == WorkItemType.BUILD_MCP:
                 enhancement_prompt = _prompts.get(
                     "planner.copilot_enhancement_tool.md",
                     task_description=task_description,
@@ -899,9 +929,10 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
 
     BL-007: Uses project_directory from build_settings if provided.
 
-    The spec file is placed inside the agent's or tool's directory:
+    The spec file is placed inside the agent's, MCP tool's, or Progenitor directory:
     - If project_directory provided: Creates {project_directory}/spec.md
-    - BUILD_TOOL: Creates app/mcp/{tool_name}/spec.md
+    - BUILD_MCP: Creates app/mcp/{tool_name}/spec.md
+    - BUILD_PROGENITOR: Creates app/progenitor/spec.md
     - Otherwise fallback: Creates app/agents/{agent_name}/spec.md
 
     Returns the path to the saved file.
@@ -918,11 +949,14 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
             project_root = Path(__file__).parent.parent.parent.parent
 
             # Select the right base directory based on item type
-            if item_type == WorkItemType.BUILD_TOOL:
-                base_dir = project_root / "build" / "mcp"
+            if item_type == WorkItemType.BUILD_MCP:
+                base_dir = project_root / "app" / "mcp"
                 entity_type_name = "tool"
+            elif item_type == WorkItemType.BUILD_PROGENITOR:
+                base_dir = project_root / "app" / "progenitor"
+                entity_type_name = "progenitor"
             else:
-                base_dir = project_root / "build" / "agents"
+                base_dir = project_root / "app" / "agents"
                 entity_type_name = "agent"
 
             base_dir.mkdir(parents=True, exist_ok=True)
@@ -965,13 +999,18 @@ async def _seed_spec_doc_from_template(
 
     Selects template based on item_type:
     - BUILD_AGENT: agent_structure.md
-    - BUILD_TOOL: tool_structure.md
+    - BUILD_MCP: tool_structure.md
+    - BUILD_PROGENITOR: progenitor_structure.md
     """
     # Determine which template to use based on item_type
-    if item_type == WorkItemType.BUILD_TOOL:
+    if item_type == WorkItemType.BUILD_MCP:
         template_name = "tool_structure.md"
         entity_type = "tool"
         output_dir = "app/mcp"
+    elif item_type == WorkItemType.BUILD_PROGENITOR:
+        template_name = "progenitor_structure.md"
+        entity_type = "progenitor"
+        output_dir = "app/progenitor"
     else:
         template_name = "agent_structure.md"
         entity_type = "agent"
@@ -995,7 +1034,7 @@ async def _seed_spec_doc_from_template(
 
     if not template_content:
         # Fallback: Create a minimal spec if template not found
-        if item_type == WorkItemType.BUILD_TOOL:
+        if item_type == WorkItemType.BUILD_MCP:
             template_content = f"""# FastMCP Tool Specification
 
 ## Directory Structure
@@ -1007,6 +1046,17 @@ Create the tool in `{output_dir}/{{tool_name}}/`:
 - Use FastMCP (@mcp.tool decorator)
 - Python best practices
 - Docstrings and type hints
+"""
+        elif item_type == WorkItemType.BUILD_PROGENITOR:
+            template_content = """# Progenitor Core Improvement Specification
+
+## Directory Scope (CRITICAL)
+All changes MUST be limited to `app/progenitor/` unless the spec explicitly requires otherwise.
+
+## Build Discipline
+- Keep diffs minimal and focused
+- Prefer targeted refactors over rewrites
+- Add/update tests only when behavior changes
 """
         else:
             template_content = f"""# Agent Structure Specification
@@ -1028,7 +1078,7 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
     if llm_client:
         try:
             # Adjust prompts based on entity type
-            if item_type == WorkItemType.BUILD_TOOL:
+            if item_type == WorkItemType.BUILD_MCP:
                 customization_prompt = _prompts.get(
                     "planner.spec_customization_tool.md",
                     task_description=task_description,
@@ -1036,6 +1086,14 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
                     template_content=template_content,
                 )
                 system_prompt = _prompts.get("planner.spec_customization_tool_system.md")
+            elif item_type == WorkItemType.BUILD_PROGENITOR:
+                customization_prompt = _prompts.get(
+                    "planner.spec_customization_agent.md",
+                    task_description=task_description,
+                    entity_name="progenitor",
+                    template_content=template_content,
+                )
+                system_prompt = _prompts.get("planner.spec_customization_agent_system.md")
             else:
                 customization_prompt = _prompts.get(
                     "planner.spec_customization_agent.md",

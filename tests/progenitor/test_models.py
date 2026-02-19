@@ -52,13 +52,13 @@ class TestDecision:
     def test_create_decision(self):
         """Test creating a routing decision."""
         decision = Decision(
-            action=DecisionAction.DELEGATE_A2A,
-            reasoning="User wants to send an email",
-            target_capabilities=["email"],
+            action=DecisionAction.BUILD_AGENT,
+            reasoning="User explicitly asked to build an agent",
+            target_capabilities=["weather_agent"],
         )
 
-        assert decision.action == DecisionAction.DELEGATE_A2A
-        assert "email" in decision.target_capabilities
+        assert decision.action == DecisionAction.BUILD_AGENT
+        assert "weather_agent" in decision.target_capabilities
         assert not decision.requires_planning
 
     def test_direct_answer_decision(self):

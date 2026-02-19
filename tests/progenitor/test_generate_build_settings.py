@@ -38,7 +38,7 @@ class TestBuildTypeDetection:
         settings = await _generate_build_settings(
             user_input="create an MCP tool for database access",
             llm_client=mock_llm_client,
-            llm_action="build_tool",
+            llm_action="build_mcp",
         )
 
         assert settings.build_type == "mcp"
@@ -62,7 +62,7 @@ class TestBuildTypeDetection:
         settings = await _generate_build_settings(
             user_input="build a fastmcp tool for file operations",
             llm_client=mock_llm_client,
-            llm_action="build_tool",
+            llm_action="build_mcp",
         )
 
         assert settings.build_type == "mcp"
