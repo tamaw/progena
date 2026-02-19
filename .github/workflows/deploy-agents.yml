@@ -32,16 +32,25 @@ jobs:
           # Compare HEAD^ to HEAD for the merge commit
           CHANGED=$(git diff --name-only HEAD^ HEAD)
 
-          # Extract unique agent names from changed paths
+          # Extract unique agent dirs from changed paths.
+          # Filter to *directories only* to avoid deploying app/agents/.gitkeep, app/agents/__init__.py, etc.
           AGENTS=$(echo "$CHANGED" \
-            | grep -oP '^app/agents/\K[^/]+' \
+            | awk -F/ '$1=="app" && $2=="agents" {print $3}' \
             | sort -u \
-            | jq -Rc '[., inputs]' || echo '[]')
+            | while read -r name; do \
+                test -n "$name" || continue; \
+                test -d "app/agents/$name" && echo "$name"; \
+              done \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
 
           MCPS=$(echo "$CHANGED" \
-            | grep -oP '^app/mcp/\K[^/]+' \
+            | awk -F/ '$1=="app" && $2=="mcp" {print $3}' \
             | sort -u \
-            | jq -Rc '[., inputs]' || echo '[]')
+            | while read -r name; do \
+                test -n "$name" || continue; \
+                test -d "app/mcp/$name" && echo "$name"; \
+              done \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
 
           echo "agents=$AGENTS" >> "$GITHUB_OUTPUT"
           echo "mcps=$MCPS"     >> "$GITHUB_OUTPUT"
