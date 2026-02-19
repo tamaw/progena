@@ -77,7 +77,7 @@ Examples that should NOT trigger build (answer_directly instead):
   - "Create an agent that tracks stocks" → "stock_tracker"
   - "Make a simple calculator tool" → "calculator_tool"
 
-- **build_type**: Either "agent" (for A2A agents) or "tool" (for FastMCP tools)
+- **build_type**: Either "agent" (for A2A agents) or "mcp" (for FastMCP tools)
 
 - **build_description**: A clear, refined description of what to build
   - Capture the user's intent and any requirements they mentioned

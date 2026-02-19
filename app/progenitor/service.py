@@ -116,7 +116,12 @@ class ProgenitorService:
             )
             await self.tool_registry.load()
 
-            # MCP tools are initialized in main startup only.
+            # Initialize MCP tools (LiteLLM /mcp) and register them so they show up
+            # in tool discovery and can be invoked via the registry.
+            from .tools.mcp import setup_mcp_for_llm_client
+
+            await setup_mcp_for_llm_client(self.llm_client, self.config.mcp)
+            await self._register_mcp_tools()
 
             # Run agent discovery to populate registry from agents/ folder
             await self._discover_agents()

@@ -146,6 +146,12 @@ class ToolRegistry:
             name = tool.get("name", "unknown")
             desc = tool.get("description", "No description")
             lines.append(f"- {name}: {desc}")
+
+        # Build actions are handled via decide -> BackgroundBuildRunner, but they are
+        # still important routing capabilities to surface in tool context.
+        lines.append("- build_agent: Build a new A2A agent in the background (explicit requests only)")
+        lines.append("- build_tool: Build a new FastMCP tool in the background (explicit requests only)")
+        lines.append("- upgrade: Upgrade an existing agent/tool in the background (explicit requests only)")
         sections.append("\n".join(lines))
 
         # A2A agents from registry
