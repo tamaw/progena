@@ -1,150 +1,99 @@
-"""Hello World Agent implementation."""
-
-import asyncio
-import json
-import sys
+import os
 import time
 from datetime import UTC, datetime
+from typing import Any
 
-from aiohttp import web
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+_start_time = time.time()
 
 
 class HelloWorldAgent:
-    """A minimal agent that responds with 'Hello World!' to any request."""
-
     AGENT_ID = "hello_world_agent"
     AGENT_NAME = "Hello World Agent"
     DESCRIPTION = "Responds with 'Hello World!' to any request."
     CAPABILITIES = ["hello_world", "static_response"]
-    VERSION = "0.1.0"
 
-    def __init__(self, port: int = 8000):
-        """Initialize the Hello World Agent."""
-        self.port = port
-        self.app = web.Application()
-        self.start_time = time.time()
-        self._setup_routes()
-
-    def _setup_routes(self):
-        """Set up HTTP routes."""
-        self.app.router.add_get("/.well-known/agent.json", self._handle_agent_card)
-        self.app.router.add_get("/health", self._handle_health)
-        self.app.router.add_post("/", self._handle_request)
-
-    async def _handle_agent_card(self, _request: web.Request) -> web.Response:
-        """Handle agent card endpoint."""
-        card = {
-            "name": self.AGENT_NAME,
-            "description": self.DESCRIPTION,
-            "version": self.VERSION,
-            "protocol": "a2a",
-            "capabilities": self.CAPABILITIES,
-            "endpoint": f"http://localhost:{self.port}",
-        }
-        return web.json_response(card)
-
-    async def _handle_health(self, _request: web.Request) -> web.Response:
-        """Handle health check endpoint."""
-        uptime = time.time() - self.start_time
-        health = {
-            "status": "healthy",
-            "name": self.AGENT_NAME,
-            "version": self.VERSION,
-            "uptime_seconds": uptime,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        return web.json_response(health)
-
-    async def _handle_request(self, request: web.Request) -> web.Response:
-        """Handle main request endpoint."""
-        self._emit_status("executing", "Processing request")
-
-        try:
-            # Parse request body (handle errors gracefully)
-            try:
-                if request.content_length:
-                    body = await request.json()
-                else:
-                    body = {}
-            except (json.JSONDecodeError, ValueError):
-                body = {}
-
-            # Process the request (ignore all input)
-            response_text = await self.process(
-                body.get("request", ""),
-                body.get("context", {}),
-            )
-
-            # Return success response
-            response = {
-                "success": True,
-                "response": response_text,
-                "error": None,
-                "metadata": {},
-            }
-
-            self._emit_status("waiting", "Idle, waiting for requests")
-            return web.json_response(response)
-
-        except Exception as e:
-            self._emit_status("failed", str(e))
-            return web.json_response(
-                {
-                    "success": False,
-                    "response": None,
-                    "error": str(e),
-                    "metadata": {},
-                },
-                status=500,
-            )
-
-    async def process(self, _request: str = "", context: dict | None = None) -> str:
-        """Process a request and return response.
-
-        Always returns 'Hello World!' regardless of input.
-        """
-        if context is None:
-            context = {}
+    async def process(self, _request: str, _context: dict[str, Any]) -> str:
         return "Hello World!"
 
-    def _emit_status(self, state: str, message: str):
-        """Emit a status line to STDOUT."""
-        status_line = f"STATUS:{state}:{message}"
-        print(status_line, file=sys.stdout, flush=True)
 
-    async def start(self):
-        """Start the agent server."""
-        self._emit_status("starting", "Initializing Hello World Agent")
-
-        runner = web.AppRunner(self.app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self.port)
-        await site.start()
-
-        self._emit_status("running", f"Server started on port {self.port}")
-
-        # Keep the server running
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except KeyboardInterrupt:
-            self._emit_status("stopping", "Shutting down")
-        finally:
-            await runner.cleanup()
-            self._emit_status("stopped", "Agent terminated")
+agent = HelloWorldAgent()
 
 
-async def main():
-    """Main entry point."""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Hello World Agent")
-    parser.add_argument("--port", type=int, default=8000, help="Port to run on")
-    args = parser.parse_args()
-
-    agent = HelloWorldAgent(port=args.port)
-    await agent.start()
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+@app.on_event("startup")
+async def startup_event() -> None:
+    port = int(os.environ.get("PORT", "8080"))
+    print("STATUS:starting:Initializing Hello World Agent")
+    print(f"STATUS:running:Server started on port {port}")
+    print("STATUS:waiting:Idle, waiting for requests")
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    print("STATUS:stopping:Shutting down")
+    print("STATUS:stopped:Agent terminated")
+
+
+@app.get("/.well-known/agent.json")
+async def agent_card() -> JSONResponse:
+    port = int(os.environ.get("PORT", "8080"))
+    payload = {
+        "name": agent.AGENT_NAME,
+        "description": agent.DESCRIPTION,
+        "version": "0.1.0",
+        "protocol": "a2a",
+        "capabilities": agent.CAPABILITIES,
+        "endpoint": f"http://localhost:{port}",
+    }
+    return JSONResponse(content=payload)
+
+
+@app.get("/health")
+async def health() -> JSONResponse:
+    uptime = time.time() - _start_time
+    payload = {
+        "status": "healthy",
+        "name": agent.AGENT_NAME,
+        "version": "0.1.0",
+        "uptime_seconds": float(uptime),
+        "timestamp": _utc_now_iso(),
+    }
+    return JSONResponse(content=payload)
+
+
+@app.post("/")
+async def handle(req: Request) -> JSONResponse:
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    req_str = body.get("request", "") if isinstance(body, dict) else ""
+    ctx = body.get("context", {}) if isinstance(body, dict) else {}
+
+    print("STATUS:executing:Processing request")
+    try:
+        result = await agent.process(req_str, ctx)
+        response = {
+            "success": True,
+            "response": result,
+            "error": None,
+            "metadata": {},
+        }
+        print("STATUS:waiting:Idle, waiting for requests")
+        return JSONResponse(content=response)
+    except Exception:
+        print("STATUS:failed:Error processing request")
+        err: dict[str, Any] = {
+            "success": False,
+            "response": None,
+            "error": "Internal error",
+            "metadata": {},
+        }
+        return JSONResponse(content=err, status_code=500)
