@@ -406,6 +406,8 @@ class ProgenitorLoop:
                     self._state["last_cycle_response"] = pending_text
                     if self._streaming_enabled:
                         await self._stream_response(pending_text)
+                        # _stream_response sends an is_final chunk, so mark stream closed for this cycle.
+                        self._stream_final_sent = True
                     self._state["pending_response"] = None
                 elif self._response_was_streamed and not self._stream_final_sent:
                     # Response was already streamed by a node, just send final marker ONCE
@@ -413,6 +415,11 @@ class ProgenitorLoop:
                         await self.stream_final()
                     self._stream_final_sent = True
                     self._state["pending_response"] = None
+
+            # Ensure streaming clients never hang waiting for an is_final marker.
+            if self._streaming_enabled and not self._stream_final_sent:
+                await self.stream_final()
+                self._stream_final_sent = True
 
             # Checkpoint state after cycle
             await self._checkpoint_state(self._state)
