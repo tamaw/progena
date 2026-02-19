@@ -17,7 +17,6 @@ import asyncio
 import inspect
 import json
 import logging
-import os
 import time
 import tomllib
 import uuid
@@ -345,15 +344,6 @@ class ShutdownManager:
 
 shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
-TELEGRAM_STARTUP_MARKER_FILE = "telegram_startup_notified.json"
-
-
-def _get_progenitor_state_dir() -> Path:
-    """Resolve Progenitor state dir (shared with the agent process)."""
-    # Keep backend + progenitor aligned: PROGENITOR_STATE_DIR > default data/state
-    return Path(os.getenv("PROGENITOR_STATE_DIR", "data/state"))
-
-
 def _get_progenitor_project_version() -> str:
     """Best-effort project version for user-facing startup notifications."""
     try:
@@ -379,36 +369,19 @@ def _get_progenitor_project_version() -> str:
     return "unknown"
 
 
-async def _maybe_send_telegram_startup_message(telegram: TelegramClient) -> None:
-    """Send a one-time 'up and running' Telegram message on first fresh startup."""
-    state_dir = _get_progenitor_state_dir()
-    marker_path = state_dir / TELEGRAM_STARTUP_MARKER_FILE
-
-    if marker_path.exists():
-        return
-
-    state_dir.mkdir(parents=True, exist_ok=True)
-
+async def _send_telegram_connected_message(telegram: TelegramClient) -> None:
+    """Send a friendly 'connected' message when Telegram is successfully initialized."""
     version_str = _get_progenitor_project_version()
-    message = f"✅ Progenitor is up and running (v{version_str})."
+    message = f"👋 Progenitor connected to Telegram (v{version_str})."
 
     try:
         sent = await telegram.send_message(message)
     except Exception as e:
-        logger.warning("Failed to send Telegram startup message: %s", e)
+        logger.warning("Failed to send Telegram connected message: %s", e)
         return
 
     if not sent:
-        logger.warning("Telegram startup message send returned False")
-        return
-
-    try:
-        marker_path.write_text(
-            json.dumps({"notified_at": time.time(), "version": version_str}),
-            encoding="utf-8",
-        )
-    except OSError as e:
-        logger.warning("Failed to write Telegram startup marker (%s): %s", marker_path, e)
+        logger.warning("Telegram connected message send returned False")
 
 
 async def _send_telegram_message(
@@ -489,8 +462,8 @@ async def lifespan(app: FastAPI):
             "Telegram integration enabled (chat_id=%s)",
             config.telegram_chat_id[:8] + "..." if len(config.telegram_chat_id) > 8 else config.telegram_chat_id
         )
-        # One-time "up and running" message for first fresh startup.
-        asyncio.create_task(_maybe_send_telegram_startup_message(telegram_client))
+        # Friendly confirmation for users who expect a Telegram message when connected.
+        asyncio.create_task(_send_telegram_connected_message(telegram_client))
         # Register Telegram shutdown callback
         graceful_shutdown.register_callback(
             "stop_telegram_client",

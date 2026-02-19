@@ -647,49 +647,29 @@ class TestTelegramPolling:
         assert client_with_polling._polling_task is None
 
 
-class TestTelegramStartupMessage:
-    """Tests for one-time Telegram startup notification."""
+class TestTelegramConnectedMessage:
+    """Tests for Telegram 'connected' notification."""
 
     @pytest.mark.asyncio
-    async def test_sends_and_writes_marker(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("PROGENITOR_STATE_DIR", str(tmp_path))
-
+    async def test_sends_hi_with_version(self):
         from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.send_message.return_value = True
 
         with patch.object(backend_main, "_get_progenitor_project_version", return_value="9.9.9"):
-            await backend_main._maybe_send_telegram_startup_message(telegram)
+            await backend_main._send_telegram_connected_message(telegram)
 
         telegram.send_message.assert_awaited_once()
-        assert (tmp_path / backend_main.TELEGRAM_STARTUP_MARKER_FILE).exists()
+        sent_text = telegram.send_message.call_args.args[0]
+        assert "connected" in sent_text.lower()
+        assert "9.9.9" in sent_text
 
     @pytest.mark.asyncio
-    async def test_does_not_send_when_marker_exists(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("PROGENITOR_STATE_DIR", str(tmp_path))
-
-        from app.backend import main as backend_main
-
-        (tmp_path / backend_main.TELEGRAM_STARTUP_MARKER_FILE).write_text("{}", encoding="utf-8")
-
-        telegram = AsyncMock()
-        telegram.send_message.return_value = True
-
-        await backend_main._maybe_send_telegram_startup_message(telegram)
-
-        telegram.send_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_does_not_write_marker_on_send_failure(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("PROGENITOR_STATE_DIR", str(tmp_path))
-
+    async def test_no_exception_on_send_failure(self):
         from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.send_message.return_value = False
 
-        with patch.object(backend_main, "_get_progenitor_project_version", return_value="9.9.9"):
-            await backend_main._maybe_send_telegram_startup_message(telegram)
-
-        assert not (tmp_path / backend_main.TELEGRAM_STARTUP_MARKER_FILE).exists()
+        await backend_main._send_telegram_connected_message(telegram)
