@@ -110,9 +110,9 @@ def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_override_env() -> dict[str, str | None]:
-    responses_url = os.getenv("PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL")
-    api_key = os.getenv("PROGENITOR_AZURE_STRUCTUED_API_KEY")
-    model = os.getenv("PROGENITOR_AZURE_STRUCTUED_MODEL")
+    responses_url = os.getenv("PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL")
+    api_key = os.getenv("PROGENITOR_AZURE_STRUCTURED_API_KEY")
+    model = os.getenv("PROGENITOR_AZURE_STRUCTURED_MODEL")
 
     final_api_key = api_key
     final_model = model
@@ -329,8 +329,10 @@ async def main() -> int:
     print(f"- LITELLM_BASE_URL={os.getenv('LITELLM_BASE_URL', '<missing>')}")
     print(f"- PROGENITOR_MODEL_DEFAULT={os.getenv('PROGENITOR_MODEL_DEFAULT', '<missing>')}")
     print(f"- LITELLM_MASTER_KEY={_mask(os.getenv('LITELLM_MASTER_KEY'))}")
-    print(f"- PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL={os.getenv('PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL', '<missing>')}")
-    print(f"- PROGENITOR_AZURE_STRUCTUED_MODEL={os.getenv('PROGENITOR_AZURE_STRUCTUED_MODEL', '<missing>')}")
+    print(
+        f"- PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL={os.getenv('PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL', '<missing>')}"
+    )
+    print(f"- PROGENITOR_AZURE_STRUCTURED_MODEL={os.getenv('PROGENITOR_AZURE_STRUCTURED_MODEL', '<missing>')}")
 
     print("\n[1/3] Probing LLMClient structured output path...")
     llm_probe = await _probe_llm_client(response_format)

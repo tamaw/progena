@@ -125,8 +125,8 @@ class LLMClient:
 
         self.structured_override_url = self._resolve_structured_override_url()
         # Structured output bypasses LiteLLM (bug workaround); these env vars are required.
-        self.structured_override_api_key = os.getenv("PROGENITOR_AZURE_STRUCTUED_API_KEY")
-        self.structured_override_model = os.getenv("PROGENITOR_AZURE_STRUCTUED_MODEL")
+        self.structured_override_api_key = os.getenv("PROGENITOR_AZURE_STRUCTURED_API_KEY")
+        self.structured_override_model = os.getenv("PROGENITOR_AZURE_STRUCTURED_MODEL")
 
         # MCP context is initialized externally (startup)
         self.mcp_client: httpx.AsyncClient | None = None
@@ -478,7 +478,7 @@ class LLMClient:
         return endpoint.rstrip("/")
 
     def _resolve_structured_override_url(self) -> str | None:
-        explicit_url = os.getenv("PROGENITOR_AZURE_STRUCTUED_RESPONSES_URL")
+        explicit_url = os.getenv("PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL")
         if explicit_url:
             return explicit_url
         return None
@@ -783,7 +783,7 @@ class LLMClient:
         if response_format is not None:
             if not self._can_use_structured_override():
                 raise RuntimeError(
-                    "Structured output requires PROGENITOR_AZURE_STRUCTUED_* env vars "
+                    "Structured output requires PROGENITOR_AZURE_STRUCTURED_* env vars "
                     "(RESPONSES_URL, API_KEY, MODEL)."
                 )
             return await self._post_structured_response_override(
