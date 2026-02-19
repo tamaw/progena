@@ -206,6 +206,34 @@ class TestBackgroundBuildRunner:
         assert cancelled is True
 
     @pytest.mark.asyncio
+    async def test_cancel_during_slow_ack_does_not_deadlock(self, runner):
+        """Cancelling while the LLM ack is slow should not deadlock on the runner lock."""
+        unblock = asyncio.Event()
+
+        async def slow_chat(*args, **kwargs):
+            await unblock.wait()
+            return "ok"
+
+        runner.llm_client.chat = AsyncMock(side_effect=slow_chat)
+
+        start_task = asyncio.create_task(
+            runner.start_build(
+                user_input="build something",
+                task_description="Slow ack task",
+                target_capabilities=["code_execution"],
+                initial_state={},
+            )
+        )
+
+        await asyncio.sleep(0)  # Let start_build acquire lock and start awaiting the ack.
+
+        cancelled = await asyncio.wait_for(runner.cancel_build(), timeout=1.0)
+        assert cancelled is True
+
+        unblock.set()
+        await asyncio.wait_for(start_task, timeout=2.0)
+
+    @pytest.mark.asyncio
     async def test_cancel_nonexistent_build(self, runner):
         """Cancelling when no build should return False."""
         cancelled = await runner.cancel_build()
