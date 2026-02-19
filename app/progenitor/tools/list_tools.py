@@ -43,17 +43,76 @@ class ListToolsTool(BaseSystemTool):
 
         system_tools = [tool.to_dict() for tool in get_all_system_tools()]
 
+        # BUILD actions are first-class capabilities (they start background jobs),
+        # even though they are routed as decision actions rather than executed as system tools.
+        build_actions = [
+            {
+                "name": "build_agent",
+                "description": "Build a new A2A agent in the background (requires explicit user request)",
+                "type": "build_action",
+            },
+            {
+                "name": "build_tool",
+                "description": "Build a new FastMCP tool in the background (requires explicit user request)",
+                "type": "build_action",
+            },
+            {
+                "name": "upgrade",
+                "description": "Upgrade an existing agent/tool in the background (requires explicit user request)",
+                "type": "build_action",
+            },
+        ]
+        system_tools = system_tools + build_actions
+
+        # Get registered A2A agents from registry
+        agents = []
+        if hasattr(context.tool_registry, "get_agents"):
+            agents = context.tool_registry.get_agents() or []
+
+        agent_entries = [
+            {
+                "name": agent.get("name"),
+                "description": agent.get("description", ""),
+                "type": "a2a_agent",
+                "capabilities": agent.get("capabilities", []),
+                "status": agent.get("status", "unknown"),
+                "transport": agent.get("transport"),
+                "endpoint": agent.get("endpoint"),
+            }
+            for agent in agents
+            if isinstance(agent, dict) and agent.get("name")
+        ]
+
         # Get registered MCP tools from registry
-        mcp_tools = context.tool_registry.get_tools()
+        mcp_tools = context.tool_registry.get_tools() if hasattr(context.tool_registry, "get_tools") else []
         local_mcp_tools = []
         if hasattr(context.tool_registry, "get_local_mcp_tools"):
             local_mcp_tools = context.tool_registry.get_local_mcp_tools()
 
-        seen_names = {tool.get("name") for tool in mcp_tools}
-        combined_mcp_tools = list(mcp_tools)
-        for tool in local_mcp_tools:
-            if tool.get("name") not in seen_names:
-                combined_mcp_tools.append(tool)
+        # Include MCP tools discovered via LiteLLM even if they haven't been
+        # persisted to registry.json yet (e.g. in-process service path).
+        litellm_mcp_tools: list[dict] = []
+        if getattr(context, "llm_client", None) is not None and hasattr(context.llm_client, "get_mcp_tool_registry_entries"):
+            try:
+                litellm_mcp_tools = context.llm_client.get_mcp_tool_registry_entries() or []
+            except Exception:
+                litellm_mcp_tools = []
+
+        combined_mcp_tools = list(mcp_tools or [])
+        combined_mcp_tools.extend(local_mcp_tools or [])
+        combined_mcp_tools.extend(litellm_mcp_tools or [])
+
+        # De-duplicate by name
+        deduped_mcp_tools: list[dict] = []
+        seen_names: set[str] = set()
+        for tool in combined_mcp_tools:
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            deduped_mcp_tools.append(tool)
 
         mcp_tool_entries = [
             {
@@ -61,11 +120,17 @@ class ListToolsTool(BaseSystemTool):
                 "description": tool.get("description", ""),
                 "type": "mcp_tool",
             }
-            for tool in combined_mcp_tools
+            for tool in deduped_mcp_tools
         ]
 
         return ToolResult.ok({
             "system_tools": system_tools,
+            "agents": agent_entries,
             "mcp_tools": mcp_tool_entries,
-            "total_count": len(system_tools) + len(mcp_tool_entries),
+            "total_count": len(system_tools) + len(agent_entries) + len(mcp_tool_entries),
+            "summary": {
+                "system_tools": len(system_tools),
+                "agents": len(agent_entries),
+                "mcp_tools": len(mcp_tool_entries),
+            },
         })

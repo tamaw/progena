@@ -76,6 +76,15 @@ def _format_list_tools(result: dict[str, Any]) -> str:
         for tool in system_tools:
             lines.append(f"  - {tool['name']} - {tool['description']}")
 
+    agents = result.get("agents", [])
+    if agents:
+        lines.append("\nA2A Agents:")
+        for agent in agents:
+            name = agent.get("name", "unknown")
+            desc = agent.get("description", "No description")
+            status = agent.get("status", "unknown")
+            lines.append(f"  - {name} [{status}] - {desc}")
+
     mcp_tools = result.get("mcp_tools", [])
     if mcp_tools:
         lines.append("\nMCP Tools:")
