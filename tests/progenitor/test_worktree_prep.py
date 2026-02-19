@@ -154,7 +154,7 @@ class TestWorktreePrepNode:
 
     @pytest.mark.asyncio
     async def test_handles_build_tool_type(self):
-        """Should work for build_tool items too."""
+        """Should work for build_mcp items too."""
         from app.progenitor.nodes import worktree_prep
 
         mock_worktree_path = Path("/tmp/worktrees/tool-1")
@@ -175,7 +175,7 @@ class TestWorktreePrepNode:
                 state = self._make_state(
                     current_work_item={
                         "id": "tool-1",
-                        "item_type": "build_tool",
+                        "item_type": "build_mcp",
                         "description": "Build an MCP server",
                         "context": {},
                     },

@@ -115,8 +115,11 @@ def create_node(
         try:
             if item_type == "build_agent":
                 await _register_agent(spec, tool_registry, agent_runner, state_manager)
-            elif item_type == "build_tool":
+            elif item_type == "build_mcp":
                 await _register_tool(spec, tool_registry, state_manager)
+            elif item_type == "build_progenitor":
+                # Core changes do not register new capabilities.
+                pass
             elif item_type == "upgrade":
                 await _register_upgrade(spec, tool_registry)
         except Exception as exc:
@@ -129,7 +132,7 @@ def create_node(
     async def _register_agent(spec, tool_registry, agent_runner, state_manager):
         """Register a newly built agent."""
         agent_name = spec.get("name", "unnamed_agent")
-        entrypoint = f"build/agents/{agent_name}/agent.py"
+        entrypoint = f"app/agents/{agent_name}/agent.py"
         port = tool_registry.allocate_port()
 
         entry = AgentRegistryEntry(
@@ -180,7 +183,7 @@ def create_node(
     async def _register_tool(spec, tool_registry, state_manager):
         """Register a newly built MCP tool."""
         tool_name = spec.get("name", "unnamed_tool")
-        entrypoint = f"build/mcp/{tool_name}/server.py"
+        entrypoint = f"app/mcp/{tool_name}/server.py"
 
         tool_entry = {
             "name": tool_name,

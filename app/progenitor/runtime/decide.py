@@ -203,6 +203,14 @@ async def _generate_build_settings(
     build_type = BuildType.AGENT
     build_description = None
 
+    # The action is authoritative for build_type when present.
+    llm_action = (llm_action or "").lower().strip()
+    if llm_action == "build_mcp":
+        build_type = BuildType.MCP
+    elif llm_action == "build_progenitor":
+        build_type = BuildType.PROGENITOR
+        project_name = "progenitor"
+
     # Primary: use values from the decision response if available
     if decision_data:
         decision_project_name = decision_data.get("project_name")
@@ -215,15 +223,19 @@ async def _generate_build_settings(
                 logger.info("Using project_name from decision response: %s", project_name)
 
         if decision_build_type:
-            if decision_build_type.lower() == "mcp":
-                build_type = BuildType.MCP
+            match decision_build_type.lower():
+                case "mcp":
+                    build_type = BuildType.MCP
+                case "progenitor":
+                    build_type = BuildType.PROGENITOR
+                    project_name = "progenitor"
             logger.info("Using build_type from decision response: %s", build_type)
 
         if decision_build_description:
             build_description = decision_build_description
 
     # Fallback: LLM structured output if decision did not provide project_name
-    if not project_name and llm_client:
+    if not project_name and llm_client and build_type != BuildType.PROGENITOR:
         try:
             system_prompt = _prompts.get("decide.project_name_system.md")
             prompt = _prompts.get(
@@ -275,10 +287,10 @@ async def _generate_build_settings(
             logger.warning("Failed to extract project name via LLM structured output: %s", e)
 
     # Fallback: regex patterns
-    if not project_name:
+    if not project_name and build_type != BuildType.PROGENITOR:
         text = user_input.lower()
         name_patterns = [
-            r'\b(?:build|create|scaffold|generate|make|implement)\s+(?:for\s+me\s+)?(?:me\s+)?(?:please\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:simple\s+|basic\s+)?([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*)?)\s+(?:a2a\s+)?(?:agent|mcp)',
+            r'\b(?:build|create|scaffold|generate|make|implement)\s+(?:for\s+me\s+)?(?:me\s+)?(?:please\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:simple\s+|basic\s+)?([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*)?)\s+(?:a2a\s+)?(?:agent|mcp|progenitor)',
             r'\bagent\s+(?:named?|called?)\s+([a-z0-9_\-]+)',
             r'\b(?:named?|called?)\s+([a-z0-9_\-]+)',
         ]
@@ -297,6 +309,9 @@ async def _generate_build_settings(
     text = user_input.lower()
     if build_type == BuildType.AGENT and ("mcp" in text or "mcp server" in text or "mcp tool" in text):
         build_type = BuildType.MCP
+    if "progenitor" in text or "app/progenitor" in text:
+        build_type = BuildType.PROGENITOR
+        project_name = "progenitor"
 
     # Final fallback: extract meaningful words
     if not project_name:
@@ -380,7 +395,7 @@ async def _handle_build_action(
     build_confidence_threshold: float,
     user_response: str | None,
 ) -> "ProgenitorState":
-    """Handle build_agent / build_tool / upgrade actions from LLM."""
+    """Handle build_agent / build_mcp / build_progenitor actions from LLM."""
 
     logger.info(
         "Build action requested: action=%s, confidence=%.2f, threshold=%.2f",
@@ -593,7 +608,7 @@ def create_node(
             user_response = decision_data.get("user_response") or decision_data.get("direct_response")
 
             llm_action = str(action_str).lower().strip()
-            is_build_action = llm_action in ("build_agent", "build_tool", "upgrade")
+            is_build_action = llm_action in ("build_agent", "build_mcp", "build_progenitor")
 
             if is_build_action:
                 return await _handle_build_action(

@@ -24,8 +24,9 @@ from ..runtime.time_utils import utcnow
 
 class BuildType(StrEnum):
     """Type of build - determines directory structure."""
-    AGENT = "agent"  # build/agents/{project_name}/
-    MCP = "mcp"      # build/mcp/{project_name}/
+    AGENT = "agent"  # app/agents/{project_name}/
+    MCP = "mcp"      # app/mcp/{project_name}/
+    PROGENITOR = "progenitor"  # app/progenitor/
 
 
 class BuildStatus(StrEnum):
@@ -53,12 +54,12 @@ class BuildSettings(BaseModel):
     # Core identification
     build_id: str = Field(description="Unique build identifier")
     project_name: str = Field(description="Name of the project (used for directory and repeatability)")
-    build_type: BuildType = Field(description="Type of build: agent or mcp")
+    build_type: BuildType = Field(description="Type of build: agent, mcp, or progenitor")
 
     # Derived paths (computed from type + project_name)
     # Note: base_directory removed - focus only on project_directory
     project_directory: str = Field(
-        description="Full project directory: build/agents/{project_name}/ or build/mcp/{project_name}/"
+        description="Full project directory: app/agents/{project_name}/, app/mcp/{project_name}/, or app/progenitor/"
     )
     allowable_directories: list[str] = Field(
         default_factory=list,
@@ -103,9 +104,13 @@ class BuildSettings(BaseModel):
         safe_name = project_name.replace(" ", "_").replace("-", "_").lower()
 
         # Derive directories based on type
-        base_dir = "build/agents" if build_type == BuildType.AGENT else "build/mcp"
-
-        project_dir = f"{base_dir}/{safe_name}"
+        if build_type == BuildType.AGENT:
+            project_dir = f"app/agents/{safe_name}"
+        elif build_type == BuildType.MCP:
+            project_dir = f"app/mcp/{safe_name}"
+        else:
+            # Progenitor improvements operate directly on the core codebase directory.
+            project_dir = "app/progenitor"
 
         return cls(
             build_id=build_id,
@@ -1061,7 +1066,7 @@ class SpecDoc(BaseModel):
     task_id: str | None = Field(default=None, description="Work item ID this spec is for")
     agent_name: str | None = Field(default=None, description="Target agent name if applicable")
 
-    # File path for copilot CLI consumption (now in build/agents/ or build/mcp/)
+    # File path for copilot CLI consumption (now in app/agents/ or app/mcp/)
     spec_file_path: str | None = Field(
         default=None,
         description="Path to the spec file under build/ for copilot to reference"
@@ -1206,4 +1211,3 @@ class SpecDoc(BaseModel):
                 changed_by="PLAN",
             )],
         )
-

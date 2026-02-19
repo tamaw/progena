@@ -272,7 +272,7 @@ async def _execute_work_item(
     elif item_type == WorkItemType.MCP_CALL:
         return await _execute_mcp_call(work_item, tool_registry, mcp_client)
 
-    elif item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_TOOL):
+    elif item_type in (WorkItemType.BUILD_AGENT, WorkItemType.BUILD_MCP, WorkItemType.BUILD_PROGENITOR):
         return await _execute_build(work_item, llm_client, copilot_cli, worktrees_dir)
 
     elif item_type == WorkItemType.UPGRADE:
@@ -397,10 +397,18 @@ async def _execute_build(
     # If worktree_path is None, use the main project directory (parent of worktrees_dir)
     working_dir = Path(work_item.worktree_path) if work_item.worktree_path else worktrees_dir.parent
     logger.info(f"BUILD: Running copilot in {working_dir}")
+    allowed_dirs = None
+    if isinstance(work_item.context.get("allowable_directories"), list):
+        allowed_dirs = [d for d in work_item.context.get("allowable_directories", []) if isinstance(d, str)]
+    if not allowed_dirs and isinstance(work_item.context.get("project_directory"), str):
+        allowed_dirs = [work_item.context["project_directory"]]
+    if not allowed_dirs:
+        allowed_dirs = ["app"]
     build_result = await copilot_cli.build(
         work_item_id=work_item.id,
         worktree_path=working_dir,
         prompt=prompt,
+        allowed_dirs=allowed_dirs,
         # Note: We no longer pass spec_file_path for stdin - the prompt references the file instead
     )
     logger.info(f"BUILD: Copilot completed, success={build_result.get('success')}")
@@ -440,6 +448,7 @@ async def _execute_upgrade(
         work_item_id=work_item.id,
         worktree_path=Path(work_item.worktree_path) if work_item.worktree_path else worktrees_dir,
         prompt=prompt,
+        allowed_dirs=["app"],
     )
 
     if not build_result.get("success"):

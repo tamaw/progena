@@ -13,7 +13,6 @@ The runner:
 """
 
 import asyncio
-import json
 import logging
 import uuid
 from collections.abc import Callable
@@ -23,10 +22,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from pydantic import BaseModel, Field
-
-from ..tools.gh import gh_pr_create
-from ..utils import env_bool
 from .time_utils import utcnow, utcnow_isoformat
 
 
@@ -55,63 +50,6 @@ def deep_merge(base: dict, updates: dict) -> dict:
             # Override with new value
             base[key] = value
     return base
-
-
-class PRDraft(BaseModel):
-    """LLM-drafted PR metadata."""
-
-    title: str = Field(min_length=1)
-    body: str = Field(min_length=1)
-
-
-async def _draft_pr_with_llm(
-    llm_client,
-    *,
-    task_description: str,
-    build_id: str,
-    verification_score: float,
-    target_score: float,
-    verification_report: Any,
-) -> PRDraft | None:
-    """Ask the LLM to draft a PR title/body (no tool use)."""
-    try:
-        system_prompt = (
-            "You draft high-quality GitHub pull request metadata.\n"
-            "Return JSON only with keys: title (string), body (string).\n"
-            "Body should include a concise summary and any notable verification results."
-        )
-        user_prompt = {
-            "task_description": task_description,
-            "build_id": build_id,
-            "verification_score": verification_score,
-            "target_score": target_score,
-            "verification_report": verification_report,
-        }
-
-        if hasattr(llm_client, "chat_structured"):
-            parsed = await llm_client.chat_structured(
-                messages=[{"role": "user", "content": json.dumps(user_prompt)}],
-                response_model=PRDraft,
-                schema_name="pr_draft",
-                system_prompt=system_prompt,
-                temperature=0.3,
-            )
-            return PRDraft.model_validate(parsed.model_dump() if hasattr(parsed, "model_dump") else parsed)
-
-        # Fallback to JSON response_format if available
-        response_format = getattr(llm_client, "_get_json_response_format", None)
-        if callable(response_format):
-            rf = llm_client._get_json_response_format(PRDraft, "pr_draft")
-            raw = await llm_client.chat(
-                messages=[{"role": "user", "content": json.dumps(user_prompt)}],
-                system_prompt=system_prompt,
-                temperature=0.3,
-                response_format=rf,
-            )
-            return PRDraft.model_validate(json.loads(raw))
-    except Exception:
-        return None
-    return None
 
 
 async def _run_git(
@@ -165,101 +103,6 @@ async def _prepare_integration_branch(
         raise RuntimeError(f"Failed to checkout integration branch {integration_branch}: {result['stderr']}".strip())
 
     return base_ref
-
-
-def _submodule_roots_from_build_settings(build_settings: Any) -> list[str]:
-    """Return which submodule roots are relevant for this build (build/agents or build/mcp)."""
-    if not isinstance(build_settings, dict):
-        return []
-    proj_dir = (build_settings.get("project_directory") or "").replace("\\", "/").strip("/")
-    if proj_dir.startswith("build/agents/") or proj_dir == "build/agents":
-        return ["build/agents"]
-    if proj_dir.startswith("build/mcp/") or proj_dir == "build/mcp":
-        return ["build/mcp"]
-    return []
-
-
-async def _commit_push_pr_in_submodule(
-    *,
-    llm_client,
-    worktree_path: Path,
-    submodule_root: str,
-    build_id: str,
-    task_description: str,
-    verification_score: float,
-    target_score: float,
-    verification_report: Any,
-) -> dict[str, Any]:
-    """Commit and open PR in a submodule repo, running commands inside the submodule."""
-    sub_repo = (worktree_path / Path(submodule_root)).resolve()
-    if not (sub_repo / ".git").exists():
-        return {"status": "not_a_repo", "submodule_root": submodule_root, "path": str(sub_repo)}
-
-    status = await _run_git(["status", "--porcelain"], cwd=sub_repo, timeout_seconds=20.0)
-    if status["returncode"] != 0:
-        return {"status": "status_failed", "submodule_root": submodule_root, "error": status["stderr"].strip()}
-    if not status["stdout"].strip():
-        return {"status": "no_changes", "submodule_root": submodule_root}
-
-    branch = f"progenitor/{build_id}"
-    await _run_git(["fetch", "origin", "main"], cwd=sub_repo, timeout_seconds=60.0)
-    checkout = await _run_git(["checkout", "-B", branch], cwd=sub_repo, timeout_seconds=20.0)
-    if checkout["returncode"] != 0:
-        return {"status": "checkout_failed", "submodule_root": submodule_root, "error": checkout["stderr"].strip()}
-
-    await _run_git(["add", "-A"], cwd=sub_repo, timeout_seconds=20.0)
-    # Ensure identity exists for non-interactive environments.
-    await _run_git(["config", "user.email", "progenitor@local"], cwd=sub_repo, timeout_seconds=10.0)
-    await _run_git(["config", "user.name", "Progenitor"], cwd=sub_repo, timeout_seconds=10.0)
-    commit_msg = f"Progenitor: {task_description}"
-    commit = await _run_git(["commit", "-m", commit_msg], cwd=sub_repo, timeout_seconds=30.0)
-    if commit["returncode"] != 0:
-        # If another step committed already, treat as non-fatal.
-        if "nothing to commit" in (commit["stdout"] + commit["stderr"]).lower():
-            return {"status": "no_changes", "submodule_root": submodule_root}
-        return {"status": "commit_failed", "submodule_root": submodule_root, "error": (commit["stderr"] or commit["stdout"]).strip()}
-
-    push = await _run_git(["push", "-u", "origin", branch], cwd=sub_repo, timeout_seconds=120.0)
-    if push["returncode"] != 0:
-        return {"status": "push_failed", "submodule_root": submodule_root, "error": (push["stderr"] or push["stdout"]).strip()}
-
-    title = f"Progenitor: {task_description}"
-    body = (
-        "Automated change from Progenitor inner build loop.\n\n"
-        f"- Build ID: {build_id}\n"
-        f"- Verification: {verification_score:.2f} (target {target_score:.2f})\n"
-    )
-
-    if env_bool("PROGENITOR_AUTO_PR_USE_LLM", True):
-        drafted = await _draft_pr_with_llm(
-            llm_client,
-            task_description=f"{task_description} ({submodule_root})",
-            build_id=build_id,
-            verification_score=verification_score,
-            target_score=target_score,
-            verification_report=verification_report,
-        )
-        if drafted:
-            title = drafted.title.strip() or title
-            body = drafted.body.strip() or body
-
-    draft = env_bool("PROGENITOR_AUTO_PR_DRAFT", True)
-    success, pr_url_or_error = await gh_pr_create(
-        title=title,
-        body=body,
-        base="main",
-        head=branch,
-        cwd=sub_repo,
-        draft=draft,
-    )
-    pr_info: dict[str, Any] = {
-        "status": "created" if success else "failed",
-        "url": pr_url_or_error if success else None,
-        "error": None if success else pr_url_or_error,
-        "submodule_root": submodule_root,
-        "branch": branch,
-    }
-    return pr_info
 
 
 async def _cleanup_worktrees(*, repo_path: Path, worktrees: list[str]) -> None:
@@ -652,48 +495,8 @@ class BackgroundBuildRunner:
                         if build_state.get("build_error"):
                             raise RuntimeError(build_state["build_error"])
 
-            # Auto-push + PR(s) on success (best-effort; does not fail the build)
-            verification = build_state.get("verification", {}) or {}
-            score = float(verification.get("current_score") or 0.0)
-            target = float(verification.get("target_score") or 0.8)
-            passed = bool(verification.get("current_passed", False))
-
-            if env_bool("PROGENITOR_AUTO_PR_ON_SUCCESS", False) and passed and score >= target:
-                # Publish PR(s) directly in the target submodule repo (build/agents or build/mcp).
-                build_settings_dict = build_state.get("build_settings") or {}
-                submodule_roots = _submodule_roots_from_build_settings(build_settings_dict)
-                verification_report = verification.get("current_report")
-
-                worktrees = list(build_state.get("worktrees_to_cleanup", []))
-                if not worktrees:
-                    # Fallback: attempt from merge_queue paths if present.
-                    for q in (build_state.get("merge_queue") or []):
-                        if isinstance(q, dict) and q.get("worktree_path"):
-                            worktrees.append(q["worktree_path"])
-
-                pr_results: list[dict[str, Any]] = []
-                for wt in worktrees:
-                    wt_path = Path(wt)
-                    for root in submodule_roots:
-                        pr_results.append(
-                            await _commit_push_pr_in_submodule(
-                                llm_client=self.llm_client,
-                                worktree_path=wt_path,
-                                submodule_root=root,
-                                build_id=build_id,
-                                task_description=current_build.task_description,
-                                verification_score=score,
-                                target_score=target,
-                                verification_report=verification_report,
-                            )
-                        )
-
-                build_state["submodule_pull_requests"] = pr_results
-                await self.state_manager.update_build_state({"submodule_pull_requests": pr_results})
-
-                # Best-effort cleanup after publishing.
-                await _cleanup_worktrees(repo_path=repo_path, worktrees=worktrees)
-                await self.state_manager.update_build_state({"worktrees_to_cleanup": []})
+            # Note: build artifacts live in the main repo now (no submodules), so
+            # PR creation is handled by the inner-loop PUBLISH node.
 
             # Build completed successfully
             result.status = BuildStatus.COMPLETED

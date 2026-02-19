@@ -22,7 +22,7 @@ async def _setup_worktree_venv(agent_dir: Path) -> bool:
     """Create a venv inside the agent/mcp directory and install its requirements.
 
     Args:
-        agent_dir: Path to the agent package inside the worktree
+         agent_dir: Path to the agent package inside the worktree
                    (e.g. worktrees/<id>/app/agents/my_agent).
 
     Returns:
@@ -90,7 +90,7 @@ def create_node(worktrees_dir: Path) -> Callable[[ProgenitorState], Coroutine[An
             item_type = current_item.item_type
             item_id = current_item.id
 
-        build_types = ["build_agent", "build_tool", "upgrade"]
+        build_types = ["build_agent", "build_mcp", "build_progenitor", "upgrade"]
         logger.info("WORKTREE_PREP: item_type=%s, item_id=%s", item_type, item_id)
 
         if item_type not in build_types:

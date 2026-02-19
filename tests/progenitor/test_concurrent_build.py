@@ -216,7 +216,7 @@ class TestConcurrentBuildNode:
         from app.progenitor.nodes import build
 
         # Make one build fail
-        async def build_side_effect(work_item_id, worktree_path, prompt):
+        async def build_side_effect(work_item_id, worktree_path, prompt, target_path=None, allowed_dirs=None):
             if work_item_id == "item-2":
                 raise Exception("Build failed")
             return {"success": True, "message": "Build completed"}
