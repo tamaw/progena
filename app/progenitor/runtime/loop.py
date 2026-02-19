@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .scheduler import Scheduler
-from .time_utils import utcnow, utcnow_isoformat
+from .time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -433,7 +433,12 @@ class ProgenitorLoop:
 
         cycle_num = self._state["cycle_count"]
         thread_id = f"bg_cycle_{cycle_num}"
-        logger.info("Running background graph cycle %d (source: %s)", cycle_num, source)
+        logger.info(
+            "Running background graph cycle %d (source=%s, run_id=%s)",
+            cycle_num,
+            source,
+            run_id,
+        )
 
         self._last_cycle_response = None
 

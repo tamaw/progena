@@ -176,23 +176,48 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
     )
     return "observe"
 
-def route_after_verify(state: ProgenitorState) -> Literal["learn", "done"]:
-    """Route after verification - learn if continuing, done if complete."""
-    should_stop, reason = _check_build_stop(state)
-    if should_stop:
-        logger.info("route_after_verify → done: %s", reason)
+def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "done"]:
+    """Route after verify.
+
+    The inner loop has three outcomes after verification:
+      - done    : cancelled/errored (hard stop)
+      - publish : verification met OR max iterations reached (best-effort PR)
+      - learn   : continue iterating
+    """
+    if state.get("build_cancelled", False):
+        logger.info("route_after_verify → done: build cancelled")
         return "done"
 
-    # Continue to learn phase
-    iter_info = state.get("iteration", {})
-    current_iteration = iter_info.get("current", 0)
-    max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
-    verification = state.get("verification", {})
-    verification_score: float = verification.get("current_score") or 0.0
-    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
+    if state.get("build_error"):
+        logger.info("route_after_verify → done: build error: %s", state["build_error"])
+        return "done"
+
+    iter_info = state.get("iteration", {}) or {}
+    current_iteration = int(iter_info.get("current", 0) or 0)
+    max_iterations = int(iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS) or _DEFAULT_MAX_INNER_ITERATIONS)
+
+    verification = state.get("verification", {}) or {}
+    verification_score: float = float(verification.get("current_score") or 0.0)
+    target_score: float = float(verification.get("target_score") or _DEFAULT_TARGET_SCORE)
+
+    if current_iteration >= max_iterations:
+        logger.info("route_after_verify → publish: max iterations (%d) reached", max_iterations)
+        return "publish"
+
+    if verification_score >= target_score:
+        logger.info(
+            "route_after_verify → publish: score %.2f meets target %.2f",
+            verification_score,
+            target_score,
+        )
+        return "publish"
+
     logger.info(
-        "Continuing to learn phase: iteration=%d/%d, score=%.2f/%.2f",
-        current_iteration, max_iterations, verification_score, target_score,
+        "route_after_verify → learn: iteration=%d/%d, score=%.2f/%.2f",
+        current_iteration,
+        max_iterations,
+        verification_score,
+        target_score,
     )
     return "learn"
 

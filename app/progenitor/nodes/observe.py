@@ -40,7 +40,7 @@ def create_node(
     default_target_score = DEFAULT_VERIFICATION_TARGET_SCORE
 
     if config is not None and hasattr(config, "runtime"):
-        runtime = getattr(config, "runtime")
+        runtime = config.runtime
         default_max_iterations = getattr(runtime, "max_inner_iterations", default_max_iterations)
         default_target_score = getattr(runtime, "min_verification_score", default_target_score)
 

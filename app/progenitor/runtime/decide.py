@@ -23,12 +23,12 @@ from pydantic import BaseModel, Field
 from ..config import DEFAULT_BUILD_CONFIDENCE_THRESHOLD
 from ..llm.prompts import PromptTemplates
 from ..llm.response_models import DecisionResponse, validate_decision_response
-from .time_utils import utcnow_isoformat
 from ..state.models import (
     Decision,
     DecisionAction,
     ProgenitorState,
 )
+from .time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..state.execution_schemas import BuildSettings

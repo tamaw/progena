@@ -17,13 +17,12 @@ When no work is due and no backlog is pending, the graph ends immediately.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Callable, Coroutine
+from pathlib import Path
+from typing import Any, cast
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-
-from pathlib import Path
 
 from .nodes import act, chat, commit_core, intake, pick_next, respond, validate, worktree_prep
 from .nodes.schedule_dispatch import create_schedule_dispatch_node, create_schedule_finalize_node
@@ -41,7 +40,7 @@ def create_background_graph(
     config,
     worktrees_dir: Path,
     copilot_acp_manager,
-    event_pusher: Callable[[str, str, dict[str, Any] | None], Awaitable[None]] | None = None,
+    event_pusher: Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]] | None = None,
 ):
     timezone = config.runtime.timezone
 
@@ -72,7 +71,7 @@ def create_background_graph(
 
     builder = StateGraph(ProgenitorState)
     for name, node_fn in nodes.items():
-        builder.add_node(name, node_fn)  # type: ignore[arg-type]
+        builder.add_node(name, cast(Any, node_fn))
 
     builder.set_entry_point("pick_due_schedule")
 
