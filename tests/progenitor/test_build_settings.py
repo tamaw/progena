@@ -63,8 +63,8 @@ class TestBuildSettingsCreation:
         assert settings.build_id == "build_abc123"
         assert settings.project_name == "weather_agent"
         assert settings.build_type == "agent"  # Enum value serialized
-        assert settings.project_directory == "app/agents/weather_agent"
-        assert settings.allowable_directories == ["app/agents/weather_agent"]
+        assert settings.project_directory == "build/agents/weather_agent"
+        assert settings.allowable_directories == ["build/agents/weather_agent"]
         assert settings.status == "pending"
         assert settings.user_request == "build a weather agent"
         assert settings.description == "Weather lookup agent"
@@ -81,8 +81,8 @@ class TestBuildSettingsCreation:
         assert settings.build_id == "build_xyz789"
         assert settings.project_name == "database_mcp"
         assert settings.build_type == "mcp"
-        assert settings.project_directory == "app/mcp/database_mcp"
-        assert settings.allowable_directories == ["app/mcp/database_mcp"]
+        assert settings.project_directory == "build/mcp/database_mcp"
+        assert settings.allowable_directories == ["build/mcp/database_mcp"]
 
     def test_project_name_sanitization(self):
         """Test that project names are sanitized for filesystem."""
@@ -95,7 +95,7 @@ class TestBuildSettingsCreation:
 
         # Should be lowercased and use underscores
         assert settings.project_name == "my_weather_agent"
-        assert settings.project_directory == "app/agents/my_weather_agent"
+        assert settings.project_directory == "build/agents/my_weather_agent"
 
     def test_build_type_enum_input(self):
         """Test that BuildType enum can be passed directly."""
@@ -238,7 +238,7 @@ class TestBuildSettingsSerialization:
         assert data["build_id"] == "build_123"
         assert data["project_name"] == "weather"
         assert data["build_type"] == "agent"
-        assert data["project_directory"] == "app/agents/weather"
+        assert data["project_directory"] == "build/agents/weather"
         assert data["status"] == "pending"
 
     def test_round_trip_serialization(self):

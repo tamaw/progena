@@ -12,12 +12,15 @@ Includes logging for observability of build operations.
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
 
+from ..config import CopilotConfig
 from ..runtime.copilot_acp import ACPLogCapture, CopilotACPManager
 from ..runtime.time_utils import utcnow_isoformat
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -90,17 +93,7 @@ class CopilotCLI:
         prompt: str,
         target_path: str | None = None,
     ) -> dict[str, Any]:
-        """Execute a build task via Copilot ACP.
-
-        Args:
-            work_item_id: Unique identifier for the work item.
-            worktree_path: Working directory for the build.
-            prompt: The prompt text that instructs Copilot.
-            target_path: Optional target path for the build.
-
-        Returns:
-            Dict with success status, output, and any errors.
-        """
+        """Execute a build task via Copilot ACP."""
         worktree_path = Path(worktree_path)
 
         start_time = time.perf_counter()
@@ -117,7 +110,6 @@ class CopilotCLI:
             prompt[:300] + "..." if len(prompt) > 300 else prompt,
         )
 
-        # Log the invocation
         invocation_log: dict[str, Any] = {
             "work_item_id": work_item_id,
             "worktree_path": str(worktree_path),
@@ -127,7 +119,6 @@ class CopilotCLI:
         }
 
         try:
-            # Execute via ACP manager
             logger.info("COPILOT: Calling ACP manager.prompt()")
             result = await self.acp_manager.prompt(
                 prompt_text=prompt,
@@ -148,12 +139,10 @@ class CopilotCLI:
                 len(result.get("chunks", [])),
             )
 
-            # Write to log file if log capture is configured
             if self.log_capture:
                 log_path = self.log_capture.write_log(work_item_id, result)
                 logger.info("COPILOT: Session log written to %s", log_path)
 
-            # Get git diff
             diff_result = await self._get_diff(worktree_path)
             if diff_result:
                 logger.info(
@@ -164,7 +153,6 @@ class CopilotCLI:
             else:
                 logger.info("COPILOT: No git diff detected")
 
-            # Record timing
             duration = time.perf_counter() - start_time
 
             invocation_log.update({
@@ -215,16 +203,11 @@ class CopilotCLI:
             }
 
     def _extract_summary_from_output(self, output: str) -> str:
-        """Extract the usage summary section from copilot output.
-
-        The summary typically starts with 'Total usage' and includes
-        duration and code change statistics.
-        """
+        """Extract the usage summary section from copilot output."""
         summary_lines = []
         in_summary = False
 
         for line in output.splitlines():
-            # Summary starts with "Total usage" or "Total duration"
             if "Total usage" in line or "Total duration" in line:
                 in_summary = True
             if in_summary:
@@ -234,34 +217,30 @@ class CopilotCLI:
 
     async def _get_diff(self, worktree_path: Path) -> str:
         """Get git diff for the worktree."""
-
         try:
-            # Try staged diff first
             process = await asyncio.create_subprocess_exec(
-                "git", "diff", "--cached", "--stat",
+                "git",
+                "diff",
+                "--cached",
+                "--stat",
                 cwd=worktree_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(),
-                timeout=30.0
-            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30.0)
 
             if process.returncode == 0 and stdout:
                 return stdout.decode()
 
-            # Try unstaged diff
             process = await asyncio.create_subprocess_exec(
-                "git", "diff", "--stat",
+                "git",
+                "diff",
+                "--stat",
                 cwd=worktree_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(),
-                timeout=30.0
-            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30.0)
             return stdout.decode() if stdout else ""
 
         except (TimeoutError, OSError) as e:
@@ -270,7 +249,6 @@ class CopilotCLI:
 
     async def validate_installation(self) -> bool:
         """Check if Copilot CLI is installed and accessible."""
-
         try:
             process = await asyncio.create_subprocess_exec(
                 self.copilot_cmd,
@@ -283,3 +261,40 @@ class CopilotCLI:
         except (TimeoutError, OSError, FileNotFoundError) as e:
             logger.debug("Copilot CLI validation failed: %s", e)
             return False
+
+
+class CopilotTool(BaseSystemTool):
+    """Expose Copilot builder configuration/status.
+
+    Note: the actual build pipeline uses Copilot internally (builder actuator).
+    This tool is intentionally status-oriented and does not directly execute
+    builds.
+    """
+
+    @property
+    def name(self) -> str:
+        return "copilot"
+
+    @property
+    def description(self) -> str:
+        return "Show Copilot (ACP) configuration used for build operations"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, _context: ToolContext) -> ToolResult:
+        cfg = CopilotConfig.from_env()
+        return ToolResult.ok({
+            "bin_path": cfg.bin_path,
+            "model": cfg.model,
+            "timeout_seconds": cfg.timeout_seconds,
+            "default_flags": cfg.default_flags,
+            "acp_port": cfg.acp_port,
+            "acp_allowed_dirs": cfg.acp_allowed_dirs,
+            "env": {
+                "PROGENITOR_COPILOT_BIN": os.getenv("PROGENITOR_COPILOT_BIN"),
+                "PROGENITOR_COPILOT_MODEL": os.getenv("PROGENITOR_COPILOT_MODEL"),
+            },
+            "note": "Copilot is used internally by the build actuator; this tool reports configuration.",
+        })

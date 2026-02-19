@@ -14,6 +14,7 @@ from typing import Any, TypedDict
 from ..runtime.port_utils import find_available_port
 from ..runtime.time_utils import utcnow
 from ..state.models import AgentRegistryEntry, AgentStatus
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +87,11 @@ class ToolRegistry:
         return list(set(capabilities))
 
     def get_local_mcp_tools(self) -> list[dict[str, Any]]:
-        """Discover local FastMCP tools under app/mcp/.
+        """Discover local FastMCP tools under build/mcp/.
 
         These are HTTP MCP tools that may not be registered in registry.json.
         """
-        tools_dir = Path(__file__).resolve().parents[2] / "mcp"
+        tools_dir = Path(__file__).resolve().parents[3] / "build" / "mcp"
         if not tools_dir.exists():
             return []
 
@@ -106,7 +107,7 @@ class ToolRegistry:
                 continue
 
             spec_path = entry / "spec.md"
-            description = f"Local FastMCP tool (HTTP). Start with: python -m app.mcp.{entry.name}.server"
+            description = f"Local FastMCP tool (HTTP). Start with: python build/mcp/{entry.name}/server.py"
 
             if spec_path.exists():
                 try:
@@ -168,7 +169,7 @@ class ToolRegistry:
                     lines.append(f"  Capabilities: {', '.join(caps)}")
             sections.append("\n".join(lines))
 
-        # MCP tools from registry + local FastMCP tools from app/mcp
+        # MCP tools from registry + local FastMCP tools from build/mcp
         tools = self._registry.get("tools", [])
         local_tools = self.get_local_mcp_tools()
         seen_names = {tool.get("name") for tool in tools}
@@ -273,8 +274,8 @@ class ToolRegistry:
     def capability_exists(self, capability: str) -> bool:
         """Check if a capability is registered."""
         return (
-            self.find_agent_by_capability(capability) is not None or
-            self.find_tool_by_capability(capability) is not None
+            self.find_agent_by_capability(capability) is not None
+            or self.find_tool_by_capability(capability) is not None
         )
 
     def allocate_port(self) -> int:
@@ -289,14 +290,12 @@ class ToolRegistry:
         Raises:
             RuntimeError: If no ports are available.
         """
-        # Get ports already claimed in registry
-        claimed_ports = set()
+        claimed_ports: set[int] = set()
         for agent in self._registry.get("agents", []):
             port = agent.get("port")
-            if port is not None:
+            if isinstance(port, int):
                 claimed_ports.add(port)
 
-        # Use port_utils to find an actually available port
         try:
             return find_available_port(
                 start_port=AGENT_PORT_RANGE_START,
@@ -304,10 +303,10 @@ class ToolRegistry:
                 host=self.host,
                 exclude_ports=claimed_ports,
             )
-        except RuntimeError:
+        except RuntimeError as e:
             raise RuntimeError(
                 f"No available ports in range {AGENT_PORT_RANGE_START}-{AGENT_PORT_RANGE_END}"
-            )
+            ) from e
 
     async def update_agent_status(
         self,
@@ -320,23 +319,7 @@ class ToolRegistry:
         last_error: str | None = None,
         update_heartbeat: bool = False,
     ) -> bool:
-        """Update runtime status of an agent.
-
-        Called when agent process outputs status information or
-        when health checks detect state changes.
-
-        Args:
-            name: Agent name.
-            status: New status.
-            status_message: Optional human-readable status detail.
-            pid: Process ID (set when starting).
-            port: Assigned port (set when starting).
-            last_error: Error message if status is FAILED.
-            update_heartbeat: Whether to update last_heartbeat timestamp.
-
-        Returns:
-            True if agent was found and updated.
-        """
+        """Update runtime status of an agent."""
         for agent in self._registry.get("agents", []):
             if agent.get("name") == name:
                 now = utcnow()
@@ -357,7 +340,6 @@ class ToolRegistry:
                 if last_error is not None:
                     agent["last_error"] = last_error
                 elif status == AgentStatus.RUNNING:
-                    # Clear error on successful start
                     agent["last_error"] = None
 
                 if status == AgentStatus.RUNNING and agent.get("startup_time") is None:
@@ -375,29 +357,15 @@ class ToolRegistry:
                     "Agent '%s' status updated: %s%s",
                     name,
                     status.value if isinstance(status, AgentStatus) else status,
-                    f" - {status_message}" if status_message else ""
+                    f" - {status_message}" if status_message else "",
                 )
                 return True
 
         logger.warning("Agent '%s' not found for status update", name)
         return False
 
-    async def mark_agent_starting(
-        self,
-        name: str,
-        pid: int,
-        port: int,
-    ) -> bool:
-        """Mark an agent as starting up.
-
-        Args:
-            name: Agent name.
-            pid: Process ID.
-            port: Assigned HTTP port.
-
-        Returns:
-            True if agent was found and updated.
-        """
+    async def mark_agent_starting(self, name: str, pid: int, port: int) -> bool:
+        """Mark an agent as starting up."""
         return await self.update_agent_status(
             name,
             AgentStatus.STARTING,
@@ -435,8 +403,10 @@ class ToolRegistry:
     def get_running_agents(self) -> list[dict[str, Any]]:
         """Get all agents that are currently running."""
         return [
-            agent for agent in self._registry.get("agents", [])
-            if agent.get("status") in (
+            agent
+            for agent in self._registry.get("agents", [])
+            if agent.get("status")
+            in (
                 AgentStatus.RUNNING.value,
                 AgentStatus.WAITING.value,
                 AgentStatus.EXECUTING.value,
@@ -449,3 +419,33 @@ class ToolRegistry:
         if agent:
             return agent.get("endpoint")
         return None
+
+
+class RegistryTool(BaseSystemTool):
+    """Expose the current agent/tool registry summary."""
+
+    @property
+    def name(self) -> str:
+        return "registry"
+
+    @property
+    def description(self) -> str:
+        return "Show registry.json summary (agents, tools, capabilities)"
+
+    @property
+    def keywords(self) -> list[str]:
+        return []
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        registry = context.tool_registry
+        agents = registry.get_agents() if hasattr(registry, "get_agents") else []
+        tools = registry.get_tools() if hasattr(registry, "get_tools") else []
+        capabilities = registry.get_all_capabilities() if hasattr(registry, "get_all_capabilities") else []
+
+        return ToolResult.ok({
+            "registry_path": str(getattr(registry, "registry_path", None)),
+            "agent_count": len(agents),
+            "tool_count": len(tools),
+            "capability_count": len(capabilities),
+            "capabilities": sorted(capabilities),
+        })

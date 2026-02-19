@@ -4,10 +4,14 @@ Tool Registry.
 Central registry for all progenitor system tools with lookup, matching, and execution.
 """
 
+import importlib
+import inspect
 import logging
+import pkgutil
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Optional
 
-from .protocol import SystemTool, ToolContext
+from ...tools.protocol import BaseSystemTool, SystemTool, ToolContext
 
 if TYPE_CHECKING:
     from ...state.models import ProgenitorState
@@ -18,37 +22,87 @@ logger = logging.getLogger(__name__)
 _SYSTEM_TOOLS: dict[str, SystemTool] = {}
 
 
-def _init_registry() -> dict[str, SystemTool]:
-    """Initialize the tools registry (lazy imports to avoid circular deps)."""
-    from ...tools.build_status import BuildStatusTool
-    from ...tools.compress_conversation import CompressConversationTool
-    from ...tools.current_time import CurrentTimeTool
-    from ...tools.list_agents import ListAgentsTool
-    from ...tools.list_schedule import ListScheduleTool
-    from ...tools.list_tools import ListToolsTool
-    from ...tools.memory import MemoryTool
-    from ...tools.new_conversation import NewConversationTool
-    from ...tools.rediscover_agents import RediscoverAgentsTool
-    from ...tools.schedule_task import ScheduleTaskTool
-    from ...tools.shell import ShellCheckTool, ShellExecTool
-    from ...tools.self_reflect_tool import SelfReflectTool
+def _iter_tool_modules() -> list[ModuleType]:
+    """Iterate importable modules under app.progenitor.tools.
 
-    tools = [
-        ListToolsTool(),
-        RediscoverAgentsTool(),
-        ListAgentsTool(),
-        NewConversationTool(),
-        BuildStatusTool(),
-        CurrentTimeTool(),
-        ListScheduleTool(),
-        SelfReflectTool(),
-        ScheduleTaskTool(),
-        CompressConversationTool(),
-        MemoryTool(),
-        ShellCheckTool(),
-        ShellExecTool(),
-    ]
-    return {tool.name: tool for tool in tools}
+    This intentionally uses imports (not filesystem parsing) so any tool
+    implementation can use normal Python patterns.
+
+    Import failures are treated as non-fatal so optional dependencies can
+    exist in tools modules without breaking the core agent.
+    """
+    import app.progenitor.tools as tools_pkg
+
+    modules: list[ModuleType] = []
+    for info in pkgutil.iter_modules(tools_pkg.__path__, tools_pkg.__name__ + "."):
+        name = info.name.rsplit(".", 1)[-1]
+        if name.startswith("__"):
+            continue
+
+        try:
+            modules.append(importlib.import_module(info.name))
+        except Exception as e:
+            logger.debug("Skipping tools module %s (import failed: %s)", info.name, e)
+
+    # Deterministic order
+    modules.sort(key=lambda m: m.__name__)
+    return modules
+
+
+def _discover_tool_instances() -> list[BaseSystemTool]:
+    """Discover and instantiate all system tools.
+
+    Rules:
+    - Tool must be a subclass of BaseSystemTool
+    - Tool must be instantiable with a no-arg constructor
+    """
+    discovered: list[BaseSystemTool] = []
+
+    for module in _iter_tool_modules():
+        for _, obj in inspect.getmembers(module, inspect.isclass):
+            if obj is BaseSystemTool:
+                continue
+            if not issubclass(obj, BaseSystemTool):
+                continue
+            # Avoid importing/re-exporting classes from other modules.
+            if getattr(obj, "__module__", None) != module.__name__:
+                continue
+
+            try:
+                instance = obj()
+            except Exception as e:
+                # Not a system tool (requires args) or failed optional init.
+                logger.debug(
+                    "Skipping tool class %s.%s (init failed: %s)",
+                    module.__name__,
+                    getattr(obj, "__name__", str(obj)),
+                    e,
+                )
+                continue
+            discovered.append(instance)
+
+    # Deterministic tool order (helps tests and debugging)
+    discovered.sort(key=lambda t: (t.name, t.__class__.__name__))
+    return discovered
+
+
+def _init_registry() -> dict[str, SystemTool]:
+    """Initialize the tools registry by discovering tools dynamically."""
+    tools = _discover_tool_instances()
+
+    registry: dict[str, SystemTool] = {}
+    for tool in tools:
+        if tool.name in registry:
+            logger.warning(
+                "Duplicate system tool name '%s' (%s ignored; keeping %s)",
+                tool.name,
+                tool.__class__.__name__,
+                registry[tool.name].__class__.__name__,
+            )
+            continue
+        registry[tool.name] = tool
+
+    return registry
 
 
 def _ensure_registry() -> dict[str, SystemTool]:
@@ -74,25 +128,6 @@ def get_system_tool_names() -> list[str]:
     return list(_ensure_registry().keys())
 
 
-def match_tool_by_input(user_input: str) -> str | None:
-    """Fast-path: find a system tool matching user input by keywords/patterns.
-
-    Iterates over all registered system tools and checks each tool's
-    keywords and trigger_patterns against the user input.
-
-    Returns:
-        The tool name if a match is found, otherwise None.
-    """
-    if not user_input or not user_input.strip():
-        return None
-
-    for tool in _ensure_registry().values():
-        if tool.matches_input(user_input):
-            return tool.name
-
-    return None
-
-
 async def execute_system_tool(
     tool_name: str,
     tool_registry: Any,
@@ -100,6 +135,7 @@ async def execute_system_tool(
     state: Optional["ProgenitorState"] = None,
     state_manager: Any = None,
     user_input: str = "",
+    tool_args: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, bool]:
     """Execute a tool by name and return (result, error, state_updates, should_retry_slow_path).
 
@@ -116,7 +152,7 @@ async def execute_system_tool(
     Returns:
         Tuple of (result_dict, error_string, state_updates, should_retry_slow_path).
         state_updates is a dict of state keys to merge, or None.
-        should_retry_slow_path indicates if this failed fast-path should retry via slow path.
+        should_retry_slow_path indicates if the caller should retry via a different strategy.
     """
     tool = get_system_tool(tool_name)
 
@@ -129,6 +165,7 @@ async def execute_system_tool(
         state=state,
         state_manager=state_manager,
         user_input=user_input,
+        tool_args=tool_args,
     )
 
     try:

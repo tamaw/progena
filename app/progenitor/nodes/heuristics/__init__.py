@@ -1,7 +1,7 @@
 """
 Heuristics module for intent detection and parameter extraction.
 
-These fast-path heuristics avoid LLM calls for common, unambiguous requests.
+Heuristics for intent detection and parameter extraction.
 """
 
 from .intent_detection import (

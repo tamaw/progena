@@ -96,7 +96,7 @@ class AgentRunner:
 
         Args:
             agent_name: Name of the agent.
-            entrypoint: Path to agent entrypoint (e.g., app/agents/hello/agent.py).
+            entrypoint: Path to agent entrypoint (e.g., build/agents/hello/agent.py).
             env: Additional environment variables.
             background: Run as background process (for HTTP agents).
 

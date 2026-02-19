@@ -164,7 +164,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 # but mark as no longer active
             }
             # Also clear the spec_doc from build_state.json to avoid stale data on next build
-            # Note: The spec file remains in app/agents/ as it's part of the built agent
+            # Note: The spec file remains under build/ as it's part of the built artifact
             await state_manager.clear_spec_doc()
 
         return cast(ProgenitorState, {

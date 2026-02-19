@@ -21,7 +21,7 @@ class DecisionAction(StrEnum):
     BUILD_TOOL = "build_tool"  # Build FastMCP tool
     UPGRADE = "upgrade"
     MIXED = "mixed"
-    # Note: SCHEDULE removed - scheduling is handled via system tool fast-path
+    # Note: SCHEDULE removed - scheduling is handled via system tools
 
 
 class DecisionResponse(BaseModel):

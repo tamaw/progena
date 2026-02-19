@@ -129,7 +129,7 @@ def test_merge_tools_respects_explicit_empty_list():
     assert merged == []
 
 
-def test_resolve_request_tools_disables_tools_for_structured_by_default():
+def test_resolve_request_tools_includes_tools_for_structured_by_default():
     client = LLMClient.__new__(LLMClient)
     client.mcp_tools = [
         {
@@ -144,7 +144,8 @@ def test_resolve_request_tools_disables_tools_for_structured_by_default():
         tools=None,
         response_format={"type": "json_schema", "json_schema": {"name": "x", "schema": {}}},
     )
-    assert resolved == []
+    assert isinstance(resolved, list)
+    assert any(t.get("function", {}).get("name") == "primer" for t in resolved)
 
 
 def test_resolve_request_tools_keeps_tools_for_non_structured_requests():

@@ -1,8 +1,8 @@
-"""
-Integration test for outer and inner loop implementations.
+"""Integration test for graph compilation.
 
-- Outer loop: Intake → TimeCheck → Decide → Planner → PickNext → Act → Respond → CycleLimit → Idle
-- Inner loop: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN (runs in background)
+- Outer loop (user chat): Intake → Chat → Respond → CommitCore → END
+- Background jobs: scheduled tasks + backlog execution run in background graph
+- Inner loop: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
 """
 
 from pathlib import Path
@@ -11,8 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 from app.progenitor.config import ProgenitorConfig
-from app.progenitor.graph_inner_loop import create_inner_loop_graph
-from app.progenitor.graph_outer_loop import create_progenitor_graph
+from app.progenitor.graph_background_loop import create_background_graph
+from app.progenitor.graph_build_loop import create_inner_loop_graph
+from app.progenitor.graph_chat_loop import create_progenitor_graph
 
 
 def _create_mock_copilot_acp_manager():
@@ -32,6 +33,7 @@ def test_outer_loop_graph_compiles():
     state_manager.log_decision = AsyncMock()
 
     llm_client = Mock()
+    llm_client.chat = AsyncMock(return_value="Test response")
     llm_client.generate = AsyncMock(return_value="Test response")
 
     tool_registry = Mock()
@@ -56,17 +58,19 @@ def test_outer_loop_graph_compiles():
     nodes = graph.get_graph().nodes
     node_names = {n for n in nodes if n != "__start__"}
 
-    # Check outer loop nodes (no planner - only in inner loop)
+    # Check outer loop nodes (chat-only; no planner - only in inner loop)
     assert "intake" in node_names
-    assert "time_check" in node_names
-    assert "decide" in node_names
-    assert "pick_next" in node_names
-    assert "act" in node_names
-    assert "validate" in node_names
-    assert "commit_core" in node_names
+    assert "chat" in node_names
     assert "respond" in node_names
-    assert "cycle_limit" in node_names
-    assert "idle" in node_names
+    assert "commit_core" in node_names
+
+    # Backlog execution nodes are NOT in the user-chat outer graph
+    assert "pick_next" not in node_names
+    assert "worktree_prep" not in node_names
+    assert "act" not in node_names
+    assert "validate" not in node_names
+    assert "cycle_limit" not in node_names
+    assert "idle" not in node_names
     # planner is NOT in outer loop - only in inner loop
     assert "planner" not in node_names
 
@@ -74,6 +78,47 @@ def test_outer_loop_graph_compiles():
     assert "observe" not in node_names
     assert "think" not in node_names
     assert "learn" not in node_names
+
+
+def test_background_graph_compiles():
+    """Test that the background job graph compiles without errors."""
+    state_manager = Mock()
+    state_manager.get_schedule = AsyncMock(return_value=[])
+    state_manager.update_schedule_entry = AsyncMock()
+    state_manager.log_conversation = AsyncMock()
+    state_manager.save_messages = AsyncMock()
+
+    llm_client = Mock()
+    llm_client.chat = AsyncMock(return_value="Test response")
+
+    tool_registry = Mock()
+
+    config = ProgenitorConfig()
+
+    graph = create_background_graph(
+        state_manager=state_manager,
+        llm_client=llm_client,
+        tool_registry=tool_registry,
+        config=config,
+        worktrees_dir=Path("./worktrees"),
+        copilot_acp_manager=_create_mock_copilot_acp_manager(),
+    )
+
+    assert graph is not None
+    nodes = graph.get_graph().nodes
+    node_names = {n for n in nodes if n != "__start__"}
+    assert "pick_due_schedule" in node_names
+    assert "intake" in node_names
+    assert "chat" in node_names
+    assert "respond" in node_names
+    assert "advance_schedule" in node_names
+
+    # Backlog execution nodes also exist in background graph
+    assert "pick_next" in node_names
+    assert "worktree_prep" in node_names
+    assert "act" in node_names
+    assert "validate" in node_names
+    assert "commit_core" in node_names
 
 
 def test_inner_loop_graph_compiles():

@@ -23,9 +23,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from ..llm.prompts import PromptTemplates
 from .scheduler import Scheduler
-from .time_utils import utcnow, utcnow_isoformat
+from .time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -34,8 +33,6 @@ logger = logging.getLogger(__name__)
 
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
-SCHEDULED_MESSAGE_PREFIX = "[Scheduled Task] This message was triggered by the scheduler."
-_prompts = PromptTemplates()
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -57,8 +54,10 @@ class ProgenitorLoop:
         llm_client=None,
         worktrees_dir: Path | None = None,
         copilot_acp_manager=None,
+        background_graph=None,
     ):
         self.graph = graph
+        self.background_graph = background_graph
         self.state_manager = state_manager
         self.config = config
         self.llm_client = llm_client
@@ -95,6 +94,10 @@ class ProgenitorLoop:
         self._response_was_streamed = False
         self._stream_final_sent = False
         self._streamed_response_content: str = ""  # Accumulated streamed text for saving to messages
+
+        # Captures the most recent pending_response emitted by the graph during a cycle.
+        # Used for background job cycles where we don't stream to the client.
+        self._last_cycle_response: str | None = None
 
         # Background build runner (initialized in run_forever)
         self._background_runner: Any = None
@@ -290,124 +293,69 @@ class ProgenitorLoop:
         backoff_multiplier = runtime.backoff_multiplier
         last_idle_log_backoff: float | None = None
 
+        if not self.background_graph:
+            logger.warning("Background worker disabled (no background_graph configured)")
+            return
+
         logger.info("Background worker started")
         await self._push_event("background_worker_started", "Background worker is now running")
 
         while self.running:
             try:
-                # Check if there's pending work (without holding the lock)
-                has_work = await self._check_pending_work(self._state)
+                # Try to acquire lock (non-blocking check first)
+                if self._graph_lock.locked():
+                    # User input is being processed, wait a bit
+                    logger.debug("Graph lock held, waiting for user input to complete")
+                    await asyncio.sleep(0.5)
+                    continue
 
-                if has_work:
-                    # Try to acquire lock (non-blocking check first)
-                    if self._graph_lock.locked():
-                        # User input is being processed, wait a bit
-                        logger.debug("Graph lock held, waiting for user input to complete")
-                        await asyncio.sleep(0.5)
-                        continue
+                sleep_seconds: float | None = None
 
-                    async with self._graph_lock:
-                        # Re-check work is still available (may have been processed)
-                        has_work = await self._check_pending_work(self._state)
-                        if not has_work:
-                            continue
+                async with self._graph_lock:
+                    # Background cycles must not stream to the client queues.
+                    self._streaming_enabled = False
+                    self._response_was_streamed = False
+                    self._stream_final_sent = False
+                    self._streamed_response_content = ""
 
-                        messages_before = len(self._state.get("messages") or [])
+                    self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
+                    self._state["actions_this_cycle"] = 0
 
-                        # Reset backoff when work is available
-                        backoff = runtime.idle_backoff_seconds
-                        self._state["current_backoff_seconds"] = backoff
+                    await self._run_background_graph_cycle(run_id, source="background")
+
+                    had_work = bool(self._state.get("bg_had_work"))
+                    if had_work:
+                        # Reset backoff when work was processed
+                        self._state["current_backoff_seconds"] = runtime.idle_backoff_seconds
                         self._state["idle_cycles"] = 0
-
-                        due_ids = list(self._state.get("due_items") or [])
-                        if not due_ids:
-                            continue
-
-                        schedule_dicts = self._coerce_schedule_dicts(self._state.get("schedule", []))
-                        schedule_id = str(due_ids[0])
-                        entry = next((item for item in schedule_dicts if str(item.get("id")) == schedule_id), None)
-                        if not entry:
-                            self._state["due_items"] = []
-                            continue
-
-                        scheduled_input = self._format_scheduled_input(entry)
-                        self._state["current_input"] = scheduled_input
-                        self._state["current_input_role"] = "scheduler"
-                        self._state["current_input_metadata"] = {
-                            "type": "scheduled",
-                            "schedule_id": entry.get("id"),
-                            "schedule_description": entry.get("description"),
-                            "schedule_run_at": entry.get("run_at"),
-                            "schedule_repeat_minutes": entry.get("repeat_minutes"),
-                            "schedule_instruction": entry.get("instruction"),
-                        }
-                        self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
-
-                        # Enable streaming mode for scheduled input
-                        self._streaming_enabled = True
-                        self._response_was_streamed = False
-                        self._stream_final_sent = False
-                        self._streamed_response_content = ""
-
-                        await self._push_event(
-                            "work_started",
-                            "Processing scheduled work",
-                            {"work_type": "scheduled", "schedule_id": schedule_id}
-                        )
-
-                        await self._run_graph_cycle(run_id, source="scheduled_input")
-
-                        scheduled_response = self._extract_scheduled_response(
-                            messages_before=messages_before,
-                            schedule_id=schedule_id,
-                        )
-                        if scheduled_response:
-                            await self._push_event(
-                                "scheduled_response",
-                                scheduled_response,
-                                {
-                                    "schedule_id": schedule_id,
-                                    "schedule_description": entry.get("description"),
-                                    "schedule_run_at": entry.get("run_at"),
-                                },
-                            )
-
-                        # Disable streaming mode after scheduled input
-                        self._streaming_enabled = False
-                        self._response_was_streamed = False
-                        self._stream_final_sent = False
-                        self._streamed_response_content = ""
-
-                        await self._advance_schedule_after_run(schedule_id)
-                        self._state["due_items"] = []
-
-                        await self._push_event(
-                            "work_completed",
-                            "Completed scheduled work",
-                            {"work_type": "scheduled", "schedule_id": schedule_id}
-                        )
-                else:
-                    # No work - increase backoff exponentially
-                    self._state["idle_cycles"] = self._state.get("idle_cycles", 0) + 1
-                    current_backoff = float(
-                        self._state.get("current_backoff_seconds", runtime.idle_backoff_seconds)
-                    )
-                    next_backoff = min(current_backoff * backoff_multiplier, max_backoff)
-                    self._state["current_backoff_seconds"] = next_backoff
-
-                    # Update health periodically even when idle
-                    await self._update_health_file(self._state)
-
-                    if next_backoff >= 60 and next_backoff != last_idle_log_backoff:
-                        logger.info(
-                            "Background worker idle; next check in %.1f s (idle_cycles=%d)",
-                            next_backoff,
-                            self._state.get("idle_cycles", 0),
-                        )
-                        last_idle_log_backoff = next_backoff
+                        # Small throttle to avoid a tight loop if many items are due.
+                        sleep_seconds = 0.1
                     else:
-                        logger.debug("Background worker idle, sleeping %.1f s", next_backoff)
-                    await asyncio.sleep(next_backoff)
+                        # No work - increase backoff exponentially
+                        self._state["idle_cycles"] = self._state.get("idle_cycles", 0) + 1
+                        current_backoff = float(
+                            self._state.get("current_backoff_seconds", runtime.idle_backoff_seconds)
+                        )
+                        next_backoff = min(current_backoff * backoff_multiplier, max_backoff)
+                        self._state["current_backoff_seconds"] = next_backoff
+
+                        # Update health periodically even when idle
+                        await self._update_health_file(self._state)
+
+                        if next_backoff >= 60 and next_backoff != last_idle_log_backoff:
+                            logger.info(
+                                "Background worker idle; next check in %.1f s (idle_cycles=%d)",
+                                next_backoff,
+                                self._state.get("idle_cycles", 0),
+                            )
+                            last_idle_log_backoff = next_backoff
+                        else:
+                            logger.debug("Background worker idle, sleeping %.1f s", next_backoff)
+                        sleep_seconds = next_backoff
+
+                # Sleep OUTSIDE the graph lock so user input can be processed.
+                if sleep_seconds is not None and sleep_seconds > 0:
+                    await asyncio.sleep(sleep_seconds)
 
             except asyncio.CancelledError:
                 logger.info("Background worker cancelled")
@@ -434,6 +382,9 @@ class ProgenitorLoop:
         thread_id = f"cycle_{cycle_num}"
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
+        # Reset per-cycle capture
+        self._last_cycle_response = None
+
         try:
             async for event in self.graph.astream(
                 self._state,
@@ -450,11 +401,16 @@ class ProgenitorLoop:
                 pending = self._state.get("pending_response")
                 # Prefer explicit pending_response (final user response) even if some node streamed tokens.
                 if pending:
-                    await self._stream_response(str(pending))
+                    pending_text = str(pending)
+                    self._last_cycle_response = pending_text
+                    self._state["last_cycle_response"] = pending_text
+                    if self._streaming_enabled:
+                        await self._stream_response(pending_text)
                     self._state["pending_response"] = None
                 elif self._response_was_streamed and not self._stream_final_sent:
                     # Response was already streamed by a node, just send final marker ONCE
-                    await self.stream_final()
+                    if self._streaming_enabled:
+                        await self.stream_final()
                     self._stream_final_sent = True
                     self._state["pending_response"] = None
 
@@ -464,6 +420,51 @@ class ProgenitorLoop:
 
         except Exception as e:
             logger.error("Graph cycle %d failed: %s", cycle_num, e, exc_info=True)
+            raise
+
+    async def _run_background_graph_cycle(self, run_id: str, source: str = "background") -> None:
+        """Run a background job graph cycle.
+
+        Background cycles must not write to the user stream/output queues.
+        They still checkpoint state and may emit IPC events via nodes.
+        """
+        if not self.background_graph:
+            raise RuntimeError("background_graph not configured")
+
+        cycle_num = self._state["cycle_count"]
+        thread_id = f"bg_cycle_{cycle_num}"
+        logger.info(
+            "Running background graph cycle %d (source=%s, run_id=%s)",
+            cycle_num,
+            source,
+            run_id,
+        )
+
+        self._last_cycle_response = None
+
+        try:
+            async for event in self.background_graph.astream(
+                self._state,
+                config={"configurable": {"thread_id": thread_id}},
+            ):
+                for node_name, node_output in event.items():
+                    output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
+                    logger.info("BG GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
+                    if isinstance(node_output, dict):
+                        self._state.update(node_output)
+
+                pending = self._state.get("pending_response")
+                if pending:
+                    pending_text = str(pending)
+                    self._last_cycle_response = pending_text
+                    self._state["last_cycle_response"] = pending_text
+                    self._state["pending_response"] = None
+
+            await self._checkpoint_state(self._state)
+            await self._update_health_file(self._state)
+
+        except Exception as e:
+            logger.error("Background graph cycle %d failed: %s", cycle_num, e, exc_info=True)
             raise
 
     async def _push_event(
@@ -699,113 +700,6 @@ class ProgenitorLoop:
             return cast(dict[str, Any] | None, await self._stream_queue.get())
         except TimeoutError:
             return None
-
-    async def _check_pending_work(self, state: dict[str, Any]) -> bool:
-        """Check if there's pending scheduled work.
-
-        Reloads schedule from schedule.json to pick up any new scheduled tasks
-        (schedule is a system feature that persists beyond user sessions).
-        """
-        # Reload schedule from schedule.json (system feature, may have been updated)
-        try:
-            schedule_entries = await self.state_manager.get_schedule()
-            schedule_dicts: list[dict[str, Any]] = [
-                e.model_dump() if hasattr(e, "model_dump") else e for e in schedule_entries
-            ]
-            # Update state with latest schedule
-            state["schedule"] = schedule_dicts
-        except Exception as e:
-            logger.warning("Failed to reload schedule: %s", e)
-            schedule_dicts = []
-            for item in state.get("schedule", []):
-                if hasattr(item, "model_dump"):
-                    schedule_dicts.append(item.model_dump())
-                elif isinstance(item, dict):
-                    schedule_dicts.append(item)
-
-        if schedule_dicts:
-            due_items = self._scheduler.get_due_items(schedule_dicts, utcnow())
-            due_ids = [item.get("id") for item in due_items if item.get("id")]
-            if due_ids:
-                state["due_items"] = due_ids
-                return True
-
-        state["due_items"] = []
-
-        return False
-
-    def _coerce_schedule_dicts(self, schedule_entries: list[Any]) -> list[dict[str, Any]]:
-        """Normalize schedule entries to dicts."""
-        schedule_dicts: list[dict[str, Any]] = []
-        for entry in schedule_entries:
-            if hasattr(entry, "model_dump"):
-                schedule_dicts.append(entry.model_dump())
-            elif isinstance(entry, dict):
-                schedule_dicts.append(dict(entry))
-        return schedule_dicts
-
-    def _format_scheduled_input(self, entry: dict[str, Any]) -> str:
-        """Build the input text for a scheduled message."""
-        prefix = self._load_scheduled_prefix()
-        instruction = entry.get("instruction") or entry.get("description") or "Scheduled task"
-        return f"{prefix}\n\n{instruction}"
-
-    def _extract_scheduled_response(self, messages_before: int, schedule_id: str) -> str | None:
-        """Extract assistant response text generated by a scheduled cycle."""
-        messages = self._state.get("messages") or []
-        if not isinstance(messages, list) or messages_before >= len(messages):
-            return None
-
-        new_messages = messages[messages_before:]
-        for msg in reversed(new_messages):
-            if hasattr(msg, "model_dump"):
-                msg_dict = msg.model_dump()
-            elif isinstance(msg, dict):
-                msg_dict = msg
-            else:
-                continue
-
-            if msg_dict.get("role") != "assistant":
-                continue
-            metadata = msg_dict.get("metadata") or {}
-            if isinstance(metadata, dict) and metadata.get("type") == "scheduled" and str(metadata.get("schedule_id") or "") != str(schedule_id):
-                continue
-            content = msg_dict.get("content")
-            if isinstance(content, str) and content.strip():
-                return content
-
-        return None
-
-    def _load_scheduled_prefix(self) -> str:
-        """Load the scheduled prefix text from prompts with fallback."""
-        try:
-            text = _prompts.get("scheduled_prefix.md").strip()
-            return text or SCHEDULED_MESSAGE_PREFIX
-        except Exception:
-            return SCHEDULED_MESSAGE_PREFIX
-
-    async def _advance_schedule_after_run(self, schedule_id: str) -> None:
-        """Advance schedule entry timestamps after a scheduled run."""
-        schedule_dicts = self._coerce_schedule_dicts(self._state.get("schedule", []))
-        updated_schedule = self._scheduler.advance_recurring(
-            schedule_dicts,
-            schedule_id,
-            utcnow(),
-        )
-        self._state["schedule"] = updated_schedule
-
-        entry = next((item for item in updated_schedule if str(item.get("id")) == str(schedule_id)), None)
-        if not entry or not self.state_manager:
-            return
-
-        updates = {"last_run": entry.get("last_run")}
-        if entry.get("repeat_minutes"):
-            updates["run_at"] = entry.get("run_at")
-
-        try:
-            await self.state_manager.update_schedule_entry(schedule_id, updates)
-        except Exception as e:
-            logger.warning("Failed to persist schedule updates: %s", e)
 
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
         """Save full recoverable state checkpoint.

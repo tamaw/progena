@@ -13,11 +13,24 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from .env_utils import env_bool, env_float, env_int, env_list
+from .utils import env_bool, env_float, env_int, env_list
 
 # Auto-load .env file from project root
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Backward-compatible default constants
+#
+# These values historically lived in app/progenitor/constants.py. They are
+# configuration defaults (not protocol constants), so they now live here.
+# ---------------------------------------------------------------------------
+
+DEFAULT_MAX_INNER_ITERATIONS = 5
+DEFAULT_MAX_OUTER_ITERATIONS = 10
+DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
+DEFAULT_VERIFICATION_TARGET_SCORE = 0.8
+DEFAULT_MAX_CONVERSATION_HISTORY = 10
 
 
 @dataclass

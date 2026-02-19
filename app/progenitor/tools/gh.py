@@ -9,10 +9,16 @@ publish node after verification passes.
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import cast
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_pr_url(text: str) -> str | None:
+    m = re.search(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+", text or "")
+    return m.group(0) if m else None
 
 
 async def _run_gh(

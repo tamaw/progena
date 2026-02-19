@@ -39,7 +39,7 @@ class TestToolRegistry:
             name="test_agent",
             description="A test agent",
             capabilities=["test_cap"],
-            entrypoint="/app/agents/test/main.py",
+            entrypoint="/build/agents/test/main.py",
         )
 
         await registry.register_agent(entry)
@@ -59,7 +59,7 @@ class TestToolRegistry:
             "kind": "mcp_server",
             "description": "A test tool",
             "capabilities": ["fetch_data"],
-            "command": "python /app/mcp/test/server.py",
+            "command": "python /build/mcp/test/server.py",
             "transport": "stdio",
         }
 
@@ -80,7 +80,7 @@ class TestToolRegistry:
             name="agent1",
             description="Agent 1",
             capabilities=["cap_a", "cap_b"],
-            entrypoint="/app/agents/1/main.py",
+            entrypoint="/build/agents/1/main.py",
         )
         await registry.register_agent(entry)
 
@@ -108,7 +108,7 @@ class TestToolRegistry:
             name="email_agent",
             description="Email agent",
             capabilities=["send_email", "read_email"],
-            entrypoint="/app/agents/email/main.py",
+            entrypoint="/build/agents/email/main.py",
         )
         await registry.register_agent(entry)
 
@@ -144,7 +144,7 @@ class TestToolRegistry:
             name="my_agent",
             description="My agent",
             capabilities=[],
-            entrypoint="/app/agents/my/main.py",
+            entrypoint="/build/agents/my/main.py",
         )
         await registry.register_agent(entry)
 
@@ -163,7 +163,7 @@ class TestToolRegistry:
             name="agent",
             description="Agent",
             capabilities=["existing_cap"],
-            entrypoint="/app/agents/agent/main.py",
+            entrypoint="/build/agents/agent/main.py",
         )
         await registry.register_agent(entry)
 
@@ -180,7 +180,7 @@ class TestToolRegistry:
             name="to_remove",
             description="Agent to remove",
             capabilities=[],
-            entrypoint="/app/agents/remove/main.py",
+            entrypoint="/build/agents/remove/main.py",
         )
         await registry.register_agent(entry)
 
@@ -202,7 +202,7 @@ class TestToolRegistry:
             name="persistent_agent",
             description="Agent",
             capabilities=["persist"],
-            entrypoint="/app/agents/persist/main.py",
+            entrypoint="/build/agents/persist/main.py",
         )
         await registry1.register_agent(entry)
 

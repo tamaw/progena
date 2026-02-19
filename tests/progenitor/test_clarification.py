@@ -373,7 +373,7 @@ NEW_ANTI_CRITERIA:
         decide starts the build via BackgroundBuildRunner. So the route
         should be 'respond', not 'planner' (outer loop has no planner).
         """
-        from app.progenitor.graph_outer_loop import route_after_decide
+        from app.progenitor.graph_chat_loop import route_after_decide
         from app.progenitor.state.ideal_state import IdealState
         from app.progenitor.state.models import Decision, DecisionAction
 

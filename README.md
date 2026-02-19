@@ -72,9 +72,14 @@ docker compose -f docker/docker-compose.progenitor.yml down
 ### LangGraph Topology
 
 ```
-Intake → TimeCheck → EnqueueDue → Decide → Planner → PickNext →
-WorktreePrep → Act → Validate → Register → CommitCore → Respond →
-CycleLimit → (PickNext | Idle)
+User (outer loop):
+Intake → Chat → Respond → CycleLimit → (PickNext | Idle)
+
+Execution path (when tools/work items are needed):
+PickNext → WorktreePrep → Act → Validate → CommitCore → Respond
+
+Background (scheduled jobs):
+PickDueSchedule → Intake → Chat → Respond → AdvanceSchedule
 ```
 
 ### Directory Structure
@@ -83,8 +88,8 @@ CycleLimit → (PickNext | Idle)
 app/
   progenitor/
     main.py          # Service entrypoint
-    graph_outer_loop.py  # Outer loop topology
-    graph_inner_loop.py  # Inner loop topology
+    graph_chat_loop.py   # Chat loop topology
+    graph_build_loop.py  # Build loop topology
     llm/             # OpenAI wrapper + prompts
     tools/           # Copilot, git, MCP clients
     runtime/         # Loop, scheduler, time
@@ -198,8 +203,8 @@ pytest tests/test_dual_loop.py -v
 
 ### Adding New Capabilities
 
-1. Create an agent in `app/agents/<agent_name>/`
-2. Or create an MCP server in `app/mcp/`
+1. Create an agent in `build/agents/<agent_name>/`
+2. Or create an MCP server in `build/mcp/`
 3. Register in `data/state/registry.json`
 
 Or simply ask Progenitor to build it for you!

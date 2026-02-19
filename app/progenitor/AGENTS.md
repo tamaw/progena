@@ -19,7 +19,11 @@ The core perpetual agent implementing the "Last Algorithm" dual-loop pattern.
 #### Dual-Loop Pattern
 **Outer Loop (Perpetual):**
 ```
-Intake → TimeCheck → EnqueueDue → Decide → [InnerLoop] → Respond → Idle → repeat
+User (outer loop):
+Intake → Chat → Respond → CycleLimit → (PickNext | Idle) → repeat
+
+Background (scheduled jobs):
+PickDueSchedule → Intake → Chat → Respond → AdvanceSchedule → repeat
 ```
 
 **Inner Loop (Iteration):**

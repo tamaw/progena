@@ -7,6 +7,13 @@ Reduces duplication and improves type safety across the codebase.
 
 from enum import StrEnum
 
+from .config import (  # noqa: F401
+    DEFAULT_BUILD_CONFIDENCE_THRESHOLD,
+    DEFAULT_MAX_INNER_ITERATIONS,
+    DEFAULT_MAX_OUTER_ITERATIONS,
+    DEFAULT_VERIFICATION_TARGET_SCORE,
+)
+
 
 class BuildPhase(StrEnum):
     """Phases of the inner build loop."""
@@ -26,7 +33,6 @@ class RouteTarget(StrEnum):
     """Valid routing targets for graph transitions."""
     # Outer loop targets
     INTAKE = "intake"
-    TIME_CHECK = "time_check"
     DECIDE = "decide"
     PICK_NEXT = "pick_next"
     WORKTREE_PREP = "worktree_prep"
@@ -63,17 +69,3 @@ class SystemToolName(StrEnum):
     SELF_REFLECT = "self_reflect"
     NEW_CONVERSATION = "new_conversation"
     COMPRESS_CONVERSATION = "compress_conversation"
-
-
-# Default thresholds and limits
-DEFAULT_MAX_INNER_ITERATIONS = 5
-DEFAULT_MAX_OUTER_ITERATIONS = 10
-DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
-DEFAULT_VERIFICATION_TARGET_SCORE = 0.8
-DEFAULT_MAX_CONVERSATION_HISTORY = 10
-
-# Retry configuration
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_DELAY = 1.0
-DEFAULT_RETRY_MULTIPLIER = 2.0
-DEFAULT_RETRY_JITTER = 0.5

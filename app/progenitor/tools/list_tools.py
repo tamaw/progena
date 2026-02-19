@@ -3,8 +3,9 @@ List Tools - Lists all available tools including system tools, agents, and MCP t
 """
 
 import logging
+from typing import Any
 
-from ..nodes.node_helpers.protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class ListToolsTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..nodes.node_helpers.registry import get_all_system_tools
 
-        system_tools = [tool.to_dict() for tool in get_all_system_tools()]
+        system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]
 
         # BUILD actions are first-class capabilities (they start background jobs),
         # even though they are routed as decision actions rather than executed as system tools.
@@ -70,7 +71,7 @@ class ListToolsTool(BaseSystemTool):
         system_tools = system_tools + list(USER_COMMUNICATION_TOOLS)
 
         # Get registered A2A agents from registry
-        agents = []
+        agents: list[dict[str, Any]] = []
         if hasattr(context.tool_registry, "get_agents"):
             agents = context.tool_registry.get_agents() or []
 

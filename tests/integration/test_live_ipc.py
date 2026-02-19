@@ -343,14 +343,53 @@ async def test_system_tool(ipc_client):
 @pytest.mark.integration
 async def test_mcp_tool(ipc_client):
     """Test MCP tool usage - calls the primer tool to get session context."""
-    # Request to use the primer MCP tool
-    message = "Use the 'primer' MCP tool to get the current session context and tell me what time it is."
+    events: list[dict[str, Any]] = []
+
+    async def _on_event(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    ipc_client.set_event_callback(_on_event)
+
+    # Strongly request the tool call so the model is likely to emit a tool_call item.
+    message = (
+        "Call the MCP tool 'primer' now. Do not answer until after the tool returns. "
+        "Then summarize what the tool returned in 1-2 sentences."
+    )
 
     result = await send_message_and_collect(
         ipc_client,
         message,
         "mcp_tool",
     )
+
+    # Best-effort: drain any remaining events that arrived near the end of streaming.
+    for _ in range(10):
+        evt = await ipc_client.get_event(timeout=0.1)
+        if not evt:
+            break
+        events.append(evt)
+
+    # Reset callback to avoid cross-test bleed
+    ipc_client.set_event_callback(None)
+
+    # De-dupe events (callback + queue drain can capture the same event twice)
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for e in events:
+        key = (
+            str(e.get("event_type", "")),
+            str(e.get("timestamp", "")),
+            str(e.get("content", "")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(e)
+    events = deduped
+
+    result["events"] = events
+    result["mcp_tool_events"] = [e for e in events if str(e.get("event_type", "")).startswith("mcp_tool_")]
+    result["observed_tool_call"] = any(e.get("event_type") == "mcp_tool_call_started" for e in events)
 
     write_result("mcp_tool", result)
 
