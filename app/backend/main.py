@@ -379,13 +379,16 @@ async def _send_telegram_connected_message(
     except Exception as e:
         logger.warning("Failed to send agent-generated Telegram greeting: %s", e)
 
-        # Keep prior behavior as a fallback so users still get confirmation.
+        # Fallback should signal failure (if the agent path failed, we're not fully connected).
         try:
-            sent = await telegram.send_message("👋 Progenitor connected to Telegram.")
+            sent = await telegram.send_message(
+                "⚠️ Progenitor failed to connect to the agent. "
+                "I can't respond yet — please check the backend/agent logs and try again."
+            )
             if not sent:
-                logger.warning("Fallback Telegram connected message send returned False")
+                logger.warning("Fallback Telegram failure message send returned False")
         except Exception as e2:
-            logger.warning("Failed to send fallback Telegram connected message: %s", e2)
+            logger.warning("Failed to send fallback Telegram failure message: %s", e2)
 
 
 async def _send_telegram_message(
