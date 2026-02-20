@@ -462,6 +462,29 @@ class LLMClient:
                     return {"error": err}
                 return {"result": data_out}
 
+            # If it isn't a system tool, allow direct A2A agent invocation by name.
+            tool_registry = system_tool_context.get("tool_registry")
+            if tool_registry is not None and hasattr(tool_registry, "find_by_name"):
+                try:
+                    agent_cfg = tool_registry.find_by_name(tool_name)
+                except Exception:
+                    agent_cfg = None
+
+                if isinstance(agent_cfg, dict) and agent_cfg.get("kind") == "a2a_agent":
+                    from ..tools.mcp import A2AClient
+
+                    req = str(tool_args.get("request") or "")
+                    ctx = tool_args.get("context") if isinstance(tool_args.get("context"), dict) else {}
+                    result = await A2AClient().call_agent(
+                        agent_config=agent_cfg,
+                        request=req,
+                        context=ctx,
+                        timeout=60.0,
+                    )
+                    if isinstance(result, dict) and result.get("error"):
+                        return {"error": str(result.get("error"))}
+                    return {"result": result}
+
         # Default: call MCP tool
         return await self._call_mcp_tool({**tool_call, "arguments": tool_args})
 
