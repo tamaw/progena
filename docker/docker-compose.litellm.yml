@@ -1,6 +1,7 @@
 services:
   caddy:
     container_name: litellm-caddy
+    image: ghcr.io/tamaw/progenitor-litellm-caddy:latest
     build:
       context: ..
       dockerfile: docker/caddy/Dockerfile

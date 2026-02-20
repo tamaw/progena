@@ -2,18 +2,84 @@ name: progenitor-deploy
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "prompts/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - "requirements.lock.txt"
+      - "requirements-ml.txt"
+      - "pyproject.toml"
+      - "docker/**"
+      - "docker-compose*.yml"
+      - "litellm-config.yaml"
+      - ".github/workflows/progenitor-deploy.yml"
 
 concurrency:
   group: progenitor-deploy-cronix
-  cancel-in-progress: true
+  # Queue deploys so changes stack safely.
+  cancel-in-progress: false
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push progenitor image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/progenitor/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor:latest
+            ghcr.io/tamaw/progenitor:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor-backend:latest
+            ghcr.io/tamaw/progenitor-backend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: app/frontend
+          file: docker/frontend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor-frontend:latest
+            ghcr.io/tamaw/progenitor-frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     runs-on: [self-hosted, Linux, X64]
     environment: cronix
+    needs: [build-and-push]
     steps:
       - uses: actions/checkout@v4
 
@@ -80,12 +146,11 @@ jobs:
       - name: Ensure external network
         run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
 
-      - name: Build frontend image (sanity)
-        run: docker build -f docker/frontend/Dockerfile app/frontend -t progenitor-frontend:cronix
-
       - name: Deploy progenitor stack
         run: |
-          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml up -d --build
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml pull
+          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml up -d
           docker compose -f docker/docker-compose.progenitor.yml ps
 
       - name: Liveness checks

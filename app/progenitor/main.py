@@ -8,6 +8,8 @@ Communication:
 - IPC: Socket-based communication for reliability and streaming
 """
 
+# CI: comment-only change to validate path filters.
+
 import asyncio
 import contextlib
 import json
