@@ -54,33 +54,8 @@ jobs:
           MODE="${MODE:-changed}"
           if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${MODE}" = "all" ]; then
             echo "Deploying ALL agents and MCP servers (workflow_dispatch mode=all)"
-            AGENTS=$(python - <<'PY'
-import json
-from pathlib import Path
-
-agents_dir = Path("app/agents")
-skip = {"__pycache__", ".git", "base", ".venv", "node_modules"}
-agents = (
-  sorted([p.name for p in agents_dir.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith(".")])
-  if agents_dir.exists() else []
-)
-print(json.dumps(agents))
-PY
-)
-
-            MCPS=$(python - <<'PY'
-import json
-from pathlib import Path
-
-mcp_dir = Path("app/mcp")
-skip = {"__pycache__", ".git", "base", ".venv", "node_modules"}
-mcps = (
-  sorted([p.name for p in mcp_dir.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith(".")])
-  if mcp_dir.exists() else []
-)
-print(json.dumps(mcps))
-PY
-)
+            AGENTS=$(python -c "import json; from pathlib import Path; skip={'__pycache__','.git','base','.venv','node_modules'}; d=Path('app/agents'); print(json.dumps(sorted([p.name for p in d.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith('.')])) if d.exists() else [])")
+            MCPS=$(python -c "import json; from pathlib import Path; skip={'__pycache__','.git','base','.venv','node_modules'}; d=Path('app/mcp'); print(json.dumps(sorted([p.name for p in d.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith('.')])) if d.exists() else [])")
           else
             # Compare HEAD^ to HEAD for the merge commit
             CHANGED=$(git diff --name-only HEAD^ HEAD)
@@ -89,33 +64,8 @@ PY
             if echo "$CHANGED" | grep -q '^docker/runner/'; then
               echo "docker/runner changed; deploying ALL agents and MCP servers"
               MODE="all"
-              AGENTS=$(python - <<'PY'
-import json
-from pathlib import Path
-
-agents_dir = Path("app/agents")
-skip = {"__pycache__", ".git", "base", ".venv", "node_modules"}
-agents = (
-  sorted([p.name for p in agents_dir.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith(".")])
-  if agents_dir.exists() else []
-)
-print(json.dumps(agents))
-PY
-)
-
-              MCPS=$(python - <<'PY'
-import json
-from pathlib import Path
-
-mcp_dir = Path("app/mcp")
-skip = {"__pycache__", ".git", "base", ".venv", "node_modules"}
-mcps = (
-  sorted([p.name for p in mcp_dir.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith(".")])
-  if mcp_dir.exists() else []
-)
-print(json.dumps(mcps))
-PY
-)
+              AGENTS=$(python -c "import json; from pathlib import Path; skip={'__pycache__','.git','base','.venv','node_modules'}; d=Path('app/agents'); print(json.dumps(sorted([p.name for p in d.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith('.')])) if d.exists() else [])")
+              MCPS=$(python -c "import json; from pathlib import Path; skip={'__pycache__','.git','base','.venv','node_modules'}; d=Path('app/mcp'); print(json.dumps(sorted([p.name for p in d.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith('.')])) if d.exists() else [])")
             else
 
             # Extract unique agent dirs from changed paths.
@@ -244,43 +194,7 @@ PY
 
       - name: Update Progenitor agent registry entry
         run: |
-          python - <<'PY'
-          import json
-          import os
-          from datetime import datetime, timezone
-          from pathlib import Path
-          
-          name = os.environ["AGENT_NAME"]
-          endpoint = f"http://progenitor-agent-{name}:8080"
-          card_url = f"{endpoint}/.well-known/agent.json"
-          
-          path = Path("data/state/registry.json")
-          path.parent.mkdir(parents=True, exist_ok=True)
-          
-          try:
-            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"agents": [], "tools": []}
-          except Exception:
-            data = {"agents": [], "tools": []}
-          
-          agents = data.setdefault("agents", [])
-          now = datetime.now(timezone.utc).isoformat()
-          
-          entry = next((a for a in agents if a.get("name") == name), None)
-          if entry is None:
-            entry = {"name": name, "kind": "a2a_agent", "enabled": True, "created_at": now}
-            agents.append(entry)
-          
-          entry.update({
-            "transport": "http",
-            "endpoint": endpoint,
-            "agent_card_url": card_url,
-            "status": "running",
-            "updated_at": now,
-          })
-          
-          path.write_text(json.dumps(data, indent=2, sort_keys=False), encoding="utf-8")
-          print(f"Updated registry entry for {name} -> {endpoint}")
-          PY
+          python -c "import json,os; from datetime import datetime,timezone; from pathlib import Path; name=os.environ['AGENT_NAME']; endpoint=f'http://progenitor-agent-{name}:8080'; card_url=f'{endpoint}/.well-known/agent.json'; path=Path('data/state/registry.json'); path.parent.mkdir(parents=True, exist_ok=True); data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'agents': [], 'tools': []}; agents=list(data.get('agents') or []); now=datetime.now(timezone.utc).isoformat(); existing=next((a for a in agents if a.get('name')==name), {}); created_at=existing.get('created_at', now); enabled=existing.get('enabled', True); entry={**existing, 'name': name, 'kind': 'a2a_agent', 'enabled': enabled, 'created_at': created_at, 'transport': 'http', 'endpoint': endpoint, 'agent_card_url': card_url, 'status': 'running', 'updated_at': now}; data['agents']=[a for a in agents if a.get('name')!=name]+[entry]; path.write_text(json.dumps(data, indent=2, sort_keys=False), encoding='utf-8'); print(f'Updated registry entry for {name} -> {endpoint}')"
         env:
           AGENT_NAME: ${{ matrix.agent }}
 
