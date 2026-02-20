@@ -9,6 +9,8 @@ on:
       - "prompts/**"
       - "scripts/**"
       - "requirements.txt"
+      - "requirements.lock.txt"
+      - "requirements-ml.txt"
       - "pyproject.toml"
       - "docker/**"
       - "docker-compose*.yml"
