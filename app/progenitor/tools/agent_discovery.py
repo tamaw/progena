@@ -374,6 +374,19 @@ class AgentDiscovery:
             skipped,
         )
 
+        # Best-effort: refresh description/version/capabilities from live agent cards.
+        card_refresh = None
+        if hasattr(self.registry, "refresh_agent_cards"):
+            try:
+                from .mcp import A2AClient
+
+                card_refresh = await self.registry.refresh_agent_cards(A2AClient())  # type: ignore[attr-defined]
+            except Exception as e:
+                card_refresh = {"error": str(e)}
+
+        if card_refresh is not None:
+            summary["agent_card_refresh"] = card_refresh
+
         return summary
 
     async def _register_agent(self, spec: DiscoveredAgentSpec) -> None:
