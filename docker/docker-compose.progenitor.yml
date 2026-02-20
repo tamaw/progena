@@ -16,6 +16,7 @@ services:
   # Progenitor Application Stack
   # =============================================================================
   progenitor:
+    image: ghcr.io/tamaw/progenitor:latest
     build:
       context: ..
       dockerfile: docker/progenitor/Dockerfile
@@ -51,6 +52,7 @@ services:
           memory: 512M
 
   backend:
+    image: ghcr.io/tamaw/progenitor-backend:latest
     build:
       context: ..
       dockerfile: docker/backend/Dockerfile

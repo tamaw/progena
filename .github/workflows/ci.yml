@@ -11,6 +11,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   python:
@@ -86,11 +87,62 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-and-push-images:
+    runs-on: ubuntu-latest
+    needs: [python, frontend]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push progenitor image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/progenitor/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor:latest
+            ghcr.io/tamaw/progenitor:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor-backend:latest
+            ghcr.io/tamaw/progenitor-backend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: app/frontend
+          file: docker/frontend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor-frontend:latest
+            ghcr.io/tamaw/progenitor-frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy-cronix:
     # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
     runs-on: [self-hosted, Linux, X64]
     environment: cronix
-    needs: [python, frontend]
+    needs: [python, frontend, build-and-push-images]
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
@@ -160,7 +212,9 @@ jobs:
 
       - name: Deploy progenitor stack
         run: |
-          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml up -d --build
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml pull
+          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml up -d
           docker compose -f docker/docker-compose.progenitor.yml ps
 
       - name: Liveness checks
@@ -185,23 +239,3 @@ jobs:
 
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
-
-      - name: Build backend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/backend/Dockerfile
-          push: false
-          tags: progenitor-backend:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: app/frontend
-          file: docker/frontend/Dockerfile
-          push: false
-          tags: progenitor-frontend:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
