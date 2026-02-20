@@ -5,14 +5,22 @@ on:
   push:
     branches: [main]
     paths:
-      - "app/**"
+      # Core app surfaces only (exclude app/agents and app/mcp; those deploy via agent-deploy.yml)
+      - "app/progenitor/**"
+      - "app/backend/**"
+      - "app/frontend/**"
       - "prompts/**"
       - "scripts/**"
       - "requirements.txt"
       - "requirements.lock.txt"
       - "requirements-ml.txt"
       - "pyproject.toml"
-      - "docker/**"
+      # Core Dockerfiles only (exclude docker/runner which is for agents/mcp images)
+      - "docker/progenitor/**"
+      - "docker/backend/**"
+      - "docker/frontend/**"
+      - "docker/caddy/**"
+      - "docker/litellm/**"
       - "docker-compose*.yml"
       - "litellm-config.yaml"
       - ".github/workflows/progenitor-deploy.yml"

@@ -16,6 +16,17 @@ CORRECT: `app/agents/{agent_name}/agent.py`
 
 All HTTP agents MUST implement these endpoints. Each agent is self-contained - there is no base class to inherit from.
 
+## LLM-Backed Agents (Recommended Pattern)
+
+If the agent must reason over data/tools (not just static responses), implement:
+- LiteLLM /responses client (httpx)
+  - Endpoint: `${LITELLM_BASE_URL}/responses`
+  - Headers: `x-litellm-api-key` using `LITELLM_API_KEY` (or `LITELLM_MASTER_KEY`)
+  - Model: `PROGENITOR_MODEL_DEFAULT`
+- A local tool-calling loop so the agent can call its own Python tools multiple times in one request before returning a final answer.
+- For more structure/flexibility, you may implement the tool loop using LangGraph nodes (LLM -> tools -> LLM -> finalize).
+- Return plain text in the A2A `response` field unless the task explicitly needs structured output.
+
 ### Required Endpoints
 
 1. **GET `/.well-known/agent.json`** - Agent Card (A2A Standard)
