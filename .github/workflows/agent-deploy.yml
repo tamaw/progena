@@ -215,12 +215,14 @@ jobs:
           AGENT_HOST="progenitor-agent-${{ matrix.agent }}"
           AGENT_URL="http://${AGENT_HOST}:8080/v1"
 
-          REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://localhost:4000}"
-          if echo "$REGISTER_BASE_URL" | grep -q "://litellm:"; then
-            REGISTER_BASE_URL="http://localhost:4000"
+          REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://litellm:4000}"
+          if echo "$REGISTER_BASE_URL" | grep -Eq "://(localhost|127\\.0\\.0\\.1)"; then
+            REGISTER_BASE_URL="http://litellm:4000"
           fi
 
-          curl -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
+          # Register from inside the docker network so `litellm` DNS resolves.
+          docker run --rm --network langfuse_network curlimages/curl:8.6.0 \
+            -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -H "Content-Type: application/json" \
             -d "{
@@ -336,12 +338,13 @@ jobs:
           MCP_HOST="progenitor-mcp-${{ matrix.mcp }}"
           MCP_URL="http://${MCP_HOST}:8080/v1"
 
-          REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://localhost:4000}"
-          if echo "$REGISTER_BASE_URL" | grep -q "://litellm:"; then
-            REGISTER_BASE_URL="http://localhost:4000"
+          REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://litellm:4000}"
+          if echo "$REGISTER_BASE_URL" | grep -Eq "://(localhost|127\\.0\\.0\\.1)"; then
+            REGISTER_BASE_URL="http://litellm:4000"
           fi
 
-          curl -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
+          docker run --rm --network langfuse_network curlimages/curl:8.6.0 \
+            -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -H "Content-Type: application/json" \
             -d "{
