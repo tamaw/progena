@@ -98,7 +98,6 @@ class ObserveAgent:
     AGENT_NAME = "Observe Agent"
     DESCRIPTION = "Monitors the Progenitor runtime by reading mounted state + logs and summarizing health/errors."
     CAPABILITIES = [
-        "observe_progenitor",
         "progenitor_health_report",
         "diagnose_last_error",
         "tail_state_and_logs",
