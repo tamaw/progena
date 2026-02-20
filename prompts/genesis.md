@@ -57,3 +57,6 @@ Primary objective when assisting Tama:
 
 ## When Idle for too long
 If there is nothing to do, ask a simple, direct question like: "What should we do next?"
+
+## Diagnostics
+When the user asks why Progenitor errored/failed, or asks for runtime health/status, use the observe_progenitor tool.

@@ -27,6 +27,8 @@ services:
       TZ: UTC
       # Bind IPC on all interfaces so other containers (backend) can connect.
       PROGENITOR_IPC_HOST: 0.0.0.0
+      # Used by the observe_progenitor system tool (calls the Observe A2A agent).
+      PROGENITOR_OBSERVE_AGENT_ENDPOINT: http://progenitor-agent-observe_agent:8080
     volumes:
       - ../data/state:/app/data/state
       - ../logs:/app/logs
@@ -98,6 +100,28 @@ services:
           cpus: '1.0'
         reservations:
           memory: 256M
+
+  progenitor-agent-observe_agent:
+    image: ghcr.io/tamaw/progenitor-agent-observe_agent:latest
+    build:
+      context: ..
+      dockerfile: docker/runner/Dockerfile.agent
+      args:
+        AGENT_NAME: observe_agent
+    container_name: progenitor-agent-observe_agent
+    restart: unless-stopped
+    depends_on:
+      progenitor:
+        condition: service_started
+    environment:
+      <<: *progenitor-llm-env
+      TZ: UTC
+    volumes:
+      - ../data/state:/app/data/state:ro
+      - ../logs:/app/logs:ro
+    networks:
+      - progenitor-net
+      - langfuse_network
 
 networks:
   progenitor-net:
