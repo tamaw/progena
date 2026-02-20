@@ -24,9 +24,16 @@ Create a new {kind} named "{agent_name}" in `app/agents/{agent_name}/`
 ## Requirements
 - Follow Python best practices
 - Include docstrings and type hints
-- The agent class must have:
-  - AGENT_ID, AGENT_NAME, DESCRIPTION, CAPABILITIES class attributes
-  - async def invoke(self, input: str) -> str method
-  - def get_agent_card(self) -> dict method
+- Implement an HTTP A2A agent using FastAPI (preferred) and follow prompts/agent_structure.md:
+  - `agent.py` must expose `app = FastAPI()` and implement:
+    - GET `/.well-known/agent.json`
+    - GET `/health`
+    - POST `/` with `{request, context}` and respond with `{success, response, error, metadata}`
+  - Emit stdout status lines: `STATUS:<status>:<message>`
+  - Keep the `response` field plain text unless the task explicitly requires structured output.
+- If the agent is LLM-backed, use the same LiteLLM /responses integration pattern as Progenitor:
+  - Read `LITELLM_BASE_URL` + `LITELLM_API_KEY`/`LITELLM_MASTER_KEY`
+  - Use `PROGENITOR_MODEL_DEFAULT` for model selection
+  - Support multi-round tool calling to gather data before responding
 
 Build it now.
