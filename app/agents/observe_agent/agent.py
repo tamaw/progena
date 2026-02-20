@@ -1,6 +1,7 @@
 """Observe agent (A2A).
 
-Reads Progenitor's mounted state + logs (read-only) and returns a structured health/error report.
+Receives a user request, uses the same LiteLLM /responses flow as Progenitor,
+invokes local tools to read mounted state/logs, and returns plain-text insights.
 """
 
 import json
@@ -10,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -62,41 +64,10 @@ def _read_jsonl_tail(path: Path, limit: int = 50) -> list[dict[str, Any]]:
     return entries[-limit:]
 
 
-def _extract_errorish_events(entries: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for e in reversed(entries):
-        if not isinstance(e, dict):
-            continue
-        event = str(e.get("event", "")).lower()
-        error = e.get("error")
-        level = str(e.get("level", "")).lower()
-        if error or "error" in event or "fail" in event or level in ("error", "critical"):
-            out.append(e)
-        if len(out) >= limit:
-            break
-    return list(reversed(out))
-
-
-def _truncate(text: Any, limit: int = 240) -> str:
-    s = "" if text is None else str(text)
-    s = " ".join(s.split())
-    if len(s) <= limit:
-        return s
-    return s[: limit - 3] + "..."
-
-
-def _event_ts(event: dict[str, Any]) -> str:
-    for key in ("timestamp", "created_at", "time", "ts", "at"):
-        v = event.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return ""
-
-
 class ObserveAgent:
     AGENT_ID = "observe_agent"
     AGENT_NAME = "Observe Agent"
-    DESCRIPTION = "Monitors the Progenitor runtime by reading mounted state + logs and summarizing health/errors."
+    DESCRIPTION = "Monitors Progenitor by reading mounted state/logs and using LiteLLM to generate diagnostic insights."
     CAPABILITIES = [
         "progenitor_health_report",
         "diagnose_last_error",
@@ -111,181 +82,296 @@ class ObserveAgent:
         self.state_dir = state_dir or Path(os.getenv("OBSERVE_STATE_DIR", "/app/data/state"))
         self.logs_dir = logs_dir or Path(os.getenv("OBSERVE_LOGS_DIR", "/app/logs"))
 
-    def _read_state_bundle(self) -> dict[str, Any]:
-        health = _safe_read_json(self.state_dir / "health.json") or {}
-        legacy_state = _safe_read_json(self.state_dir / "state.json")
-        current_state = _safe_read_json(self.state_dir / "current_state.json") or {}
-        build_state = _safe_read_json(self.state_dir / "build_state.json") or {}
-        schedule = _safe_read_json(self.state_dir / "schedule.json")
-        registry = _safe_read_json(self.state_dir / "registry.json") or {}
+    # -------------------------------------------------------------------------
+    # Tooling (local, read-only)
+    # -------------------------------------------------------------------------
+    def _resolve_under(self, base_dir: Path, relative_path: str) -> Path:
+        base = base_dir.resolve()
+        candidate = (base_dir / relative_path).resolve()
+        if str(candidate).startswith(str(base)):
+            return candidate
+        raise ValueError("Path escapes base directory")
 
-        return {
-            "paths": {
-                "state_dir": str(self.state_dir),
-                "logs_dir": str(self.logs_dir),
-            },
-            "health": health,
-            "legacy_state": legacy_state,
-            "current_state": {
-                "run_id": current_state.get("run_id"),
-                "cycle_count": current_state.get("cycle_count"),
-                "actions_this_cycle": current_state.get("actions_this_cycle"),
-                "messages_count": len(current_state.get("messages", []) or []),
-                "backlog_count": len(current_state.get("backlog", []) or []),
-            },
-            "build_state": {
-                "build_in_progress": bool(build_state.get("build_in_progress")),
-                "build_phase": build_state.get("build_phase"),
-                "build_started_at": build_state.get("build_started_at"),
-                "backlog_count": len(build_state.get("backlog", []) or []),
-                "current_work_item": build_state.get("current_work_item"),
-            },
-            "schedule": schedule,
-            "registry": {
-                "agents_count": len(registry.get("agents", []) or []) if isinstance(registry, dict) else None,
-                "tools_count": len(registry.get("tools", []) or []) if isinstance(registry, dict) else None,
-            },
-        }
+    def tool_list_state_files(self) -> dict[str, Any]:
+        try:
+            files = sorted([p.name for p in self.state_dir.iterdir() if p.is_file()]) if self.state_dir.exists() else []
+            return {"state_dir": str(self.state_dir), "files": files}
+        except Exception as e:
+            return {"error": str(e)}
 
-    def _read_log_bundle(self) -> dict[str, Any]:
-        decisions = _read_jsonl_tail(self.logs_dir / "decisions.jsonl", limit=80)
-        conversation = _read_jsonl_tail(self.logs_dir / "conversation.jsonl", limit=40)
-        schedule = _read_jsonl_tail(self.logs_dir / "schedule.jsonl", limit=80)
-        validation = _read_jsonl_tail(self.logs_dir / "validation.jsonl", limit=80)
-        errors = _read_jsonl_tail(self.logs_dir / "errors.jsonl", limit=80)
-        stderr_tail = _safe_read_text(self.logs_dir / "progenitor.client.stderr.log", max_bytes=256 * 1024).splitlines()[
-            -80:
+    def tool_list_log_files(self) -> dict[str, Any]:
+        try:
+            files = sorted([p.name for p in self.logs_dir.iterdir() if p.is_file()]) if self.logs_dir.exists() else []
+            return {"logs_dir": str(self.logs_dir), "files": files}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def tool_read_state_json(self, filename: str) -> dict[str, Any]:
+        try:
+            path = self._resolve_under(self.state_dir, filename)
+            data = _safe_read_json(path)
+            return {"path": str(path), "json": data}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def tool_read_state_text_tail(self, filename: str, max_bytes: int = 131072) -> dict[str, Any]:
+        try:
+            path = self._resolve_under(self.state_dir, filename)
+            text = _safe_read_text(path, max_bytes=max(1024, int(max_bytes)))
+            return {"path": str(path), "text": text}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def tool_read_log_jsonl_tail(self, filename: str, limit: int = 50) -> dict[str, Any]:
+        try:
+            path = self._resolve_under(self.logs_dir, filename)
+            entries = _read_jsonl_tail(path, limit=max(1, min(int(limit), 500)))
+            return {"path": str(path), "entries": entries}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def tool_read_log_text_tail(self, filename: str, max_bytes: int = 262144) -> dict[str, Any]:
+        try:
+            path = self._resolve_under(self.logs_dir, filename)
+            text = _safe_read_text(path, max_bytes=max(1024, int(max_bytes)))
+            return {"path": str(path), "text": text}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_defs(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_state_files",
+                    "description": "List files under the mounted state directory.",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_log_files",
+                    "description": "List files under the mounted logs directory.",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_state_json",
+                    "description": "Read a JSON file from the mounted state directory (e.g. health.json, current_state.json).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"filename": {"type": "string"}},
+                        "required": ["filename"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_state_text_tail",
+                    "description": "Read the tail of a state file as text (for malformed JSON or debugging).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "max_bytes": {"type": "integer", "default": 131072},
+                        },
+                        "required": ["filename"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_log_jsonl_tail",
+                    "description": "Read the tail of a JSONL log file as parsed JSON objects (e.g. decisions.jsonl).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "limit": {"type": "integer", "default": 50},
+                        },
+                        "required": ["filename"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_log_text_tail",
+                    "description": "Read the tail of a log file as text (e.g. progenitor.client.stderr.log).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "max_bytes": {"type": "integer", "default": 262144},
+                        },
+                        "required": ["filename"],
+                    },
+                },
+            },
         ]
 
-        errorish = []
-        errorish.extend(_extract_errorish_events(decisions, limit=10))
-        errorish.extend(_extract_errorish_events(schedule, limit=10))
-        errorish.extend(_extract_errorish_events(validation, limit=10))
-        errorish.extend(_extract_errorish_events(errors, limit=10))
+    def _execute_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == "list_state_files":
+            return self.tool_list_state_files()
+        if name == "list_log_files":
+            return self.tool_list_log_files()
+        if name == "read_state_json":
+            return self.tool_read_state_json(filename=str(args.get("filename") or ""))
+        if name == "read_state_text_tail":
+            return self.tool_read_state_text_tail(
+                filename=str(args.get("filename") or ""),
+                max_bytes=int(args.get("max_bytes") or 131072),
+            )
+        if name == "read_log_jsonl_tail":
+            return self.tool_read_log_jsonl_tail(
+                filename=str(args.get("filename") or ""),
+                limit=int(args.get("limit") or 50),
+            )
+        if name == "read_log_text_tail":
+            return self.tool_read_log_text_tail(
+                filename=str(args.get("filename") or ""),
+                max_bytes=int(args.get("max_bytes") or 262144),
+            )
+        return {"error": f"Unknown tool: {name}"}
 
-        # Keep only the last N overall, preserving order.
-        errorish = errorish[-15:]
+    # -------------------------------------------------------------------------
+    # LiteLLM /responses (tool loop)
+    # -------------------------------------------------------------------------
+    def _litellm_endpoint(self) -> str:
+        base = os.getenv("LITELLM_BASE_URL", "http://litellm:4000").rstrip("/")
+        return f"{base}/responses"
 
-        return {
-            "recent": {"decisions": decisions[-15:], "schedule": schedule[-15:], "validation": validation[-15:], "errors": errors[-15:]},
-            "recent_errorish_events": errorish,
-            "stderr_tail": stderr_tail,
-            "conversation_tail": conversation[-10:],
-        }
+    def _litellm_headers(self) -> dict[str, str]:
+        key = (os.getenv("LITELLM_API_KEY") or os.getenv("LITELLM_MASTER_KEY") or "").strip()
+        headers = {"Content-Type": "application/json", "x-litellm-api-key": key}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
 
-    def _format_report(
-        self,
-        *,
-        request: str,
-        focus: str,
-        state_bundle: dict[str, Any],
-        log_bundle: dict[str, Any],
-    ) -> str:
-        lines: list[str] = []
+    async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._litellm_headers()) as client:
+            resp = await client.post(self._litellm_endpoint(), json=payload)
+            resp.raise_for_status()
+            return resp.json()
 
-        health = state_bundle.get("health") or {}
-        current = state_bundle.get("current_state") or {}
-        build = state_bundle.get("build_state") or {}
-        registry = state_bundle.get("registry") or {}
+    @staticmethod
+    def _extract_tool_calls(data: dict[str, Any]) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        tool_call_types = {"tool_call", "function_call"}
 
-        lines.append("Observe Agent Report")
-        lines.append(f"time: {_utc_now_iso()}")
-        if request:
-            lines.append(f"request: {_truncate(request, 400)}")
-        lines.append(f"focus: {focus}")
-        lines.append("")
+        for item in data.get("output", []) if isinstance(data.get("output"), list) else []:
+            if isinstance(item, dict) and item.get("type") in tool_call_types:
+                tool_calls.append(item)
+                continue
+            if isinstance(item, dict) and item.get("type") == "message":
+                content = item.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") in tool_call_types:
+                            tool_calls.append(part)
 
-        lines.append("Health")
-        lines.append(f"- status: {health.get('status', 'unknown')}")
-        if health.get("last_active"):
-            lines.append(f"- last_active: {health.get('last_active')}")
-        if health.get("run_id"):
-            lines.append(f"- run_id: {health.get('run_id')}")
-        if health.get("cycle_count") is not None:
-            lines.append(f"- cycle_count: {health.get('cycle_count')}")
-        if health.get("backlog_count") is not None:
-            lines.append(f"- backlog_count: {health.get('backlog_count')}")
-        if health.get("schedule_count") is not None:
-            lines.append(f"- schedule_count: {health.get('schedule_count')}")
-        if health.get("error"):
-            lines.append(f"- error: {_truncate(health.get('error'), 600)}")
-        lines.append("")
+        if isinstance(data.get("tool_calls"), list):
+            tool_calls.extend([c for c in data["tool_calls"] if isinstance(c, dict)])
 
-        lines.append("State Summary")
-        lines.append(f"- messages_count: {current.get('messages_count', 0)}")
-        lines.append(f"- current.backlog_count: {current.get('backlog_count', 0)}")
-        lines.append(f"- build_in_progress: {build.get('build_in_progress', False)}")
-        if build.get("build_phase"):
-            lines.append(f"- build_phase: {build.get('build_phase')}")
-        if build.get("build_started_at"):
-            lines.append(f"- build_started_at: {build.get('build_started_at')}")
-        lines.append(f"- build.backlog_count: {build.get('backlog_count', 0)}")
-        if registry.get("agents_count") is not None:
-            lines.append(f"- registry.agents_count: {registry.get('agents_count')}")
-        if registry.get("tools_count") is not None:
-            lines.append(f"- registry.tools_count: {registry.get('tools_count')}")
-        lines.append("")
+        return tool_calls
 
-        errorish = log_bundle.get("recent_errorish_events") or []
-        stderr_tail = log_bundle.get("stderr_tail") or []
+    @staticmethod
+    def _extract_text(data: dict[str, Any]) -> str:
+        text = data.get("output_text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
 
-        if focus in ("errors", "logs"):
-            lines.append("Recent Error Signals")
-            if not errorish:
-                lines.append("- (none found in decisions/schedule/validation/errors logs)")
-            else:
-                for idx, e in enumerate(errorish[-10:], start=1):
-                    if not isinstance(e, dict):
-                        continue
-                    ts = _event_ts(e)
-                    event = e.get("event") or e.get("type") or ""
-                    msg = e.get("error") or e.get("message") or e.get("detail") or ""
-                    prefix = f"{idx}) "
-                    ts_part = f"[{ts}] " if ts else ""
-                    lines.append(f"{prefix}{ts_part}{_truncate(event, 80)} - {_truncate(msg, 400)}")
-            lines.append("")
+        # Fallback: walk output messages
+        for item in data.get("output", []) if isinstance(data.get("output"), list) else []:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
+                        candidate = part.get("text") or part.get("value") or ""
+                        if isinstance(candidate, str) and candidate.strip():
+                            return candidate.strip()
+        return ""
 
-            if stderr_tail:
-                lines.append("progenitor.client.stderr.log (tail)")
-                for line in stderr_tail[-30:]:
-                    lines.append(f"> {line}")
-                lines.append("")
+    async def _chat_with_tools(self, *, request: str, context: dict[str, Any]) -> str:
+        model = os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max").strip() or "gpt-5.1-codex-max"
+        max_rounds = int(os.getenv("OBSERVE_MAX_TOOL_ROUNDS", "12"))
+        max_rounds = max(1, min(max_rounds, 30))
 
-        return "\n".join(lines).rstrip() + "\n"
-
-    async def process(self, request: str, context: dict[str, Any]) -> dict[str, Any]:
-        req = (request or "").strip()
-        state_bundle = self._read_state_bundle()
-        log_bundle = self._read_log_bundle()
-
-        # If user asked "why error", bias toward error-focused output.
-        req_lower = req.lower()
-        focus = "status"
-        if any(k in req_lower for k in ("why", "error", "failed", "crash", "exception", "broken")):
-            focus = "errors"
-        elif any(k in req_lower for k in ("log", "logs", "tail")):
-            focus = "logs"
-
-        report = self._format_report(
-            request=req,
-            focus=focus,
-            state_bundle=state_bundle,
-            log_bundle=log_bundle,
+        system_prompt = (
+            "You are Observe Agent, a monitoring assistant for the Progenitor runtime.\n"
+            "You have read-only tool access to Progenitor state/log mounts.\n"
+            "Use tools as needed to answer the user's question.\n"
+            "Return plain text only. Do not output JSON.\n"
+            "If you cite log/state evidence, quote small relevant snippets.\n"
         )
 
-        health = state_bundle.get("health") or {}
-        metadata = {
-            "focus": focus,
-            "paths": state_bundle.get("paths"),
-            "health_status": health.get("status", "unknown"),
-            "health_last_active": health.get("last_active"),
-            "health_run_id": health.get("run_id"),
-            "health_cycle_count": health.get("cycle_count"),
-            "recent_errorish_count": len(log_bundle.get("recent_errorish_events") or []),
-            "context_keys": sorted(context.keys()) if isinstance(context, dict) else [],
+        input_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request},
+        ]
+        if context:
+            # Provide lightweight context, but keep it small.
+            input_messages.append({"role": "user", "content": f"Context keys: {sorted(context.keys())}"})
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": input_messages,
+            "tools": self._tool_defs(),
+            "tool_choice": "auto",
+            "max_output_tokens": 2048,
         }
 
-        return {"report": report, "metadata": metadata}
+        seen: set[str] = set()
+        for _round in range(max_rounds):
+            data = await self._post_responses(payload)
+            tool_calls = self._extract_tool_calls(data)
+            if not tool_calls:
+                return self._extract_text(data)
+
+            tool_result_messages: list[dict[str, Any]] = []
+            for call in tool_calls:
+                call_id = call.get("call_id") or call.get("id") or call.get("tool_call_id") or ""
+                name = call.get("name") or call.get("tool_name") or call.get("function", {}).get("name") or ""
+                raw_args = call.get("arguments") or call.get("input") or call.get("params") or call.get("function", {}).get("arguments") or {}
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {"raw": raw_args}
+                elif isinstance(raw_args, dict):
+                    args = raw_args
+                else:
+                    args = {"raw": raw_args}
+
+                sig = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                if sig in seen:
+                    result = {"error": f"Repeated tool call detected: {name}"}
+                else:
+                    seen.add(sig)
+                    result = self._execute_tool(str(name), args)
+
+                tool_result_messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[TOOL_RESULT tool={name} id={call_id}] {json.dumps(result, default=str)}",
+                    }
+                )
+
+            input_messages.extend(tool_result_messages)
+            payload["input"] = input_messages
+
+        return "I hit the tool-call round limit while diagnosing. Try narrowing the question (which time window / which error)."
+
+    async def process(self, request: str, context: dict[str, Any]) -> str:
+        req = (request or "").strip() or "Summarize current Progenitor health and explain any recent errors."
+        return await self._chat_with_tools(request=req, context=context if isinstance(context, dict) else {})
 
 
 app = FastAPI()
@@ -343,16 +429,14 @@ async def handle(req: Request) -> JSONResponse:
     req_str = body.get("request", "") if isinstance(body, dict) else ""
     ctx = body.get("context", {}) if isinstance(body, dict) else {}
 
-    print("STATUS:executing:Reading state/logs and generating report", flush=True)
+    print("STATUS:executing:Calling LiteLLM with tool access", flush=True)
     try:
-        result = await agent.process(req_str, ctx)
-        report = result.get("report", "")
-        meta = result.get("metadata", {}) if isinstance(result, dict) else {}
+        text = await agent.process(req_str, ctx)
         response = {
             "success": True,
-            "response": report,
+            "response": text,
             "error": None,
-            "metadata": meta,
+            "metadata": {},
         }
         print("STATUS:waiting:Idle, waiting for requests", flush=True)
         return JSONResponse(content=response)
