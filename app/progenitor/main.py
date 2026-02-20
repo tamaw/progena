@@ -75,6 +75,19 @@ class Progenitor:
 
         # Load tool/agent registry
         await self.tool_registry.load()
+        # Refresh agent metadata from agent cards (best-effort).
+        try:
+            from .tools.mcp import A2AClient
+
+            summary = await self.tool_registry.refresh_agent_cards(A2AClient())
+            logger.info(
+                "Agent card refresh: checked=%d updated=%d errors=%d",
+                summary.get("agents_checked", 0),
+                summary.get("agents_updated", 0),
+                len(summary.get("errors") or []),
+            )
+        except Exception as exc:
+            logger.debug("Agent card refresh skipped: %s", exc)
 
         # Warm system tool registry so tools are discovered at startup
         from .nodes.node_helpers.registry import get_system_tool_names

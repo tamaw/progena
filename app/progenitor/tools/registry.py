@@ -6,6 +6,7 @@ Provides capability discovery and lookup for routing decisions.
 Tracks runtime status of HTTP-based A2A agents.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -419,6 +420,73 @@ class ToolRegistry:
         if agent:
             return agent.get("endpoint")
         return None
+
+    async def refresh_agent_cards(
+        self,
+        a2a_client: Any,
+        *,
+        timeout: float = 2.0,
+        concurrency: int = 8,
+    ) -> dict[str, Any]:
+        """Best-effort refresh agent metadata from their agent cards.
+
+        Updates registry entries in-place (description/version/capabilities) and persists
+        to registry.json if anything changed.
+        """
+        agents = self._registry.get("agents", [])
+        if not agents:
+            return {"agents_checked": 0, "agents_updated": 0, "errors": []}
+
+        sem = asyncio.Semaphore(max(1, int(concurrency)))
+        updated = 0
+        errors: list[str] = []
+        changed_any = False
+
+        async def _refresh_one(agent: dict[str, Any]) -> None:
+            nonlocal updated, changed_any
+            name = str(agent.get("name") or "")
+            if not name:
+                return
+            if not agent.get("endpoint") and not agent.get("agent_card_url"):
+                return
+
+            async with sem:
+                try:
+                    card = await a2a_client.get_agent_card(agent, timeout=timeout)
+                except Exception as exc:
+                    errors.append(f"{name}: {exc}")
+                    return
+
+            if not isinstance(card, dict):
+                return
+
+            changed = False
+            if isinstance(card.get("description"), str) and card["description"] and card["description"] != agent.get("description"):
+                agent["description"] = card["description"]
+                changed = True
+
+            if isinstance(card.get("version"), str) and card["version"] and card["version"] != agent.get("version"):
+                agent["version"] = card["version"]
+                changed = True
+
+            if isinstance(card.get("capabilities"), list) and card["capabilities"] and card["capabilities"] != agent.get("capabilities"):
+                agent["capabilities"] = card["capabilities"]
+                changed = True
+
+            # Keep a copy for debugging/UI without depending on it elsewhere.
+            agent["agent_card"] = card
+
+            if changed:
+                agent["updated_at"] = utcnow().isoformat()
+                updated += 1
+                changed_any = True
+
+        await asyncio.gather(*[_refresh_one(a) for a in agents if isinstance(a, dict)])
+
+        if changed_any:
+            await self.save()
+
+        return {"agents_checked": len(agents), "agents_updated": updated, "errors": errors}
 
 
 class RegistryTool(BaseSystemTool):

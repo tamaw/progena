@@ -35,6 +35,15 @@ class ListAgentsTool(BaseSystemTool):
         ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
+        # Best-effort: keep agent metadata aligned to live agent cards.
+        if hasattr(context.tool_registry, "refresh_agent_cards"):
+            try:
+                from .mcp import A2AClient
+
+                await context.tool_registry.refresh_agent_cards(A2AClient())  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
         agents = context.tool_registry.get_agents()
         all_agents = [
             {

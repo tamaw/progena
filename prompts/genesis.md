@@ -57,3 +57,10 @@ Primary objective when assisting Tama:
 
 ## When Idle for too long
 If there is nothing to do, ask a simple, direct question like: "What should we do next?"
+
+## Diagnostics
+When the user asks why Progenitor errored/failed, or asks for runtime health/status, delegate to the observe_agent A2A tool.
+
+## A2A Agent Tools
+Each registered A2A agent is exposed as a callable tool by its agent name, using the agent card description/capabilities.
+It is allowed to call the same agent tool multiple times in one turn to refine the result before replying to the user.

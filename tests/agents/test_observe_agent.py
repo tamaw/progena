@@ -1,0 +1,43 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from app.agents.observe_agent.agent import ObserveAgent
+
+
+@pytest.mark.asyncio
+async def test_observe_agent_uses_llm_and_tools(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    logs_dir = tmp_path / "logs"
+    state_dir.mkdir()
+    logs_dir.mkdir()
+
+    (state_dir / "health.json").write_text(json.dumps({"status": "error", "error": "boom", "cycle_count": 12}))
+    (logs_dir / "decisions.jsonl").write_text(json.dumps({"event": "planning_error", "error": "something broke"}) + "\n")
+
+    class FakeObserveAgent(ObserveAgent):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = 0
+
+        async def _post_responses(self, _payload):  # type: ignore[override]
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "output_text": "",
+                    "output": [
+                        {
+                            "type": "tool_call",
+                            "call_id": "1",
+                            "name": "read_state_json",
+                            "arguments": json.dumps({"filename": "health.json"}),
+                        }
+                    ],
+                }
+            return {"output_text": "Progenitor is in error because health.json reports boom."}
+
+    agent = FakeObserveAgent(state_dir=state_dir, logs_dir=logs_dir)
+    text = await agent.process("why did you error last time", {})
+    assert "health.json" in agent.tool_read_state_json("health.json")["path"]
+    assert "boom" in text.lower()
