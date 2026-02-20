@@ -1,4 +1,4 @@
-name: deploy-agents
+name: agent-deploy
 
 # Deploy only the agents/MCP servers that changed on merge to main.
 # Each changed agent/mcp gets its own Docker container and is registered
@@ -10,6 +10,11 @@ on:
     paths:
       - "app/agents/**"
       - "app/mcp/**"
+
+concurrency:
+  group: agent-deploy-cronix
+  # Queue deploys so changes stack safely.
+  cancel-in-progress: false
 
 permissions:
   contents: read
