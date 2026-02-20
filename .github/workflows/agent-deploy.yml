@@ -5,6 +5,16 @@ name: agent-deploy
 # with the LiteLLM proxy.
 
 on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Deploy mode: changed (diff HEAD^..HEAD) or all agents/mcps"
+        required: false
+        default: "changed"
+        type: choice
+        options:
+          - changed
+          - all
   push:
     branches: [main]
     paths:
@@ -35,29 +45,51 @@ jobs:
 
       - name: Detect changed agents and MCP servers
         id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MODE: ${{ inputs.mode }}
         run: |
-          # Compare HEAD^ to HEAD for the merge commit
-          CHANGED=$(git diff --name-only HEAD^ HEAD)
+          set -euo pipefail
+          MODE="${MODE:-changed}"
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${MODE}" = "all" ]; then
+            echo "Deploying ALL agents and MCP servers (workflow_dispatch mode=all)"
+            AGENTS=$(ls -1 app/agents 2>/dev/null \
+              | while read -r name; do \
+                  test -n "$name" || continue; \
+                  test -d "app/agents/$name" && echo "$name"; \
+                done \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))')
 
-          # Extract unique agent dirs from changed paths.
-          # Filter to *directories only* to avoid deploying app/agents/.gitkeep, app/agents/__init__.py, etc.
-          AGENTS=$(echo "$CHANGED" \
-            | awk -F/ '$1=="app" && $2=="agents" {print $3}' \
-            | sort -u \
-            | while read -r name; do \
-                test -n "$name" || continue; \
-                test -d "app/agents/$name" && echo "$name"; \
-              done \
-            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            MCPS=$(ls -1 app/mcp 2>/dev/null \
+              | while read -r name; do \
+                  test -n "$name" || continue; \
+                  test -d "app/mcp/$name" && echo "$name"; \
+                done \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          else
+            # Compare HEAD^ to HEAD for the merge commit
+            CHANGED=$(git diff --name-only HEAD^ HEAD)
 
-          MCPS=$(echo "$CHANGED" \
-            | awk -F/ '$1=="app" && $2=="mcp" {print $3}' \
-            | sort -u \
-            | while read -r name; do \
-                test -n "$name" || continue; \
-                test -d "app/mcp/$name" && echo "$name"; \
-              done \
-            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            # Extract unique agent dirs from changed paths.
+            # Filter to *directories only* to avoid deploying app/agents/.gitkeep, app/agents/__init__.py, etc.
+            AGENTS=$(echo "$CHANGED" \
+              | awk -F/ '$1=="app" && $2=="agents" {print $3}' \
+              | sort -u \
+              | while read -r name; do \
+                  test -n "$name" || continue; \
+                  test -d "app/agents/$name" && echo "$name"; \
+                done \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+            MCPS=$(echo "$CHANGED" \
+              | awk -F/ '$1=="app" && $2=="mcp" {print $3}' \
+              | sort -u \
+              | while read -r name; do \
+                  test -n "$name" || continue; \
+                  test -d "app/mcp/$name" && echo "$name"; \
+                done \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          fi
 
           echo "agents=$AGENTS" >> "$GITHUB_OUTPUT"
           echo "mcps=$MCPS"     >> "$GITHUB_OUTPUT"
