@@ -26,7 +26,7 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Detect core changes (exclude app/agents and app/mcp)
+      - name: Detect core changes (exclude app/agents, app/mcp, docker/runner)
         id: diff
         shell: bash
         run: |
@@ -43,6 +43,7 @@ jobs:
             case "$f" in
               app/agents/*) ;;
               app/mcp/*) ;;
+              docker/runner/*) ;;
               .github/workflows/agent-deploy.yml) ;;
               *) CORE_CHANGED="true" ;;
             esac
