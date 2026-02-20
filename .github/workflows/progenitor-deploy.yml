@@ -2,6 +2,18 @@ name: progenitor-deploy
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "prompts/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "docker/**"
+      - "docker-compose*.yml"
+      - "litellm-config.yaml"
+      - ".github/workflows/progenitor-deploy.yml"
 
 concurrency:
   group: progenitor-deploy-cronix
