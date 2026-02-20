@@ -1,57 +1,32 @@
-name: ci
+name: ci-python
 
 on:
   push:
     branches: [main]
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/ci.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # On main we want deploys to queue (not cancel) so merges can stack safely.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      python: ${{ steps.filter.outputs.python }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      images: ${{ steps.filter.outputs.images }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Detect changed paths
-        id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          filters: |
-            python:
-              - "app/**"
-              - "tests/**"
-              - "requirements.txt"
-              - "pyproject.toml"
-              - ".github/workflows/ci.yml"
-            frontend:
-              - "app/frontend/**"
-              - ".github/workflows/ci.yml"
-            images:
-              - "app/**"
-              - "prompts/**"
-              - "scripts/**"
-              - "requirements.txt"
-              - "pyproject.toml"
-              - "docker/**"
-              - ".github/workflows/ci.yml"
-
   python:
     runs-on: ubuntu-latest
-    needs: changes
-    if: ${{ needs.changes.outputs.python == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,182 +54,3 @@ jobs:
           --ignore=tests/progenitor/test_dual_loop_full_integration.py
           --ignore=tests/progenitor/test_dual_loop_integration.py
           --ignore=tests/progenitor/test_e2e_dual_loop.py
-
-  frontend:
-    runs-on: ubuntu-latest
-    needs: changes
-    if: ${{ needs.changes.outputs.frontend == 'true' }}
-    defaults:
-      run:
-        working-directory: app/frontend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: app/frontend/package-lock.json
-
-      - name: Install deps
-        run: npm ci
-
-      - name: Lint
-        continue-on-error: true
-        run: npm run lint
-
-      - name: Build
-        run: npm run build
-
-  build-and-push:
-    runs-on: ubuntu-latest
-    needs: [changes, python, frontend]
-    if: ${{ github.ref == 'refs/heads/main' && needs.changes.outputs.images == 'true' && needs.python.result != 'failure' && needs.frontend.result != 'failure' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push progenitor image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/progenitor/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/tamaw/progenitor:latest
-            ghcr.io/tamaw/progenitor:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/backend/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/tamaw/progenitor-backend:latest
-            ghcr.io/tamaw/progenitor-backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: app/frontend
-          file: docker/frontend/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/tamaw/progenitor-frontend:latest
-            ghcr.io/tamaw/progenitor-frontend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy:
-    # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
-    runs-on: [self-hosted, Linux, X64]
-    environment: cronix
-    needs: [build-and-push]
-    if: ${{ github.ref == 'refs/heads/main' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Verify required secrets
-        env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          COPILOT_GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
-          TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
-          test -n "$LITELLM_API_KEY" || (echo "Missing/empty secret: LITELLM_API_KEY" && exit 1)
-          test -n "$COPILOT_GH_TOKEN" || (echo "Missing/empty secret: COPILOT_GH_TOKEN" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL" || (echo "Missing/empty secret: PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_API_KEY" || (echo "Missing/empty secret: PROGENITOR_AZURE_STRUCTURED_API_KEY" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_MODEL" || (echo "Missing/empty var: PROGENITOR_AZURE_STRUCTURED_MODEL" && exit 1)
-          TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-false}"
-          if [ "$TELEGRAM_ENABLED" = "true" ]; then
-            test -n "$TELEGRAM_BOT_TOKEN" || (echo "Missing/empty secret: TELEGRAM_BOT_TOKEN (required when TELEGRAM_ENABLED=true)" && exit 1)
-            test -n "$TELEGRAM_CHAT_ID" || (echo "Missing/empty secret: TELEGRAM_CHAT_ID (required when TELEGRAM_ENABLED=true)" && exit 1)
-          fi
-
-      - name: Write env file
-        env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
-          PROGENITOR_MODEL_DEFAULT: ${{ secrets.PROGENITOR_MODEL_DEFAULT }}
-          PROGENITOR_TIMEZONE: ${{ secrets.PROGENITOR_TIMEZONE }}
-          COPILOT_GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
-          TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
-          TELEGRAM_POLLING_ENABLED: ${{ vars.TELEGRAM_POLLING_ENABLED }}
-          TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-false}"
-          TELEGRAM_POLLING_ENABLED="${TELEGRAM_POLLING_ENABLED:-true}"
-          cat > .progenitor.env <<EOF
-          LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-          EOF
-          if [ -n "${LITELLM_API_KEY}" ]; then echo "LITELLM_API_KEY=${LITELLM_API_KEY}" >> .progenitor.env; fi
-          if [ -n "${LITELLM_BASE_URL}" ]; then echo "LITELLM_BASE_URL=${LITELLM_BASE_URL}" >> .progenitor.env; fi
-          if [ -n "${PROGENITOR_MODEL_DEFAULT}" ]; then echo "PROGENITOR_MODEL_DEFAULT=${PROGENITOR_MODEL_DEFAULT}" >> .progenitor.env; fi
-          if [ -n "${PROGENITOR_TIMEZONE}" ]; then echo "PROGENITOR_TIMEZONE=${PROGENITOR_TIMEZONE}" >> .progenitor.env; fi
-          echo "GH_TOKEN=${COPILOT_GH_TOKEN}" >> .progenitor.env
-          echo "PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL=${PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL}" >> .progenitor.env
-          echo "PROGENITOR_AZURE_STRUCTURED_API_KEY=${PROGENITOR_AZURE_STRUCTURED_API_KEY}" >> .progenitor.env
-          echo "PROGENITOR_AZURE_STRUCTURED_MODEL=${PROGENITOR_AZURE_STRUCTURED_MODEL}" >> .progenitor.env
-          echo "TELEGRAM_ENABLED=${TELEGRAM_ENABLED}" >> .progenitor.env
-          echo "TELEGRAM_POLLING_ENABLED=${TELEGRAM_POLLING_ENABLED}" >> .progenitor.env
-          if [ -n "${TELEGRAM_ALLOWED_USERS}" ]; then echo "TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS}" >> .progenitor.env; fi
-          if [ -n "${TELEGRAM_BOT_TOKEN}" ]; then echo "TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}" >> .progenitor.env; fi
-          if [ -n "${TELEGRAM_CHAT_ID}" ]; then echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .progenitor.env; fi
-
-      - name: Ensure external network
-        run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
-
-      - name: Deploy progenitor stack
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml pull
-          docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml up -d
-          docker compose -f docker/docker-compose.progenitor.yml ps
-
-      - name: Liveness checks
-        run: |
-          wait_healthy() {
-            local name="$1"
-            local attempts="${2:-60}"
-            local i status
-            for i in $(seq 1 "$attempts"); do
-              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name" 2>/dev/null || true)"
-              if [ "$status" = "healthy" ]; then
-                echo "$name is healthy"
-                return 0
-              fi
-              sleep 2
-            done
-            echo "Timed out waiting for $name to become healthy (status=$status)"
-            docker ps -a || true
-            docker logs "$name" --tail 200 || true
-            return 1
-          }
-
-          wait_healthy progenitor-backend 90
-          wait_healthy progenitor 120
