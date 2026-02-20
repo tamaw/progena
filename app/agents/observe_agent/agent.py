@@ -280,7 +280,12 @@ class ObserveAgent:
         async def prepare(state: ObserveGraphState) -> dict[str, Any]:
             request = (state.get("request") or "").strip() or "Summarize current Progenitor health and explain any recent errors."
             context = state.get("context") or {}
-            model = (state.get("model") or "").strip() or os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max").strip() or "gpt-5.1-codex-max"
+            # Match Progenitor's default model selection (config.py defaults to gpt-5.2-chat).
+            model = (
+                (state.get("model") or "").strip()
+                or os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat").strip()
+                or "gpt-5.2-chat"
+            )
             system_prompt = state.get("system_prompt")
             if not system_prompt:
                 system_prompt = (
@@ -392,7 +397,15 @@ class ObserveAgent:
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._litellm_headers()) as client:
             resp = await client.post(self._litellm_endpoint(), json=payload)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                body_preview = (resp.text or "").strip()
+                if len(body_preview) > 2000:
+                    body_preview = body_preview[:2000] + "..."
+                raise httpx.HTTPStatusError(
+                    f"Client error '{resp.status_code}' calling LiteLLM /responses: {body_preview}",
+                    request=resp.request,
+                    response=resp,
+                )
             return resp.json()
 
     @staticmethod
@@ -522,4 +535,3 @@ async def handle(req: Request) -> JSONResponse:
             "metadata": {"detail": str(e)},
         }
         return JSONResponse(content=err, status_code=500)
-
