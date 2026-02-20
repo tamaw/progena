@@ -9,6 +9,8 @@ on:
       - "requirements.txt"
       - "pyproject.toml"
       - ".github/workflows/ci.yml"
+    paths-ignore:
+      - "app/frontend/**"
   pull_request:
     paths:
       - "app/**"
@@ -16,6 +18,8 @@ on:
       - "requirements.txt"
       - "pyproject.toml"
       - ".github/workflows/ci.yml"
+    paths-ignore:
+      - "app/frontend/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
