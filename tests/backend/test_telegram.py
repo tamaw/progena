@@ -657,7 +657,11 @@ class TestTelegramConnectedMessage:
         telegram = AsyncMock()
         telegram.send_message.return_value = True
 
-        await backend_main._send_telegram_connected_message(telegram)
+        progenitor = AsyncMock()
+        progenitor.is_running = True
+        progenitor.send_message.return_value = "👋 Progenitor connected to Telegram."
+
+        await backend_main._send_telegram_connected_message(telegram, progenitor)
 
         telegram.send_message.assert_awaited_once()
         sent_text = telegram.send_message.call_args.args[0]
@@ -671,4 +675,8 @@ class TestTelegramConnectedMessage:
         telegram = AsyncMock()
         telegram.send_message.return_value = False
 
-        await backend_main._send_telegram_connected_message(telegram)
+        progenitor = AsyncMock()
+        progenitor.is_running = True
+        progenitor.send_message.return_value = "👋 Progenitor connected to Telegram."
+
+        await backend_main._send_telegram_connected_message(telegram, progenitor)
