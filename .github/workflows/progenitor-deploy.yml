@@ -5,7 +5,8 @@ on:
 
 concurrency:
   group: progenitor-deploy-cronix
-  cancel-in-progress: true
+  # Queue deploys so changes stack safely.
+  cancel-in-progress: false
 
 permissions:
   contents: read
