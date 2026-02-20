@@ -7,6 +7,7 @@ Intake -> Chat -> Respond
 
 import logging
 from collections.abc import Callable, Coroutine
+import inspect
 from typing import Any, cast
 
 from ..llm.prompts import PromptTemplates
@@ -140,6 +141,16 @@ def create_node(
             "state_updates": {},
             "default_user_input": user_input,
         }
+
+        # Registry can be modified by external deploy pipelines; reload best-effort
+        # so A2A agents appear as tools without requiring a container restart.
+        try:
+            if tool_registry is not None and hasattr(tool_registry, "load"):
+                maybe = tool_registry.load()  # type: ignore[call-arg]
+                if inspect.isawaitable(maybe):
+                    await maybe
+        except Exception:
+            pass
 
         tool_defs = system_tools + _get_a2a_agent_tool_definitions(tool_registry)
         response_text = await llm_client.chat(

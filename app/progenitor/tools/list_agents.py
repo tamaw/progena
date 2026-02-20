@@ -35,6 +35,13 @@ class ListAgentsTool(BaseSystemTool):
         ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
+        # External deploy pipelines can update registry.json; reload best-effort.
+        if hasattr(context.tool_registry, "load"):
+            try:
+                await context.tool_registry.load()  # type: ignore[func-returns-value]
+            except Exception:
+                pass
+
         # Best-effort: keep agent metadata aligned to live agent cards.
         if hasattr(context.tool_registry, "refresh_agent_cards"):
             try:
