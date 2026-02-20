@@ -256,9 +256,19 @@ class ObserveAgent:
         return headers
 
     def _build_graph(self):
-        """LangGraph tool-loop: LLM -> tool calls -> tool results -> repeat -> finalize."""
+        """LangGraph tool-loop: prepare -> LLM -> tools -> LLM -> finalize.
+
+        This is intentionally a small graph so we can extend it later with nodes like:
+        - prefetch (read common files upfront)
+        - classify (route to different diagnostics strategies)
+        - memory (persist last-seen snapshots)
+        """
 
         class ObserveGraphState(TypedDict, total=False):
+            request: str
+            context: dict[str, Any]
+            model: str
+            system_prompt: str
             payload: dict[str, Any]
             tool_round: int
             max_tool_rounds: int
@@ -266,6 +276,36 @@ class ObserveAgent:
             tool_calls: list[dict[str, Any]]
             seen_tool_sigs: set[str]
             final_text: str
+
+        async def prepare(state: ObserveGraphState) -> dict[str, Any]:
+            request = (state.get("request") or "").strip() or "Summarize current Progenitor health and explain any recent errors."
+            context = state.get("context") or {}
+            model = (state.get("model") or "").strip() or os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max").strip() or "gpt-5.1-codex-max"
+            system_prompt = state.get("system_prompt")
+            if not system_prompt:
+                system_prompt = (
+                    "You are Observe Agent, a monitoring assistant for the Progenitor runtime.\n"
+                    "You have read-only tool access to Progenitor state/log mounts.\n"
+                    "Use tools as needed to answer the user's question.\n"
+                    "Return plain text only. Do not output JSON.\n"
+                    "If you cite log/state evidence, quote small relevant snippets.\n"
+                )
+
+            input_messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": request},
+            ]
+            if context:
+                input_messages.append({"role": "user", "content": f"Context keys: {sorted(context.keys())}"})
+
+            payload: dict[str, Any] = {
+                "model": model,
+                "input": input_messages,
+                "tools": self._tool_defs(),
+                "tool_choice": "auto",
+                "max_output_tokens": 2048,
+            }
+            return {"payload": payload, "tool_round": 0, "max_tool_rounds": int(state.get("max_tool_rounds") or 12)}
 
         async def llm_call(state: ObserveGraphState) -> dict[str, Any]:
             payload = state["payload"]
@@ -279,7 +319,10 @@ class ObserveAgent:
                 return {}
 
             input_messages = state["payload"]["input"]
-            seen = state.setdefault("seen_tool_sigs", set())
+            seen = state.get("seen_tool_sigs")
+            if not isinstance(seen, set):
+                seen = set()
+                state["seen_tool_sigs"] = seen
             tool_result_messages: list[dict[str, Any]] = []
 
             for call in tool_calls:
@@ -331,10 +374,12 @@ class ObserveAgent:
             return "finalize"
 
         graph = StateGraph(ObserveGraphState)
+        graph.add_node("prepare", prepare)
         graph.add_node("llm_call", llm_call)
         graph.add_node("run_tools", run_tools)
         graph.add_node("finalize", finalize)
-        graph.set_entry_point("llm_call")
+        graph.set_entry_point("prepare")
+        graph.add_edge("prepare", "llm_call")
         graph.add_conditional_edges(
             "llm_call",
             route_after_llm,
@@ -391,38 +436,9 @@ class ObserveAgent:
         return ""
 
     async def _chat_with_tools(self, *, request: str, context: dict[str, Any]) -> str:
-        model = os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max").strip() or "gpt-5.1-codex-max"
         max_rounds = int(os.getenv("OBSERVE_MAX_TOOL_ROUNDS", "12"))
         max_rounds = max(1, min(max_rounds, 30))
-
-        system_prompt = (
-            "You are Observe Agent, a monitoring assistant for the Progenitor runtime.\n"
-            "You have read-only tool access to Progenitor state/log mounts.\n"
-            "Use tools as needed to answer the user's question.\n"
-            "Return plain text only. Do not output JSON.\n"
-            "If you cite log/state evidence, quote small relevant snippets.\n"
-        )
-
-        input_messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": request},
-        ]
-        if context:
-            # Provide lightweight context, but keep it small.
-            input_messages.append({"role": "user", "content": f"Context keys: {sorted(context.keys())}"})
-
-        payload: dict[str, Any] = {
-            "model": model,
-            "input": input_messages,
-            "tools": self._tool_defs(),
-            "tool_choice": "auto",
-            "max_output_tokens": 2048,
-        }
-        init_state = {
-            "payload": payload,
-            "tool_round": 0,
-            "max_tool_rounds": max_rounds,
-        }
+        init_state = {"request": request, "context": context, "max_tool_rounds": max_rounds}
         result = await self._graph.ainvoke(init_state, {"configurable": {"thread_id": f"observe_{int(time.time())}"}})
         return str(result.get("final_text") or "").strip() or "No response text returned from Observe graph."
 
