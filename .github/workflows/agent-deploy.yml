@@ -10,6 +10,7 @@ on:
     paths:
       - "app/agents/**"
       - "app/mcp/**"
+      - ".github/workflows/agent-deploy.yml"
 
 concurrency:
   group: agent-deploy-cronix

@@ -8,6 +8,7 @@ on:
       - docker/litellm/**
       - litellm-config.yaml
       - docker/docker-compose.litellm.yml
+      - .github/workflows/litellm-deploy.yml
 
 concurrency:
   group: litellm-deploy-cronix
