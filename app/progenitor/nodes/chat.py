@@ -62,6 +62,49 @@ def _get_system_tool_definitions() -> list[dict[str, Any]]:
     return tool_defs
 
 
+def _get_a2a_agent_tool_definitions(tool_registry: Any) -> list[dict[str, Any]]:
+    """Expose registered A2A agents as callable tools (conversational delegation)."""
+    agents: list[dict[str, Any]] = []
+    if tool_registry is not None and hasattr(tool_registry, "get_agents"):
+        try:
+            agents = tool_registry.get_agents() or []
+        except Exception:
+            agents = []
+
+    tool_defs: list[dict[str, Any]] = []
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        name = agent.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        desc = str(agent.get("description") or "A2A agent")
+        tool_defs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": f"A2A agent: {desc}",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "request": {
+                                "type": "string",
+                                "description": "Natural language request for the agent.",
+                            },
+                            "context": {
+                                "type": "object",
+                                "description": "Optional structured context for the agent.",
+                            },
+                        },
+                        "required": ["request"],
+                    },
+                },
+            }
+        )
+    return tool_defs
+
+
 def create_node(
     llm_client,
     tool_registry,
@@ -92,11 +135,12 @@ def create_node(
             "default_user_input": user_input,
         }
 
+        tool_defs = system_tools + _get_a2a_agent_tool_definitions(tool_registry)
         response_text = await llm_client.chat(
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.7,
-            tools=system_tools,
+            tools=tool_defs,
             max_tool_rounds=max_tool_rounds,
             system_tool_context=tool_exec_ctx,
         )

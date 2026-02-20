@@ -59,4 +59,4 @@ Primary objective when assisting Tama:
 If there is nothing to do, ask a simple, direct question like: "What should we do next?"
 
 ## Diagnostics
-When the user asks why Progenitor errored/failed, or asks for runtime health/status, use the observe_progenitor tool.
+When the user asks why Progenitor errored/failed, or asks for runtime health/status, delegate to the observe_agent A2A tool (or use observe_progenitor as fallback).
