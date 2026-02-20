@@ -5,7 +5,10 @@ on:
   push:
     branches: [main]
     paths:
-      - "app/**"
+      # Core app surfaces only (exclude app/agents and app/mcp; those deploy via agent-deploy.yml)
+      - "app/progenitor/**"
+      - "app/backend/**"
+      - "app/frontend/**"
       - "prompts/**"
       - "scripts/**"
       - "requirements.txt"
