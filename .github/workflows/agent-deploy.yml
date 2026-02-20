@@ -183,10 +183,17 @@ jobs:
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: |
+          EXTRA_VOLUMES=""
+          if [ "${{ matrix.agent }}" = "observe_agent" ]; then
+            mkdir -p data/state logs
+            EXTRA_VOLUMES="-v $(pwd)/data/state:/app/data/state:ro -v $(pwd)/logs:/app/logs:ro"
+          fi
+
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
             --restart unless-stopped \
             --network langfuse_network \
+            ${EXTRA_VOLUMES} \
             -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
             -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
             -e TEST_MODE=false \
@@ -207,6 +214,48 @@ jobs:
           docker logs progenitor-agent-${{ matrix.agent }} --tail 50
           exit 1
 
+      - name: Update Progenitor agent registry entry
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          
+          name = os.environ["AGENT_NAME"]
+          endpoint = f"http://progenitor-agent-{name}:8080"
+          card_url = f"{endpoint}/.well-known/agent.json"
+          
+          path = Path("data/state/registry.json")
+          path.parent.mkdir(parents=True, exist_ok=True)
+          
+          try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"agents": [], "tools": []}
+          except Exception:
+            data = {"agents": [], "tools": []}
+          
+          agents = data.setdefault("agents", [])
+          now = datetime.now(timezone.utc).isoformat()
+          
+          entry = next((a for a in agents if a.get("name") == name), None)
+          if entry is None:
+            entry = {"name": name, "kind": "a2a_agent", "enabled": True, "created_at": now}
+            agents.append(entry)
+          
+          entry.update({
+            "transport": "http",
+            "endpoint": endpoint,
+            "agent_card_url": card_url,
+            "status": "running",
+            "updated_at": now,
+          })
+          
+          path.write_text(json.dumps(data, indent=2, sort_keys=False), encoding="utf-8")
+          print(f"Updated registry entry for {name} -> {endpoint}")
+          PY
+        env:
+          AGENT_NAME: ${{ matrix.agent }}
+
       - name: Register agent with LiteLLM
         env:
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
@@ -216,7 +265,12 @@ jobs:
           AGENT_HOST="progenitor-agent-${{ matrix.agent }}"
           AGENT_URL="http://${AGENT_HOST}:8080/v1"
 
-          curl -fsS -X POST "${LITELLM_BASE_URL:-http://localhost:4000}/model/new" \
+          REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://localhost:4000}"
+          if echo "$REGISTER_BASE_URL" | grep -q "://litellm:"; then
+            REGISTER_BASE_URL="http://localhost:4000"
+          fi
+
+          curl -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -H "Content-Type: application/json" \
             -d "{
@@ -332,7 +386,12 @@ jobs:
           MCP_HOST="progenitor-mcp-${{ matrix.mcp }}"
           MCP_URL="http://${MCP_HOST}:8080/v1"
 
-          curl -fsS -X POST "${LITELLM_BASE_URL:-http://localhost:4000}/model/new" \
+          REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://localhost:4000}"
+          if echo "$REGISTER_BASE_URL" | grep -q "://litellm:"; then
+            REGISTER_BASE_URL="http://localhost:4000"
+          fi
+
+          curl -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -H "Content-Type: application/json" \
             -d "{
