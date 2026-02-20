@@ -27,8 +27,6 @@ services:
       TZ: UTC
       # Bind IPC on all interfaces so other containers (backend) can connect.
       PROGENITOR_IPC_HOST: 0.0.0.0
-      # Used by the observe_progenitor system tool (calls the Observe A2A agent).
-      PROGENITOR_OBSERVE_AGENT_ENDPOINT: http://progenitor-agent-observe_agent:8080
     volumes:
       - ../data/state:/app/data/state
       - ../logs:/app/logs
