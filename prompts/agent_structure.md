@@ -24,6 +24,7 @@ If the agent must reason over data/tools (not just static responses), implement:
   - Headers: `x-litellm-api-key` using `LITELLM_API_KEY` (or `LITELLM_MASTER_KEY`)
   - Model: `PROGENITOR_MODEL_DEFAULT`
 - A local tool-calling loop so the agent can call its own Python tools multiple times in one request before returning a final answer.
+- For more structure/flexibility, you may implement the tool loop using LangGraph nodes (LLM -> tools -> LLM -> finalize).
 - Return plain text in the A2A `response` field unless the task explicitly needs structured output.
 
 ### Required Endpoints

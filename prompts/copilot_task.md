@@ -34,6 +34,6 @@ Create a new {kind} named "{agent_name}" in `app/agents/{agent_name}/`
 - If the agent is LLM-backed, use the same LiteLLM /responses integration pattern as Progenitor:
   - Read `LITELLM_BASE_URL` + `LITELLM_API_KEY`/`LITELLM_MASTER_KEY`
   - Use `PROGENITOR_MODEL_DEFAULT` for model selection
-  - Support multi-round tool calling to gather data before responding
+  - Support multi-round tool calling (LangGraph is acceptable for this loop) to gather data before responding
 
 Build it now.
