@@ -20,6 +20,7 @@ on:
     paths:
       - "app/agents/**"
       - "app/mcp/**"
+      - "docker/runner/**"
       - ".github/workflows/agent-deploy.yml"
 
 concurrency:
@@ -70,6 +71,25 @@ jobs:
             # Compare HEAD^ to HEAD for the merge commit
             CHANGED=$(git diff --name-only HEAD^ HEAD)
 
+            # If the shared runner Dockerfiles changed, rebuild/redeploy ALL agents & MCPs.
+            if echo "$CHANGED" | grep -q '^docker/runner/'; then
+              echo "docker/runner changed; deploying ALL agents and MCP servers"
+              MODE="all"
+              AGENTS=$(ls -1 app/agents 2>/dev/null \
+                | while read -r name; do \
+                    test -n "$name" || continue; \
+                    test -d "app/agents/$name" && echo "$name"; \
+                  done \
+                | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+              MCPS=$(ls -1 app/mcp 2>/dev/null \
+                | while read -r name; do \
+                    test -n "$name" || continue; \
+                    test -d "app/mcp/$name" && echo "$name"; \
+                  done \
+                | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            else
+
             # Extract unique agent dirs from changed paths.
             # Filter to *directories only* to avoid deploying app/agents/.gitkeep, app/agents/__init__.py, etc.
             AGENTS=$(echo "$CHANGED" \
@@ -89,6 +109,7 @@ jobs:
                   test -d "app/mcp/$name" && echo "$name"; \
                 done \
               | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            fi
           fi
 
           echo "agents=$AGENTS" >> "$GITHUB_OUTPUT"

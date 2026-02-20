@@ -15,7 +15,12 @@ on:
       - "requirements.lock.txt"
       - "requirements-ml.txt"
       - "pyproject.toml"
-      - "docker/**"
+      # Core Dockerfiles only (exclude docker/runner which is for agents/mcp images)
+      - "docker/progenitor/**"
+      - "docker/backend/**"
+      - "docker/frontend/**"
+      - "docker/caddy/**"
+      - "docker/litellm/**"
       - "docker-compose*.yml"
       - "litellm-config.yaml"
       - ".github/workflows/progenitor-deploy.yml"
