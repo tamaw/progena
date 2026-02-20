@@ -348,18 +348,47 @@ class ShutdownManager:
 
 shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
-async def _send_telegram_connected_message(telegram: TelegramClient) -> None:
-    """Send a friendly 'connected' message when Telegram is successfully initialized."""
-    message = "👋 Progenitor connected to Telegram."
+
+async def _send_telegram_connected_message(
+    telegram: TelegramClient,
+    progenitor: ProgenitorClient | IPCProgenitorClient,
+) -> None:
+    """Trigger an agent-generated greeting after Telegram is initialized.
+
+    This routes through the same backend -> Progenitor IPC request/response
+    path as a normal user message, but is auto-invoked on connection.
+    """
+    prompt = (
+        "Hi! I just connected to you on Telegram. "
+        "Please reply with a short, friendly greeting and invite me to send a message."
+    )
+    request_id = f"telegram-connect-{uuid.uuid4().hex[:8]}"
 
     try:
-        sent = await telegram.send_message(message)
-    except Exception as e:
-        logger.warning("Failed to send Telegram connected message: %s", e)
-        return
+        # Ensure the client is started/connected (we normally lazy-start).
+        if not progenitor.is_running:
+            await progenitor.start()
 
-    if not sent:
-        logger.warning("Telegram connected message send returned False")
+        response_text = (await progenitor.send_message(prompt, request_id=request_id)).strip()
+        if not response_text:
+            raise RuntimeError("Empty greeting response from agent")
+
+        sent = await telegram.send_message(response_text)
+        if not sent:
+            logger.warning("Telegram greeting send returned False")
+    except Exception as e:
+        logger.warning("Failed to send agent-generated Telegram greeting: %s", e)
+
+        # Fallback should signal failure (if the agent path failed, we're not fully connected).
+        try:
+            sent = await telegram.send_message(
+                "⚠️ Progenitor failed to connect to the agent. "
+                "I can't respond yet — please check the backend/agent logs and try again."
+            )
+            if not sent:
+                logger.warning("Fallback Telegram failure message send returned False")
+        except Exception as e2:
+            logger.warning("Failed to send fallback Telegram failure message: %s", e2)
 
 
 async def _send_telegram_message(
@@ -440,8 +469,6 @@ async def lifespan(app: FastAPI):
             "Telegram integration enabled (chat_id=%s)",
             config.telegram_chat_id[:8] + "..." if len(config.telegram_chat_id) > 8 else config.telegram_chat_id
         )
-        # Friendly confirmation for users who expect a Telegram message when connected.
-        asyncio.create_task(_send_telegram_connected_message(telegram_client))
         # Register Telegram shutdown callback
         graceful_shutdown.register_callback(
             "stop_telegram_client",
@@ -582,6 +609,9 @@ async def lifespan(app: FastAPI):
         telegram_client.set_message_handler(handle_telegram_message)
         await telegram_client.start_polling()
         logger.info("Telegram polling started with message handler")
+
+        # Send a one-time agent-generated greeting now that Telegram + IPC are wired.
+        asyncio.create_task(_send_telegram_connected_message(telegram_client, client))
 
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues
