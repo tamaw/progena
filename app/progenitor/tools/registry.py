@@ -9,6 +9,7 @@ Tracks runtime status of HTTP-based A2A agents.
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -18,6 +19,18 @@ from ..state.models import AgentRegistryEntry, AgentStatus
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+_TOOL_NAME_INVALID_CHARS = re.compile(r"[^a-zA-Z0-9_-]+")
+
+
+def normalize_tool_name(name: str) -> str:
+    """Normalize an arbitrary display name into a valid OpenAI function/tool name."""
+    raw = (name or "").strip()
+    if not raw:
+        return "tool"
+    slug = _TOOL_NAME_INVALID_CHARS.sub("_", raw).strip("_")
+    slug = re.sub(r"_+", "_", slug)
+    return (slug or "tool")[:64]
 
 
 # Port range for A2A agents (8100-8199 by default)
@@ -207,12 +220,15 @@ class ToolRegistry:
 
     def find_by_name(self, name: str) -> dict[str, Any] | None:
         """Find an agent or tool by name."""
+        needle = normalize_tool_name(name)
         for agent in self._registry.get("agents", []):
-            if agent.get("name") == name:
+            agent_name = str(agent.get("name") or "")
+            if agent_name == name or normalize_tool_name(agent_name) == needle:
                 return agent
 
         for tool in self._registry.get("tools", []):
-            if tool.get("name") == name:
+            tool_name = str(tool.get("name") or "")
+            if tool_name == name or normalize_tool_name(tool_name) == needle:
                 return tool
 
         return None
