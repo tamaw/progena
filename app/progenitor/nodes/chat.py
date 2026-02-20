@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from ..llm.prompts import PromptTemplates
 from ..state.models import Decision, DecisionAction, ProgenitorState
+from ..tools.registry import normalize_tool_name
 from ..utils import env_int
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,7 @@ def _get_a2a_agent_tool_definitions(tool_registry: Any) -> list[dict[str, Any]]:
         name = agent.get("name")
         if not name or not isinstance(name, str):
             continue
+        tool_name = normalize_tool_name(name)
         desc = str(agent.get("description") or "A2A agent")
         caps = agent.get("capabilities") if isinstance(agent.get("capabilities"), list) else []
         caps_str = ", ".join(str(c) for c in caps[:10] if c) if caps else ""
@@ -87,8 +89,8 @@ def _get_a2a_agent_tool_definitions(tool_registry: Any) -> list[dict[str, Any]]:
             {
                 "type": "function",
                 "function": {
-                    "name": name,
-                    "description": f"A2A agent: {desc}",
+                    "name": tool_name,
+                    "description": f"A2A agent ({name}): {desc}",
                     "parameters": {
                         "type": "object",
                         "properties": {
