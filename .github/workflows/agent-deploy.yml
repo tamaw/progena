@@ -1,4 +1,4 @@
-name: deploy-agents
+name: agent-deploy
 
 # Deploy only the agents/MCP servers that changed on merge to main.
 # Each changed agent/mcp gets its own Docker container and is registered
@@ -10,9 +10,16 @@ on:
     paths:
       - "app/agents/**"
       - "app/mcp/**"
+      - ".github/workflows/agent-deploy.yml"
+
+concurrency:
+  group: agent-deploy-cronix
+  # Queue deploys so changes stack safely.
+  cancel-in-progress: false
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   # ------------------------------------------------------------------ detect
@@ -57,9 +64,43 @@ jobs:
           echo "Changed agents: $AGENTS"
           echo "Changed mcps:   $MCPS"
 
+  # ------------------------------------------------------------------ build agents (GH-hosted)
+  build-agent:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/runner/Dockerfile.agent
+          build-args: |
+            AGENT_NAME=${{ matrix.agent }}
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest
+            ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # ------------------------------------------------------------------ agents
   deploy-agent:
-    needs: detect-changes
+    needs: [detect-changes, build-agent]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
     runs-on: [self-hosted, Linux, X64]
     environment: cronix
@@ -75,13 +116,11 @@ jobs:
           test -d "app/agents/${{ matrix.agent }}" \
             || { echo "Agent directory app/agents/${{ matrix.agent }} not found"; exit 1; }
 
-      - name: Build agent image
-        run: |
-          docker build \
-            --build-arg AGENT_NAME=${{ matrix.agent }} \
-            -f docker/runner/Dockerfile.agent \
-            -t progenitor-agent-${{ matrix.agent }}:latest \
-            .
+      - name: Docker login (GHCR)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull agent image
+        run: docker pull ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest
 
       - name: Stop existing container (if any)
         run: docker rm -f progenitor-agent-${{ matrix.agent }} 2>/dev/null || true
@@ -98,7 +137,7 @@ jobs:
             -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
             -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
             -e TEST_MODE=false \
-            progenitor-agent-${{ matrix.agent }}:latest
+            ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest
 
       - name: Wait for agent to become healthy
         run: |
@@ -142,9 +181,43 @@ jobs:
           echo ""
           echo "Registered agent/${{ matrix.agent }} with LiteLLM at ${AGENT_URL}"
 
+  # ------------------------------------------------------------------ build mcps (GH-hosted)
+  build-mcp:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push MCP image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/runner/Dockerfile.mcp
+          build-args: |
+            MCP_NAME=${{ matrix.mcp }}
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
+            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # ------------------------------------------------------------------ mcps
   deploy-mcp:
-    needs: detect-changes
+    needs: [detect-changes, build-mcp]
     if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
     runs-on: [self-hosted, Linux, X64]
     environment: cronix
@@ -160,13 +233,11 @@ jobs:
           test -d "app/mcp/${{ matrix.mcp }}" \
             || { echo "MCP directory app/mcp/${{ matrix.mcp }} not found"; exit 1; }
 
-      - name: Build MCP image
-        run: |
-          docker build \
-            --build-arg MCP_NAME=${{ matrix.mcp }} \
-            -f docker/runner/Dockerfile.mcp \
-            -t progenitor-mcp-${{ matrix.mcp }}:latest \
-            .
+      - name: Docker login (GHCR)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull MCP image
+        run: docker pull ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
 
       - name: Stop existing container (if any)
         run: docker rm -f progenitor-mcp-${{ matrix.mcp }} 2>/dev/null || true
@@ -183,7 +254,7 @@ jobs:
             -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
             -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
             -e TEST_MODE=false \
-            progenitor-mcp-${{ matrix.mcp }}:latest
+            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
 
       - name: Wait for MCP server to become healthy
         run: |
