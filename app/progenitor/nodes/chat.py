@@ -79,6 +79,10 @@ def _get_a2a_agent_tool_definitions(tool_registry: Any) -> list[dict[str, Any]]:
         if not name or not isinstance(name, str):
             continue
         desc = str(agent.get("description") or "A2A agent")
+        caps = agent.get("capabilities") if isinstance(agent.get("capabilities"), list) else []
+        caps_str = ", ".join(str(c) for c in caps[:10] if c) if caps else ""
+        if caps_str:
+            desc = f"{desc} (capabilities: {caps_str})"
         tool_defs.append(
             {
                 "type": "function",
