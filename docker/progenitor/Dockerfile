@@ -26,8 +26,8 @@ RUN curl -fsSL https://gh.io/copilot-install | bash
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock.txt .
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 # Copy application code (including app.chat_server and app.progenitor)
 COPY app/ ./app/
