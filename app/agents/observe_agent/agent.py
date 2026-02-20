@@ -9,11 +9,12 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from langgraph.graph import END, StateGraph
 
 
 def _utc_now_iso() -> str:
@@ -81,6 +82,7 @@ class ObserveAgent:
     ):
         self.state_dir = state_dir or Path(os.getenv("OBSERVE_STATE_DIR", "/app/data/state"))
         self.logs_dir = logs_dir or Path(os.getenv("OBSERVE_LOGS_DIR", "/app/logs"))
+        self._graph = self._build_graph()
 
     # -------------------------------------------------------------------------
     # Tooling (local, read-only)
@@ -253,6 +255,95 @@ class ObserveAgent:
             headers["Authorization"] = f"Bearer {key}"
         return headers
 
+    def _build_graph(self):
+        """LangGraph tool-loop: LLM -> tool calls -> tool results -> repeat -> finalize."""
+
+        class ObserveGraphState(TypedDict, total=False):
+            payload: dict[str, Any]
+            tool_round: int
+            max_tool_rounds: int
+            last_data: dict[str, Any]
+            tool_calls: list[dict[str, Any]]
+            seen_tool_sigs: set[str]
+            final_text: str
+
+        async def llm_call(state: ObserveGraphState) -> dict[str, Any]:
+            payload = state["payload"]
+            data = await self._post_responses(payload)
+            tool_calls = self._extract_tool_calls(data)
+            return {"last_data": data, "tool_calls": tool_calls}
+
+        async def run_tools(state: ObserveGraphState) -> dict[str, Any]:
+            tool_calls = state.get("tool_calls") or []
+            if not isinstance(tool_calls, list) or not tool_calls:
+                return {}
+
+            input_messages = state["payload"]["input"]
+            seen = state.setdefault("seen_tool_sigs", set())
+            tool_result_messages: list[dict[str, Any]] = []
+
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                call_id = call.get("call_id") or call.get("id") or call.get("tool_call_id") or ""
+                name = call.get("name") or call.get("tool_name") or call.get("function", {}).get("name") or ""
+                raw_args = call.get("arguments") or call.get("input") or call.get("params") or call.get("function", {}).get("arguments") or {}
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {"raw": raw_args}
+                elif isinstance(raw_args, dict):
+                    args = raw_args
+                else:
+                    args = {"raw": raw_args}
+
+                sig = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                if sig in seen:
+                    result = {"error": f"Repeated tool call detected: {name}"}
+                else:
+                    seen.add(sig)
+                    result = self._execute_tool(str(name), args)
+
+                tool_result_messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[TOOL_RESULT tool={name} id={call_id}] {json.dumps(result, default=str)}",
+                    }
+                )
+
+            input_messages.extend(tool_result_messages)
+            state["payload"]["input"] = input_messages
+            state["tool_round"] = int(state.get("tool_round", 0)) + 1
+            return {"payload": state["payload"], "tool_round": state["tool_round"]}
+
+        async def finalize(state: ObserveGraphState) -> dict[str, Any]:
+            data = state.get("last_data") or {}
+            text = self._extract_text(data)
+            if not text:
+                text = "No response text returned from LiteLLM."
+            return {"final_text": text}
+
+        def route_after_llm(state: ObserveGraphState) -> str:
+            tool_calls = state.get("tool_calls") or []
+            if tool_calls and int(state.get("tool_round", 0)) < int(state.get("max_tool_rounds", 0)):
+                return "run_tools"
+            return "finalize"
+
+        graph = StateGraph(ObserveGraphState)
+        graph.add_node("llm_call", llm_call)
+        graph.add_node("run_tools", run_tools)
+        graph.add_node("finalize", finalize)
+        graph.set_entry_point("llm_call")
+        graph.add_conditional_edges(
+            "llm_call",
+            route_after_llm,
+            {"run_tools": "run_tools", "finalize": "finalize"},
+        )
+        graph.add_edge("run_tools", "llm_call")
+        graph.add_edge("finalize", END)
+        return graph.compile()
+
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._litellm_headers()) as client:
             resp = await client.post(self._litellm_endpoint(), json=payload)
@@ -327,47 +418,13 @@ class ObserveAgent:
             "tool_choice": "auto",
             "max_output_tokens": 2048,
         }
-
-        seen: set[str] = set()
-        for _round in range(max_rounds):
-            data = await self._post_responses(payload)
-            tool_calls = self._extract_tool_calls(data)
-            if not tool_calls:
-                return self._extract_text(data)
-
-            tool_result_messages: list[dict[str, Any]] = []
-            for call in tool_calls:
-                call_id = call.get("call_id") or call.get("id") or call.get("tool_call_id") or ""
-                name = call.get("name") or call.get("tool_name") or call.get("function", {}).get("name") or ""
-                raw_args = call.get("arguments") or call.get("input") or call.get("params") or call.get("function", {}).get("arguments") or {}
-                if isinstance(raw_args, str):
-                    try:
-                        args = json.loads(raw_args)
-                    except Exception:
-                        args = {"raw": raw_args}
-                elif isinstance(raw_args, dict):
-                    args = raw_args
-                else:
-                    args = {"raw": raw_args}
-
-                sig = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
-                if sig in seen:
-                    result = {"error": f"Repeated tool call detected: {name}"}
-                else:
-                    seen.add(sig)
-                    result = self._execute_tool(str(name), args)
-
-                tool_result_messages.append(
-                    {
-                        "role": "user",
-                        "content": f"[TOOL_RESULT tool={name} id={call_id}] {json.dumps(result, default=str)}",
-                    }
-                )
-
-            input_messages.extend(tool_result_messages)
-            payload["input"] = input_messages
-
-        return "I hit the tool-call round limit while diagnosing. Try narrowing the question (which time window / which error)."
+        init_state = {
+            "payload": payload,
+            "tool_round": 0,
+            "max_tool_rounds": max_rounds,
+        }
+        result = await self._graph.ainvoke(init_state, {"configurable": {"thread_id": f"observe_{int(time.time())}"}})
+        return str(result.get("final_text") or "").strip() or "No response text returned from Observe graph."
 
     async def process(self, request: str, context: dict[str, Any]) -> str:
         req = (request or "").strip() or "Summarize current Progenitor health and explain any recent errors."
