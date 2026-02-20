@@ -195,11 +195,12 @@ jobs:
       - name: Update Progenitor agent registry entry
         run: |
           CODE="import json,os; from datetime import datetime,timezone; from pathlib import Path; name=os.environ['AGENT_NAME']; endpoint=f'http://progenitor-agent-{name}:8080'; card_url=f'{endpoint}/.well-known/agent.json'; path=Path('/app/data/state/registry.json'); path.parent.mkdir(parents=True, exist_ok=True); data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'agents': [], 'tools': []}; agents=list(data.get('agents') or []); now=datetime.now(timezone.utc).isoformat(); existing=next((a for a in agents if a.get('name')==name), {}); created_at=existing.get('created_at', now); enabled=existing.get('enabled', True); entry={**existing, 'name': name, 'kind': 'a2a_agent', 'enabled': enabled, 'created_at': created_at, 'transport': 'http', 'endpoint': endpoint, 'agent_card_url': card_url, 'status': 'running', 'updated_at': now}; data['agents']=[a for a in agents if a.get('name')!=name]+[entry]; path.write_text(json.dumps(data, indent=2, sort_keys=False), encoding='utf-8'); print(f'Updated registry entry for {name} -> {endpoint}')"
-          docker exec progenitor python -c "$CODE"
+          docker exec -e AGENT_NAME="${AGENT_NAME}" progenitor python -c "$CODE"
         env:
           AGENT_NAME: ${{ matrix.agent }}
 
       - name: Register agent with LiteLLM
+        continue-on-error: true
         env:
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
@@ -324,6 +325,7 @@ jobs:
           exit 1
 
       - name: Register MCP with LiteLLM
+        continue-on-error: true
         env:
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
