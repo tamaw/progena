@@ -22,7 +22,6 @@ from ..config import ProgenitorConfig, get_config
 from .backends import create_progenitor_backend
 from .langchain_adapter import create_langchain_model
 from .middleware import AuditLoggingMiddleware, MetricsMiddleware, SecretRedactionMiddleware
-from .subagents import create_progenitor_subagents
 from .tools_adapter import create_deepagent_tools
 
 logger = logging.getLogger(__name__)
@@ -31,21 +30,19 @@ logger = logging.getLogger(__name__)
 # This is prepended to DeepAgent's built-in system prompt which includes
 # instructions for planning, filesystem, and subagent tools.
 PROGENITOR_SYSTEM_PROMPT = """\
-You are Progenitor, a perpetual personal assistant and bootstrap builder.
+You are Progenitor Core.
 
-Your capabilities include:
-- Answering questions and having conversations
-- Building and managing AI agents (A2A protocol)
-- Executing shell commands, git operations, and GitHub CLI
-- Scheduling tasks (one-off and recurring)
-- Managing MCP (Model Context Protocol) tools
-- Self-reflection and continuous improvement
+Scope (core-only):
+- Hold a conversation, keep memory/skills, and answer directly when you can.
+- Delegate specialized work to external A2A agents.
 
-When given complex multi-step tasks, break them down using the planning tools.
-For code generation tasks, delegate to the build subagent.
-For simple questions, answer directly.
+Tooling:
+- Use list_agents to see what agents exist.
+- Use call_agent to delegate by name or capability.
 
-Always be concise and action-oriented.
+Hard limits:
+- Do NOT edit the repository, run shell commands, use git/gh, build agents/tools, or schedule tasks.
+- If the user asks for those, delegate to the Builder Agent (if available) via call_agent.
 """
 
 
@@ -100,8 +97,8 @@ def create_progenitor_agent(
         from langgraph.store.memory import InMemoryStore
         store = InMemoryStore()
 
-    # Create CompositeBackend: LocalShell + StoreBackend + StateBackend
-    backend = create_progenitor_backend(config=config, project_root=project_root)
+    # Core-only backend: no project filesystem, no shell.
+    backend = create_progenitor_backend(project_root=project_root)
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools
     tools = create_deepagent_tools(
@@ -132,9 +129,6 @@ def create_progenitor_agent(
         if agents_md.is_file():
             memory_paths.append(str(agents_md))
 
-    # Create subagents (build loop, code reviewer, researcher)
-    subagents = create_progenitor_subagents(inner_loop_graph=inner_loop_graph)
-
     agent = create_deep_agent(
         name="progenitor",
         model=model,
@@ -144,7 +138,7 @@ def create_progenitor_agent(
         store=store,
         skills=skills_dirs,
         memory=memory_paths or None,
-        subagents=subagents or None,
+        subagents=None,
         middleware=custom_middleware,
         checkpointer=checkpointer,
     )
