@@ -5,7 +5,6 @@ Tests for Phase 3: Backend configuration for DeepAgent.
 from unittest.mock import MagicMock
 
 from app.progenitor.agent.backends import create_progenitor_backend
-from app.progenitor.config import ProgenitorConfig
 
 
 class TestBackendFactory:
@@ -18,7 +17,7 @@ class TestBackendFactory:
 
     def test_factory_creates_composite_backend(self):
         """Factory callable creates a CompositeBackend when called with runtime."""
-        from deepagents.backends import CompositeBackend
+        from deepagents.backends import CompositeBackend, StateBackend
 
         factory = create_progenitor_backend(project_root=".")
         runtime = MagicMock()
@@ -27,9 +26,10 @@ class TestBackendFactory:
 
         backend = factory(runtime)
         assert isinstance(backend, CompositeBackend)
+        assert isinstance(backend.default, StateBackend)
 
     def test_factory_uses_project_root(self):
-        """Factory uses specified project_root for LocalShellBackend."""
+        """project_root is accepted (even though core-only doesn't use it)."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -38,7 +38,6 @@ class TestBackendFactory:
             runtime.store = MagicMock()
 
             backend = factory(runtime)
-            # The default backend should be a LocalShellBackend rooted at tmpdir
             assert backend is not None
 
     def test_factory_defaults_to_cwd(self):
@@ -47,9 +46,3 @@ class TestBackendFactory:
         factory = create_progenitor_backend()
         # Just verify it returns without error
         assert factory is not None
-
-    def test_factory_with_config(self):
-        """Factory accepts ProgenitorConfig."""
-        config = ProgenitorConfig()
-        factory = create_progenitor_backend(config=config)
-        assert callable(factory)

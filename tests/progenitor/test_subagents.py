@@ -108,8 +108,7 @@ class TestSubagentWiring:
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert "subagents" in call_kwargs
-                subagents = call_kwargs["subagents"]
-                assert len(subagents) >= 2  # At least reviewer + researcher
+                assert call_kwargs["subagents"] is None
 
     def test_factory_with_inner_loop(self):
         with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
@@ -122,6 +121,4 @@ class TestSubagentWiring:
                 create_progenitor_agent(inner_loop_graph=mock_graph)
 
                 call_kwargs = mock_create.call_args.kwargs
-                subagents = call_kwargs["subagents"]
-                names = [s["name"] for s in subagents]
-                assert "build-agent" in names
+                assert call_kwargs["subagents"] is None

@@ -5,11 +5,12 @@ A perpetual, conversational personal assistant and bootstrap builder for the TAR
 ## Overview
 
 Progenitor is an always-on agent that:
-- Accepts user messages conversationally
-- Routes requests: answer directly, delegate via A2A, or build/upgrade agents
-- Uses Copilot CLI as the builder actuator
-- Maintains persistent state and logs
+- Accepts user messages conversationally (DeepAgent)
+- Delegates specialized work to external A2A agents
+- Maintains persistent conversation state and logs
 - Runs as a perpetual loop in Docker
+
+Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A agent: **Builder Agent**.
 
 ## Quick Start
 
@@ -180,13 +181,8 @@ User: I need a tool that can fetch weather data
 
 ## Architecture
 
-Progenitor implements a dual-loop architecture based on the [loop.spec.md](docs/loop.spec.md), with a [DeepAgent](https://docs.langchain.com/oss/python/deepagents/overview) conversational layer:
-
-- **Conversational Layer**: LangChain DeepAgent with middleware (auto-summarization, skills, memory, subagents)
-- **Outer Loop**: Perpetual cycle — intake, decide, respond, idle with exponential backoff
-- **Inner Loop**: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
-
-The DeepAgent handles conversation management, context windows, and tool orchestration while the existing dual-loop handles build iteration and scheduling.
+Progenitor core uses a [DeepAgent](https://docs.langchain.com/oss/python/deepagents/overview) conversational layer and keeps its runtime focused on chat + delegation.
+The iterative inner build loop and repo mutation live in the **Builder Agent** (A2A).
 
 See [docs/](docs/) for detailed documentation:
 - [SPEC.md](docs/SPEC.md) - Original system specification

@@ -1,33 +1,22 @@
 """
 Backend configuration for Progenitor's DeepAgent.
 
-Creates a CompositeBackend that routes:
-- Default: LocalShellBackend (project filesystem + shell execution)
-- /memories/: StoreBackend (cross-thread persistent memory)
-- /workspace/: StateBackend (ephemeral scratch space per thread)
-
-This preserves Progenitor's existing StateManager for build/schedule state
-while giving DeepAgent proper filesystem and memory backends.
+Core-only profile:
+- No project filesystem access
+- No shell execution
+- Only ephemeral workspace (StateBackend) and cross-thread memory (StoreBackend)
 """
 
 import logging
 from pathlib import Path
 from typing import Any
 
-from deepagents.backends import (
-    CompositeBackend,
-    LocalShellBackend,
-    StateBackend,
-    StoreBackend,
-)
-
-from ..config import ProgenitorConfig
+from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
 
 logger = logging.getLogger(__name__)
 
 
 def create_progenitor_backend(
-    config: ProgenitorConfig | None = None,
     project_root: str | Path | None = None,
 ) -> Any:
     """Create a backend factory for the Progenitor DeepAgent.
@@ -42,16 +31,14 @@ def create_progenitor_backend(
     Returns:
         Backend factory callable.
     """
-    root_dir = str(project_root or Path.cwd())
-
+    # project_root intentionally unused in core-only mode.
     def _backend_factory(runtime: Any) -> CompositeBackend:
         return CompositeBackend(
-            default=LocalShellBackend(root_dir=root_dir, virtual_mode=True),
+            default=StateBackend(runtime),
             routes={
                 "/memories/": StoreBackend(runtime),
-                "/workspace/": StateBackend(runtime),
             },
         )
 
-    logger.info("Created backend factory: root_dir=%s", root_dir)
+    logger.info("Created core-only backend factory")
     return _backend_factory

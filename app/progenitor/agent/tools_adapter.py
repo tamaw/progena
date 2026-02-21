@@ -1,68 +1,18 @@
-"""
-Tool adapter layer: wraps Progenitor's BaseSystemTool instances as
-DeepAgent-compatible tools (plain async functions with typed parameters).
+"""DeepAgent tool adapters (core-only).
 
-DeepAgent accepts tools as plain Python callables. This module auto-discovers
-all Progenitor system tools and creates wrapper functions that the LLM can
-call with structured arguments.
-
-Tools that DeepAgent replaces natively (filesystem ops, planning) are excluded.
-Tools that are deprecated in favour of DeepAgent capabilities are also excluded.
+Core-only policy: Progenitor core should not expose build/git/shell/filesystem tools.
+It only exposes:
+- list_agents: inspect what A2A agents exist
+- call_agent: delegate a request to an A2A agent by name/capability
 """
 
-import json
-import logging
+import contextlib
 from typing import Any
 
 from langchain_core.tools import StructuredTool
 
-from ..nodes.node_helpers.registry import get_all_system_tools
-from ..tools.protocol import ToolContext, ToolResult
-
-logger = logging.getLogger(__name__)
-
-# Tools that DeepAgent provides natively — skip wrapping these.
-# Tools that DeepAgent provides natively — skip wrapping these.
-DEEPAGENT_NATIVE_TOOLS: set[str] = set()
-# DeepAgent has built-in filesystem tools (ls, read_file, write_file, etc.)
-# DeepAgent has built-in planning (write_todos)
-# DeepAgent has built-in subagent delegation (task)
-
-# Tools that are internal/infrastructure and shouldn't be exposed to LLM.
-INTERNAL_TOOLS = {
-    "user_communication",     # Internal event pushing
-    "rediscover_agents",      # Internal registry refresh
-    "registry",               # Internal registry management
-    "semantic_registry",      # Internal semantic search
-}
-
-
-def _make_tool_context(
-    tool_registry: Any = None,
-    llm_client: Any = None,
-    state: Any = None,
-    state_manager: Any = None,
-    user_input: str = "",
-    tool_args: dict[str, Any] | None = None,
-) -> ToolContext:
-    """Create a ToolContext for a Progenitor system tool."""
-    return ToolContext(
-        tool_registry=tool_registry,
-        llm_client=llm_client,
-        state=state,
-        state_manager=state_manager,
-        user_input=user_input,
-        tool_args=tool_args,
-    )
-
-
-def _format_tool_result(result: ToolResult) -> str:
-    """Convert ToolResult to a string for DeepAgent tool output."""
-    if result.success:
-        if result.data:
-            return json.dumps(result.data, indent=2, default=str)
-        return "Success"
-    return f"Error: {result.error or 'Unknown error'}"
+from ..runtime.time_utils import utcnow_isoformat
+from ..tools.mcp import A2AClient
 
 
 def create_deepagent_tools(
@@ -70,80 +20,53 @@ def create_deepagent_tools(
     llm_client: Any = None,
     state_manager: Any = None,
 ) -> list:
-    """Create DeepAgent-compatible tool wrappers for all Progenitor system tools.
+    """Create the minimal tool set for progenitor-core."""
+    a2a_client = A2AClient()
 
-    Args:
-        tool_registry: Progenitor's tool/agent registry.
-        llm_client: Progenitor's LLM client (for tools that need AI).
-        state_manager: Progenitor's StateManager (for persistence).
+    async def list_agents(refresh: bool = False) -> dict[str, Any]:
+        """List known A2A agents from registry.json."""
+        if tool_registry and refresh and hasattr(tool_registry, "refresh_agent_cards"):
+            with contextlib.suppress(Exception):
+                await tool_registry.refresh_agent_cards(a2a_client)
+        agents = tool_registry.get_agents() if tool_registry and hasattr(tool_registry, "get_agents") else []
+        return {
+            "timestamp": utcnow_isoformat(),
+            "count": len(agents or []),
+            "agents": agents or [],
+        }
 
-    Returns:
-        List of LangChain tool objects ready for create_deep_agent(tools=...).
-    """
-    skip_tools = DEEPAGENT_NATIVE_TOOLS | INTERNAL_TOOLS
-    system_tools = get_all_system_tools()
+    async def call_agent(agent: str, request: str, timeout_seconds: float = 60.0) -> dict[str, Any]:
+        """Call an A2A agent by name or capability."""
+        if not tool_registry:
+            return {"success": False, "error": "tool_registry unavailable"}
+        agent = (agent or "").strip()
+        if not agent:
+            return {"success": False, "error": "Missing agent name/capability"}
 
-    wrapped_tools = []
-    for sys_tool in system_tools:
-        if sys_tool.name in skip_tools:
-            logger.debug("Skipping tool %s (native/deprecated/internal)", sys_tool.name)
-            continue
+        cfg = None
+        if hasattr(tool_registry, "find_by_name"):
+            cfg = tool_registry.find_by_name(agent)
+        if not cfg and hasattr(tool_registry, "find_agent_by_capability"):
+            cfg = tool_registry.find_agent_by_capability(agent)
+        if not isinstance(cfg, dict):
+            return {"success": False, "error": f"Unknown agent: {agent}"}
 
-        wrapper = _wrap_system_tool(
-            sys_tool,
-            tool_registry=tool_registry,
-            llm_client=llm_client,
-            state_manager=state_manager,
-        )
-        if wrapper is not None:
-            wrapped_tools.append(wrapper)
-
-    logger.info(
-        "Created %d DeepAgent tool wrappers (skipped %d)",
-        len(wrapped_tools),
-        len(skip_tools),
-    )
-    return wrapped_tools
-
-
-def _wrap_system_tool(
-    sys_tool: Any,
-    tool_registry: Any = None,
-    llm_client: Any = None,
-    state_manager: Any = None,
-) -> Any:
-    """Wrap a single Progenitor system tool as a LangChain tool.
-
-    Most Progenitor tools accept a single text 'request' parameter.
-    The wrapper creates a function with that signature and calls
-    the underlying tool's execute() method.
-    """
-    tool_name = sys_tool.name
-    tool_desc = sys_tool.description
-
-    async def _execute(request: str = "") -> str:
-        """Execute a Progenitor system tool.
-
-        Args:
-            request: The request or command to execute.
-        """
-        context = _make_tool_context(
-            tool_registry=tool_registry,
-            llm_client=llm_client,
-            state_manager=state_manager,
-            user_input=request,
-            tool_args={"request": request} if request else None,
+        return await a2a_client.call_agent(
+            agent_config=cfg,
+            request=request or "",
+            context={"caller": "progenitor-core"},
+            timeout=float(timeout_seconds or 60.0),
         )
 
-        try:
-            result = await sys_tool.execute(context)
-            return _format_tool_result(result)
-        except Exception as e:
-            logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
-            return f"Error: {e}"
-
-    return StructuredTool.from_function(
-        coroutine=_execute,
-        name=tool_name,
-        description=tool_desc,
-    )
+    return [
+        StructuredTool.from_function(
+            coroutine=list_agents,
+            name="list_agents",
+            description="List known A2A agents from the registry (optionally refresh agent cards).",
+        ),
+        StructuredTool.from_function(
+            coroutine=call_agent,
+            name="call_agent",
+            description="Delegate a request to an A2A agent by name or capability.",
+        ),
+    ]

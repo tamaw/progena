@@ -19,13 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import ProgenitorConfig, get_config, setup_logging
-from .graph_background_loop import create_background_graph
-from .graph_chat_loop import create_progenitor_graph
 from .llm.client import LLMClient
-from .runtime.copilot_acp import CopilotACPManager
+from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .runtime.loop import ProgenitorLoop
 from .state.manager import StateManager
-from .tools.mcp import setup_mcp_for_llm_client
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -46,7 +43,6 @@ class Progenitor:
         # Use paths from configuration
         self.state_dir = self.config.storage.state_dir
         self.logs_dir = self.config.storage.log_dir
-        self.worktrees_dir = self.config.storage.worktree_dir
 
         self.state_manager = StateManager(
             self.state_dir,
@@ -55,16 +51,15 @@ class Progenitor:
         )
         self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
         self.tool_registry = ToolRegistry(self.state_dir / "registry.json")
-        self.graph = None
+        self.graph: Any = None
         self.loop_runner: Any = None
         self._background_tasks: list[asyncio.Task] = []
         self._ipc_server: Any = None  # Socket-based IPC server
-        self._copilot_acp_manager: CopilotACPManager | None = None
 
     async def initialize(self) -> None:
         """Initialize all components."""
         # Ensure directories exist
-        for dir_path in [self.state_dir, self.logs_dir, self.worktrees_dir]:
+        for dir_path in [self.state_dir, self.logs_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
         # Log resolved configuration (with secrets redacted) per SPEC
@@ -89,48 +84,8 @@ class Progenitor:
         except Exception as exc:
             logger.debug("Agent card refresh skipped: %s", exc)
 
-        # Warm system tool registry so tools are discovered at startup
-        from .nodes.node_helpers.registry import get_system_tool_names
-        system_tool_names = get_system_tool_names()
-        system_tool_count = len(system_tool_names)
-        logger.info(
-            "System tools discovered: %d (%s)",
-            system_tool_count,
-            ", ".join(system_tool_names),
-        )
-
-        # Initialize MCP tools and register with tool registry
-        await setup_mcp_for_llm_client(self.llm_client, self.config.mcp)
-        await self._register_mcp_tools()
-
         agent_count = len(self.tool_registry.get_agents())
-        mcp_tool_count = len(self.tool_registry.get_tools())
-        local_mcp_count = 0
-        if hasattr(self.tool_registry, "get_local_mcp_tools"):
-            try:
-                local_mcp_count = len(self.tool_registry.get_local_mcp_tools())
-            except Exception:
-                local_mcp_count = 0
-
-        logger.info(
-            "Startup discovery: system_tools=%d, agents=%d, mcp_tools=%d (local_mcp=%d)",
-            system_tool_count,
-            agent_count,
-            mcp_tool_count,
-            local_mcp_count,
-        )
-
-        # Initialize Copilot ACP manager
-        # The manager spawns copilot processes per-request via stdio (no persistent service)
-        logger.info("Initializing Copilot ACP manager")
-        self._copilot_acp_manager = CopilotACPManager(
-            copilot_cmd=self.config.copilot.bin_path,
-            model=self.config.copilot.model,
-            yolo="--yolo" in self.config.copilot.default_flags,
-            allowed_dirs=self.config.copilot.acp_allowed_dirs,
-            timeout=self.config.copilot.timeout_seconds,
-        )
-        logger.info("Copilot ACP manager initialized")
+        logger.info("Startup discovery: agents=%d", agent_count)
 
         # Create a deferred event pusher that will be bound to the loop later
         # This allows the graph to be created before the loop, but still have
@@ -142,43 +97,25 @@ class Progenitor:
             else:
                 logger.warning("Event pusher called before loop_runner available: %s", event_type)
 
-        # Allow the LLM client to emit realtime progress updates (e.g., tool calls)
-        # through the same IPC event channel.
+        # Allow the LLM client to emit realtime progress updates through IPC.
         self.llm_client.set_event_pusher(deferred_push_event)
 
-        # Create the outer loop graph
-        logger.info("Creating outer loop graph")
-        self.graph = create_progenitor_graph(
-            state_manager=self.state_manager,
-            llm_client=self.llm_client,
-            tool_registry=self.tool_registry,
+        logger.info("Creating DeepAgent graph (core-only)")
+        self.graph = create_deep_agent_for_loop(
             config=self.config,
-            worktrees_dir=self.worktrees_dir,
-            event_pusher=deferred_push_event,
-            copilot_acp_manager=self._copilot_acp_manager,
-        )
-
-        # Create the background job graph (scheduled tasks)
-        logger.info("Creating background job graph")
-        background_graph = create_background_graph(
-            state_manager=self.state_manager,
-            llm_client=self.llm_client,
             tool_registry=self.tool_registry,
-            config=self.config,
-            worktrees_dir=self.worktrees_dir,
-            copilot_acp_manager=self._copilot_acp_manager,
-            event_pusher=deferred_push_event,
+            llm_client=self.llm_client,
+            state_manager=self.state_manager,
+            project_root=str(PROJECT_ROOT),
+            log_dir=self.logs_dir,
         )
 
         # Create loop runner
         self.loop_runner = ProgenitorLoop(
             graph=self.graph,
-            background_graph=background_graph,
             state_manager=self.state_manager,
             config=self.config,
             llm_client=self.llm_client,
-            worktrees_dir=self.worktrees_dir,
-            copilot_acp_manager=self._copilot_acp_manager,
         )
 
     async def _log_startup_config(self) -> None:
@@ -195,14 +132,6 @@ class Progenitor:
 
         with open(decisions_path, "a") as f:
             f.write(json.dumps(config_log) + "\n")
-
-    async def _register_mcp_tools(self) -> None:
-        """Register MCP tools discovered via LiteLLM MCP."""
-        if not self.llm_client.mcp_tools:
-            return
-
-        for tool in self.llm_client.get_mcp_tool_registry_entries():
-            await self.tool_registry.register_tool(tool)
 
     async def run(self) -> None:
         """Run the perpetual agent loop.
