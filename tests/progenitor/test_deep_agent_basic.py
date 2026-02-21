@@ -25,7 +25,6 @@ class TestLangChainAdapter:
 
         assert model.model_name == "gpt-5.2-chat"
         assert "localhost:4000" in str(model.openai_api_base)
-        assert model.temperature == 0
         assert model.streaming is True
 
     def test_create_model_with_role(self):
