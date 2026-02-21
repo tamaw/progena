@@ -51,7 +51,7 @@ RUN mkdir -p /app/data/state /app/logs /app/workspace
 # Named volume mount-points — Docker Compose overrides these with named volumes.
 VOLUME ["/app/data", "/app/workspace", "/app/logs"]
 
-ENV PYTHONPATH=/app/agent
+ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 # Point git operations at the workspace volume by default.
 ENV PROGENITOR_PROJECT_ROOT=/app/workspace
@@ -68,5 +68,5 @@ EXPOSE 8107
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8107/health')" || exit 1
 
-WORKDIR /app/agent
-CMD ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8107"]
+WORKDIR /app
+CMD ["python", "-m", "uvicorn", "agent.agent:app", "--host", "0.0.0.0", "--port", "8107"]
