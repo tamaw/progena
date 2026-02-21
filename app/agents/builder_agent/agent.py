@@ -118,7 +118,7 @@ async def _ensure_initialized() -> None:
 
     project_root = Path(__file__).resolve().parent
     config = get_config(project_root, project_root / "config", validate=False)
-    setup_logging(config)
+    setup_logging(config, "builder_agent")
     _config = config
 
     for p in [config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir]:

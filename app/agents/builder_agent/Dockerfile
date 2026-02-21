@@ -59,7 +59,7 @@ ENV PROGENITOR_PROJECT_ROOT=/app/workspace
 ENV PROGENITOR_WORKTREE_DIR=/app/workspace/worktrees
 # Storage paths — align with the directories created above.
 ENV PROGENITOR_STATE_DIR=/app/data/state
-ENV PROGENITOR_LOG_DIR=/app/logs
+ENV PROGENITOR_LOG_DIR=/app/logs/builder_agent
 
 USER runner
 

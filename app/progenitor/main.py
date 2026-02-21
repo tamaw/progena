@@ -268,7 +268,7 @@ async def main() -> None:
     """Main entry point."""
     # Load configuration and setup logging first
     config = get_config(PROJECT_ROOT, CONFIG_DIR)
-    setup_logging(config)
+    setup_logging(config, "progenitor")
 
     progenitor = Progenitor(config)
     setup_signal_handlers(progenitor)
