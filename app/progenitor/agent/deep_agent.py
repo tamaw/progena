@@ -6,7 +6,8 @@ layer, using Progenitor's LiteLLM proxy for model calls and wrapping
 Progenitor's custom tools.
 
 Phase 1: Basic agent with LangChain model adapter.
-Later phases will add tools, middleware, skills, memory, and subagents.
+Phase 2: Custom tools wrapped via tools_adapter.
+Later phases will add middleware, skills, memory, and subagents.
 """
 
 import logging
@@ -19,6 +20,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from ..config import ProgenitorConfig, get_config
 from .langchain_adapter import create_langchain_model
+from .tools_adapter import create_deepagent_tools
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,9 @@ Always be concise and action-oriented.
 def create_progenitor_agent(
     config: ProgenitorConfig | None = None,
     checkpointer: Any | None = None,
+    tool_registry: Any | None = None,
+    llm_client: Any | None = None,
+    state_manager: Any | None = None,
 ) -> CompiledStateGraph:
     """Create the Progenitor DeepAgent instance.
 
@@ -54,6 +59,9 @@ def create_progenitor_agent(
         config: Progenitor configuration. If None, loads from environment.
         checkpointer: LangGraph checkpointer for conversation persistence.
                       If None, uses in-memory checkpointer (dev mode).
+        tool_registry: Progenitor's tool/agent registry (for tool context).
+        llm_client: Progenitor's LLM client (for tools that need AI).
+        state_manager: Progenitor's StateManager (for tools that need persistence).
 
     Returns:
         Compiled DeepAgent graph ready for invoke/stream.
@@ -68,13 +76,18 @@ def create_progenitor_agent(
     if checkpointer is None:
         checkpointer = MemorySaver()
 
-    # Phase 1: Basic agent with model and system prompt.
-    # Tools, middleware, skills, memory, and subagents added in later phases.
+    # Wrap Progenitor's system tools as DeepAgent-compatible tools
+    tools = create_deepagent_tools(
+        tool_registry=tool_registry,
+        llm_client=llm_client,
+        state_manager=state_manager,
+    )
+
     agent = create_deep_agent(
         name="progenitor",
         model=model,
         system_prompt=PROGENITOR_SYSTEM_PROMPT,
-        tools=[],  # Phase 2: custom tools
+        tools=tools,
         checkpointer=checkpointer,
     )
 
