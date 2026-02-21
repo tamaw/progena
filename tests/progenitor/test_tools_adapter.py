@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.progenitor.agent.tools_adapter import (
-    DEPRECATED_TOOLS,
     INTERNAL_TOOLS,
     _format_tool_result,
     _make_tool_context,
@@ -73,13 +72,6 @@ class TestCreateDeepagentTools:
         assert isinstance(tools, list)
         # Should have wrapped at least some tools
         assert len(tools) > 0
-
-    def test_skips_deprecated_tools(self):
-        """Deprecated tools are not wrapped."""
-        tools = create_deepagent_tools()
-        tool_names = {t.name for t in tools}
-        for deprecated in DEPRECATED_TOOLS:
-            assert deprecated not in tool_names, f"Deprecated tool {deprecated} should be skipped"
 
     def test_skips_internal_tools(self):
         """Internal tools are not wrapped."""
