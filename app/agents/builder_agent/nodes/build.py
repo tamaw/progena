@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 
 def create_node(
     llm_client,
-    copilot_cli: "CopilotCLI",
+    copilot_cli: "CopilotCLI | None",
     worktrees_dir: Path,
     state_manager,
-    git_manager: "GitWorktreeManager",
+    git_manager: "GitWorktreeManager | None",
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the BUILD node that runs Copilot CLI concurrently.
 
@@ -56,6 +56,13 @@ def create_node(
         and runs copilot concurrently for each in its own worktree.
         """
         logger.info("BUILD: Starting concurrent build phase")
+
+        if git_manager is None:
+            logger.error("BUILD: git_manager is None — cannot create worktrees")
+            return cast(ProgenitorState, {})
+        if copilot_cli is None:
+            logger.error("BUILD: copilot_cli is None — cannot run builds")
+            return cast(ProgenitorState, {})
 
         # Get configuration
         max_concurrency = state.get("max_concurrency", 3)

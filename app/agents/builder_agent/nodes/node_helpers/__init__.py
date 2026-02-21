@@ -17,7 +17,12 @@ from .registry import (
 )
 
 if TYPE_CHECKING:
+    from ...tools.copilot import CopilotTool
+    from ...tools.git import GitTool
+    from ...tools.mcp import MCPTool
+    from ...tools.registry import RegistryTool
     from ...tools.shell import ShellCheckTool, ShellExecTool
+    from ...tools.user_communication import UserCommunicationTool
 
 
 def __getattr__(name: str):

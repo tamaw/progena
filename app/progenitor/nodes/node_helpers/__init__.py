@@ -17,15 +17,22 @@ from .registry import (
 )
 
 if TYPE_CHECKING:
+    from ...tools.agent_discovery import AgentDiscoveryTool
     from ...tools.current_time import CurrentTimeTool
     from ...tools.list_agents import ListAgentsTool
     from ...tools.list_schedule import ListScheduleTool
     from ...tools.list_tools import ListToolsTool
+    from ...tools.mcp import MCPTool
     from ...tools.new_conversation import NewConversationTool
     from ...tools.rediscover_agents import RediscoverAgentsTool
+    from ...tools.registry import RegistryTool
+    from ...tools.schedule import ScheduleTool
     from ...tools.schedule_task import ScheduleTaskTool
+    from ...tools.self_reflect import SelfReflectModuleTool
     from ...tools.self_reflect_tool import SelfReflectTool
+    from ...tools.semantic_registry import SemanticRegistryTool
     from ...tools.shell import ShellCheckTool, ShellExecTool
+    from ...tools.user_communication import UserCommunicationTool
 
 
 def __getattr__(name: str):

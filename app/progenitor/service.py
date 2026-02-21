@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import ProgenitorConfig, get_config
-from .graph_chat_loop import create_progenitor_graph
 from .llm.client import LLMClient
+from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .state.manager import StateManager
 from .state.models import ConversationMessage, ProgenitorState
 from .tools.registry import ToolRegistry
@@ -74,7 +74,7 @@ class ProgenitorService:
         self.state_manager: StateManager | None = None
         self.llm_client: LLMClient | None = None
         self.tool_registry: ToolRegistry | None = None
-        self.graph = None
+        self.graph: Any = None
 
         # State tracking
         self._session_id: str | None = None
@@ -127,12 +127,13 @@ class ProgenitorService:
             await self._discover_agents()
 
             # Create the LangGraph
-            self.graph = create_progenitor_graph(
-                state_manager=self.state_manager,
-                llm_client=self.llm_client,
-                tool_registry=self.tool_registry,
+            self.graph = create_deep_agent_for_loop(
                 config=self.config,
-                worktrees_dir=self.config.storage.worktree_dir,
+                tool_registry=self.tool_registry,
+                llm_client=self.llm_client,
+                state_manager=self.state_manager,
+                project_root=str(self.project_root),
+                log_dir=self.config.storage.log_dir,
             )
 
             # Generate session ID

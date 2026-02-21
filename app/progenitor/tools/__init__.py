@@ -22,12 +22,10 @@ from .user_communication import (
 )
 
 if TYPE_CHECKING:
-    from .compress_conversation import CompressConversationTool
     from .current_time import CurrentTimeTool
     from .list_agents import ListAgentsTool
     from .list_schedule import ListScheduleTool
     from .list_tools import ListToolsTool
-    from .memory import MemoryTool
     from .new_conversation import NewConversationTool
     from .rediscover_agents import RediscoverAgentsTool
     from .schedule_task import ScheduleTaskTool
@@ -45,8 +43,6 @@ def __getattr__(name: str):
         "ListScheduleTool": "list_schedule",
         "SelfReflectTool": "self_reflect_tool",
         "ScheduleTaskTool": "schedule_task",
-        "CompressConversationTool": "compress_conversation",
-        "MemoryTool": "memory",
     }
     if name in _tool_modules:
         import importlib
@@ -78,6 +74,4 @@ __all__ = [
     "ListScheduleTool",
     "SelfReflectTool",
     "ScheduleTaskTool",
-    "CompressConversationTool",
-    "MemoryTool",
 ]

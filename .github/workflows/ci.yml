@@ -95,12 +95,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock.txt
-          pip install ruff
+          pip install ruff pyright
           pip install -e . --no-deps
 
       - name: Lint progenitor (ruff)
         continue-on-error: true
         run: ruff check app/progenitor tests/progenitor tests/test_scheduler.py
+
+      - name: Type-check progenitor (pyright)
+        continue-on-error: true
+        run: pyright app/progenitor
 
       - name: Tests progenitor (pytest)
         run: >
@@ -110,6 +114,38 @@ jobs:
           --ignore=tests/progenitor/test_dual_loop_full_integration.py
           --ignore=tests/progenitor/test_dual_loop_integration.py
           --ignore=tests/progenitor/test_e2e_dual_loop.py
+
+  builder-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            app/agents/builder_agent/requirements.txt
+            requirements.lock.txt
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+          pip install -r app/agents/builder_agent/requirements.txt
+          pip install ruff pyright
+          pip install -e . --no-deps
+
+      - name: Lint builder_agent (ruff)
+        continue-on-error: true
+        run: ruff check app/agents/builder_agent tests/agents/builder_agent
+
+      - name: Type-check builder_agent (pyright)
+        continue-on-error: true
+        run: pyright app/agents/builder_agent
+
+      - name: Tests builder_agent (pytest)
+        run: pytest tests/agents/builder_agent -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -173,7 +209,7 @@ jobs:
 
   build-and-push:
     runs-on: ubuntu-latest
-    needs: [detect-changes, backend, progenitor, frontend, build-agents]
+    needs: [detect-changes, backend, progenitor, builder-agent, frontend, build-agents]
     if: ${{ github.ref == 'refs/heads/main' && needs.detect-changes.outputs.core_changed == 'true' }}
     steps:
       - uses: actions/checkout@v4

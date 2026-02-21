@@ -260,7 +260,12 @@ async def _plan_schedule_task(
     be executed at the scheduled time as if it were a new user input.
     """
     from ..state.models import ScheduleEntry
-    from ..tools.schedule import add_scheduled_task
+
+    try:
+        from ..tools.schedule import add_scheduled_task  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        logger.warning("Schedule tool not available in this agent")
+        return None
 
     # Get schedule params from decision
     if hasattr(decision, "model_dump"):

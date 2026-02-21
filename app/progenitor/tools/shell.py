@@ -117,7 +117,7 @@ class ShellCheckTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return ["shell_check", "shell check"]
 
-    async def execute(self, _context: ToolContext) -> ToolResult:
+    async def execute(self, context: ToolContext) -> ToolResult:
         shell = _resolve_shell()
         return ToolResult.ok(
             {
