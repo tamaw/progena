@@ -403,7 +403,7 @@ def create_llm_client(
     *args,
     force_mock: bool = False,
     **kwargs,
-) -> "MockLLMClient":
+) -> MockLLMClient:
     """Factory function to create appropriate LLM client.
 
     Automatically selects MockLLMClient if:
