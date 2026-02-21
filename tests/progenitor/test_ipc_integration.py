@@ -81,6 +81,12 @@ class MockLoopRunner:
         for chunk in chunks:
             await self._stream_queue.put(chunk)
 
+    async def get_event(self, timeout: float | None = None) -> dict | None:
+        """Get event from queue (stub for IPC event broadcast)."""
+        if timeout:
+            await asyncio.sleep(timeout)
+        return None
+
 
 @pytest.fixture
 def mock_loop_runner():
@@ -317,20 +323,20 @@ class TestIPCErrorHandling:
         await client.connect()
 
         # Create a custom mock that never responds
-        # Override the queue so get_output always times out
-        original_get_output = mock_loop_runner.get_output
+        # Override the queue so get_stream_chunk always times out
+        original_get_stream_chunk = mock_loop_runner.get_stream_chunk
 
-        async def slow_get_output(timeout=None):
+        async def slow_get_stream_chunk(timeout=None):
             await asyncio.sleep(10)  # Much longer than client timeout
             return None
 
-        mock_loop_runner.get_output = slow_get_output
+        mock_loop_runner.get_stream_chunk = slow_get_stream_chunk
 
         try:
             with pytest.raises((TimeoutError, asyncio.TimeoutError)):
                 await client.send_message("Timeout test")
         finally:
-            mock_loop_runner.get_output = original_get_output
+            mock_loop_runner.get_stream_chunk = original_get_stream_chunk
             await client.disconnect()
 
     @pytest.mark.asyncio
