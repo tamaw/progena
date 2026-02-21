@@ -7,6 +7,7 @@ This is the main Progenitor agent system - a perpetual, conversational personal 
 ### Agent Capabilities
 - Full-stack development (Python backend, React frontend)
 - LangGraph state machine design and implementation
+- DeepAgent integration (middleware, skills, memory, subagents)
 - Docker containerization and deployment
 - API design (FastAPI, OpenAI-compatible endpoints)
 - Testing with pytest and async patterns
@@ -18,10 +19,17 @@ This is the main Progenitor agent system - a perpetual, conversational personal 
 progenitor/
 ├── app/
 │   ├── progenitor/     # Core agent logic (LangGraph)
+│   │   ├── agent/      # DeepAgent integration layer
+│   │   ├── nodes/      # LangGraph node implementations
+│   │   ├── state/      # State models and persistence
+│   │   ├── tools/      # System tools (23+)
+│   │   └── runtime/    # Loop runner, scheduler, DeepAgent adapter
 │   ├── backend/        # FastAPI server
 │   ├── frontend/       # React/Vite UI
 │   ├── agents/         # Agent implementations
 │   └── mcp/            # MCP server integrations
+├── prompts/
+│   └── skills/         # DeepAgent SKILL.md files
 ├── tests/              # Test suites
 └── docs/               # Documentation
 ```
@@ -40,6 +48,7 @@ progenitor/
 - **State Models**: Pydantic v2 models in `app/progenitor/state/models.py`
 - **Node Pattern**: Factory functions returning async callables
 - **Graph Routing**: Conditional edges defined in `app/progenitor/graph.py`
+- **DeepAgent Factory**: `app/progenitor/agent/deep_agent.py` — `create_progenitor_agent()`
 - **Configuration**: Environment variables > JSON config files
 - **Testing**: `pytest-asyncio` with `asyncio_mode = auto`
 

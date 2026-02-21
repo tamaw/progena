@@ -6,7 +6,25 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                    PROGENITOR AGENT                             │
 │              Dual-Loop Architecture (loop.spec.md)              │
+│           + DeepAgent Conversational Layer (agent/)             │
 └─────────────────────────────────────────────────────────────────┘
+
+┌──────────────────── DEEPAGENT LAYER ────────────────────────────┐
+│                    (Conversational Graph)                        │
+│                                                                  │
+│  ┌────────────┐  ┌────────────┐  ┌──────────┐  ┌───────────┐  │
+│  │ Middleware  │  │   Skills   │  │  Memory  │  │ Subagents │  │
+│  │            │  │            │  │          │  │           │  │
+│  │ • Redact   │  │ • build    │  │ AGENTS.md│  │ • build   │  │
+│  │ • Audit    │  │ • schedule │  │ /memories│  │ • review  │  │
+│  │ • Metrics  │  │ • git      │  │ • Store  │  │ • research│  │
+│  │ • Summarize│  │ • reflect  │  │          │  │           │  │
+│  │ • PatchTC  │  │ • arch     │  │          │  │           │  │
+│  └────────────┘  └────────────┘  └──────────┘  └───────────┘  │
+│                                                                  │
+│  23+ Wrapped Tools ──→ LiteLLM Proxy ──→ Azure/OpenAI          │
+│  CompositeBackend: LocalShell + StoreBackend + StateBackend     │
+└──────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────── OUTER LOOP ───────────────────────────┐
 │                         (Perpetual)                              │
