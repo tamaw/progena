@@ -9,7 +9,7 @@ python-dotenv>=1.0.0
 tiktoken>=0.7.0  # Accurate token counting for OpenAI models
 
 # DeepAgent harness (LangChain agent framework)
-deepagents>=0.1.0
+deepagents>=0.4.3
 langchain-openai>=0.3.0
 
 # Backend (FastAPI + OpenAI-compatible interface)

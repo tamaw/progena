@@ -4,8 +4,6 @@ Tests for Phase 8: Runtime loop integration with DeepAgent.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from app.progenitor.runtime.deep_agent_adapter import (
     create_deep_agent_for_loop,
     patch_loop_with_deep_agent,
@@ -47,7 +45,6 @@ class TestCreateDeepAgentForLoop:
                     log_dir="/tmp/logs",
                 )
 
-                call_kwargs = mock_da.call_args.kwargs
                 # Verify the DeepAgent was created (parameters flow through)
                 assert mock_da.called
 

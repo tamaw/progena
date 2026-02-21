@@ -4,8 +4,6 @@ Tests for Phase 3: Backend configuration for DeepAgent.
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from app.progenitor.agent.backends import create_progenitor_backend
 from app.progenitor.config import ProgenitorConfig
 
@@ -33,7 +31,6 @@ class TestBackendFactory:
     def test_factory_uses_project_root(self):
         """Factory uses specified project_root for LocalShellBackend."""
         import tempfile
-        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
             factory = create_progenitor_backend(project_root=tmpdir)
@@ -46,7 +43,6 @@ class TestBackendFactory:
 
     def test_factory_defaults_to_cwd(self):
         """Factory defaults to cwd when no project_root specified."""
-        from pathlib import Path
 
         factory = create_progenitor_backend()
         # Just verify it returns without error
