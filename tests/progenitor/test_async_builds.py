@@ -11,6 +11,7 @@ Tests cover:
 import asyncio
 import json
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -46,10 +47,8 @@ async def _cancel_runner_task(runner: BackgroundBuildRunner, timeout: float = 2.
     task = getattr(runner, "_current_task", None)
     if task and not task.done():
         task.cancel()
-        try:
+        with suppress(TimeoutError, asyncio.CancelledError):
             await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
 
 
 @pytest.fixture(autouse=True)

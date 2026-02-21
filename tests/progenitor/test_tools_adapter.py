@@ -2,7 +2,7 @@
 Tests for Phase 2: Tool adapter — wrapping Progenitor tools for DeepAgent.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,7 +12,7 @@ from app.progenitor.agent.tools_adapter import (
     _make_tool_context,
     create_deepagent_tools,
 )
-from app.progenitor.tools.protocol import ToolContext, ToolResult
+from app.progenitor.tools.protocol import ToolResult
 
 
 class TestToolContext:

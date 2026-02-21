@@ -42,17 +42,19 @@ class TestMemoryWiring:
 
     def test_factory_no_memory_when_no_agents_md(self):
         """When AGENTS.md doesn't exist, memory is None."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
-                mock_create.return_value = MagicMock()
-                with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
-                    mock_model.return_value = MagicMock()
-                    from app.progenitor.agent.deep_agent import create_progenitor_agent
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
+        ):
+            mock_create.return_value = MagicMock()
+            mock_model.return_value = MagicMock()
+            from app.progenitor.agent.deep_agent import create_progenitor_agent
 
-                    create_progenitor_agent(project_root=tmpdir)
+            create_progenitor_agent(project_root=tmpdir)
 
-                    call_kwargs = mock_create.call_args.kwargs
-                    assert call_kwargs.get("memory") is None
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs.get("memory") is None
 
 
 class TestAgentsMdContent:

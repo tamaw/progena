@@ -4,8 +4,6 @@ Tests for Phase 7: Subagent architecture.
 
 from unittest.mock import MagicMock, patch
 
-from deepagents.middleware.subagents import CompiledSubAgent, SubAgent
-
 from app.progenitor.agent.subagents import (
     create_build_subagent,
     create_code_review_subagent,

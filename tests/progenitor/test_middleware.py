@@ -4,7 +4,6 @@ Tests for Phase 4: Custom middleware for DeepAgent.
 
 import json
 import tempfile
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -44,7 +43,7 @@ class TestSecretRedactionMiddleware:
             "id": "tc_1",
         }
         # awrap_tool_call returns the coroutine from handler
-        result = await mw.awrap_tool_call(request, handler)
+        await mw.awrap_tool_call(request, handler)
         # It should call handler with the original request (not redacted)
         handler.assert_called_once_with(request)
 
@@ -64,7 +63,7 @@ class TestAuditLoggingMiddleware:
     def test_creates_log_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir) / "nested" / "logs"
-            mw = AuditLoggingMiddleware(log_dir=log_dir)
+            AuditLoggingMiddleware(log_dir=log_dir)
             assert log_dir.exists()
 
     async def test_logs_successful_call(self):

@@ -182,7 +182,7 @@ class TestRegisterNode:
                     validation_result_v2={"has_blocking_issues": False},
                 )
 
-                result = await node(state)
+                await node(state)
 
         # Should have registered with tool registry
         registry.register_agent.assert_called_once()
@@ -232,7 +232,7 @@ class TestRegisterNode:
                     validation_result_v2={"has_blocking_issues": False},
                 )
 
-                result = await node(state)
+                await node(state)
 
         # Should have registered tool
         registry.register_tool.assert_called_once()

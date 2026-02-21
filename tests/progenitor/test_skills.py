@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-
 SKILLS_DIR = Path("prompts/skills")
 
 
