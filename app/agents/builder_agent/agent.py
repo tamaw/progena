@@ -12,6 +12,7 @@ Port:       8107  (configurable via PORT env var)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -63,11 +64,57 @@ _runner: BackgroundBuildRunner | None = None
 _initialized = False
 
 
+async def _ensure_workspace() -> None:
+    """Initialise the git workspace for Docker deployments.
+
+    When PROGENITOR_PROJECT_ROOT points to a directory that is not yet a git
+    repo (i.e. a fresh named volume on first boot) and PROGENITOR_REPO_URL is
+    set, clone the repo there so git worktrees become available.
+
+    No-op when running locally (PROGENITOR_PROJECT_ROOT not set) or when the
+    workspace is already a valid git repo.
+    """
+    workspace_env = os.getenv("PROGENITOR_PROJECT_ROOT")
+    if not workspace_env:
+        return  # Local dev — project root detected via file traversal
+
+    workspace = Path(workspace_env)
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    if (workspace / ".git").exists():
+        logger.info("Workspace already initialised at %s", workspace)
+        return
+
+    repo_url = os.getenv("PROGENITOR_REPO_URL")
+    if not repo_url:
+        logger.warning(
+            "PROGENITOR_PROJECT_ROOT=%s is not a git repo and PROGENITOR_REPO_URL "
+            "is not set — git worktrees will be unavailable until the workspace is "
+            "populated (mount a pre-cloned volume or set PROGENITOR_REPO_URL).",
+            workspace,
+        )
+        return
+
+    logger.info("Cloning %s into %s …", repo_url, workspace)
+    proc = await asyncio.create_subprocess_exec(
+        "git", "clone", repo_url, str(workspace),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.error("Failed to clone repo: %s", stderr.decode()[:500])
+    else:
+        logger.info("Workspace ready at %s", workspace)
+
+
 async def _ensure_initialized() -> None:
     """Lazy-initialise all builder services (idempotent)."""
     global _config, _state_manager, _llm_client, _tool_registry, _copilot_acp, _runner, _initialized
     if _initialized:
         return
+
+    await _ensure_workspace()
 
     project_root = Path(__file__).resolve().parent
     config = get_config(project_root, project_root / "config", validate=False)
