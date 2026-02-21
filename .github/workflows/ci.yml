@@ -7,13 +7,11 @@ on:
       - 'app/agents/**'
       - 'app/mcp/**'
       - '.github/workflows/agents.yml'
-      - '.github/workflows/agent-deploy.yml'
   pull_request:
     paths-ignore:
       - 'app/agents/**'
       - 'app/mcp/**'
       - '.github/workflows/agents.yml'
-      - '.github/workflows/agent-deploy.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
