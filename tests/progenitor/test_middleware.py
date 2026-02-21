@@ -44,7 +44,7 @@ class TestSecretRedactionMiddleware:
             "id": "tc_1",
         }
         # awrap_tool_call returns the coroutine from handler
-        result = mw.awrap_tool_call(request, handler)
+        result = await mw.awrap_tool_call(request, handler)
         # It should call handler with the original request (not redacted)
         handler.assert_called_once_with(request)
 

@@ -12,8 +12,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -35,7 +36,7 @@ class SecretRedactionMiddleware(AgentMiddleware):
     wrap_tool_call interceptor so it covers all tools automatically.
     """
 
-    def awrap_tool_call(
+    async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
@@ -58,7 +59,7 @@ class SecretRedactionMiddleware(AgentMiddleware):
 
         # Don't modify the actual tool call args — we log redacted but
         # execute with originals (tools need real credentials to work)
-        return handler(request)
+        return await handler(request)
 
     def wrap_tool_call(
         self,
@@ -189,7 +190,7 @@ class MetricsMiddleware(AgentMiddleware):
         """Sync version — just pass through."""
         return handler(request)
 
-    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+    def after_model(self, _state: Any, _runtime: Any) -> dict[str, Any] | None:
         """Track model call count."""
         self._model_calls += 1
         return None
