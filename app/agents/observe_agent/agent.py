@@ -7,14 +7,16 @@ invokes local tools to read mounted state/logs, and returns plain-text insights.
 import json
 import os
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from langgraph.graph import END, StateGraph
+from pydantic import BaseModel, Field
 
 
 def _utc_now_iso() -> str:
@@ -446,6 +448,30 @@ class ObserveAgent:
         req = (request or "").strip() or "Summarize current Progenitor health and explain any recent errors."
         return await self._chat_with_tools(request=req, context=context if isinstance(context, dict) else {})
 
+class RunRequest(BaseModel):
+    input: str = Field(default="", description="User input for the agent")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Optional structured metadata/context")
+
+
+class RunResponse(BaseModel):
+    agent: str
+    request_id: str
+    status: str
+    summary: str
+    data: dict[str, Any] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+def require_auth(authorization: str | None) -> None:
+    token = (os.getenv("A2A_AUTH_TOKEN") or os.getenv("LITELLM_MASTER_KEY") or "").strip()
+    if not token:
+        return
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization")
+    if authorization.split(" ", 1)[1].strip() != token:
+        raise HTTPException(status_code=403, detail="Invalid Authorization")
+
 
 app = FastAPI()
 agent = ObserveAgent()
@@ -492,6 +518,35 @@ async def health() -> JSONResponse:
     }
     return JSONResponse(content=payload)
 
+@app.post("/run", response_model=RunResponse)
+async def run(req: RunRequest, authorization: str | None = Header(default=None)) -> RunResponse:
+    require_auth(authorization)
+    request_id = str(uuid.uuid4())
+    print("STATUS:executing:Calling LiteLLM with tool access", flush=True)
+    try:
+        text = await agent.process(req.input, req.metadata or {})
+        print("STATUS:waiting:Idle, waiting for requests", flush=True)
+        return RunResponse(
+            agent=agent.AGENT_NAME,
+            request_id=request_id,
+            status="ok",
+            summary=text,
+            data={"response": text},
+            errors=[],
+            metrics={"langgraph": True},
+        )
+    except Exception as e:
+        print(f"STATUS:failed:{e}", flush=True)
+        return RunResponse(
+            agent=agent.AGENT_NAME,
+            request_id=request_id,
+            status="fatal_error",
+            summary="Observe agent failed to generate report",
+            data={},
+            errors=[str(e)],
+            metrics={"langgraph": True},
+        )
+
 
 @app.post("/")
 async def handle(req: Request) -> JSONResponse:
@@ -522,4 +577,3 @@ async def handle(req: Request) -> JSONResponse:
             "metadata": {"detail": str(e)},
         }
         return JSONResponse(content=err, status_code=500)
-

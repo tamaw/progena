@@ -4,11 +4,13 @@ import os
 import time
 import urllib.error
 import urllib.request
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 
 class BtcPriceAgent:
@@ -88,6 +90,30 @@ app = FastAPI()
 agent = BtcPriceAgent()
 _start_time = time.time()
 
+class RunRequest(BaseModel):
+    input: str = Field(default="", description="User input for the agent")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Optional structured metadata/context")
+
+
+class RunResponse(BaseModel):
+    agent: str
+    request_id: str
+    status: str
+    summary: str
+    data: dict[str, Any] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+def require_auth(authorization: str | None) -> None:
+    token = (os.getenv("A2A_AUTH_TOKEN") or os.getenv("LITELLM_MASTER_KEY") or "").strip()
+    if not token:
+        return
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization")
+    if authorization.split(" ", 1)[1].strip() != token:
+        raise HTTPException(status_code=403, detail="Invalid Authorization")
+
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -132,6 +158,33 @@ async def health():
         "timestamp": _utc_now_iso(),
     }
     return JSONResponse(content=payload)
+
+@app.post("/run", response_model=RunResponse)
+async def run(req: RunRequest, authorization: str | None = Header(default=None)) -> RunResponse:
+    require_auth(authorization)
+    request_id = str(uuid.uuid4())
+    try:
+        data = await agent.process(req.input, req.metadata or {})
+        summary = f"BTC spot price: {data.get('price')} USD (source: {data.get('source')})"
+        return RunResponse(
+            agent=agent.AGENT_NAME,
+            request_id=request_id,
+            status="ok",
+            summary=summary,
+            data=data if isinstance(data, dict) else {"result": data},
+            errors=[],
+            metrics={"langgraph": False},
+        )
+    except Exception as e:
+        return RunResponse(
+            agent=agent.AGENT_NAME,
+            request_id=request_id,
+            status="fatal_error",
+            summary="Failed to retrieve BTC price",
+            data={},
+            errors=[str(e)],
+            metrics={"langgraph": False},
+        )
 
 
 @app.post("/")

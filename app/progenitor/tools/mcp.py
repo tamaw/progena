@@ -7,6 +7,7 @@ Handles communication with MCP servers via stdio or HTTP transports.
 import asyncio
 import json
 import logging
+import os
 import shlex
 from pathlib import Path
 from typing import Any, cast
@@ -398,24 +399,70 @@ class A2AClient:
         if not endpoint:
             raise ValueError("No endpoint specified for HTTP agent")
 
-        payload = {
-            "request": request,
-            "context": context or {},
-        }
+        token = (
+            os.getenv("PROGENITOR_A2A_AUTH_TOKEN")
+            or os.getenv("A2A_AUTH_TOKEN")
+            or os.getenv("LITELLM_API_KEY")
+            or os.getenv("LITELLM_MASTER_KEY")
+            or ""
+        ).strip()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+        # Preferred A2A invocation contract: POST /run {input, metadata}
+        run_url = endpoint.rstrip("/") + "/run"
+        run_payload = {"input": request, "metadata": context or {}}
 
         try:
-            async with aiohttp.ClientSession() as session, session.post(
-                endpoint,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
-                if response.status >= 400:
-                    text = await response.text()
-                    return {
-                        "success": False,
-                        "error": f"HTTP {response.status}: {text[:200]}",
-                    }
-                return cast(dict[str, Any], await response.json())
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    run_url,
+                    json=run_payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as response:
+                    if response.status == 404:
+                        # Back-compat: older agents expose POST / with {request, context}
+                        legacy_payload = {"request": request, "context": context or {}}
+                        async with session.post(
+                            endpoint,
+                            json=legacy_payload,
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=timeout),
+                        ) as legacy_resp:
+                            if legacy_resp.status >= 400:
+                                text = await legacy_resp.text()
+                                return {"success": False, "error": f"HTTP {legacy_resp.status}: {text[:200]}"}
+                            return cast(dict[str, Any], await legacy_resp.json())
+
+                    if response.status >= 400:
+                        text = await response.text()
+                        return {"success": False, "error": f"HTTP {response.status}: {text[:200]}"}
+
+                    data = cast(dict[str, Any], await response.json())
+
+            # Normalize /run response into the legacy {success, response, error, metadata} shape.
+            if isinstance(data, dict) and "request_id" in data and "summary" in data:
+                status = str(data.get("status") or "")
+                errors = data.get("errors") if isinstance(data.get("errors"), list) else []
+                ok = status in {"ok", "success", "completed"} and not errors
+                summary = str(data.get("summary") or "").strip()
+                err_text = None
+                if not ok:
+                    if errors:
+                        err_text = "; ".join(str(e) for e in errors[:5] if e)
+                    elif summary:
+                        err_text = summary
+                    else:
+                        err_text = f"Agent returned status={status}"
+                return {
+                    "success": ok,
+                    "response": summary,
+                    "error": err_text,
+                    "metadata": data,
+                    "data": data.get("data") if isinstance(data.get("data"), dict) else {},
+                }
+
+            return data
         except aiohttp.ClientConnectorError as e:
             return {
                 "success": False,

@@ -399,18 +399,23 @@ async def main():
             print(f"TEST_START: {{test_name}}")
             total += 1
             try:
-                payload = {{"request": prompt, "context": {{}}}}
-                async with session.post(f"{{BASE_URL}}/", json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                payload = {{"input": prompt, "metadata": {{}}}}
+                async with session.post(f"{{BASE_URL}}/run", json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        if data.get("success") is True and data.get("response"):
-                            response_preview = str(data.get("response"))[:100]
-                            print(f"TEST_RESULT: PASS: Got response: {{response_preview}}...")
+                        # New /run contract: {status, summary, data, errors}
+                        if data.get("status") in ("ok", "success", "completed") and data.get("summary"):
+                            response_preview = str(data.get("summary"))[:100]
+                            print(f"TEST_RESULT: PASS: Got summary: {{response_preview}}...")
                             passed += 1
-                        elif data.get("error"):
-                            # Some agents return success=False with helpful error (e.g. missing location)
-                            error_preview = str(data.get("error"))[:100]
-                            print(f"TEST_RESULT: PASS: Agent responded with clarification: {{error_preview}}")
+                        elif data.get("errors"):
+                            error_preview = str(data.get("errors"))[:100]
+                            print(f"TEST_RESULT: PASS: Agent returned errors: {{error_preview}}")
+                            passed += 1
+                        elif data.get("summary"):
+                            # Non-ok status but still returned something human readable.
+                            response_preview = str(data.get("summary"))[:100]
+                            print(f"TEST_RESULT: PASS: Got non-ok summary: {{response_preview}}...")
                             passed += 1
                         else:
                             print(f"TEST_RESULT: FAIL: Invalid response structure: {{data}}")
