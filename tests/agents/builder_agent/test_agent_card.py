@@ -1,5 +1,4 @@
 """Tests for the Builder Agent AgentCard and A2A metadata."""
-import pytest
 
 from app.agents.builder_agent.agent import AGENT_CARD
 

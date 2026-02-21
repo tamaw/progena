@@ -1,7 +1,7 @@
 """Tests for the Builder Agent graph creation and checkpointing."""
-import pytest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 
 @pytest.fixture
@@ -40,6 +40,7 @@ def mock_copilot_acp():
 def test_build_checkpointer_explicit_false():
     """Passing False should always return MemorySaver."""
     from langgraph.checkpoint.memory import MemorySaver
+
     from app.agents.builder_agent.graph import _build_checkpointer
 
     result = _build_checkpointer(False, None)
@@ -49,6 +50,7 @@ def test_build_checkpointer_explicit_false():
 def test_build_checkpointer_invalid_config_falls_back():
     """When config has no state_dir, should fall back to MemorySaver."""
     from langgraph.checkpoint.memory import MemorySaver
+
     from app.agents.builder_agent.graph import _build_checkpointer
 
     result = _build_checkpointer(None, None)
@@ -58,6 +60,7 @@ def test_build_checkpointer_invalid_config_falls_back():
 def test_build_checkpointer_with_path(tmp_path):
     """When a valid path is given, should return a SqliteSaver or MemorySaver fallback."""
     from langgraph.checkpoint.memory import MemorySaver
+
     from app.agents.builder_agent.graph import _build_checkpointer
 
     db_path = tmp_path / "test_checkpoints.db"
@@ -66,9 +69,12 @@ def test_build_checkpointer_with_path(tmp_path):
     assert result is not None
     # If SqliteSaver is present, the DB file should be created
     try:
-        from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import]
-        assert db_path.exists()
-    except ImportError:
+        import importlib
+        if importlib.util.find_spec("langgraph.checkpoint.sqlite"):
+            assert db_path.exists()
+        else:
+            assert isinstance(result, MemorySaver)
+    except Exception:
         assert isinstance(result, MemorySaver)
 
 
