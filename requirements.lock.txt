@@ -16,6 +16,8 @@ aiohttp==3.13.3
     #   google-genai
 aiosignal==1.4.0
     # via aiohttp
+aiosqlite==0.22.1
+    # via langgraph-checkpoint-sqlite
 annotated-doc==0.0.4
     # via fastapi
 annotated-types==0.7.0
@@ -168,7 +170,10 @@ langgraph==1.0.9
 langgraph-checkpoint==4.0.0
     # via
     #   langgraph
+    #   langgraph-checkpoint-sqlite
     #   langgraph-prebuilt
+langgraph-checkpoint-sqlite==3.0.3
+    # via -r requirements.txt
 langgraph-prebuilt==1.0.8
     # via langgraph
 langgraph-sdk==0.3.8
@@ -290,6 +295,8 @@ sniffio==1.3.1
     #   openai
 sortedcontainers==2.4.0
     # via hypothesis
+sqlite-vec==0.1.6
+    # via langgraph-checkpoint-sqlite
 starlette==0.52.1
     # via fastapi
 tenacity==9.1.4
