@@ -8,7 +8,7 @@ partially with dicts.
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from .models import (
     BuildPhases,
@@ -19,9 +19,6 @@ from .models import (
     WorkItemStatus,
     WorkItemType,
 )
-
-if TYPE_CHECKING:
-    from .ideal_state import IdealState
 
 logger = logging.getLogger(__name__)
 
@@ -312,52 +309,6 @@ def get_item_type_value(item: Any) -> str:
 
     return "unknown"
 
-
-
-def ensure_ideal_state(ideal_state: Any, allow_none: bool = True) -> Optional["IdealState"]:
-    """Convert ideal_state dict to IdealState object if needed.
-
-    This is the canonical helper for IdealState conversion - use this
-    instead of duplicating the conversion logic in multiple places.
-
-    LangGraph state may serialize IdealState to dict when passing through nodes.
-    This helper ensures we always have an IdealState object for methods.
-
-    Args:
-        ideal_state: IdealState, dict, or None
-        allow_none: If True, returns None for None/invalid input.
-                    If False, raises TypeError for None/invalid input.
-
-    Returns:
-        IdealState instance, or None if allow_none=True and input is None/invalid
-
-    Raises:
-        TypeError: If allow_none=False and ideal_state is not valid
-    """
-    # Late import to avoid circular imports
-    from .ideal_state import IdealState
-
-    if ideal_state is None:
-        if allow_none:
-            return None
-        raise TypeError("ideal_state cannot be None")
-
-    if isinstance(ideal_state, IdealState):
-        return ideal_state
-
-    if isinstance(ideal_state, dict):
-        try:
-            return IdealState(**ideal_state)
-        except Exception as e:
-            logger.warning("Failed to convert ideal_state dict to IdealState: %s", e)
-            if allow_none:
-                return None
-            raise TypeError(f"Invalid ideal_state dict: {e}") from e
-
-    if allow_none:
-        logger.warning("Unknown ideal_state type: %s", type(ideal_state))
-        return None
-    raise TypeError(f"Expected IdealState or dict, got {type(ideal_state)}")
 
 
 def mark_work_item_completed(

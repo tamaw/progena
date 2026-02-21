@@ -202,9 +202,6 @@ class Progenitor:
             await self._ipc_server.stop()
             self._ipc_server = None
 
-        # Clear Copilot ACP manager reference
-        self._copilot_acp_manager = None
-
         # Stop loop runner so the main loop exits promptly
         if self.loop_runner:
             self.loop_runner.stop()
