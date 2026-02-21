@@ -6,27 +6,22 @@ All prompts are stored as markdown files for easy editing.
 """
 
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 # Project root: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PROMPTS_DIR = PROJECT_ROOT / "prompts"
-LEGACY_PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
 
 
 def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
-    """Resolve prompt directory from explicit override, env, and defaults.
+    """Resolve prompt directory from explicit override, env, and project default.
 
     Resolution order:
     1. Explicit ``prompts_dir`` argument (always honored)
-    2. ``PROGENITOR_PROMPTS_DIR`` environment variable
-    3. Project default ``<root>/prompts``
-    4. Legacy fallback ``<root>/data/prompts`` (for backward compatibility)
+    2. ``PROGENITOR_PROMPTS_DIR`` environment variable (raises if missing)
+    3. Project default ``<root>/prompts`` (raises if missing)
     """
     if prompts_dir is not None:
         return Path(prompts_dir).expanduser().resolve()
@@ -34,19 +29,17 @@ def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
     env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
     if env_prompts_dir:
         resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
-        if resolved_env_dir.exists():
-            return resolved_env_dir
-        logger.warning(
-            "PROGENITOR_PROMPTS_DIR points to missing directory: %s. Falling back to defaults.",
-            resolved_env_dir,
+        if not resolved_env_dir.exists():
+            raise FileNotFoundError(
+                f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
+            )
+        return resolved_env_dir
+
+    if not DEFAULT_PROMPTS_DIR.exists():
+        raise FileNotFoundError(
+            f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
+            "Ensure the prompts/ directory exists at the project root."
         )
-
-    if DEFAULT_PROMPTS_DIR.exists():
-        return DEFAULT_PROMPTS_DIR
-
-    if LEGACY_PROMPTS_DIR.exists():
-        return LEGACY_PROMPTS_DIR
-
     return DEFAULT_PROMPTS_DIR
 
 
