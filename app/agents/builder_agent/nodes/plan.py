@@ -1020,63 +1020,15 @@ async def _seed_spec_doc_from_template(
         entity_type = "agent"
         output_dir = "app/agents"
 
-    # Determine path to seed template
-    # Try project-relative path first
-    seed_paths = [
-        Path(f"prompts/{template_name}"),
-        Path(__file__).parent.parent.parent.parent / f"prompts/{template_name}",
-    ]
-
-    template_content = ""
-    seed_path = f"prompts/{template_name}"  # Default reference path
-
-    for path in seed_paths:
-        if path.exists():
-            template_content = path.read_text(encoding="utf-8")
-            seed_path = str(path.relative_to(path.parent.parent) if path.parent.parent.exists() else path.name)
-            break
-
-    if not template_content:
-        # Fallback: Create a minimal spec if template not found
-        if item_type == WorkItemType.BUILD_MCP:
-            template_content = f"""# FastMCP Tool Specification
-
-## Directory Structure
-Create the tool in `{output_dir}/{{tool_name}}/`:
-- `{output_dir}/{{tool_name}}/__init__.py`
-- `{output_dir}/{{tool_name}}/server.py` - FastMCP server implementation
-
-## Requirements
-- Use FastMCP (@mcp.tool decorator)
-- Python best practices
-- Docstrings and type hints
-"""
-        elif item_type == WorkItemType.BUILD_PROGENITOR:
-            template_content = """# Progenitor Core Improvement Specification
-
-## Directory Scope (CRITICAL)
-All changes MUST be limited to `app/progenitor/` unless the spec explicitly requires otherwise.
-
-## Build Discipline
-- Keep diffs minimal and focused
-- Prefer targeted refactors over rewrites
-- Add/update tests only when behavior changes
-"""
-        else:
-            template_content = f"""# Agent Structure Specification
-
-## Directory Structure
-Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
-- `{output_dir}/{{agent_name}}/__init__.py`
-- `{output_dir}/{{agent_name}}/agent.py` - Main implementation
-
-## Requirements
-- Python best practices
-- Docstrings and type hints
-- Implement required A2A endpoints
-"""
-        seed_path = f"generated/minimal_{entity_type}_spec.md"
-        logger.warning(f"SpecDoc: Template {template_name} not found, using minimal fallback spec")
+    # Resolve template from the prompts directory (fail fast if missing)
+    template_path = Path(__file__).parent.parent.parent.parent / "prompts" / template_name
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"Spec template not found: {template_path}. "
+            f"Ensure prompts/{template_name} exists."
+        )
+    template_content = template_path.read_text(encoding="utf-8")
+    seed_path = f"prompts/{template_name}"
 
     # Use LLM to customize the template with user's task
     if llm_client:
