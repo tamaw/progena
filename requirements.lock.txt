@@ -258,7 +258,7 @@ python-socketio[client]==5.16.1
     # via locust
 pytz==2025.2
     # via -r requirements.txt
-pywin32==311
+pywin32==311; platform_system == "Windows"
     # via locust
 pyyaml==6.0.3
     # via
