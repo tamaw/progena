@@ -11,6 +11,7 @@ Later phases will add middleware, skills, memory, and subagents.
 """
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,29 @@ from .middleware import AuditLoggingMiddleware, MetricsMiddleware, SecretRedacti
 from .tools_adapter import create_deepagent_tools
 
 logger = logging.getLogger(__name__)
+
+
+def _build_checkpointer(db_path: Path) -> Any:
+    """Create a SqliteSaver checkpointer, falling back to MemorySaver.
+
+    Args:
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        SqliteSaver if langgraph-checkpoint-sqlite is installed, else MemorySaver.
+    """
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver  # pyright: ignore[reportMissingImports]
+
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        return SqliteSaver(conn)
+    except ImportError:
+        logger.warning(
+            "langgraph-checkpoint-sqlite not installed; using in-memory checkpointer. "
+            "Install with: pip install langgraph-checkpoint-sqlite"
+        )
+        return MemorySaver()
 
 
 def create_progenitor_agent(
@@ -70,9 +94,10 @@ def create_progenitor_agent(
     # Create LangChain model routed through LiteLLM
     model = create_langchain_model(config.llm)
 
-    # Default to in-memory checkpointer for development
+    # Default to SQLite checkpointer for persistence; fall back to MemorySaver
     if checkpointer is None:
-        checkpointer = MemorySaver()
+        db_path = config.storage.state_dir / "conversations.db"
+        checkpointer = _build_checkpointer(db_path)
 
     # Default to in-memory store for development
     if store is None:
