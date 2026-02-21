@@ -177,7 +177,9 @@ def _build_checkpointer(
     try:
         import sqlite3
 
-        from langgraph.checkpoint.sqlite import SqliteSaver
+        from langgraph.checkpoint.sqlite import (
+            SqliteSaver,  # type: ignore[import-untyped,import-not-found]  # pyright: ignore[reportMissingImports]
+        )
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path), check_same_thread=False)

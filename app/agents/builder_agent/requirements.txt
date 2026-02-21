@@ -2,7 +2,7 @@
 # Self-contained A2A agent for inner-loop build operations.
 
 # A2A protocol server
-a2a-sdk[starlette]>=0.3.24
+a2a-sdk[http-server]>=0.3.24
 
 # LLM / agent framework
 openai>=1.0.0

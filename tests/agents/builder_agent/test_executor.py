@@ -1,6 +1,7 @@
 """Tests for the BuilderAgentExecutor A2A implementation."""
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from a2a.types import (
     Message,
     Part,
@@ -52,12 +53,14 @@ def mock_context_build():
 @pytest.mark.asyncio
 async def test_execute_empty_request_emits_failed(executor, mock_event_queue, mock_context_empty):
     """An empty build request should immediately emit a 'failed' terminal event."""
-    with patch("app.agents.builder_agent.agent._ensure_initialized", new_callable=AsyncMock):
-        with patch("app.agents.builder_agent.agent._runner", new_callable=MagicMock):
-            with patch("app.agents.builder_agent.agent._llm_client", new_callable=MagicMock):
-                with patch("app.agents.builder_agent.agent._tool_registry", new_callable=MagicMock):
-                    with patch("app.agents.builder_agent.agent._config", new_callable=MagicMock):
-                        await executor.execute(mock_context_empty, mock_event_queue)
+    with (
+        patch("app.agents.builder_agent.agent._ensure_initialized", new_callable=AsyncMock),
+        patch("app.agents.builder_agent.agent._runner", new_callable=MagicMock),
+        patch("app.agents.builder_agent.agent._llm_client", new_callable=MagicMock),
+        patch("app.agents.builder_agent.agent._tool_registry", new_callable=MagicMock),
+        patch("app.agents.builder_agent.agent._config", new_callable=MagicMock),
+    ):
+        await executor.execute(mock_context_empty, mock_event_queue)
 
     assert mock_event_queue.enqueue_event.called
     events = [call.args[0] for call in mock_event_queue.enqueue_event.call_args_list]
@@ -83,12 +86,14 @@ async def test_execute_no_message_emits_failed(executor, mock_event_queue):
     ctx.context_id = "ctx-no-msg"
     ctx.message = None
 
-    with patch("app.agents.builder_agent.agent._ensure_initialized", new_callable=AsyncMock):
-        with patch("app.agents.builder_agent.agent._runner", new_callable=MagicMock):
-            with patch("app.agents.builder_agent.agent._llm_client", new_callable=MagicMock):
-                with patch("app.agents.builder_agent.agent._tool_registry", new_callable=MagicMock):
-                    with patch("app.agents.builder_agent.agent._config", new_callable=MagicMock):
-                        await executor.execute(ctx, mock_event_queue)
+    with (
+        patch("app.agents.builder_agent.agent._ensure_initialized", new_callable=AsyncMock),
+        patch("app.agents.builder_agent.agent._runner", new_callable=MagicMock),
+        patch("app.agents.builder_agent.agent._llm_client", new_callable=MagicMock),
+        patch("app.agents.builder_agent.agent._tool_registry", new_callable=MagicMock),
+        patch("app.agents.builder_agent.agent._config", new_callable=MagicMock),
+    ):
+        await executor.execute(ctx, mock_event_queue)
 
     events = [call.args[0] for call in mock_event_queue.enqueue_event.call_args_list]
     terminal = [e for e in events if getattr(e, "final", False)]
