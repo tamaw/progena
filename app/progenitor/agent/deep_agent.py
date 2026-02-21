@@ -58,6 +58,7 @@ def create_progenitor_agent(
     project_root: str | None = None,
     log_dir: str | Path | None = None,
     skills_dirs: list[str] | None = None,
+    memory_paths: list[str] | None = None,
 ) -> CompiledStateGraph:
     """Create the Progenitor DeepAgent instance.
 
@@ -74,6 +75,8 @@ def create_progenitor_agent(
         log_dir: Directory for JSONL audit logs. If None, logs to Python logger only.
         skills_dirs: Paths to skill directories for progressive disclosure.
                      If None, auto-discovers from prompts/skills/.
+        memory_paths: Paths to memory files (e.g., AGENTS.md).
+                      If None, auto-discovers from project root.
 
     Returns:
         Compiled DeepAgent graph ready for invoke/stream.
@@ -117,6 +120,14 @@ def create_progenitor_agent(
         if skills_path.is_dir():
             skills_dirs = [str(skills_path)]
 
+    # Auto-discover memory files if not provided
+    if memory_paths is None:
+        root = Path(project_root) if project_root else Path.cwd()
+        memory_paths = []
+        agents_md = root / "AGENTS.md"
+        if agents_md.is_file():
+            memory_paths.append(str(agents_md))
+
     agent = create_deep_agent(
         name="progenitor",
         model=model,
@@ -125,6 +136,7 @@ def create_progenitor_agent(
         backend=backend,
         store=store,
         skills=skills_dirs,
+        memory=memory_paths or None,
         middleware=custom_middleware,
         checkpointer=checkpointer,
     )
