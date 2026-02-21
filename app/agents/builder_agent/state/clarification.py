@@ -251,7 +251,7 @@ class ClarificationDetector:
                 ideal_state_summary = f"Task: {ideal_state.get('task_description', '')}"
 
         prompt = _prompts.get(
-            "clarification.detection.md",
+            "builder_agent/clarification_detection.md",
             task_description=task_description,
             ideal_state_summary=ideal_state_summary,
             output_tail=output[-2000:],

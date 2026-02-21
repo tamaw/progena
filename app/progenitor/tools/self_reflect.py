@@ -471,7 +471,7 @@ class SelfReflection:
         file_content = self.read_file(relative_path, max_lines=300)
 
         prompt = _prompts.get(
-            "self_reflect.file_analysis.md",
+            "progenitor/self_reflect_file_analysis.md",
             relative_path=relative_path,
             language=file_content.language,
             content=file_content.content,
