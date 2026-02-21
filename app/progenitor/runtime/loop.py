@@ -259,9 +259,19 @@ class ProgenitorLoop:
                     self._state["pending_response"] = None
 
             # Ensure streaming clients never hang waiting for an is_final marker.
+            # Extract the last AI message from messages if nothing was streamed yet.
             if self._streaming_enabled and not self._stream_final_sent:
-                await self.stream_final()
-                self._stream_final_sent = True
+                messages = self._state.get("messages")
+                if messages and isinstance(messages, list):
+                    last_msg = messages[-1]
+                    content = getattr(last_msg, "content", None)
+                    if content and isinstance(content, str):
+                        logger.info("Extracting AI response from messages (%d chars)", len(content))
+                        await self._stream_response(content)
+                        self._stream_final_sent = True
+                if not self._stream_final_sent:
+                    await self.stream_final()
+                    self._stream_final_sent = True
 
             # Checkpoint state after cycle
             await self._checkpoint_state(self._state)
@@ -622,8 +632,8 @@ class ProgenitorLoop:
             "pid": __import__("os").getpid(),
             "idle_cycles": state.get("idle_cycles", 0),
             "current_backoff_seconds": state.get("current_backoff_seconds"),
-            "message_count": len(state.get("messages", []) or []),
-            "agent_count": len(state.get("agents", []) or []),
+            "message_count": len(state.get("messages") or []) if isinstance(state.get("messages"), list) else 0,
+            "agent_count": len(state.get("agents") or []) if isinstance(state.get("agents"), list) else 0,
             "queues": self.get_queue_stats(),
         }
 
