@@ -11,7 +11,6 @@ Later phases will add middleware, skills, memory, and subagents.
 """
 
 import logging
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -30,20 +29,21 @@ logger = logging.getLogger(__name__)
 
 
 def _build_checkpointer(db_path: Path) -> Any:
-    """Create a SqliteSaver checkpointer, falling back to MemorySaver.
+    """Create an AsyncSqliteSaver checkpointer, falling back to MemorySaver.
 
     Args:
         db_path: Path to the SQLite database file.
 
     Returns:
-        SqliteSaver if langgraph-checkpoint-sqlite is installed, else MemorySaver.
+        AsyncSqliteSaver if langgraph-checkpoint-sqlite is installed, else MemorySaver.
     """
     try:
-        from langgraph.checkpoint.sqlite import SqliteSaver  # pyright: ignore[reportMissingImports]
+        import aiosqlite
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver  # pyright: ignore[reportMissingImports]
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        return SqliteSaver(conn)
+        conn = aiosqlite.connect(str(db_path))
+        return AsyncSqliteSaver(conn=conn)
     except ImportError:
         logger.warning(
             "langgraph-checkpoint-sqlite not installed; using in-memory checkpointer. "

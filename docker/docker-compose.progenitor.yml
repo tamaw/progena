@@ -28,10 +28,11 @@ services:
       # Bind IPC on all interfaces so other containers (backend) can connect.
       PROGENITOR_IPC_HOST: 0.0.0.0
     volumes:
-      - ../data/state:/app/data/state
+      - ../data:/app/data
       - ../logs:/app/logs
       - ../worktrees:/app/worktrees
       - ../tmp:/app/tmp
+      - ../prompts:/app/prompts
     stdin_open: true
     tty: true
     networks:
@@ -79,7 +80,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ../data/state:/app/data/state
+      - ../data:/app/data
       - ../logs:/app/logs
       - ../tmp:/app/tmp
     networks:
