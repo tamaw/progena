@@ -28,9 +28,6 @@ DEEPAGENT_NATIVE_TOOLS: set[str] = set()
 # DeepAgent has built-in planning (write_todos)
 # DeepAgent has built-in subagent delegation (task)
 
-# Tools deprecated in favour of DeepAgent capabilities (already removed from codebase).
-DEPRECATED_TOOLS: set[str] = set()
-
 # Tools that are internal/infrastructure and shouldn't be exposed to LLM.
 INTERNAL_TOOLS = {
     "user_communication",     # Internal event pushing
@@ -83,7 +80,7 @@ def create_deepagent_tools(
     Returns:
         List of LangChain tool objects ready for create_deep_agent(tools=...).
     """
-    skip_tools = DEEPAGENT_NATIVE_TOOLS | DEPRECATED_TOOLS | INTERNAL_TOOLS
+    skip_tools = DEEPAGENT_NATIVE_TOOLS | INTERNAL_TOOLS
     system_tools = get_all_system_tools()
 
     wrapped_tools = []
