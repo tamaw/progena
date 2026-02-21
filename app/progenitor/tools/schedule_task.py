@@ -62,7 +62,7 @@ class ScheduleTaskTool(BaseSystemTool):
             return ToolResult.fail("No user input provided for scheduling.")
 
         # Use LLM to extract and process schedule parameters
-        system_prompt = _prompts.get("schedule_task.extraction_system.md")
+        system_prompt = _prompts.get("progenitor/schedule_task_extraction_system.md")
 
         messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
 

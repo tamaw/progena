@@ -3,7 +3,17 @@ name: ci
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'app/agents/**'
+      - 'app/mcp/**'
+      - '.github/workflows/agents.yml'
+      - '.github/workflows/agent-deploy.yml'
   pull_request:
+    paths-ignore:
+      - 'app/agents/**'
+      - 'app/mcp/**'
+      - '.github/workflows/agents.yml'
+      - '.github/workflows/agent-deploy.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,42 +25,6 @@ permissions:
   packages: write
 
 jobs:
-  detect-changes:
-    # Only used to gate docker build/push/deploy on main when changes are core (not only agents/mcp).
-    runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' }}
-    outputs:
-      core_changed: ${{ steps.diff.outputs.core_changed }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Detect core changes (exclude app/agents, app/mcp, docker/runner)
-        id: diff
-        shell: bash
-        run: |
-          set -euo pipefail
-          CHANGED="$(git diff --name-only HEAD^ HEAD || true)"
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          # Core changed if any file is outside app/agents/ and app/mcp/
-          # (agent/mcp deploy is handled by .github/workflows/agent-deploy.yml).
-          CORE_CHANGED="false"
-          while IFS= read -r f; do
-            [ -n "$f" ] || continue
-            case "$f" in
-              app/agents/*) ;;
-              app/mcp/*) ;;
-              docker/runner/*) ;;
-              .github/workflows/agent-deploy.yml) ;;
-              *) CORE_CHANGED="true" ;;
-            esac
-          done <<< "$CHANGED"
-
-          echo "core_changed=$CORE_CHANGED" >> "$GITHUB_OUTPUT"
-
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -95,12 +69,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock.txt
-          pip install ruff
+          pip install ruff pyright
           pip install -e . --no-deps
 
       - name: Lint progenitor (ruff)
         continue-on-error: true
         run: ruff check app/progenitor tests/progenitor tests/test_scheduler.py
+
+      - name: Type-check progenitor (pyright)
+        continue-on-error: true
+        run: pyright app/progenitor
 
       - name: Tests progenitor (pytest)
         run: >
@@ -137,8 +115,8 @@ jobs:
 
   build-and-push:
     runs-on: ubuntu-latest
-    needs: [detect-changes, backend, progenitor, frontend]
-    if: ${{ github.ref == 'refs/heads/main' && needs.detect-changes.outputs.core_changed == 'true' }}
+    needs: [backend, progenitor, frontend]
+    if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -190,8 +168,8 @@ jobs:
     # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
     runs-on: [self-hosted, Linux, X64]
     environment: cronix
-    needs: [detect-changes, build-and-push]
-    if: ${{ github.ref == 'refs/heads/main' && needs.detect-changes.outputs.core_changed == 'true' }}
+    needs: [build-and-push]
+    if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 

@@ -26,8 +26,6 @@ import random
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ..protocols import LLMClientProtocol
-
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +34,7 @@ def is_mock_mode_enabled() -> bool:
     return os.environ.get("PROGENITOR_MOCK_LLM", "").lower() in ("true", "1", "yes")
 
 
-class MockLLMClient(LLMClientProtocol):
+class MockLLMClient:
     """Mock LLM client that returns realistic fake responses.
 
     Simulates API latency and returns contextually appropriate
@@ -405,7 +403,7 @@ def create_llm_client(
     *args,
     force_mock: bool = False,
     **kwargs,
-) -> LLMClientProtocol:
+) -> MockLLMClient:
     """Factory function to create appropriate LLM client.
 
     Automatically selects MockLLMClient if:

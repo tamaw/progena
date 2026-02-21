@@ -1,10 +1,8 @@
-"""Tools module - Copilot CLI, git/worktree helpers, MCP client, agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
+"""Tools module - MCP client, agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
 
 from typing import TYPE_CHECKING
 
 from .agent_discovery import AgentDiscovery, discover_agents
-from .copilot import CopilotCLI
-from .git import GitWorktreeManager
 from .mcp import MCPClient
 from .registry import ToolRegistry
 from .schedule import (
@@ -24,13 +22,10 @@ from .user_communication import (
 )
 
 if TYPE_CHECKING:
-    from .build_status import BuildStatusTool
-    from .compress_conversation import CompressConversationTool
     from .current_time import CurrentTimeTool
     from .list_agents import ListAgentsTool
     from .list_schedule import ListScheduleTool
     from .list_tools import ListToolsTool
-    from .memory import MemoryTool
     from .new_conversation import NewConversationTool
     from .rediscover_agents import RediscoverAgentsTool
     from .schedule_task import ScheduleTaskTool
@@ -44,13 +39,10 @@ def __getattr__(name: str):
         "RediscoverAgentsTool": "rediscover_agents",
         "ListAgentsTool": "list_agents",
         "NewConversationTool": "new_conversation",
-        "BuildStatusTool": "build_status",
         "CurrentTimeTool": "current_time",
         "ListScheduleTool": "list_schedule",
         "SelfReflectTool": "self_reflect_tool",
         "ScheduleTaskTool": "schedule_task",
-        "CompressConversationTool": "compress_conversation",
-        "MemoryTool": "memory",
     }
     if name in _tool_modules:
         import importlib
@@ -61,8 +53,6 @@ def __getattr__(name: str):
 
 __all__ = [
     "ToolRegistry",
-    "CopilotCLI",
-    "GitWorktreeManager",
     "MCPClient",
     "AgentDiscovery",
     "discover_agents",
@@ -80,11 +70,8 @@ __all__ = [
     "RediscoverAgentsTool",
     "ListAgentsTool",
     "NewConversationTool",
-    "BuildStatusTool",
     "CurrentTimeTool",
     "ListScheduleTool",
     "SelfReflectTool",
     "ScheduleTaskTool",
-    "CompressConversationTool",
-    "MemoryTool",
 ]

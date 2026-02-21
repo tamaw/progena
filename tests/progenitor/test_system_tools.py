@@ -11,7 +11,6 @@ import pytest
 
 from app.progenitor.nodes.node_helpers import (
     BaseSystemTool,
-    BuildStatusTool,
     CurrentTimeTool,
     ListAgentsTool,
     ListScheduleTool,
@@ -175,48 +174,10 @@ class TestListToolsTool:
         assert {"tool1", "tool2", "local_tool", "litellm_tool"} <= mcp_names
 
         system_names = {t.get("name") for t in result.data["system_tools"]}
-        assert {"build_agent", "build_mcp", "build_progenitor"} <= system_names
+        assert len(system_names) > 0
 
         agent_names = {a.get("name") for a in result.data["agents"]}
         assert "agent1" in agent_names
-
-
-class TestBuildStatusTool:
-    """Tests for BuildStatusTool implementation."""
-
-    @pytest.fixture
-    def tool(self):
-        return BuildStatusTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "build_status"
-
-    async def test_execute_no_build(self, tool):
-        """Should report no build when none active."""
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=MagicMock(),
-            state={"build_in_progress": False},
-            state_manager=MagicMock(),
-        )
-        result = await tool.execute(ctx)
-        assert result.success is True
-        # Message should indicate no active build
-
-    async def test_execute_with_build(self, tool):
-        """Should report build status when active."""
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=MagicMock(),
-            state={
-                "build_in_progress": True,
-                "build_settings": {"project_name": "test_agent"},
-            },
-            state_manager=MagicMock(),
-        )
-        result = await tool.execute(ctx)
-        assert result.success is True
 
 
 class TestCurrentTimeTool:

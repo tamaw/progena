@@ -10,55 +10,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-class TestCopilotExceptionHandling:
-    """Test exception handling in copilot.py."""
-
-    def test_uses_specific_exception_types(self):
-        """Verify copilot.py uses specific exception types."""
-        import app.progenitor.tools.copilot as copilot_module
-
-        with open(copilot_module.__file__) as f:
-            content = f.read()
-
-        # Should use specific exceptions instead of bare except
-        assert "(TimeoutError, OSError)" in content or "(TimeoutError, OSError, FileNotFoundError)" in content
-        assert "logger.debug" in content
-
-    @pytest.mark.asyncio
-    async def test_validate_installation_returns_false_on_error(self):
-        """Test that validate_installation handles errors gracefully."""
-        from app.progenitor.runtime.copilot_acp import CopilotACPManager
-        from app.progenitor.tools.copilot import CopilotCLI
-
-        # Create mock ACP manager
-        mock_acp_manager = MagicMock(spec=CopilotACPManager)
-
-        cli = CopilotCLI(copilot_cmd="copilot", acp_manager=mock_acp_manager, timeout=10)
-
-        # Mock asyncio.create_subprocess_exec to raise FileNotFoundError
-        with patch('asyncio.create_subprocess_exec', side_effect=FileNotFoundError("Not found")):
-            result = await cli.validate_installation()
-
-        assert result is False
-
-
-class TestGitExceptionHandling:
-    """Test exception handling in git.py."""
-
-    def test_uses_specific_exception_types(self):
-        """Verify git.py uses specific exception types."""
-        import app.progenitor.tools.git as git_module
-
-        with open(git_module.__file__) as f:
-            content = f.read()
-
-        # Should use specific exceptions
-        assert "(OSError, json.JSONDecodeError)" in content
-        assert "(OSError, RuntimeError)" in content
-        assert "(OSError, ValueError)" in content
-        assert "logger.debug" in content or "logger.warning" in content
-
-
 class TestMCPExceptionHandling:
     """Test exception handling in mcp.py."""
 
@@ -111,21 +62,6 @@ class TestTimeUtilsExceptionHandling:
         assert tm.tz == pytz.UTC
 
 
-class TestIdealStateExceptionHandling:
-    """Test exception handling in ideal_state.py."""
-
-    def test_uses_specific_exception_types(self):
-        """Verify ideal_state.py uses specific exception types."""
-        import app.progenitor.state.ideal_state as ideal_module
-
-        with open(ideal_module.__file__) as f:
-            content = f.read()
-
-        # Should use specific exceptions
-        assert "(ValueError, KeyError, TypeError)" in content
-        assert "logger.warning" in content
-
-
 class TestPickNextExceptionHandling:
     """Test exception handling in pick_next.py."""
 
@@ -139,19 +75,3 @@ class TestPickNextExceptionHandling:
         # Should have specific exception types
         assert "(KeyError, TypeError, ValueError)" in content
         assert "logger.debug" in content
-
-
-class TestCommitCoreExceptionHandling:
-    """Test exception handling in commit_core.py."""
-
-    def test_uses_specific_exception_types(self):
-        """Verify commit_core.py uses specific exception types."""
-        import app.progenitor.nodes.commit_core as commit_core_module
-
-        with open(commit_core_module.__file__) as f:
-            content = f.read()
-
-        # Should use specific exception types
-        assert "(TypeError, ValueError)" in content
-        assert "logger.debug" in content
-

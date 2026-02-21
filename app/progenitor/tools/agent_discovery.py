@@ -200,7 +200,7 @@ class AgentDiscovery:
         # Build prompt with all folder info
         folder_descriptions = "\n\n".join(f.to_prompt_string() for f in folders)
 
-        system_prompt = _prompts.get("agent_discovery.analysis_system.md")
+        system_prompt = _prompts.get("progenitor/agent_discovery_analysis_system.md")
 
         user_prompt = _prompts.get(
             "agent_discovery.analysis.md",
@@ -358,7 +358,7 @@ class AgentDiscovery:
                 logger.error("Failed to register agent '%s': %s", agent_spec.name, e)
                 errors.append(f"{agent_spec.name}: {e}")
 
-        summary = {
+        summary: dict[str, Any] = {
             "success": len(errors) == 0,
             "agents_found": len(result.agents),
             "agents_registered": registered,
@@ -380,7 +380,7 @@ class AgentDiscovery:
             try:
                 from .mcp import A2AClient
 
-                card_refresh = await self.registry.refresh_agent_cards(A2AClient())  # type: ignore[attr-defined]
+                card_refresh = await self.registry.refresh_agent_cards(A2AClient())
             except Exception as e:
                 card_refresh = {"error": str(e)}
 
