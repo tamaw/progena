@@ -239,7 +239,7 @@ async def _generate_build_settings(
         try:
             system_prompt = _prompts.get("builder_agent/decide_project_name_system.md")
             prompt = _prompts.get(
-                "decide.project_name.md",
+                "builder_agent/decide_project_name.md",
                 user_input=user_input,
             )
 

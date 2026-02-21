@@ -285,7 +285,7 @@ async def _plan_schedule_task(
     try:
         # Use LLM to generate the instruction that will run at scheduled time
         instruction_prompt = _prompts.get(
-            "planner.schedule_instruction.md",
+            "builder_agent/planner_schedule_instruction.md",
             user_input=user_input,
             time_expression=time_expression,
         )
@@ -333,7 +333,7 @@ async def _plan_schedule_task(
             try:
                 pending_response = await llm_client.complete(
                     prompt=_prompts.get(
-                        "planner.schedule_confirmation.md",
+                        "builder_agent/planner_schedule_confirmation.md",
                         task_details=json.dumps(schedule_result_payload, ensure_ascii=False),
                     ),
                     system_prompt=_prompts.get("builder_agent/planner_schedule_confirmation_system.md"),
@@ -882,29 +882,28 @@ This is iteration {iteration} of the build. Focus on addressing these gaps:
     rel_path_str = str(rel_path)
 
     # Base prompt that references the spec file
-    base_prompt = f"""{action_verb} a {entity_type} based on the specification file.
-
-SPEC FILE: {rel_path_str}
-
-Read the spec file above and implement the {entity_type} according to its requirements.
-{iteration_context}
-IMPORTANT:
-- Read the spec file FIRST to understand the full requirements
-{action_details}"""
+    base_prompt = _prompts.get(
+        "builder_agent/build_spec_copilot_prompt.md",
+        action_verb=action_verb,
+        entity_type=entity_type,
+        rel_path_str=rel_path_str,
+        iteration_context=iteration_context,
+        action_details=action_details,
+    )
 
     # Optionally use LLM to enhance the prompt with task-specific guidance
     if llm_client and iteration == 0 and item_type != WorkItemType.BUILD_PROGENITOR:
         try:
             if item_type == WorkItemType.BUILD_MCP:
                 enhancement_prompt = _prompts.get(
-                    "planner.copilot_enhancement_tool.md",
+                    "builder_agent/planner_copilot_enhancement_tool.md",
                     task_description=task_description,
                     entity_name=agent_name,
                     spec_rel_path=rel_path_str,
                 )
             else:
                 enhancement_prompt = _prompts.get(
-                    "planner.copilot_enhancement_agent.md",
+                    "builder_agent/planner_copilot_enhancement_agent.md",
                     task_description=task_description,
                     entity_name=agent_name,
                     spec_rel_path=rel_path_str,
@@ -1009,11 +1008,11 @@ async def _seed_spec_doc_from_template(
     """
     # Determine which template to use based on item_type
     if item_type == WorkItemType.BUILD_MCP:
-        template_name = "tool_structure.md"
+        template_name = "builder_agent/tool_structure.md"
         entity_type = "tool"
         output_dir = "app/mcp"
     elif item_type == WorkItemType.BUILD_PROGENITOR:
-        template_name = "progenitor_structure.md"
+        template_name = "builder_agent/progenitor_structure.md"
         entity_type = "progenitor"
         output_dir = "app/progenitor"
     else:
@@ -1085,7 +1084,7 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
             # Adjust prompts based on entity type
             if item_type == WorkItemType.BUILD_MCP:
                 customization_prompt = _prompts.get(
-                    "planner.spec_customization_tool.md",
+                    "builder_agent/planner_spec_customization_tool.md",
                     task_description=task_description,
                     entity_name=agent_name,
                     template_content=template_content,
@@ -1093,7 +1092,7 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
                 system_prompt = _prompts.get("builder_agent/planner_spec_customization_tool_system.md")
             elif item_type == WorkItemType.BUILD_PROGENITOR:
                 customization_prompt = _prompts.get(
-                    "planner.spec_customization_agent.md",
+                    "builder_agent/planner_spec_customization_agent.md",
                     task_description=task_description,
                     entity_name="progenitor",
                     template_content=template_content,
@@ -1101,7 +1100,7 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
                 system_prompt = _prompts.get("builder_agent/planner_spec_customization_agent_system.md")
             else:
                 customization_prompt = _prompts.get(
-                    "planner.spec_customization_agent.md",
+                    "builder_agent/planner_spec_customization_agent.md",
                     task_description=task_description,
                     entity_name=agent_name,
                     template_content=template_content,
@@ -1174,7 +1173,7 @@ async def _generate_experiment_plan(
     # Build prompt for LLM to generate experiment details
     gaps_section = "GAPS TO ADDRESS:\n" + chr(10).join([f"- {gap}" for gap in gaps[:3]]) if gaps else ""
     prompt = _prompts.get(
-        "planner.experiment_plan.md",
+        "builder_agent/planner_experiment_plan.md",
         approach_name=chosen_approach.get('name', 'primary'),
         approach_description=chosen_approach.get('description', ''),
         task_description=task_description,

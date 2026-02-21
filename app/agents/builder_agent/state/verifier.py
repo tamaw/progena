@@ -703,7 +703,7 @@ class Verifier:
                 context_parts.append(f"Validation findings: {'; '.join(finding_msgs)}")
 
         prompt = _prompts.get(
-            "verifier.criterion_scoring.md",
+            "builder_agent/verifier_criterion_scoring.md",
             context_parts=chr(10).join(context_parts),
         )
 
@@ -969,7 +969,7 @@ class Verifier:
     ) -> tuple[float, str]:
         """Use LLM to judge quality."""
         prompt = _prompts.get(
-            "verifier.llm_verification.md",
+            "builder_agent/verifier_llm_verification.md",
             criterion_description=criterion.description,
             measurement=criterion.measurement,
             output=str(output),

@@ -1128,15 +1128,12 @@ class LLMClient:
     ) -> list[dict[str, Any]]:
         """Generate work items for a task."""
         system_prompt = self.prompts.get_planner_prompt()
-        context = f"""
-User Request: {user_input}
-
-Decision: {decision}
-
-Current Backlog: {current_backlog}
-
-Generate a list of work items to fulfill this request.
-"""
+        context = self.prompts.get(
+            "builder_agent/planner_user_message.md",
+            user_input=user_input,
+            decision=str(decision),
+            current_backlog=str(current_backlog),
+        )
         messages = [{"role": "user", "content": context}]
         response_format = _build_json_schema_format(PlannerResponse, "planner_response")
 
@@ -1198,13 +1195,12 @@ Generate a list of work items to fulfill this request.
     ) -> dict[str, Any]:
         """Generate a specification for building an agent or MCP server."""
         system_prompt = self.prompts.get_build_prompt(item_type)
-        context = f"""
-Build Type: {item_type}
-Description: {description}
-Required Capabilities: {', '.join(capabilities)}
-
-Generate a detailed specification for building this component.
-"""
+        context = self.prompts.get(
+            "builder_agent/build_spec_user_message.md",
+            item_type=item_type,
+            description=description,
+            capabilities=", ".join(capabilities),
+        )
         messages = [{"role": "user", "content": context}]
         response_format = _build_json_schema_format(BuildSpec, "build_spec")
 
