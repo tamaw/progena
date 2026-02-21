@@ -19,6 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from ..config import ProgenitorConfig, get_config
+from .backends import create_progenitor_backend
 from .langchain_adapter import create_langchain_model
 from .tools_adapter import create_deepagent_tools
 
@@ -52,6 +53,8 @@ def create_progenitor_agent(
     tool_registry: Any | None = None,
     llm_client: Any | None = None,
     state_manager: Any | None = None,
+    store: Any | None = None,
+    project_root: str | None = None,
 ) -> CompiledStateGraph:
     """Create the Progenitor DeepAgent instance.
 
@@ -62,6 +65,9 @@ def create_progenitor_agent(
         tool_registry: Progenitor's tool/agent registry (for tool context).
         llm_client: Progenitor's LLM client (for tools that need AI).
         state_manager: Progenitor's StateManager (for tools that need persistence).
+        store: LangGraph BaseStore for cross-thread memory persistence.
+               If None, uses InMemoryStore (dev mode).
+        project_root: Root directory for filesystem backend. Defaults to cwd.
 
     Returns:
         Compiled DeepAgent graph ready for invoke/stream.
@@ -76,6 +82,14 @@ def create_progenitor_agent(
     if checkpointer is None:
         checkpointer = MemorySaver()
 
+    # Default to in-memory store for development
+    if store is None:
+        from langgraph.store.memory import InMemoryStore
+        store = InMemoryStore()
+
+    # Create CompositeBackend: LocalShell + StoreBackend + StateBackend
+    backend = create_progenitor_backend(config=config, project_root=project_root)
+
     # Wrap Progenitor's system tools as DeepAgent-compatible tools
     tools = create_deepagent_tools(
         tool_registry=tool_registry,
@@ -88,6 +102,8 @@ def create_progenitor_agent(
         model=model,
         system_prompt=PROGENITOR_SYSTEM_PROMPT,
         tools=tools,
+        backend=backend,
+        store=store,
         checkpointer=checkpointer,
     )
 
