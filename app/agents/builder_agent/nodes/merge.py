@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def create_node(
     llm_client,
-    git_manager,
+    git_manager,  # GitWorktreeManager | None
     state_manager,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the MERGE node that sequentially merges worktrees.

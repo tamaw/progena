@@ -63,10 +63,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
     plan_phase = phases.get("plan", {})
     experiment_plan = plan_phase.get("experiment_plan")
     if experiment_plan:
-        if hasattr(experiment_plan, "model_dump"):
-            context["experiment_plan"] = experiment_plan.model_dump()
-        else:
-            context["experiment_plan"] = experiment_plan
+        context["experiment_plan"] = experiment_plan
 
     # Think phase - reasoning and approaches
     think_phase = phases.get("think", {})
@@ -100,10 +97,7 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
             }
 
     if verification_report:
-        if hasattr(verification_report, "model_dump"):
-            context["verification_report"] = verification_report.model_dump()
-        else:
-            context["verification_report"] = verification_report
+        context["verification_report"] = verification_report
 
     # History - previous iterations (full list for pattern detection)
     history = state.get("history", {})

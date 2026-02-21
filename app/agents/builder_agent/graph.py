@@ -109,7 +109,7 @@ def create_inner_loop_graph(
 
     builder = StateGraph(ProgenitorState)
     for name, node_fn in nodes.items():
-        builder.add_node(name, node_fn)
+        builder.add_node(name, node_fn)  # type: ignore[call-overload]
 
     builder.set_entry_point("observe")
 
@@ -173,11 +173,11 @@ def _build_checkpointer(
         except Exception:
             return MemorySaver()
 
-    db_path = Path(checkpoint_db_path)
+    db_path = Path(str(checkpoint_db_path))
     try:
         import sqlite3
 
-        from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import]
+        from langgraph.checkpoint.sqlite import SqliteSaver
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path), check_same_thread=False)

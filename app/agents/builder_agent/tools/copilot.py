@@ -285,7 +285,7 @@ class CopilotTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return []
 
-    async def execute(self, _context: ToolContext) -> ToolResult:
+    async def execute(self, context: ToolContext) -> ToolResult:
         cfg = CopilotConfig.from_env()
         return ToolResult.ok({
             "bin_path": cfg.bin_path,

@@ -443,7 +443,7 @@ class LLMClient:
                 default_user_input = system_tool_context.get("default_user_input", "")
                 tool_user_input = str(tool_args.get("request") or default_user_input or "")
 
-                data_out, err, state_updates, _retry = await execute_system_tool(
+                data_out, err, state_updates, _retry = await execute_system_tool(  # pyright: ignore[reportGeneralTypeIssues]
                     tool_name=tool_name,
                     tool_registry=tool_registry,
                     llm_client=self,

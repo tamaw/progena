@@ -149,8 +149,8 @@ class BuilderAgentExecutor(AgentExecutor):
         if not request_text:
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
-                    taskId=task_id,
-                    contextId=ctx_id,
+                    task_id=task_id,
+                    context_id=ctx_id,
                     status=TaskStatus(
                         state=TaskState.failed,
                         message=_text_message("Empty build request — please describe what to build.", role=Role.agent),
@@ -166,8 +166,8 @@ class BuilderAgentExecutor(AgentExecutor):
         # ------------------------------------------------------------------
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                taskId=task_id,
-                contextId=ctx_id,
+                task_id=task_id,
+                context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.working,
                     message=_text_message(f"Starting build: {request_text[:120]}", role=Role.agent),
@@ -199,8 +199,8 @@ class BuilderAgentExecutor(AgentExecutor):
         if action not in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
-                    taskId=task_id,
-                    contextId=ctx_id,
+                    task_id=task_id,
+                    context_id=ctx_id,
                     status=TaskStatus(
                         state=TaskState.failed,
                         message=_text_message(
@@ -237,8 +237,8 @@ class BuilderAgentExecutor(AgentExecutor):
 
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                taskId=task_id,
-                contextId=ctx_id,
+                task_id=task_id,
+                context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.working,
                     message=_text_message(ack_message, role=Role.agent),
@@ -260,8 +260,8 @@ class BuilderAgentExecutor(AgentExecutor):
         if result is None:
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
-                    taskId=task_id,
-                    contextId=ctx_id,
+                    task_id=task_id,
+                    context_id=ctx_id,
                     status=TaskStatus(
                         state=TaskState.failed,
                         message=_text_message("Build completed but no result was recorded.", role=Role.agent),
@@ -293,10 +293,10 @@ class BuilderAgentExecutor(AgentExecutor):
 
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(
-                taskId=task_id,
-                contextId=ctx_id,
+                task_id=task_id,
+                context_id=ctx_id,
                 artifact=Artifact(
-                    artifactId=str(uuid.uuid4()),
+                    artifact_id=str(uuid.uuid4()),
                     name="build-result",
                     description=f"Build result for {task_description}",
                     parts=[Part(root=TextPart(text=summary_text))],
@@ -307,8 +307,8 @@ class BuilderAgentExecutor(AgentExecutor):
 
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                taskId=task_id,
-                contextId=ctx_id,
+                task_id=task_id,
+                context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.completed if succeeded else TaskState.failed,
                     message=_text_message(
@@ -334,8 +334,8 @@ class BuilderAgentExecutor(AgentExecutor):
 
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                taskId=task_id,
-                contextId=ctx_id,
+                task_id=task_id,
+                context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.canceled,
                     message=_text_message("Build task cancelled.", role=Role.agent),
@@ -352,7 +352,7 @@ class BuilderAgentExecutor(AgentExecutor):
 
 def _text_message(text: str, *, role: Role = Role.agent) -> Message:
     return Message(
-        messageId=str(uuid.uuid4()),
+        message_id=str(uuid.uuid4()),
         role=role,
         parts=[Part(root=TextPart(text=text))],
     )
@@ -376,9 +376,9 @@ AGENT_CARD = AgentCard(
     ),
     version="0.2.0",
     url=f"http://localhost:{_PORT}",
-    capabilities=AgentCapabilities(streaming=False, stateTransitionHistory=True),
-    defaultInputModes=["text/plain"],
-    defaultOutputModes=["text/plain"],
+    capabilities=AgentCapabilities(streaming=False, state_transition_history=True),
+    default_input_modes=["text/plain"],
+    default_output_modes=["text/plain"],
     skills=[
         AgentSkill(
             id="build_agent",
@@ -427,7 +427,7 @@ app = _a2a_app.build()
 from fastapi.responses import JSONResponse  # noqa: E402
 
 
-async def _health(request: Any) -> JSONResponse:  # type: ignore[name-defined]
+async def _health(request: Any) -> JSONResponse:
     uptime = time.time() - _start_time
     return JSONResponse(
         {

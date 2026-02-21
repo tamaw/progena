@@ -133,7 +133,7 @@ def _check_build_stop(
         return True, "build cancelled"
 
     if state.get("build_error"):
-        return True, f"build error: {state['build_error']}"
+        return True, f"build error: {state.get('build_error')}"
 
     iter_info = state.get("iteration", {})
     current_iteration = iter_info.get("current", 0)
@@ -189,7 +189,7 @@ def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "d
         return "done"
 
     if state.get("build_error"):
-        logger.info("route_after_verify → done: build error: %s", state["build_error"])
+        logger.info("route_after_verify → done: build error: %s", state.get("build_error"))
         return "done"
 
     iter_info = state.get("iteration", {}) or {}

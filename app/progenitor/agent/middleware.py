@@ -190,7 +190,7 @@ class MetricsMiddleware(AgentMiddleware):
         """Sync version — just pass through."""
         return handler(request)
 
-    def after_model(self, _state: Any, _runtime: Any) -> dict[str, Any] | None:
+    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         """Track model call count."""
         self._model_calls += 1
         return None
