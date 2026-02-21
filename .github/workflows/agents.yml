@@ -1,0 +1,125 @@
+name: agents
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/agents/**'
+      - 'tests/agents/**'
+      - '.github/workflows/agents.yml'
+  pull_request:
+    paths:
+      - 'app/agents/**'
+      - 'tests/agents/**'
+      - '.github/workflows/agents.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Discovers all agent directories under app/agents/ and outputs a JSON array
+  # used by the matrix jobs below — no need to hardcode agent names.
+  discover-agents:
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.list.outputs.agents }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Discover agents
+        id: list
+        run: |
+          set -euo pipefail
+          # List immediate subdirectories (skip __pycache__ and hidden dirs)
+          agents=$(find app/agents -mindepth 1 -maxdepth 1 -type d \
+            ! -name '__pycache__' ! -name '.*' \
+            -exec basename {} \; | sort | jq -R . | jq -sc .)
+          echo "agents=$agents" >> "$GITHUB_OUTPUT"
+          echo "Discovered agents: $agents"
+
+  # Lint, type-check and test each agent using its own requirements if present.
+  test-agent:
+    needs: discover-agents
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJson(needs.discover-agents.outputs.agents) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock.txt
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+          if [ -f "app/agents/${{ matrix.agent }}/requirements.txt" ]; then
+            pip install -r "app/agents/${{ matrix.agent }}/requirements.txt"
+          fi
+          pip install ruff pyright
+          pip install -e . --no-deps
+
+      - name: Lint (ruff)
+        continue-on-error: true
+        run: |
+          TARGETS="app/agents/${{ matrix.agent }}"
+          TEST_DIR="tests/agents/${{ matrix.agent }}"
+          [ -d "$TEST_DIR" ] && TARGETS="$TARGETS $TEST_DIR"
+          ruff check $TARGETS
+
+      - name: Type-check (pyright)
+        continue-on-error: true
+        run: pyright "app/agents/${{ matrix.agent }}"
+
+      - name: Tests (pytest)
+        run: |
+          TEST_DIR="tests/agents/${{ matrix.agent }}"
+          if [ -d "$TEST_DIR" ]; then
+            pytest "$TEST_DIR" -q
+          else
+            echo "No tests found for ${{ matrix.agent }}, skipping."
+          fi
+
+  # Build each agent's Docker image to validate Dockerfiles.
+  # Uses the agent's own Dockerfile when present, otherwise the generic runner.
+  build-agent:
+    needs: discover-agents
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJson(needs.discover-agents.outputs.agents) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Detect agent Dockerfile
+        id: dockerfile
+        run: |
+          if [ -f "app/agents/${{ matrix.agent }}/Dockerfile" ]; then
+            echo "file=app/agents/${{ matrix.agent }}/Dockerfile" >> "$GITHUB_OUTPUT"
+          else
+            echo "file=docker/runner/Dockerfile.agent" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build agent image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.dockerfile.outputs.file }}
+          build-args: |
+            AGENT_NAME=${{ matrix.agent }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
