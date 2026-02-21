@@ -135,9 +135,45 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Build each agent Docker image to validate Dockerfiles on every PR/push.
+  # Uses each agent's own Dockerfile if present, otherwise the generic runner.
+  build-agents:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent:
+          - builder_agent
+          - hello_world_agent
+          - observe_agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Detect agent Dockerfile
+        id: dockerfile
+        run: |
+          if [ -f "app/agents/${{ matrix.agent }}/Dockerfile" ]; then
+            echo "file=app/agents/${{ matrix.agent }}/Dockerfile" >> "$GITHUB_OUTPUT"
+          else
+            echo "file=docker/runner/Dockerfile.agent" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build agent image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.dockerfile.outputs.file }}
+          build-args: |
+            AGENT_NAME=${{ matrix.agent }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   build-and-push:
     runs-on: ubuntu-latest
-    needs: [detect-changes, backend, progenitor, frontend]
+    needs: [detect-changes, backend, progenitor, frontend, build-agents]
     if: ${{ github.ref == 'refs/heads/main' && needs.detect-changes.outputs.core_changed == 'true' }}
     steps:
       - uses: actions/checkout@v4
