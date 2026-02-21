@@ -1016,7 +1016,7 @@ async def _seed_spec_doc_from_template(
         entity_type = "progenitor"
         output_dir = "app/progenitor"
     else:
-        template_name = "agent_structure.md"
+        template_name = "builder_agent/agent_structure.md"
         entity_type = "agent"
         output_dir = "app/agents"
 
