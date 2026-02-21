@@ -9,7 +9,7 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 import httpx
 from fastapi import FastAPI, Request
@@ -393,7 +393,7 @@ class ObserveAgent:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._litellm_headers()) as client:
             resp = await client.post(self._litellm_endpoint(), json=payload)
             resp.raise_for_status()
-            return resp.json()
+            return cast(dict[str, Any], resp.json())
 
     @staticmethod
     def _extract_tool_calls(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -522,4 +522,3 @@ async def handle(req: Request) -> JSONResponse:
             "metadata": {"detail": str(e)},
         }
         return JSONResponse(content=err, status_code=500)
-

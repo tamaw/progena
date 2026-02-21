@@ -3,6 +3,7 @@ List Agents - List all registered agents with their status.
 """
 
 import logging
+from contextlib import suppress
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -37,19 +38,15 @@ class ListAgentsTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         # External deploy pipelines can update registry.json; reload best-effort.
         if hasattr(context.tool_registry, "load"):
-            try:
-                await context.tool_registry.load()  # type: ignore[func-returns-value]
-            except Exception:
-                pass
+            with suppress(Exception):
+                await context.tool_registry.load()
 
         # Best-effort: keep agent metadata aligned to live agent cards.
         if hasattr(context.tool_registry, "refresh_agent_cards"):
-            try:
+            with suppress(Exception):
                 from .mcp import A2AClient
 
-                await context.tool_registry.refresh_agent_cards(A2AClient())  # type: ignore[attr-defined]
-            except Exception:
-                pass
+                await context.tool_registry.refresh_agent_cards(A2AClient())
 
         agents = context.tool_registry.get_agents()
         all_agents = [
