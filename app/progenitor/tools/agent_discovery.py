@@ -200,7 +200,7 @@ class AgentDiscovery:
         # Build prompt with all folder info
         folder_descriptions = "\n\n".join(f.to_prompt_string() for f in folders)
 
-        system_prompt = _prompts.get("agent_discovery.analysis_system.md")
+        system_prompt = _prompts.get("progenitor/agent_discovery_analysis_system.md")
 
         user_prompt = _prompts.get(
             "agent_discovery.analysis.md",

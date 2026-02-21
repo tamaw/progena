@@ -349,7 +349,7 @@ class IdealStateBuilder:
         try:
             extraction = await self._structured_call(
                 prompt=prompt,
-                system_prompt=self.prompts.get("ideal_state.extraction_system.md"),
+                system_prompt=self.prompts.get("builder_agent/ideal_state_extraction_system.md"),
                 response_model=IdealStateExtractionResponse,
                 schema_name="ideal_state_extraction",
             )
@@ -384,7 +384,7 @@ class IdealStateBuilder:
         try:
             refinement = await self._structured_call(
                 prompt=prompt,
-                system_prompt=self.prompts.get("ideal_state.refinement_system.md"),
+                system_prompt=self.prompts.get("builder_agent/ideal_state_refinement_system.md"),
                 response_model=IdealStateRefinementResponse,
                 schema_name="ideal_state_refinement",
             )
@@ -420,7 +420,7 @@ class IdealStateBuilder:
         try:
             response = await self._structured_call(
                 prompt=prompt,
-                system_prompt=self.prompts.get("ideal_state.clarification_system.md"),
+                system_prompt=self.prompts.get("builder_agent/ideal_state_clarification_system.md"),
                 response_model=IdealStateClarificationResponse,
                 schema_name="ideal_state_clarification",
             )
@@ -466,7 +466,7 @@ class IdealStateBuilder:
         try:
             response = await self._structured_call(
                 prompt=prompt,
-                system_prompt=self.prompts.get("ideal_state.anti_criteria_system.md"),
+                system_prompt=self.prompts.get("builder_agent/ideal_state_anti_criteria_system.md"),
                 response_model=AntiCriteriaExtractionResponse,
                 schema_name="anti_criteria_extraction",
             )
@@ -510,7 +510,7 @@ class IdealStateBuilder:
         try:
             return await self._structured_call(
                 prompt=prompt,
-                system_prompt=self.prompts.get("ideal_state.validation_system.md"),
+                system_prompt=self.prompts.get("builder_agent/ideal_state_validation_system.md"),
                 response_model=CriteriaValidationResponse,
                 schema_name="criteria_validation",
             )
@@ -549,7 +549,7 @@ class IdealStateBuilder:
         try:
             response = await self._structured_call(
                 prompt=prompt,
-                system_prompt=self.prompts.get("ideal_state.verification_system.md"),
+                system_prompt=self.prompts.get("builder_agent/ideal_state_verification_system.md"),
                 response_model=VerificationMethodSuggestionResponse,
                 schema_name="verification_method_suggestion",
             )

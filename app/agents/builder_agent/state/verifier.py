@@ -712,12 +712,12 @@ class Verifier:
             if hasattr(self.llm_client, "generate_with_reasoning"):
                 response, reasoning_trace = await self.llm_client.generate_with_reasoning(
                     prompt=prompt,
-                    system_prompt=_prompts.get("verifier.criterion_scoring_system.md"),
+                    system_prompt=_prompts.get("builder_agent/verifier_criterion_scoring_system.md"),
                 )
             else:
                 response = await self.llm_client.generate(
                     prompt=prompt,
-                    system_prompt=_prompts.get("verifier.criterion_scoring_system.md"),
+                    system_prompt=_prompts.get("builder_agent/verifier_criterion_scoring_system.md"),
                 )
 
             # Parse response
@@ -983,7 +983,7 @@ class Verifier:
             assert self.llm_client is not None, "llm_client must be available when uses_llm is True"
             response = await self.llm_client.generate(
                 prompt=prompt,
-                system_prompt=_prompts.get("verifier.llm_verification_system.md"),
+                system_prompt=_prompts.get("builder_agent/verifier_llm_verification_system.md"),
             )
 
             # Parse response (simplified)

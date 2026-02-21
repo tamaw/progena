@@ -82,7 +82,7 @@ def create_schedule_dispatch_node(
         schedule_id = str(entry["id"])
         instruction = entry.get("instruction") or entry.get("description") or "Scheduled task"
 
-        prefix = _prompts.get("scheduled_prefix.md").strip()
+        prefix = _prompts.get("progenitor/scheduled_prefix.md").strip()
         scheduled_input = f"{prefix}\n\n{instruction}".strip()
 
         if event_pusher:

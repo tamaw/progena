@@ -303,7 +303,7 @@ async def _generate_lessons_via_llm(
         best_result=_serialize_for_prompt(context.get("best_result")),
     )
 
-    system_prompt = _prompts.get("learn.system.md")
+    system_prompt = _prompts.get("builder_agent/learn_system.md")
 
     try:
         if hasattr(llm_client, "chat_structured"):
