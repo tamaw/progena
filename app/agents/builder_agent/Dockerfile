@@ -43,11 +43,23 @@ COPY app/agents/builder_agent/ /app/agent/
 # Copy prompts used by inner-loop nodes (skills, system prompts)
 COPY prompts/ /app/prompts/
 
-# Runtime directories (state, logs, worktrees are mounted as volumes)
-RUN mkdir -p /app/data/state /app/logs /app/worktrees
+# Runtime directories (state and logs are mounted as named volumes).
+# /app/workspace is the git workspace used for worktrees — populated on first
+# boot if PROGENITOR_REPO_URL is set, or bind-mounted with a pre-cloned repo.
+RUN mkdir -p /app/data/state /app/logs /app/workspace
+
+# Named volume mount-points — Docker Compose overrides these with named volumes.
+VOLUME ["/app/data", "/app/workspace", "/app/logs"]
 
 ENV PYTHONPATH=/app/agent
 ENV PYTHONUNBUFFERED=1
+# Point git operations at the workspace volume by default.
+ENV PROGENITOR_PROJECT_ROOT=/app/workspace
+# Worktrees live inside the workspace so they share the same git repo.
+ENV PROGENITOR_WORKTREE_DIR=/app/workspace/worktrees
+# Storage paths — align with the directories created above.
+ENV PROGENITOR_STATE_DIR=/app/data/state
+ENV PROGENITOR_LOG_DIR=/app/logs
 
 USER runner
 

@@ -91,8 +91,16 @@ def create_inner_loop_graph(
     registry_path = config.storage.state_dir / "registry.json"
     tool_registry = ToolRegistry(registry_path)
 
-    # Repo root is two levels above this file (app/agents/builder_agent → repo root).
-    project_root = Path(__file__).resolve().parents[2]
+    # Prefer an explicit env override (required in Docker where the full repo is
+    # not present in the image).  Fall back to file-relative traversal for local dev:
+    # graph.py lives at app/agents/builder_agent/graph.py → parents[3] = repo root.
+    import os as _os  # local import to avoid polluting module namespace
+    _project_root_env = _os.getenv("PROGENITOR_PROJECT_ROOT")
+    if _project_root_env:
+        project_root = Path(_project_root_env)
+    else:
+        candidate = Path(__file__).resolve().parents[3]
+        project_root = candidate if (candidate / ".git").exists() else Path.cwd()
     git_manager = GitWorktreeManager(worktrees_dir, repo_path=project_root)
 
     nodes = {
@@ -177,8 +185,8 @@ def _build_checkpointer(
     try:
         import sqlite3
 
-        from langgraph.checkpoint.sqlite import (
-            SqliteSaver,  # type: ignore[import-untyped,import-not-found]  # pyright: ignore[reportMissingImports]
+        from langgraph.checkpoint.sqlite import (  # pyright: ignore[reportMissingImports]
+            SqliteSaver,  # type: ignore[import-untyped,import-not-found]
         )
 
         db_path.parent.mkdir(parents=True, exist_ok=True)

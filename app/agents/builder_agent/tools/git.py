@@ -432,7 +432,14 @@ class GitTool(BaseSystemTool):
         return []
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        project_root = Path(__file__).parent.parent.parent.parent
+        import os as _os  # local import
+        _env = _os.getenv("PROGENITOR_PROJECT_ROOT")
+        if _env:
+            project_root = Path(_env)
+        else:
+            # git.py lives at app/agents/builder_agent/tools/git.py → parents[4] = repo root
+            candidate = Path(__file__).resolve().parents[4]
+            project_root = candidate if (candidate / ".git").exists() else Path.cwd()
         worktrees_dir = project_root / "worktrees"
         manager = GitWorktreeManager(
             worktrees_dir=worktrees_dir,
