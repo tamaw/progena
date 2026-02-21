@@ -90,9 +90,10 @@ app/
     main.py          # Service entrypoint
     graph_chat_loop.py   # Chat loop topology
     graph_build_loop.py  # Build loop topology
+    agent/           # DeepAgent integration layer
     llm/             # OpenAI wrapper + prompts
     tools/           # Copilot, git, MCP clients
-    runtime/         # Loop, scheduler, time
+    runtime/         # Loop, scheduler, time, DeepAgent adapter
     state/           # State management + models
     nodes/           # LangGraph node implementations
   agents/            # A2A agents (created by Progenitor)
@@ -104,6 +105,8 @@ data/
   sessions/          # Session persistence
   attachments/       # Uploaded file cache/data
 logs/                # Append-only logs (JSONL)
+prompts/             # Prompt templates
+  skills/            # DeepAgent SKILL.md files
 scripts/             # CLI utilities
 worktrees/           # Git worktrees for builds
 ```
@@ -119,6 +122,7 @@ worktrees/           # Git worktrees for builds
 - `prompts/genesis.md` - System prompt
 - `prompts/decide.md` - Decision routing
 - `prompts/build.md` - Build specifications
+- `prompts/skills/` - DeepAgent SKILL.md files (progressive disclosure)
 
 ### Log Files
 
@@ -176,10 +180,13 @@ User: I need a tool that can fetch weather data
 
 ## Architecture
 
-Progenitor implements a dual-loop architecture based on the [loop.spec.md](docs/loop.spec.md):
+Progenitor implements a dual-loop architecture based on the [loop.spec.md](docs/loop.spec.md), with a [DeepAgent](https://docs.langchain.com/oss/python/deepagents/overview) conversational layer:
 
-- **Outer Loop**: Ideal state management (define, refine, verify)
+- **Conversational Layer**: LangChain DeepAgent with middleware (auto-summarization, skills, memory, subagents)
+- **Outer Loop**: Perpetual cycle — intake, decide, respond, idle with exponential backoff
 - **Inner Loop**: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
+
+The DeepAgent handles conversation management, context windows, and tool orchestration while the existing dual-loop handles build iteration and scheduling.
 
 See [docs/](docs/) for detailed documentation:
 - [SPEC.md](docs/SPEC.md) - Original system specification

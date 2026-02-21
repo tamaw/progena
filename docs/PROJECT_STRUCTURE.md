@@ -11,6 +11,12 @@ progenitor/
 ├── docker/                      # Docker compose files and runner Dockerfiles
 ├── docs/                        # Project documentation
 ├── prompts/                     # Prompt templates used by the agent
+│   └── skills/                  # DeepAgent SKILL.md files (progressive disclosure)
+│       ├── build-agent/         # A2A agent and MCP tool building patterns
+│       ├── scheduling/          # Task scheduling skill
+│       ├── git-workflow/        # Git operations and worktree management
+│       ├── self-improvement/    # Iteration analysis, pattern extraction
+│       └── agent-architecture/  # System architecture reference
 ├── scripts/                     # Utility and demo scripts
 ├── tests/                       # Test suite
 ├── worktrees/                   # Worktree artifacts for build flows
@@ -29,11 +35,19 @@ app/
 │   ├── graph_chat_loop.py       # Chat loop graph topology
 │   ├── graph_build_loop.py      # Build loop graph topology
 │   ├── routing.py               # Graph routing helpers
+│   ├── agent/                   # DeepAgent integration layer
+│   │   ├── deep_agent.py        # Main factory: create_progenitor_agent()
+│   │   ├── langchain_adapter.py # ChatOpenAI → LiteLLM proxy bridge
+│   │   ├── tools_adapter.py     # BaseSystemTool → DeepAgent tool wrappers
+│   │   ├── backends.py          # CompositeBackend (LocalShell + Store + State)
+│   │   ├── middleware.py        # SecretRedaction, AuditLogging, Metrics
+│   │   └── subagents.py         # Build loop, code reviewer, researcher subagents
 │   ├── nodes/                   # Node implementations (intake, decide, act, validate, etc.)
 │   ├── state/                   # State models, persistence, verification
 │   ├── llm/                     # LLM provider client and prompt handling
 │   ├── tools/                   # Tool registry + integrations (MCP, git, copilot)
 │   ├── runtime/                 # Loop runner, scheduler, IPC, execution utilities
+│   │   └── deep_agent_adapter.py # Drop-in DeepAgent adapter for ProgenitorLoop
 │   └── ipc/                     # IPC protocol/server/client
 ├── backend/                     # FastAPI OpenAI-compatible API
 ├── frontend/                    # React + Vite web client
