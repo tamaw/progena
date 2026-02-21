@@ -180,13 +180,13 @@ class BuilderAgentExecutor(AgentExecutor):
         # ------------------------------------------------------------------
         # Decide action via LLM and validate it is a build request
         # ------------------------------------------------------------------
+        import contextlib
+
         from .runtime import decide as decide_mod  # local import to avoid circular
 
         tool_context = ""
-        try:
+        with contextlib.suppress(Exception):
             tool_context = _tool_registry.get_tool_context()
-        except Exception:
-            pass
 
         decision = await decide_mod._request_decision_data(
             llm_client=_llm_client,
@@ -424,9 +424,7 @@ app = _a2a_app.build()
 # ---------------------------------------------------------------------------
 # Extra endpoints: /health (Docker healthcheck) and startup hook
 # ---------------------------------------------------------------------------
-from fastapi import FastAPI as _FastAPI  # noqa: E402 — after app is defined
 from fastapi.responses import JSONResponse  # noqa: E402
-from starlette.routing import Route  # noqa: E402
 
 
 async def _health(request: Any) -> JSONResponse:  # type: ignore[name-defined]
