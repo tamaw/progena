@@ -21,6 +21,7 @@ from langgraph.graph.state import CompiledStateGraph
 from ..config import ProgenitorConfig, get_config
 from .backends import create_progenitor_backend
 from .langchain_adapter import create_langchain_model
+from .middleware import AuditLoggingMiddleware, MetricsMiddleware, SecretRedactionMiddleware
 from .tools_adapter import create_deepagent_tools
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def create_progenitor_agent(
     state_manager: Any | None = None,
     store: Any | None = None,
     project_root: str | None = None,
+    log_dir: str | Path | None = None,
 ) -> CompiledStateGraph:
     """Create the Progenitor DeepAgent instance.
 
@@ -68,6 +70,7 @@ def create_progenitor_agent(
         store: LangGraph BaseStore for cross-thread memory persistence.
                If None, uses InMemoryStore (dev mode).
         project_root: Root directory for filesystem backend. Defaults to cwd.
+        log_dir: Directory for JSONL audit logs. If None, logs to Python logger only.
 
     Returns:
         Compiled DeepAgent graph ready for invoke/stream.
@@ -97,6 +100,13 @@ def create_progenitor_agent(
         state_manager=state_manager,
     )
 
+    # Custom middleware stack (appended after DeepAgent's built-in middleware)
+    custom_middleware = [
+        SecretRedactionMiddleware(),
+        AuditLoggingMiddleware(log_dir=log_dir),
+        MetricsMiddleware(),
+    ]
+
     agent = create_deep_agent(
         name="progenitor",
         model=model,
@@ -104,6 +114,7 @@ def create_progenitor_agent(
         tools=tools,
         backend=backend,
         store=store,
+        middleware=custom_middleware,
         checkpointer=checkpointer,
     )
 
