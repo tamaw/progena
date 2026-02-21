@@ -292,7 +292,7 @@ async def _plan_schedule_task(
 
         instruction = await llm_client.complete(
             prompt=instruction_prompt,
-            system_prompt=_prompts.get("planner.schedule_instruction_system.md"),
+            system_prompt=_prompts.get("builder_agent/planner_schedule_instruction_system.md"),
         )
 
         instruction = instruction.strip()
@@ -336,7 +336,7 @@ async def _plan_schedule_task(
                         "planner.schedule_confirmation.md",
                         task_details=json.dumps(schedule_result_payload, ensure_ascii=False),
                     ),
-                    system_prompt=_prompts.get("planner.schedule_confirmation_system.md"),
+                    system_prompt=_prompts.get("builder_agent/planner_schedule_confirmation_system.md"),
                     temperature=0.2,
                 )
                 pending_response = pending_response.strip() if pending_response else None
@@ -912,7 +912,7 @@ IMPORTANT:
 
             enhanced_guidance = await llm_client.generate(
                 prompt=enhancement_prompt,
-                system_prompt=_prompts.get("planner.copilot_enhancement_system.md"),
+                system_prompt=_prompts.get("builder_agent/planner_copilot_enhancement_system.md"),
             )
 
             if enhanced_guidance and len(enhanced_guidance.strip()) > 20:
@@ -1090,7 +1090,7 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
                     entity_name=agent_name,
                     template_content=template_content,
                 )
-                system_prompt = _prompts.get("planner.spec_customization_tool_system.md")
+                system_prompt = _prompts.get("builder_agent/planner_spec_customization_tool_system.md")
             elif item_type == WorkItemType.BUILD_PROGENITOR:
                 customization_prompt = _prompts.get(
                     "planner.spec_customization_agent.md",
@@ -1098,7 +1098,7 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
                     entity_name="progenitor",
                     template_content=template_content,
                 )
-                system_prompt = _prompts.get("planner.spec_customization_agent_system.md")
+                system_prompt = _prompts.get("builder_agent/planner_spec_customization_agent_system.md")
             else:
                 customization_prompt = _prompts.get(
                     "planner.spec_customization_agent.md",
@@ -1106,7 +1106,7 @@ Create the {entity_type} in `{output_dir}/{{agent_name}}/`:
                     entity_name=agent_name,
                     template_content=template_content,
                 )
-                system_prompt = _prompts.get("planner.spec_customization_agent_system.md")
+                system_prompt = _prompts.get("builder_agent/planner_spec_customization_agent_system.md")
 
             customized_content = await llm_client.generate(
                 prompt=customization_prompt,
@@ -1186,12 +1186,12 @@ async def _generate_experiment_plan(
     if hasattr(llm_client, "generate_with_reasoning"):
         response, reasoning_trace = await llm_client.generate_with_reasoning(
             prompt=prompt,
-            system_prompt=_prompts.get("planner.experiment_plan_system.md"),
+            system_prompt=_prompts.get("builder_agent/planner_experiment_plan_system.md"),
         )
     else:
         response = await llm_client.generate(
             prompt=prompt,
-            system_prompt=_prompts.get("planner.experiment_plan_system.md"),
+            system_prompt=_prompts.get("builder_agent/planner_experiment_plan_system.md"),
         )
 
     # Parse the response into structured PromptSpecs

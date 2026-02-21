@@ -237,7 +237,7 @@ async def _generate_build_settings(
     # Fallback: LLM structured output if decision did not provide project_name
     if not project_name and llm_client and build_type != BuildType.PROGENITOR:
         try:
-            system_prompt = _prompts.get("decide.project_name_system.md")
+            system_prompt = _prompts.get("builder_agent/decide_project_name_system.md")
             prompt = _prompts.get(
                 "decide.project_name.md",
                 user_input=user_input,

@@ -137,7 +137,7 @@ def create_progenitor_agent(
             memory_paths.append(str(agents_md))
 
     # Load system prompt from prompts/progenitor_system.md
-    system_prompt = PromptTemplates().get("progenitor_system.md")
+    system_prompt = PromptTemplates().get("progenitor/system.md")
 
     agent = create_deep_agent(
         name="progenitor",

@@ -13,8 +13,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Project root: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# Project root: prompts.py -> llm/ -> builder_agent/ -> agents/ -> app/ -> project_root/
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_PROMPTS_DIR = PROJECT_ROOT / "prompts"
 LEGACY_PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
 
@@ -108,20 +108,20 @@ class PromptTemplates:
 
     def get_genesis_prompt(self) -> str:
         """Get the system genesis prompt (loaded on startup)."""
-        return self._load_prompt("genesis.md")
+        return self._load_prompt("progenitor/genesis.md")
 
     def get_decide_prompt(self, tool_context: str) -> str:
         """Get the decision routing prompt with full tool/agent context."""
-        template = self._load_prompt("decide.md")
+        template = self._load_prompt("progenitor/decide.md")
         return template.replace("{tool_context}", tool_context)
 
     def get_planner_prompt(self) -> str:
         """Get the planning prompt for work item generation."""
-        return self._load_prompt("planner.md")
+        return self._load_prompt("builder_agent/planner.md")
 
     def get_build_prompt(self, item_type: str) -> str:
         """Get the build specification prompt."""
-        template = self._load_prompt("build.md")
+        template = self._load_prompt("builder_agent/build.md")
         return template.replace("{item_type}", item_type)
 
     def get_copilot_task_prompt(self, spec: dict) -> str:
@@ -138,7 +138,7 @@ class PromptTemplates:
 
         # Load structure guidance for agents
         if kind == 'agent':
-            structure_template = self._load_prompt("agent_structure.md")
+            structure_template = self._load_prompt("builder_agent/agent_structure.md")
             structure_guidance = structure_template.replace(
                 "{agent_name}", agent_name
             ).replace(
@@ -163,7 +163,7 @@ The following specification has evolved through planning iterations and should g
 """
             structure_guidance = spec_doc_section + structure_guidance
 
-        template = self._load_prompt("copilot_task.md")
+        template = self._load_prompt("builder_agent/copilot_task.md")
         return template.replace(
             "{agent_name}", agent_name
         ).replace(
@@ -188,7 +188,7 @@ The following specification has evolved through planning iterations and should g
         context: dict[str, Any],
     ) -> str:
         """Get prompt for extracting ideal state from a task description."""
-        template = self._load_prompt("ideal_state_extract.md")
+        template = self._load_prompt("builder_agent/ideal_state_extract.md")
         context_str = json.dumps(context, indent=2, default=str) if context else "{}"
         return template.replace("{task}", task).replace("{context}", context_str)
 
@@ -198,7 +198,7 @@ The following specification has evolved through planning iterations and should g
         results_str: str,
     ) -> str:
         """Get prompt for refining ideal state after an iteration."""
-        template = self._load_prompt("ideal_state_refine.md")
+        template = self._load_prompt("builder_agent/ideal_state_refine.md")
         return (
             template
             .replace("{current_state}", current_state_json)
@@ -213,7 +213,7 @@ The following specification has evolved through planning iterations and should g
         current_state_json: str,
     ) -> str:
         """Get prompt for incorporating user clarification."""
-        template = self._load_prompt("ideal_state_clarify.md")
+        template = self._load_prompt("builder_agent/ideal_state_clarify.md")
         return (
             template
             .replace("{original_task}", original_task)
@@ -229,7 +229,7 @@ The following specification has evolved through planning iterations and should g
         task_description: str,
     ) -> str:
         """Get prompt for extracting anti-criteria from violations."""
-        template = self._load_prompt("ideal_state_anti_criteria.md")
+        template = self._load_prompt("builder_agent/ideal_state_anti_criteria.md")
         return (
             template
             .replace("{violations}", violations_str)
@@ -244,7 +244,7 @@ The following specification has evolved through planning iterations and should g
         task_description: str,
     ) -> str:
         """Get prompt for validating criteria quality."""
-        template = self._load_prompt("ideal_state_validate.md")
+        template = self._load_prompt("builder_agent/ideal_state_validate.md")
         return (
             template
             .replace("{criteria}", criteria_str)
@@ -259,7 +259,7 @@ The following specification has evolved through planning iterations and should g
         context_str: str,
     ) -> str:
         """Get prompt for suggesting verification methods."""
-        template = self._load_prompt("ideal_state_verification.md")
+        template = self._load_prompt("builder_agent/ideal_state_verify.md")
         return (
             template
             .replace("{criteria}", criteria_str)
@@ -296,7 +296,7 @@ The following specification has evolved through planning iterations and should g
             constraints_context: Resource constraints (empty string if none).
             dependencies_context: Dependencies information (empty string if none).
         """
-        template = self._load_prompt("think.md")
+        template = self._load_prompt("builder_agent/think.md")
         return (
             template
             .replace("{task_description}", task_description)
@@ -327,7 +327,7 @@ The following specification has evolved through planning iterations and should g
         best_result: str,
     ) -> str:
         """Get prompt for the LEARN phase iteration analysis."""
-        template = self._load_prompt("learn.md")
+        template = self._load_prompt("builder_agent/learn.md")
         return (
             template
             .replace("{iteration}", str(iteration))
@@ -352,7 +352,7 @@ The following specification has evolved through planning iterations and should g
         iteration: int,
     ) -> str:
         """Get prompt for LLM-based severity assessment of validation findings."""
-        template = self._load_prompt("validation_severity.md")
+        template = self._load_prompt("builder_agent/validation_severity.md")
         return (
             template
             .replace("{findings_json}", findings_json)

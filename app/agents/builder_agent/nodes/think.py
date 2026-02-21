@@ -45,7 +45,7 @@ _prompts = PromptTemplates()
 # Constants
 # ---------------------------------------------------------------------------
 
-THINK_SYSTEM_PROMPT = _prompts.get("think.system.md")
+THINK_SYSTEM_PROMPT = _prompts.get("builder_agent/think_system.md")
 
 # Validation thresholds
 MIN_IMPLEMENTATION_STEPS = 2

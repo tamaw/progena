@@ -265,7 +265,7 @@ class ClarificationDetector:
             assert self.llm_client is not None
             response = await self.llm_client.generate(
                 prompt=prompt,
-                system_prompt=_prompts.get("clarification.detection_system.md"),
+                system_prompt=_prompts.get("builder_agent/clarification_detection_system.md"),
             )
 
             return self._parse_llm_response(response, output)
