@@ -44,27 +44,6 @@ class ListToolsTool(BaseSystemTool):
 
         system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]
 
-        # BUILD actions are first-class capabilities (they start background jobs),
-        # even though they are routed as decision actions rather than executed as system tools.
-        build_actions = [
-            {
-                "name": "build_agent",
-                "description": "Build a new A2A agent in the background (requires explicit user request)",
-                "type": "build_action",
-            },
-            {
-                "name": "build_mcp",
-                "description": "Build a new FastMCP tool/server in the background (requires explicit user request)",
-                "type": "build_action",
-            },
-            {
-                "name": "build_progenitor",
-                "description": "Improve Progenitor core (app/progenitor) in the background (requires explicit user request)",
-                "type": "build_action",
-            },
-        ]
-        system_tools = system_tools + build_actions
-
         # Include IPC user-communication system tools that aren't implemented as BaseSystemTool.
         from .user_communication import USER_COMMUNICATION_TOOLS
 

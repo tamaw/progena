@@ -6,10 +6,14 @@ OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN → (repea
                                                  ↓ (on pass)
                                               PUBLISH → DONE (raise PR)
 
-This graph runs asynchronously from the main loop, managing build_state.json.
-The outer loop continues to handle user interactions while builds run in background.
+Each node transition is checkpointed automatically by LangGraph.
+In production an AsyncSqliteSaver writes checkpoints to disk so that an
+interrupted build can be inspected or resumed.  In tests / when no DB path
+is supplied we fall back to MemorySaver.
 """
 import logging
+from pathlib import Path
+from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -29,21 +33,34 @@ def create_inner_loop_graph(
     config,
     worktrees_dir,
     copilot_acp_manager=None,
-):
+    checkpoint_db_path: Path | str | None = None,
+) -> Any:
     """Create the inner loop graph for build operations.
+
+    Each node in the graph (observe, think, plan, build, execute, verify,
+    learn) is persisted as a LangGraph checkpoint after it completes.  This
+    allows per-iteration recovery and post-build inspection.
 
     Args:
         state_manager: StateManager for build_state.json persistence.
         llm_client: LLM client for model calls.
-        config: ProgenitorConfig with build settings.
+        config: Config with build settings.
         worktrees_dir: Path to worktrees directory.
         copilot_acp_manager: CopilotACPManager for ACP communication.
+        checkpoint_db_path: Optional path to SQLite DB file for persistent
+            checkpoints.  Defaults to ``<state_dir>/build_checkpoints.db``
+            when not provided and the config has a storage.state_dir.
+            Pass ``False`` to explicitly disable persistence (MemorySaver).
 
     Returns:
         Compiled StateGraph implementing:
         OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN → (loop)
     """
-    from pathlib import Path
+    if copilot_acp_manager is None:
+        raise RuntimeError(
+            "copilot_acp_manager is required for inner loop graph. "
+            "Ensure CopilotACPManager is initialized."
+        )
 
     from .nodes import (
         build,
@@ -60,12 +77,6 @@ def create_inner_loop_graph(
     from .tools.git import GitWorktreeManager
     from .tools.registry import ToolRegistry
 
-    if copilot_acp_manager is None:
-        raise RuntimeError(
-            "copilot_acp_manager is required for inner loop graph. "
-            "Ensure CopilotACPManager is initialized."
-        )
-
     # Initialize tools needed for build
     copilot_cli = CopilotCLI(
         copilot_cmd=config.copilot.bin_path,
@@ -77,18 +88,13 @@ def create_inner_loop_graph(
         logs_dir=config.storage.log_dir,
     )
 
-    # Tool registry for execute phase
     registry_path = config.storage.state_dir / "registry.json"
     tool_registry = ToolRegistry(registry_path)
 
-    # Get project root (repo root; parent of the `app/` directory).
+    # Repo root is two levels above this file (app/agents/builder_agent → repo root).
     project_root = Path(__file__).resolve().parents[2]
-
-    # Git worktree manager for concurrent builds
-    # Ensure git operations run against the repo root (not the current working directory).
     git_manager = GitWorktreeManager(worktrees_dir, repo_path=project_root)
 
-    # Create node functions for inner loop
     nodes = {
         "observe": observe.create_node(llm_client, state_manager, config),
         "think": think.create_node(llm_client, state_manager),
@@ -101,17 +107,12 @@ def create_inner_loop_graph(
         "learn": learn.create_node(llm_client, state_manager),
     }
 
-    # Build the graph
     builder = StateGraph(ProgenitorState)
-
-    # Add all nodes
     for name, node_fn in nodes.items():
         builder.add_node(name, node_fn)
 
-    # Set entry point
     builder.set_entry_point("observe")
 
-    # Define edges for the inner loop
     # OBSERVE → THINK → PLAN → BUILD → MERGE → EXECUTE → VERIFY → [LEARN or DONE]
     builder.add_edge("observe", "think")
     builder.add_edge("think", "plan")
@@ -120,33 +121,75 @@ def create_inner_loop_graph(
     builder.add_edge("merge", "execute")
     builder.add_edge("execute", "verify")
 
-    # After verify: publish (pass/max-iter), learn (continue), or done (cancel/error)
     builder.add_conditional_edges(
         "verify",
         route_after_verify,
-        {
-            "publish": "publish",
-            "learn": "learn",
-            "done": END,
-        }
+        {"publish": "publish", "learn": "learn", "done": END},
     )
-
-    # After publish, we're done
     builder.add_edge("publish", END)
-
-    # After learn, check if we should continue
     builder.add_conditional_edges(
         "learn",
         should_continue_inner_loop,
-        {
-            "observe": "observe",
-            "done": END,
-        }
+        {"observe": "observe", "done": END},
     )
 
-    # Compile with checkpointing
-    memory = MemorySaver()
-    graph = builder.compile(checkpointer=memory)
+    # ------------------------------------------------------------------
+    # Checkpointer: prefer SQLite for durable per-iteration snapshots
+    # ------------------------------------------------------------------
+    checkpointer = _build_checkpointer(checkpoint_db_path, config)
+    graph = builder.compile(checkpointer=checkpointer)
 
-    logger.info("Inner loop graph created with nodes: %s", list(nodes.keys()))
+    logger.info(
+        "Inner loop graph created with nodes: %s (checkpointer=%s)",
+        list(nodes.keys()),
+        type(checkpointer).__name__,
+    )
     return graph
+
+
+def _build_checkpointer(
+    checkpoint_db_path: Path | str | None | bool,
+    config: Any,
+) -> Any:
+    """Return the appropriate LangGraph checkpointer.
+
+    Preference order:
+    1. Explicit ``checkpoint_db_path`` argument.
+    2. ``<config.storage.state_dir>/build_checkpoints.db`` when config has state_dir.
+    3. In-memory MemorySaver as fallback (also used when path is ``False``).
+
+    The SQLite checkpointer is opened *synchronously* here so the graph can
+    be compiled without ``async``.  For async use the caller should run
+    builds inside an ``asyncio`` event loop — which BackgroundBuildRunner
+    already does.
+    """
+    if checkpoint_db_path is False:
+        # Caller explicitly opted out of persistence.
+        return MemorySaver()
+
+    if checkpoint_db_path is None:
+        try:
+            checkpoint_db_path = config.storage.state_dir / "build_checkpoints.db"
+        except Exception:
+            return MemorySaver()
+
+    db_path = Path(checkpoint_db_path)
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import]
+        import sqlite3
+
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        checkpointer = SqliteSaver(conn)
+        logger.info("Build checkpoints will be stored at: %s", db_path)
+        return checkpointer
+    except ImportError:
+        logger.warning(
+            "langgraph-checkpoint-sqlite not installed; falling back to MemorySaver. "
+            "Install with: pip install langgraph-checkpoint-sqlite"
+        )
+        return MemorySaver()
+    except Exception as exc:
+        logger.warning("Could not open checkpoint DB %s: %s — using MemorySaver", db_path, exc)
+        return MemorySaver()
+

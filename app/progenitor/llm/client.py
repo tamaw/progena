@@ -20,12 +20,8 @@ from ..config import LLMConfig, MCPConfig
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
 from .response_models import (
-    BuildSpec,
     DecisionResponse,
-    PlannerResponse,
-    validate_build_spec,
     validate_decision_response,
-    validate_planner_response,
 )
 from .tokenizer import count_message_tokens
 
@@ -428,13 +424,7 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Execute either a system tool or an MCP tool call."""
         if system_tool_context:
-            get_system_tool: Any = None
-            execute_system_tool: Any = None
-            try:
-                from ..nodes.node_helpers.registry import execute_system_tool, get_system_tool
-            except Exception:
-                get_system_tool = None
-                execute_system_tool = None
+            from ..nodes.node_helpers.registry import execute_system_tool, get_system_tool
 
             if callable(get_system_tool) and callable(execute_system_tool) and get_system_tool(tool_name):
                 tool_registry = system_tool_context.get("tool_registry")
@@ -1120,31 +1110,6 @@ class LLMClient:
             validated = validate_decision_response({})
             return validated.model_dump()
 
-    async def plan(
-        self,
-        user_input: str,
-        decision: dict[str, Any],
-        current_backlog: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Generate work items for a task."""
-        system_prompt = self.prompts.get_planner_prompt()
-        context = f"""
-User Request: {user_input}
-
-Decision: {decision}
-
-Current Backlog: {current_backlog}
-
-Generate a list of work items to fulfill this request.
-"""
-        messages = [{"role": "user", "content": context}]
-        response_format = _build_json_schema_format(PlannerResponse, "planner_response")
-
-        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
-        raw_data = json.loads(response)
-        validated = validate_planner_response(raw_data)
-        return [item.model_dump() for item in validated.work_items]
-
     async def generate_response(
         self,
         user_input: str,
@@ -1189,29 +1154,6 @@ Generate a list of work items to fulfill this request.
         """Generate text response and return reasoning trace when available."""
         messages = [{"role": "user", "content": prompt}]
         return await self.chat_with_reasoning(messages, system_prompt, temperature, max_tokens)
-
-    async def generate_build_spec(
-        self,
-        item_type: str,
-        description: str,
-        capabilities: list[str],
-    ) -> dict[str, Any]:
-        """Generate a specification for building an agent or MCP server."""
-        system_prompt = self.prompts.get_build_prompt(item_type)
-        context = f"""
-Build Type: {item_type}
-Description: {description}
-Required Capabilities: {', '.join(capabilities)}
-
-Generate a detailed specification for building this component.
-"""
-        messages = [{"role": "user", "content": context}]
-        response_format = _build_json_schema_format(BuildSpec, "build_spec")
-
-        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
-        raw_data = json.loads(response)
-        validated = validate_build_spec(raw_data)
-        return validated.model_dump()
 
     async def complete(
         self,
