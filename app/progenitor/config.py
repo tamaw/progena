@@ -5,6 +5,7 @@ Configuration is read from environment variables. Per SPEC.md.
 """
 
 import logging
+import logging.handlers
 import os
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -523,12 +524,15 @@ def reload_config(
     return _config
 
 
-def setup_logging(config: ProgenitorConfig) -> None:
+def setup_logging(config: ProgenitorConfig, agent_name: str = "progenitor") -> None:
     """Configure logging based on configuration.
 
     Supports two formats:
     - "text": Human-readable format (default)
     - "json": Structured JSON format for production/log aggregation
+
+    Always writes to {log_dir}/{agent_name}.log with rotation (10 MB × 5 backups)
+    in addition to stdout.
     """
     log_levels = {
         "debug": logging.DEBUG,
@@ -542,17 +546,40 @@ def setup_logging(config: ProgenitorConfig) -> None:
     # Choose format based on config
     if config.runtime.log_format.lower() == "json":
         # JSON structured logging for production
-        formatter = JsonLogFormatter()
-        handler = logging.StreamHandler()
+        formatter: logging.Formatter = JsonLogFormatter()
+        handler: logging.Handler = logging.StreamHandler()
         handler.setFormatter(formatter)
         logging.root.handlers = [handler]
         logging.root.setLevel(level)
     else:
         # Standard text format
+        formatter = logging.Formatter(
+            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
         logging.basicConfig(
             level=level,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+    # Add rotating file handler → {log_dir}/{agent_name}.log
+    try:
+        log_dir = config.storage.log_dir
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"{agent_name}.log"
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10 MB per file
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        logging.root.addHandler(file_handler)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "Could not create log file for %s: %s", agent_name, exc
         )
 
     # Reduce noise from httpx and openai
