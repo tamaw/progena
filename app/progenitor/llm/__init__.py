@@ -2,7 +2,6 @@
 
 from .circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 from .client import LLMClient
-from .conversation_compressor import ConversationCompressor, IncrementalCompressor
 from .mock_client import MockLLMClient, create_llm_client, is_mock_mode_enabled
 from .prompts import PromptTemplates
 from .tokenizer import (
@@ -22,9 +21,6 @@ __all__ = [
     "truncate_to_tokens",
     "is_tiktoken_available",
     "get_token_stats",
-    # Conversation compression
-    "ConversationCompressor",
-    "IncrementalCompressor",
     # Circuit breaker
     "CircuitBreaker",
     "CircuitState",

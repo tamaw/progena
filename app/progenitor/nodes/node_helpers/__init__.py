@@ -18,12 +18,10 @@ from .registry import (
 
 if TYPE_CHECKING:
     from ...tools.build_status import BuildStatusTool
-    from ...tools.compress_conversation import CompressConversationTool
     from ...tools.current_time import CurrentTimeTool
     from ...tools.list_agents import ListAgentsTool
     from ...tools.list_schedule import ListScheduleTool
     from ...tools.list_tools import ListToolsTool
-    from ...tools.memory import MemoryTool
     from ...tools.new_conversation import NewConversationTool
     from ...tools.rediscover_agents import RediscoverAgentsTool
     from ...tools.schedule_task import ScheduleTaskTool
@@ -53,8 +51,6 @@ def __getattr__(name: str):
         "GitTool": "...tools.git",
         "ScheduleTaskTool": "...tools.schedule_task",
         "NewConversationTool": "...tools.new_conversation",
-        "CompressConversationTool": "...tools.compress_conversation",
-        "MemoryTool": "...tools.memory",
         "ShellCheckTool": "...tools.shell",
         "ShellExecTool": "...tools.shell",
     }
@@ -81,8 +77,6 @@ def __getattr__(name: str):
             "GitTool": "app.progenitor.tools.git",
             "ScheduleTaskTool": "app.progenitor.tools.schedule_task",
             "NewConversationTool": "app.progenitor.tools.new_conversation",
-            "CompressConversationTool": "app.progenitor.tools.compress_conversation",
-            "MemoryTool": "app.progenitor.tools.memory",
             "ShellCheckTool": "app.progenitor.tools.shell",
             "ShellExecTool": "app.progenitor.tools.shell",
         }
@@ -125,8 +119,6 @@ __all__ = [
     "CopilotACPTool",
     "ScheduleTaskTool",
     "NewConversationTool",
-    "CompressConversationTool",
-    "MemoryTool",
     "ShellCheckTool",
     "ShellExecTool",
 ]

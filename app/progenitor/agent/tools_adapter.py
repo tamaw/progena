@@ -16,8 +16,8 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool
 
-from ..nodes.node_helpers.registry import get_all_system_tools, get_system_tool
-from ..tools.protocol import BaseSystemTool, ToolContext, ToolResult
+from ..nodes.node_helpers.registry import get_all_system_tools
+from ..tools.protocol import ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +28,8 @@ DEEPAGENT_NATIVE_TOOLS: set[str] = set()
 # DeepAgent has built-in planning (write_todos)
 # DeepAgent has built-in subagent delegation (task)
 
-# Tools deprecated in favour of DeepAgent capabilities.
-DEPRECATED_TOOLS = {
-    "compress_conversation",  # Replaced by SummarizationMiddleware
-    "memory",                 # Replaced by DeepAgent Memory system
-}
+# Tools deprecated in favour of DeepAgent capabilities (already removed from codebase).
+DEPRECATED_TOOLS: set[str] = set()
 
 # Tools that are internal/infrastructure and shouldn't be exposed to LLM.
 INTERNAL_TOOLS = {

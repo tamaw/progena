@@ -118,6 +118,8 @@ class TestDeepAgentFactory:
             assert call_kwargs.kwargs["name"] == "progenitor"
             assert call_kwargs.kwargs["model"] is mock_model
             assert "system_prompt" in call_kwargs.kwargs
+            assert "backend" in call_kwargs.kwargs
+            assert "store" in call_kwargs.kwargs
 
     def test_create_agent_uses_custom_checkpointer(self):
         """Custom checkpointer is passed through."""

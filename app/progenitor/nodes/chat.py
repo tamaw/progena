@@ -5,9 +5,9 @@ Replaces Decide routing for normal chat turns:
 Intake -> Chat -> Respond
 """
 
+import inspect
 import logging
 from collections.abc import Callable, Coroutine
-import inspect
 from typing import Any, cast
 
 from ..llm.prompts import PromptTemplates

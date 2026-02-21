@@ -11,6 +11,7 @@ import logging
 import os
 
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from ..config import LLMConfig
 
@@ -43,7 +44,7 @@ def create_langchain_model(
     model = ChatOpenAI(
         model=model_name,
         base_url=base_url,
-        api_key=config.api_key or "not-needed",
+        api_key=SecretStr(config.api_key or "not-needed"),
         default_headers={
             "x-litellm-api-key": config.api_key or "",
         },
@@ -77,9 +78,9 @@ def create_azure_structured_model() -> ChatOpenAI | None:
         return None
 
     model = ChatOpenAI(
-        model=model_name,
+        model=model_name or "gpt-4o",
         base_url=url,
-        api_key=api_key,
+        api_key=SecretStr(api_key) if api_key else None,
         temperature=0,
     )
 

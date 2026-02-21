@@ -11,7 +11,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any, cast
 
 from ..runtime.time_utils import utcnow
-from ..state.helpers import get_ideal_state, trim_conversation_history
+from ..state.helpers import get_ideal_state
 from ..state.models import ConversationMessage, ProgenitorState, WorkItem
 
 
@@ -59,9 +59,6 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             messages = list(state.get("messages", []))
             messages.append(message)
 
-            # Trim conversation history to prevent unbounded growth (TD-008)
-            messages = trim_conversation_history(messages)
-
             return cast(ProgenitorState, {
                 "pending_response": response_text or "",
                 "messages": messages,
@@ -97,9 +94,6 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 # Add to messages
                 messages = list(state.get("messages", []))
                 messages.append(message)
-
-                # Trim conversation history to prevent unbounded growth
-                messages = trim_conversation_history(messages)
 
                 # Persist messages to current_state.json
                 await state_manager.save_messages(messages)
@@ -146,9 +140,6 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Add to messages
         messages = list(state.get("messages", []))
         messages.append(message)
-
-        # Trim conversation history to prevent unbounded growth (TD-008)
-        messages = trim_conversation_history(messages)
 
         # Persist messages to current_state.json
         await state_manager.save_messages(messages)
