@@ -91,12 +91,12 @@ class TestSelfReflection:
     def test_find_relevant_files(self):
         """Test finding relevant files by topic."""
         reflection = SelfReflection()
-        files = reflection.find_relevant_files("decision")
+        files = reflection.find_relevant_files("scheduling")
 
         assert len(files) > 0
-        # Should find decide.py
+        # Should find schedule-related files
         file_paths = [f.path for f in files]
-        assert any("decide" in p for p in file_paths)
+        assert any("schedule" in p for p in file_paths)
 
     def test_get_module_overview(self):
         """Test getting module overview."""

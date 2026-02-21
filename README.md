@@ -5,11 +5,12 @@ A perpetual, conversational personal assistant and bootstrap builder for the TAR
 ## Overview
 
 Progenitor is an always-on agent that:
-- Accepts user messages conversationally
-- Routes requests: answer directly, delegate via A2A, or build/upgrade agents
-- Uses Copilot CLI as the builder actuator
-- Maintains persistent state and logs
+- Accepts user messages conversationally (DeepAgent)
+- Delegates specialized work to external A2A agents
+- Maintains persistent conversation state and logs
 - Runs as a perpetual loop in Docker
+
+Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A agent: **Builder Agent** (`app/agents/builder_agent/`).
 
 ## Quick Start
 
@@ -18,7 +19,7 @@ Progenitor is an always-on agent that:
 - Python 3.12+
 - Docker (optional, recommended)
 - LiteLLM proxy with configured models
-- Copilot CLI (for build operations)
+- Copilot CLI (for build operations — required by Builder Agent only)
 
 ### Environment Setup
 
@@ -69,68 +70,64 @@ docker compose -f docker/docker-compose.progenitor.yml down
 
 ## Architecture
 
-### LangGraph Topology
+### LangGraph Topology (Outer Loop)
 
 ```
-User (outer loop):
-Intake → Chat → Respond → CycleLimit → (PickNext | Idle)
+User messages:
+Intake → Chat (DeepAgent) → Respond → Idle → (repeat)
 
-Execution path (when tools/work items are needed):
-PickNext → WorktreePrep → Act → Validate → CommitCore → Respond
+Delegation path (build/upgrade requests):
+Decide → PickNext → A2A call to Builder Agent → Respond
 
-Background (scheduled jobs):
-PickDueSchedule → Intake → Chat → Respond → AdvanceSchedule
+Scheduled jobs:
+ScheduleDispatch → Intake → Chat → Respond
 ```
 
 ### Directory Structure
 
 ```
 app/
-  progenitor/
-    main.py          # Service entrypoint
-    graph_chat_loop.py   # Chat loop topology
-    graph_build_loop.py  # Build loop topology
-    llm/             # OpenAI wrapper + prompts
-    tools/           # Copilot, git, MCP clients
-    runtime/         # Loop, scheduler, time
-    state/           # State management + models
-    nodes/           # LangGraph node implementations
-  agents/            # A2A agents (created by Progenitor)
-  mcp/               # MCP servers (created by Progenitor)
-.env                 # Local environment configuration
-.env.example         # Example environment configuration
+  progenitor/           # Core perpetual agent (chat + delegation)
+    main.py             # Service entrypoint
+    routing.py          # Graph routing
+    agent/              # DeepAgent integration layer
+    llm/                # LLM client + prompts
+    tools/              # Schedule, MCP, registry, shell, discovery tools
+    runtime/            # Loop, scheduler, HTTP agent manager, DeepAgent adapter
+    state/              # State models + persistence
+    nodes/              # LangGraph nodes: intake, decide, chat, respond, idle, etc.
+  agents/
+    builder_agent/      # Build loop A2A agent (port 8107) — see agents/builder_agent/README.md
+    hello_world_agent/  # Example A2A agent
+    observe_agent/      # Monitoring A2A agent
+  mcp/                  # MCP servers
+.env                    # Local environment configuration
 data/
-  state/             # Persisted state (JSON)
-  sessions/          # Session persistence
-  attachments/       # Uploaded file cache/data
-logs/                # Append-only logs (JSONL)
-scripts/             # CLI utilities
-worktrees/           # Git worktrees for builds
+  state/                # Persisted state (JSON)
+  sessions/             # Session persistence
+  attachments/          # Uploaded file cache/data
+logs/                   # Append-only logs (JSONL)
+prompts/                # Prompt templates
+  skills/               # DeepAgent SKILL.md files
+worktrees/              # Git worktrees for builds (used by Builder Agent)
 ```
 
 ### State Files
 
-- `data/state/build_state.json` - Build state (backlog, messages, ideal_state)
+- `data/state/current_state.json` - Conversation state (messages, tool calls)
 - `data/state/registry.json` - Agent and tool registry
 - `data/state/schedule.json` - Scheduled tasks
-
-### Prompt Files (Editable)
-
-- `prompts/genesis.md` - System prompt
-- `prompts/decide.md` - Decision routing
-- `prompts/build.md` - Build specifications
+- `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
 
 ### Log Files
 
 - `logs/conversation.jsonl` - All user/assistant messages
 - `logs/decisions.jsonl` - Routing decisions
-- `logs/acp_calls.jsonl` - Copilot ACP invocations
-- `logs/validation.jsonl` - Validation results
 - `logs/schedule.jsonl` - Schedule events
 
 ## Configuration
 
-Configuration is sourced from environment variables. See .env.example for defaults.
+Configuration is sourced from environment variables. See `.env.example` for defaults.
 
 ```dotenv
 # Runtime
@@ -138,14 +135,12 @@ PROGENITOR_TIMEZONE=Australia/Melbourne
 PROGENITOR_IDLE_BACKOFF_SECONDS=30
 PROGENITOR_MAX_BACKOFF_SECONDS=300
 PROGENITOR_MAX_ACTIONS_PER_CYCLE=10
-PROGENITOR_CHECKPOINT_INTERVAL_SECONDS=30
-PROGENITOR_MAX_INNER_ITERATIONS=20
 
-# Copilot
-PROGENITOR_COPILOT_BIN=copilot
-PROGENITOR_COPILOT_TIMEOUT_SECONDS=300
-PROGENITOR_COPILOT_MODEL=gpt-5-mini
-PROGENITOR_COPILOT_DEFAULT_FLAGS=--allow-all-tools,--no-ask-user,--no-color,--yolo
+# LLM
+PROGENITOR_LLM_PROVIDER=azure
+AZURE_OPENAI_ENDPOINT=https://...
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
 ```
 
 ## Usage
@@ -153,9 +148,9 @@ PROGENITOR_COPILOT_DEFAULT_FLAGS=--allow-all-tools,--no-ask-user,--no-color,--yo
 Progenitor accepts natural language input and decides how to handle it:
 
 1. **Direct answers**: Simple questions answered immediately
-2. **A2A delegation**: Calls existing agents for specialized tasks
+2. **A2A delegation**: Calls existing agents for specialized tasks  
 3. **MCP tools**: Uses registered MCP servers for tool access
-4. **Build/Upgrade**: Creates new agents or tools via Copilot CLI
+4. **Build/Upgrade**: Delegates to Builder Agent (creates new agents/tools)
 5. **Scheduling**: Creates time-based recurring or one-off tasks
 
 ### Examples
@@ -165,29 +160,28 @@ User: What time is it?
 → Direct answer
 
 User: Send an email to John about the meeting
-→ A2A delegation (if email agent exists) or build agent
+→ A2A delegation (if email agent exists)
 
 User: Remind me every day at 9am to check my tasks
 → Schedule creation
 
-User: I need a tool that can fetch weather data
-→ Build MCP server
+User: Build a weather MCP tool
+→ A2A call to Builder Agent → OBSERVE→THINK→PLAN→BUILD→VERIFY→LEARN loop
 ```
 
-## Architecture
+## Builder Agent
 
-Progenitor implements a dual-loop architecture based on the [loop.spec.md](docs/loop.spec.md):
+The Builder Agent (`app/agents/builder_agent/`) is a fully self-contained A2A server
+that owns all code-generation and repo-mutation capabilities:
 
-- **Outer Loop**: Ideal state management (define, refine, verify)
-- **Inner Loop**: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
+- **Port**: 8107
+- **Protocol**: A2A JSON-RPC (Google a2a-sdk)
+- **Skills**: `build_agent`, `build_mcp`, `build_progenitor`, `upgrade_repo`
+- **Loop**: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
+- **Checkpointing**: SQLite per-build (resumable)
+- **Tools**: GitHub Copilot CLI, git worktrees, gh CLI
 
-See [docs/](docs/) for detailed documentation:
-- [SPEC.md](docs/SPEC.md) - Original system specification
-- [loop.spec.md](docs/loop.spec.md) - Inner loop architecture
-- [ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) - Visual architecture
-- [BACKEND.md](docs/BACKEND.md) - Backend API
-- [DOCKER.md](docs/DOCKER.md) - Docker deployment
-- [CONTAINER_RUNNERS.md](docs/CONTAINER_RUNNERS.md) - Isolated A2A/MCP runner containers
+See [`app/agents/builder_agent/README.md`](app/agents/builder_agent/README.md) for full documentation.
 
 ## Development
 
@@ -197,8 +191,18 @@ See [docs/](docs/) for detailed documentation:
 # All tests
 pytest tests/ -v
 
-# Specific test suite
-pytest tests/test_dual_loop.py -v
+# Builder agent tests
+pytest tests/agents/builder_agent/ -v
+
+# Progenitor core tests
+pytest tests/progenitor/ -v
+```
+
+### Lint + Type Check
+
+```bash
+ruff check app/
+mypy app/
 ```
 
 ### Adding New Capabilities
@@ -207,8 +211,18 @@ pytest tests/test_dual_loop.py -v
 2. Or create an MCP server in `app/mcp/`
 3. Register in `data/state/registry.json`
 
-Or simply ask Progenitor to build it for you!
+Or ask Progenitor to build it for you — it will delegate to the Builder Agent automatically.
+
+## Docs
+
+- [SPEC.md](docs/SPEC.md) — System specification
+- [loop.spec.md](docs/loop.spec.md) — Inner loop (Last Algorithm) spec
+- [ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) — Visual architecture
+- [BACKEND.md](docs/BACKEND.md) — Backend API
+- [DOCKER.md](docs/DOCKER.md) — Docker deployment
+- [CONTAINER_RUNNERS.md](docs/CONTAINER_RUNNERS.md) — Isolated A2A/MCP runner containers
 
 ## License
 
 MIT
+

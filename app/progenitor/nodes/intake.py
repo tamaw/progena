@@ -12,7 +12,6 @@ from collections.abc import Callable, Coroutine
 from typing import Any, cast
 
 from ..runtime.time_utils import utcnow
-from ..state.helpers import trim_conversation_history
 from ..state.models import ConversationMessage, ProgenitorState
 
 
@@ -67,9 +66,6 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Update messages in state
         messages = list(state.get("messages", []))
         messages.append(message)
-
-        # Trim conversation history to prevent unbounded growth (TD-008)
-        messages = trim_conversation_history(messages)
 
         # Persist messages to current_state.json
         await state_manager.save_messages(messages)

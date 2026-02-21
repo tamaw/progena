@@ -8,7 +8,7 @@ partially with dicts.
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from .models import (
     BuildPhases,
@@ -19,9 +19,6 @@ from .models import (
     WorkItemStatus,
     WorkItemType,
 )
-
-if TYPE_CHECKING:
-    from .ideal_state import IdealState
 
 logger = logging.getLogger(__name__)
 
@@ -312,154 +309,6 @@ def get_item_type_value(item: Any) -> str:
 
     return "unknown"
 
-
-# ============================================================================
-# Conversation History Management (TD-008)
-# ============================================================================
-
-# Default limits for conversation history
-DEFAULT_MAX_MESSAGES = 100  # Keep last N messages
-DEFAULT_MAX_TOKENS_ESTIMATE = 50000  # Approximate token limit for context
-
-
-def trim_conversation_history(
-    messages: list,
-    max_messages: int = DEFAULT_MAX_MESSAGES,
-    preserve_system: bool = True,
-) -> list:
-    """Trim conversation history to prevent unbounded memory growth.
-
-    Uses a sliding window approach, keeping the most recent messages.
-    Optionally preserves system messages at the start.
-
-    Args:
-        messages: List of ConversationMessage objects or dicts
-        max_messages: Maximum number of messages to keep
-        preserve_system: If True, always keep system messages at start
-
-    Returns:
-        Trimmed list of messages
-    """
-    if not messages or len(messages) <= max_messages:
-        return messages
-
-    if preserve_system:
-        # Find system messages at the start
-        system_messages = []
-        other_messages = []
-
-        for msg in messages:
-            # Handle various message formats: objects, dicts, or raw strings
-            if hasattr(msg, "role"):
-                role = msg.role
-            elif isinstance(msg, dict):
-                role = msg.get("role", "")
-            else:
-                # Skip or treat non-standard messages as non-system
-                other_messages.append(msg)
-                continue
-
-            if role == "system" and not other_messages:
-                system_messages.append(msg)
-            else:
-                other_messages.append(msg)
-
-        # Keep system messages + most recent other messages
-        remaining_slots = max_messages - len(system_messages)
-        if remaining_slots > 0:
-            return system_messages + other_messages[-remaining_slots:]
-        else:
-            # Even system messages exceed limit, keep most recent
-            return messages[-max_messages:]
-
-    return messages[-max_messages:]
-
-
-def summarize_old_messages(
-    messages: list,
-    summary_threshold: int = 50,
-) -> tuple[list, str | None]:
-    """Create a summary of old messages when history grows large.
-
-    This is an alternative to simple truncation - creates a condensed
-    summary of older messages that can be prepended to context.
-
-    Args:
-        messages: List of ConversationMessage objects or dicts
-        summary_threshold: Number of messages before summarizing older ones
-
-    Returns:
-        Tuple of (trimmed_messages, summary_text or None)
-    """
-    if len(messages) <= summary_threshold:
-        return messages, None
-
-    # Keep recent messages, summarize older ones
-    keep_count = summary_threshold // 2
-    old_messages = messages[:-keep_count]
-    recent_messages = messages[-keep_count:]
-
-    # Create simple summary of old conversation
-    summary_parts = []
-    for msg in old_messages[-10:]:  # Summarize last 10 of old messages
-        role = msg.role if hasattr(msg, "role") else msg.get("role", "")
-        content = msg.content if hasattr(msg, "content") else msg.get("content", "")
-        if content:
-            # Truncate long content
-            short_content = content[:100] + "..." if len(content) > 100 else content
-            summary_parts.append(f"[{role}]: {short_content}")
-
-    if summary_parts:
-        summary = f"[Earlier conversation summary - {len(old_messages)} messages]:\n" + "\n".join(summary_parts)
-        return recent_messages, summary
-
-    return recent_messages, None
-
-
-def ensure_ideal_state(ideal_state: Any, allow_none: bool = True) -> Optional["IdealState"]:
-    """Convert ideal_state dict to IdealState object if needed.
-
-    This is the canonical helper for IdealState conversion - use this
-    instead of duplicating the conversion logic in multiple places.
-
-    LangGraph state may serialize IdealState to dict when passing through nodes.
-    This helper ensures we always have an IdealState object for methods.
-
-    Args:
-        ideal_state: IdealState, dict, or None
-        allow_none: If True, returns None for None/invalid input.
-                    If False, raises TypeError for None/invalid input.
-
-    Returns:
-        IdealState instance, or None if allow_none=True and input is None/invalid
-
-    Raises:
-        TypeError: If allow_none=False and ideal_state is not valid
-    """
-    # Late import to avoid circular imports
-    from .ideal_state import IdealState
-
-    if ideal_state is None:
-        if allow_none:
-            return None
-        raise TypeError("ideal_state cannot be None")
-
-    if isinstance(ideal_state, IdealState):
-        return ideal_state
-
-    if isinstance(ideal_state, dict):
-        try:
-            return IdealState(**ideal_state)
-        except Exception as e:
-            logger.warning("Failed to convert ideal_state dict to IdealState: %s", e)
-            if allow_none:
-                return None
-            raise TypeError(f"Invalid ideal_state dict: {e}") from e
-
-    if allow_none:
-        logger.warning("Unknown ideal_state type: %s", type(ideal_state))
-        return None
-    raise TypeError(f"Expected IdealState or dict, got {type(ideal_state)}")
 
 
 def mark_work_item_completed(

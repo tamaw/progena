@@ -74,34 +74,6 @@ def progenitor_state_strategy(draw):
 class TestIterationBounds:
     """Tests for iteration count bounds."""
 
-    @settings(deadline=None)  # Disable deadline for this test - timing varies
-    @given(
-        max_iterations=st.integers(min_value=1, max_value=20),
-        current_iteration=st.integers(min_value=0, max_value=25),
-    )
-    def test_iteration_never_exceeds_max_when_checked(
-        self,
-        max_iterations: int,
-        current_iteration: int,
-    ):
-        """Iteration routing should prevent exceeding max."""
-        from app.progenitor.routing import should_iterate
-
-        state: ProgenitorState = {
-            "iteration": {"current": current_iteration},
-            "verification": {"current_passed": False},
-            "phases": {"observe": {"ideal_state": None}},
-        }
-
-        result = should_iterate(state, max_iterations=max_iterations)
-
-        # If at or over limit, should stop
-        if current_iteration >= max_iterations:
-            assert result == "respond"
-        # If under limit, should continue
-        elif current_iteration == 0:
-            assert result == "observe"
-
     @given(st.integers(min_value=0, max_value=100))
     def test_cycle_count_non_negative(self, cycle_count: int):
         """Cycle count should never be negative."""

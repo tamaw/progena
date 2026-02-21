@@ -65,7 +65,6 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
             graph=self.graph,
             state_manager=self.state_manager,
             config=cast(Any, self.config),
-            copilot_acp_manager=None,
         )
 
     async def test_input_queue_is_bounded(self):
@@ -215,7 +214,6 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
             graph=MagicMock(),
             state_manager=state_manager,
             config=cast(Any, config),
-            copilot_acp_manager=None,
         )
 
         assert loop._input_queue.maxsize == 50

@@ -6,27 +6,22 @@ All prompts are stored as markdown files for easy editing.
 """
 
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 # Project root: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PROMPTS_DIR = PROJECT_ROOT / "prompts"
-LEGACY_PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
 
 
 def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
-    """Resolve prompt directory from explicit override, env, and defaults.
+    """Resolve prompt directory from explicit override, env, and project default.
 
     Resolution order:
     1. Explicit ``prompts_dir`` argument (always honored)
-    2. ``PROGENITOR_PROMPTS_DIR`` environment variable
-    3. Project default ``<root>/prompts``
-    4. Legacy fallback ``<root>/data/prompts`` (for backward compatibility)
+    2. ``PROGENITOR_PROMPTS_DIR`` environment variable (raises if missing)
+    3. Project default ``<root>/prompts`` (raises if missing)
     """
     if prompts_dir is not None:
         return Path(prompts_dir).expanduser().resolve()
@@ -34,19 +29,17 @@ def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
     env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
     if env_prompts_dir:
         resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
-        if resolved_env_dir.exists():
-            return resolved_env_dir
-        logger.warning(
-            "PROGENITOR_PROMPTS_DIR points to missing directory: %s. Falling back to defaults.",
-            resolved_env_dir,
+        if not resolved_env_dir.exists():
+            raise FileNotFoundError(
+                f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
+            )
+        return resolved_env_dir
+
+    if not DEFAULT_PROMPTS_DIR.exists():
+        raise FileNotFoundError(
+            f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
+            "Ensure the prompts/ directory exists at the project root."
         )
-
-    if DEFAULT_PROMPTS_DIR.exists():
-        return DEFAULT_PROMPTS_DIR
-
-    if LEGACY_PROMPTS_DIR.exists():
-        return LEGACY_PROMPTS_DIR
-
     return DEFAULT_PROMPTS_DIR
 
 
@@ -108,20 +101,20 @@ class PromptTemplates:
 
     def get_genesis_prompt(self) -> str:
         """Get the system genesis prompt (loaded on startup)."""
-        return self._load_prompt("genesis.md")
+        return self._load_prompt("progenitor/genesis.md")
 
     def get_decide_prompt(self, tool_context: str) -> str:
         """Get the decision routing prompt with full tool/agent context."""
-        template = self._load_prompt("decide.md")
+        template = self._load_prompt("progenitor/decide.md")
         return template.replace("{tool_context}", tool_context)
 
     def get_planner_prompt(self) -> str:
         """Get the planning prompt for work item generation."""
-        return self._load_prompt("planner.md")
+        return self._load_prompt("builder_agent/planner.md")
 
     def get_build_prompt(self, item_type: str) -> str:
         """Get the build specification prompt."""
-        template = self._load_prompt("build.md")
+        template = self._load_prompt("builder_agent/build.md")
         return template.replace("{item_type}", item_type)
 
     def get_copilot_task_prompt(self, spec: dict) -> str:
@@ -138,7 +131,7 @@ class PromptTemplates:
 
         # Load structure guidance for agents
         if kind == 'agent':
-            structure_template = self._load_prompt("agent_structure.md")
+            structure_template = self._load_prompt("builder_agent/agent_structure.md")
             structure_guidance = structure_template.replace(
                 "{agent_name}", agent_name
             ).replace(
@@ -163,7 +156,7 @@ The following specification has evolved through planning iterations and should g
 """
             structure_guidance = spec_doc_section + structure_guidance
 
-        template = self._load_prompt("copilot_task.md")
+        template = self._load_prompt("builder_agent/copilot_task.md")
         return template.replace(
             "{agent_name}", agent_name
         ).replace(
@@ -188,7 +181,7 @@ The following specification has evolved through planning iterations and should g
         context: dict[str, Any],
     ) -> str:
         """Get prompt for extracting ideal state from a task description."""
-        template = self._load_prompt("ideal_state_extract.md")
+        template = self._load_prompt("builder_agent/ideal_state_extract.md")
         context_str = json.dumps(context, indent=2, default=str) if context else "{}"
         return template.replace("{task}", task).replace("{context}", context_str)
 
@@ -198,7 +191,7 @@ The following specification has evolved through planning iterations and should g
         results_str: str,
     ) -> str:
         """Get prompt for refining ideal state after an iteration."""
-        template = self._load_prompt("ideal_state_refine.md")
+        template = self._load_prompt("builder_agent/ideal_state_refine.md")
         return (
             template
             .replace("{current_state}", current_state_json)
@@ -213,7 +206,7 @@ The following specification has evolved through planning iterations and should g
         current_state_json: str,
     ) -> str:
         """Get prompt for incorporating user clarification."""
-        template = self._load_prompt("ideal_state_clarify.md")
+        template = self._load_prompt("builder_agent/ideal_state_clarify.md")
         return (
             template
             .replace("{original_task}", original_task)
@@ -229,7 +222,7 @@ The following specification has evolved through planning iterations and should g
         task_description: str,
     ) -> str:
         """Get prompt for extracting anti-criteria from violations."""
-        template = self._load_prompt("ideal_state_anti_criteria.md")
+        template = self._load_prompt("builder_agent/ideal_state_anti_criteria.md")
         return (
             template
             .replace("{violations}", violations_str)
@@ -244,7 +237,7 @@ The following specification has evolved through planning iterations and should g
         task_description: str,
     ) -> str:
         """Get prompt for validating criteria quality."""
-        template = self._load_prompt("ideal_state_validate.md")
+        template = self._load_prompt("builder_agent/ideal_state_validate.md")
         return (
             template
             .replace("{criteria}", criteria_str)
@@ -259,7 +252,7 @@ The following specification has evolved through planning iterations and should g
         context_str: str,
     ) -> str:
         """Get prompt for suggesting verification methods."""
-        template = self._load_prompt("ideal_state_verification.md")
+        template = self._load_prompt("builder_agent/ideal_state_verify.md")
         return (
             template
             .replace("{criteria}", criteria_str)
@@ -296,7 +289,7 @@ The following specification has evolved through planning iterations and should g
             constraints_context: Resource constraints (empty string if none).
             dependencies_context: Dependencies information (empty string if none).
         """
-        template = self._load_prompt("think.md")
+        template = self._load_prompt("builder_agent/think.md")
         return (
             template
             .replace("{task_description}", task_description)
@@ -327,7 +320,7 @@ The following specification has evolved through planning iterations and should g
         best_result: str,
     ) -> str:
         """Get prompt for the LEARN phase iteration analysis."""
-        template = self._load_prompt("learn.md")
+        template = self._load_prompt("builder_agent/learn.md")
         return (
             template
             .replace("{iteration}", str(iteration))
@@ -352,7 +345,7 @@ The following specification has evolved through planning iterations and should g
         iteration: int,
     ) -> str:
         """Get prompt for LLM-based severity assessment of validation findings."""
-        template = self._load_prompt("validation_severity.md")
+        template = self._load_prompt("builder_agent/validation_severity.md")
         return (
             template
             .replace("{findings_json}", findings_json)
