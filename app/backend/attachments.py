@@ -114,7 +114,7 @@ class AttachmentManager:
     def _extract_text_from_pdf(self, content: bytes) -> str:
         """Extract text from PDF bytes."""
         try:
-            import pypdf
+            import pypdf  # pyright: ignore[reportMissingImports]
             reader = pypdf.PdfReader(io.BytesIO(content))
             text_parts = []
             for page in reader.pages:
@@ -132,7 +132,7 @@ class AttachmentManager:
     def _extract_text_from_docx(self, content: bytes) -> str:
         """Extract text from DOCX bytes."""
         try:
-            import docx
+            import docx  # pyright: ignore[reportMissingImports]
             doc = docx.Document(io.BytesIO(content))
             paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
             return "\n\n".join(paragraphs)
