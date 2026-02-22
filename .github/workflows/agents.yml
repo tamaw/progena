@@ -79,7 +79,7 @@ jobs:
           node-version: "20"
 
       - name: Lint (ruff)
-        continue-on-error: true
+        continue-on-error: ${{ matrix.agent != 'builder_agent' }}
         run: |
           TARGETS="app/agents/${{ matrix.agent }}"
           TEST_DIR="tests/agents/${{ matrix.agent }}"
@@ -87,7 +87,7 @@ jobs:
           ruff check $TARGETS
 
       - name: Type-check (pyright)
-        continue-on-error: true
+        continue-on-error: ${{ matrix.agent != 'builder_agent' }}
         run: pyright "app/agents/${{ matrix.agent }}"
 
       - name: Tests (pytest)
