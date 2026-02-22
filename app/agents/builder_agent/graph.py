@@ -166,10 +166,9 @@ def _build_checkpointer(
     2. ``<config.storage.state_dir>/build_checkpoints.db`` when config has state_dir.
     3. In-memory MemorySaver as fallback (also used when path is ``False``).
 
-    The SQLite checkpointer is opened *synchronously* here so the graph can
-    be compiled without ``async``.  For async use the caller should run
-    builds inside an ``asyncio`` event loop — which BackgroundBuildRunner
-    already does.
+    The inner-loop graph is executed asynchronously, so we prefer
+    AsyncSqliteSaver (requires aiosqlite). If unavailable, fall back to
+    in-memory checkpoints.
     """
     if checkpoint_db_path is False:
         # Caller explicitly opted out of persistence.
@@ -183,24 +182,22 @@ def _build_checkpointer(
 
     db_path = Path(str(checkpoint_db_path))
     try:
-        import sqlite3
-
-        from langgraph.checkpoint.sqlite import (  # pyright: ignore[reportMissingImports]
-            SqliteSaver,
+        import aiosqlite
+        from langgraph.checkpoint.sqlite.aio import (  # pyright: ignore[reportMissingImports]
+            AsyncSqliteSaver,
         )
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        checkpointer = SqliteSaver(conn)
+        conn = aiosqlite.connect(str(db_path))
+        checkpointer = AsyncSqliteSaver(conn=conn)
         logger.info("Build checkpoints will be stored at: %s", db_path)
         return checkpointer
     except ImportError:
         logger.warning(
-            "langgraph-checkpoint-sqlite not installed; falling back to MemorySaver. "
-            "Install with: pip install langgraph-checkpoint-sqlite"
+            "AsyncSqliteSaver unavailable; falling back to MemorySaver. "
+            "Install with: pip install aiosqlite langgraph-checkpoint-sqlite"
         )
         return MemorySaver()
     except Exception as exc:
         logger.warning("Could not open checkpoint DB %s: %s — using MemorySaver", db_path, exc)
         return MemorySaver()
-
