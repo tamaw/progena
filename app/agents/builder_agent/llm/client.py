@@ -802,20 +802,20 @@ class LLMClient:
         # Check token usage before making the call
         self._check_token_usage(input_messages)
 
-        # Structured output must bypass LiteLLM (litellm bug workaround).
-        if response_format is not None:
-            if not self._can_use_structured_override():
-                raise RuntimeError(
-                    "Structured output requires PROGENITOR_AZURE_STRUCTURED_* env vars "
-                    "(RESPONSES_URL, API_KEY, MODEL)."
+        # Prefer the Azure override when configured, but allow LiteLLM /responses
+        # structured output as a fallback so builds don't hard-fail on override
+        # endpoint issues.
+        if response_format is not None and self._can_use_structured_override():
+            try:
+                return await self._post_structured_response_override(
+                    input_messages=input_messages,
+                    response_format=response_format,
+                    include_reasoning=include_reasoning,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
                 )
-            return await self._post_structured_response_override(
-                input_messages=input_messages,
-                response_format=response_format,
-                include_reasoning=include_reasoning,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            except Exception as exc:
+                logger.warning("Structured override failed; falling back to LiteLLM: %s", exc)
 
         merged_tools = self._resolve_request_tools(tools, response_format)
 
@@ -828,7 +828,7 @@ class LLMClient:
         if self.config.model_fallbacks:
             payload["fallbacks"] = self.config.model_fallbacks
         if response_format:
-            payload["response_format"] = response_format
+            payload["text"] = {"format": response_format}
         if merged_tools:
             payload["tools"] = merged_tools
             # When requesting strict structured output, prevent tool calling while
