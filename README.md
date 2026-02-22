@@ -98,7 +98,6 @@ app/
     nodes/              # LangGraph nodes: intake, decide, chat, respond, idle, etc.
   agents/
     builder_agent/      # Build loop A2A agent (port 8107) — see agents/builder_agent/README.md
-    hello_world_agent/  # Example A2A agent
     observe_agent/      # Monitoring A2A agent
   mcp/                  # MCP servers
 .env                    # Local environment configuration
