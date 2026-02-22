@@ -321,21 +321,21 @@ class IPCServer:
     async def _wait_for_response(self, request_id: str) -> str:
         """Wait for a response from the loop runner.
 
-        This collects output from the loop runner's output queue.
+        Collects stream chunks from the stream queue until is_final=True.
         """
-        # Poll the output queue
         full_response = ""
         poll_count = 0
-        while True:
+        max_polls = 3000  # 5 min at 0.1s
+        while poll_count < max_polls:
             poll_count += 1
-            if poll_count % 10 == 0:
+            if poll_count % 50 == 0:
                 logger.debug("Still waiting for %s (poll %d)", request_id, poll_count)
-            chunk = await self.loop_runner.get_output(timeout=1.0)
-            if chunk:
-                full_response += chunk
-                # The loop runner sends complete messages
-                return full_response
-            await asyncio.sleep(0.1)
+            chunk_data = await self.loop_runner.get_stream_chunk(timeout=0.1)
+            if chunk_data:
+                full_response += chunk_data.get("content", "")
+                if chunk_data.get("is_final"):
+                    return full_response
+        return full_response
 
     async def _handle_streaming_request(
         self,

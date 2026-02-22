@@ -167,8 +167,9 @@ class Progenitor:
             max_clients=self.config.runtime.ipc_max_clients,
         )
         await self._ipc_server.start()
-        ipc_task = asyncio.create_task(self._ipc_server.serve_forever())
-        self._background_tasks.append(ipc_task)
+        if self._ipc_server:
+            ipc_task = asyncio.create_task(self._ipc_server.serve_forever())
+            self._background_tasks.append(ipc_task)
 
         try:
             done, pending = await asyncio.wait(
