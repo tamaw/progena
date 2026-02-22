@@ -20,17 +20,25 @@ def create_deepagent_tools(
     tool_registry: Any = None,
     llm_client: Any = None,
     state_manager: Any = None,
-) -> list:
-    """Create DeepAgent-compatible tools (system tools + DeepAgent-only helpers)."""
+    ) -> list:
+        """Create DeepAgent-compatible tools (system tools + DeepAgent-only helpers)."""
     def _wrap_system_tool(system_tool: Any) -> StructuredTool:
         async def _run(request: str = "", tool_args: dict[str, Any] | None = None) -> dict[str, Any]:
+            # External deploy pipelines can update registry.json; reload best-effort so new
+            # agents/tools show up without requiring a restart.
+            load_registry = getattr(tool_registry, "load", None) if tool_registry is not None else None
+            if callable(load_registry):
+                with contextlib.suppress(Exception):
+                    maybe = load_registry()
+                    if inspect.isawaitable(maybe):
+                        await cast(Any, maybe)
+
             # Prefer the live loop state when running under ProgenitorLoop so tools that
             # mutate state (e.g. new_conversation) take effect immediately.
             state = None
             loop = get_current_loop()
             if loop is not None and isinstance(getattr(loop, "_state", None), dict):
                 state = loop._state
-
             if state_manager is not None:
                 get_state = getattr(state_manager, "get_current_state", None)
                 if callable(get_state) and inspect.iscoroutinefunction(get_state):
