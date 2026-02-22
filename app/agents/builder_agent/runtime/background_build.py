@@ -511,9 +511,11 @@ class BackgroundBuildRunner:
             result.agent_name = build_state.get("agent_name") or build_state.get("build_settings", {}).get("project_name")
 
             # Extract success criteria results
-            verification_report = build_state.get("verification", {}).get("current_report", {})
+            verification_report: Any = build_state.get("verification", {}).get("current_report") or {}
             if hasattr(verification_report, "model_dump"):
                 verification_report = verification_report.model_dump()
+            if not isinstance(verification_report, dict):
+                verification_report = {}
 
             result.success_criteria_met = verification_report.get("passed_criteria", [])
             result.success_criteria_unmet = verification_report.get("gaps", [])

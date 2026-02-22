@@ -1037,18 +1037,43 @@ class LLMClient:
         max_tokens: int = 4096,
         tools: list[dict[str, Any]] | None = None,
     ) -> TModel:
-        """Call /responses endpoint and return a validated structured model."""
-        response_format = self._get_json_response_format(response_model, schema_name)
+        """Return a validated structured model.
+
+        We intentionally do NOT rely on provider-side structured output (e.g.
+        `text.format` / `response_format`) here because LiteLLM /responses support
+        varies by provider and can fail with 400s. Instead we:
+        1) Instruct the model to output strict JSON
+        2) Parse it locally and validate with Pydantic
+        """
+        schema = response_model.model_json_schema()
+        schema_hint = json.dumps(schema, separators=(",", ":"), ensure_ascii=True)
+        instruction = (
+            "Return ONLY valid JSON (no markdown, no extra text) that matches this JSON Schema: "
+            f"{schema_hint}"
+        )
+        effective_system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
+
         response = await self.chat(
             messages=messages,
-            system_prompt=system_prompt,
+            system_prompt=effective_system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format=response_format,
+            response_format=None,
             tools=tools,
         )
 
-        raw_data = json.loads(response)
+        if not response.strip():
+            raise ValueError(f"Empty structured response for schema={schema_name}")
+
+        try:
+            raw_data = json.loads(response)
+        except json.JSONDecodeError:
+            start = response.find("{")
+            end = response.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                raw_data = json.loads(response[start : end + 1])
+            else:
+                raise
         return response_model.model_validate(raw_data)
 
     async def chat_with_reasoning(
@@ -1094,9 +1119,12 @@ class LLMClient:
         """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
         messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
-        response_format = _build_json_schema_format(DecisionResponse, "decision_response")
-
-        response = await self.chat(messages, system_prompt, temperature=0.3, response_format=response_format)
+        schema_hint = json.dumps(DecisionResponse.model_json_schema(), separators=(",", ":"), ensure_ascii=True)
+        instruction = (
+            "Return ONLY valid JSON (no markdown, no extra text) that matches this JSON Schema: "
+            f"{schema_hint}"
+        )
+        response = await self.chat(messages, f"{system_prompt}\n\n{instruction}", temperature=0.3)
         if not response.strip():
             logger.warning("Empty decide response; returning default decision")
             validated = validate_decision_response({})
