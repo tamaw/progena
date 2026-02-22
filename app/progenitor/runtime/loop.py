@@ -221,15 +221,25 @@ class ProgenitorLoop:
             source: Source of the cycle (e.g., 'user_input', 'background_backlog').
         """
         cycle_num = self._state["cycle_count"]
-        thread_id = f"cycle_{cycle_num}"
+        thread_id = getattr(self, "_run_id", None) or "progenitor_main"
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
         # Reset per-cycle capture
         self._last_cycle_response = None
 
+        # Build graph input: for user_input cycles, pass only the new HumanMessage.
+        # The checkpointer (per stable thread_id) maintains conversation history.
+        # Passing the full self._state would flood the model with all accumulated messages.
+        current_input = self._state.get("current_input") if source == "user_input" else None
+        if current_input:
+            from langchain_core.messages import HumanMessage
+            graph_input: dict = {"messages": [HumanMessage(content=current_input)]}
+        else:
+            graph_input = {}
+
         try:
             async for event in self.graph.astream(
-                self._state,
+                graph_input,
                 config={"configurable": {"thread_id": thread_id}},
             ):
                 # Process graph events
