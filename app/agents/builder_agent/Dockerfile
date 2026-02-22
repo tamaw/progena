@@ -28,7 +28,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # Install GitHub Copilot CLI (provides `gh copilot` / `copilot --acp`)
-RUN curl -fsSL https://gh.io/copilot-install | bash
+RUN curl -fsSL --retry 8 --retry-delay 2 --retry-all-errors https://gh.io/copilot-install | bash
 
 WORKDIR /app
 
