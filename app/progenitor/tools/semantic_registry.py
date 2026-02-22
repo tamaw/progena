@@ -29,8 +29,10 @@ np: Any = None
 SEMANTIC_AVAILABLE = False
 
 try:
-    import numpy as _np
-    from sentence_transformers import SentenceTransformer as _SentenceTransformer
+    import numpy as _np  # pyright: ignore[reportMissingImports]
+    from sentence_transformers import (  # pyright: ignore[reportMissingImports]
+        SentenceTransformer as _SentenceTransformer,
+    )
     SentenceTransformer = _SentenceTransformer
     np = _np
     SEMANTIC_AVAILABLE = True

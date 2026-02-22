@@ -308,7 +308,7 @@ class ObserveAgent:
             return {"payload": payload, "tool_round": 0, "max_tool_rounds": int(state.get("max_tool_rounds") or 12)}
 
         async def llm_call(state: ObserveGraphState) -> dict[str, Any]:
-            payload = state["payload"]
+            payload = state.get("payload") or {}
             data = await self._post_responses(payload)
             tool_calls = self._extract_tool_calls(data)
             return {"last_data": data, "tool_calls": tool_calls}
@@ -318,7 +318,7 @@ class ObserveAgent:
             if not isinstance(tool_calls, list) or not tool_calls:
                 return {}
 
-            input_messages = state["payload"]["input"]
+            input_messages = (state.get("payload") or {}).get("input") or []
             seen = state.get("seen_tool_sigs")
             if not isinstance(seen, set):
                 seen = set()
@@ -356,9 +356,10 @@ class ObserveAgent:
                 )
 
             input_messages.extend(tool_result_messages)
-            state["payload"]["input"] = input_messages
+            current_payload = state.get("payload") or {}
+            current_payload["input"] = input_messages
             state["tool_round"] = int(state.get("tool_round", 0)) + 1
-            return {"payload": state["payload"], "tool_round": state["tool_round"]}
+            return {"payload": current_payload, "tool_round": state["tool_round"]}
 
         async def finalize(state: ObserveGraphState) -> dict[str, Any]:
             data = state.get("last_data") or {}
@@ -439,7 +440,7 @@ class ObserveAgent:
         max_rounds = int(os.getenv("OBSERVE_MAX_TOOL_ROUNDS", "12"))
         max_rounds = max(1, min(max_rounds, 30))
         init_state = {"request": request, "context": context, "max_tool_rounds": max_rounds}
-        result = await self._graph.ainvoke(init_state, {"configurable": {"thread_id": f"observe_{int(time.time())}"}})
+        result = await self._graph.ainvoke(init_state, {"configurable": {"thread_id": f"observe_{int(time.time())}"}})  # pyright: ignore[reportArgumentType]
         return str(result.get("final_text") or "").strip() or "No response text returned from Observe graph."
 
     async def process(self, request: str, context: dict[str, Any]) -> str:
