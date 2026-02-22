@@ -1,7 +1,8 @@
 """Tests for prompt directory resolution and loading."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from app.progenitor.llm.prompts import DEFAULT_PROMPTS_DIR, PromptTemplates
 

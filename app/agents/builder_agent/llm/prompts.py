@@ -72,8 +72,6 @@ class PromptTemplates:
             searched_dirs = [str(self.prompts_dir)]
             if self.prompts_dir != DEFAULT_PROMPTS_DIR:
                 searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
-            if self.prompts_dir != LEGACY_PROMPTS_DIR:
-                searched_dirs.append(str(LEGACY_PROMPTS_DIR))
             raise FileNotFoundError(
                 f"Prompt file not found: {prompt_file}. "
                 f"Ensure prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"

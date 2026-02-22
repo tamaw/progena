@@ -332,7 +332,7 @@ class IPCServer:
                 logger.debug("Still waiting for %s (poll %d)", request_id, poll_count)
             chunk_data = await self.loop_runner.get_stream_chunk(timeout=0.1)
             if chunk_data:
-                full_response += chunk_data.get("content", "")
+                full_response += str(chunk_data.get("content", ""))
                 if chunk_data.get("is_final"):
                     return full_response
         return full_response

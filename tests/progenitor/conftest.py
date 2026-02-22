@@ -1,7 +1,7 @@
 """Shared fixtures for progenitor unit tests."""
 
+
 import pytest
-from unittest.mock import MagicMock
 
 
 @pytest.fixture(autouse=True)
