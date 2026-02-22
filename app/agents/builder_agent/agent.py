@@ -95,17 +95,63 @@ async def _ensure_workspace() -> None:
         )
         return
 
-    logger.info("Cloning %s into %s …", repo_url, workspace)
-    proc = await asyncio.create_subprocess_exec(
-        "git", "clone", repo_url, str(workspace),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        logger.error("Failed to clone repo: %s", stderr.decode()[:500])
-    else:
-        logger.info("Workspace ready at %s", workspace)
+    # Note: the workspace directory may already contain runtime dirs (e.g. worktrees/)
+    # created by volume init scripts. `git clone <url> <dir>` fails unless the
+    # target dir is empty, so we fall back to `git init + fetch + checkout` which
+    # works in a non-empty directory.
+
+    async def _run_git(*args: str) -> tuple[int, str, str]:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        rc = proc.returncode
+        assert rc is not None  # communicate() awaited => process completed
+        return int(rc), stdout.decode(errors="replace"), stderr.decode(errors="replace")
+
+    # Fast path: empty dir -> clone
+    try:
+        is_empty = not any(workspace.iterdir())
+    except Exception:
+        is_empty = False
+
+    if is_empty:
+        logger.info("Cloning %s into %s …", repo_url, workspace)
+        rc, _out, err = await _run_git("clone", repo_url, str(workspace))
+        if rc != 0:
+            logger.error("Failed to clone repo: %s", err[:500])
+        else:
+            logger.info("Workspace ready at %s", workspace)
+        return
+
+    logger.info("Initialising git workspace at %s …", workspace)
+    rc, _out, err = await _run_git("-C", str(workspace), "init")
+    if rc != 0:
+        logger.error("Failed to init git repo: %s", err[:500])
+        return
+
+    # Remote add can fail if it already exists (e.g. previous partial init).
+    rc, _out, err = await _run_git("-C", str(workspace), "remote", "add", "origin", repo_url)
+    if rc != 0:
+        await _run_git("-C", str(workspace), "remote", "set-url", "origin", repo_url)
+
+    rc, _out, err = await _run_git("-C", str(workspace), "fetch", "--prune", "origin")
+    if rc != 0:
+        logger.error("Failed to fetch origin: %s", err[:500])
+        return
+
+    # Prefer origin/main, fall back to origin/master if needed.
+    rc, _out, err = await _run_git("-C", str(workspace), "checkout", "-B", "main", "origin/main")
+    if rc != 0:
+        rc, _out, err = await _run_git("-C", str(workspace), "checkout", "-B", "main", "origin/master")
+        if rc != 0:
+            logger.error("Failed to checkout default branch: %s", err[:500])
+            return
+
+    logger.info("Workspace ready at %s", workspace)
 
 
 async def _ensure_initialized() -> None:
@@ -114,12 +160,12 @@ async def _ensure_initialized() -> None:
     if _initialized:
         return
 
-    await _ensure_workspace()
-
     project_root = Path(__file__).resolve().parent
     config = get_config(project_root, project_root / "config", validate=False)
     setup_logging(config, "builder_agent")
     _config = config
+
+    await _ensure_workspace()
 
     for p in [config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir]:
         p.mkdir(parents=True, exist_ok=True)
