@@ -274,9 +274,9 @@ jobs:
                -v progenitor-builder-logs:/app/logs \
                -v progenitor-builder-workspace:/app/workspace \
                ghcr.io/tamaw/progenitor-agent-builder_agent:latest \
-               sh -lc "mkdir -p /app/data/state /app/logs/builder_agent /app/workspace/worktrees && chown -R runner:agent /app/data /app/logs /app/workspace"
+               sh -lc "mkdir -p /app/data/state /app/logs/builder_agent /app/workspace && chown -R runner:agent /app/data /app/logs /app/workspace"
              EXTRA_VOLUMES="-v progenitor-builder-data:/app/data -v progenitor-builder-logs:/app/logs -v progenitor-builder-workspace:/app/workspace -v ${PROMPTS_SRC}:/app/prompts:ro"
-             EXTRA_ENV="-e GH_TOKEN=${GH_TOKEN} -e PROGENITOR_REPO_URL=https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git -e PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL=${PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL} -e PROGENITOR_AZURE_STRUCTURED_API_KEY=${PROGENITOR_AZURE_STRUCTURED_API_KEY} -e PROGENITOR_AZURE_STRUCTURED_MODEL=${PROGENITOR_AZURE_STRUCTURED_MODEL}"
+             EXTRA_ENV="-e GH_TOKEN=${GH_TOKEN} -e PROGENITOR_REPO_URL=https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git"
            fi
 
           docker run -d \
