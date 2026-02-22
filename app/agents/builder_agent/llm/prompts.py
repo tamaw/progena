@@ -10,9 +10,17 @@ import os
 from pathlib import Path
 from typing import Any
 
-# Project root: prompts.py -> llm/ -> builder_agent/ -> agents/ -> app/ -> project_root/
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_PROMPTS_DIR = PROJECT_ROOT / "prompts"
+_this_file = Path(__file__).resolve()
+
+# Find the repo root by walking up until we see a prompts/ directory.
+# This works both in-repo (…/progenitor/prompts) and in the Docker image (/app/prompts).
+PROJECT_ROOT: Path | None = None
+for parent in (_this_file.parent, *_this_file.parents):
+    if (parent / "prompts").exists():
+        PROJECT_ROOT = parent
+        break
+
+DEFAULT_PROMPTS_DIR = (PROJECT_ROOT or _this_file.parent) / "prompts"
 
 
 def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
