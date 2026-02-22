@@ -8,10 +8,14 @@ import asyncio
 import json
 import logging
 import shlex
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
 import httpx
+from a2a.client import A2AClient as A2ASDKClient
+from a2a.client import create_text_message_object
+from a2a.types import MessageSendParams, SendMessageRequest
 
 from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -391,43 +395,40 @@ class A2AClient:
         context: dict[str, Any] | None = None,
         timeout: float = 60.0,
     ) -> dict[str, Any]:
-        """Call an agent via HTTP."""
-        import aiohttp
-
+        """Call an A2A agent via JSON-RPC (A2A protocol v0.3.x)."""
         endpoint = agent_config.get("endpoint")
         if not endpoint:
             raise ValueError("No endpoint specified for HTTP agent")
 
-        payload = {
-            "request": request,
-            "context": context or {},
-        }
+        msg = create_text_message_object(content=request or "")
+        send_req = SendMessageRequest(
+            id=str(uuid.uuid4()),
+            params=MessageSendParams(message=msg, metadata=context or {}),
+        )
 
         try:
-            async with aiohttp.ClientSession() as session, session.post(
-                endpoint,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
-                if response.status >= 400:
-                    text = await response.text()
-                    return {
-                        "success": False,
-                        "error": f"HTTP {response.status}: {text[:200]}",
-                    }
-                return cast(dict[str, Any], await response.json())
-        except aiohttp.ClientConnectorError as e:
-            return {
-                "success": False,
-                "error": f"Connection failed: {e}. Agent may not be running.",
-            }
+            async with httpx.AsyncClient(timeout=timeout) as httpx_client:
+                client = A2ASDKClient(httpx_client=httpx_client, url=str(endpoint))
+                resp = await client.send_message(send_req)
         except TimeoutError:
-            return {
-                "success": False,
-                "error": f"Request timeout after {timeout}s",
-            }
+            return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+        root = getattr(resp, "root", None)
+        if root is None:
+            return {"success": False, "error": "Invalid A2A response (missing root)"}
+
+        error = getattr(root, "error", None)
+        if error is not None:
+            return {"success": False, "error": getattr(error, "message", None) or str(error)}
+
+        result = getattr(root, "result", None)
+        if result is None:
+            return {"success": False, "error": "Invalid A2A response (missing result)"}
+
+        dumped = result.model_dump() if hasattr(result, "model_dump") else result
+        return {"success": True, "result": dumped}
 
     async def get_agent_card(
         self,
