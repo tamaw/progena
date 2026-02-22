@@ -48,7 +48,6 @@ def create_langchain_model(
         default_headers={
             "x-litellm-api-key": config.api_key or "",
         },
-        temperature=0,
         streaming=True,
     )
 
@@ -81,7 +80,6 @@ def create_azure_structured_model() -> ChatOpenAI | None:
         model=model_name or "gpt-4o",
         base_url=url,
         api_key=SecretStr(api_key) if api_key else None,
-        temperature=0,
     )
 
     logger.info("Created Azure structured output model: model=%s", model_name)
