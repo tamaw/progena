@@ -123,13 +123,18 @@ jobs:
             AGENTS=$(python -c "import json; from pathlib import Path; skip={'__pycache__','.git','base','.venv','node_modules'}; d=Path('app/agents'); print(json.dumps(sorted([p.name for p in d.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith('.')])) if d.exists() else [])")
             MCPS=$(python -c "import json; from pathlib import Path; skip={'__pycache__','.git','base','.venv','node_modules'}; d=Path('app/mcp'); print(json.dumps(sorted([p.name for p in d.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith('.')])) if d.exists() else [])")
           else
-            # HEAD^ may not exist in shallow checkouts / workflow_dispatch; fall back to diffing against origin/main.
-            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-              CHANGED=$(git diff --name-only HEAD^ HEAD)
-            else
-              git fetch origin main --depth=2 || true
+            # For workflow_dispatch mode=changed, diff against origin/main...HEAD so we pick up *all* branch changes.
+            if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+              git fetch origin main --depth=50 || true
               if git show-ref --verify --quiet refs/remotes/origin/main; then
                 CHANGED=$(git diff --name-only origin/main...HEAD || true)
+              else
+                CHANGED=""
+              fi
+            else
+              # For main pushes we only care about the last commit; HEAD^ may not exist in shallow checkouts.
+              if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+                CHANGED=$(git diff --name-only HEAD^ HEAD)
               else
                 CHANGED=""
               fi
