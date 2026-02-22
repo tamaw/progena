@@ -13,9 +13,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
-from a2a.client import A2AClient as A2ASDKClient
-from a2a.client import create_text_message_object
-from a2a.types import MessageSendParams, SendMessageRequest
 
 from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -400,35 +397,47 @@ class A2AClient:
         if not endpoint:
             raise ValueError("No endpoint specified for HTTP agent")
 
-        msg = create_text_message_object(content=request or "")
-        send_req = SendMessageRequest(
-            id=str(uuid.uuid4()),
-            params=MessageSendParams(message=msg, metadata=context or {}),
-        )
-
         try:
             async with httpx.AsyncClient(timeout=timeout) as httpx_client:
-                client = A2ASDKClient(httpx_client=httpx_client, url=str(endpoint))
-                resp = await client.send_message(send_req)
+                message_id = uuid.uuid4().hex
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": uuid.uuid4().hex,
+                    "method": "message/send",
+                    "params": {
+                        "message": {
+                            "kind": "message",
+                            "message_id": message_id,
+                            "role": "user",
+                            "parts": [{"kind": "text", "text": request or ""}],
+                        },
+                        "metadata": context or {},
+                    },
+                }
+                resp = await httpx_client.post(str(endpoint), json=payload)
         except TimeoutError:
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-        root = getattr(resp, "root", None)
-        if root is None:
-            return {"success": False, "error": "Invalid A2A response (missing root)"}
+        if resp.status_code >= 400:
+            return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
 
-        error = getattr(root, "error", None)
-        if error is not None:
-            return {"success": False, "error": getattr(error, "message", None) or str(error)}
+        try:
+            data = resp.json()
+        except Exception:
+            return {"success": False, "error": f"Non-JSON A2A response: {resp.text[:200]}"}
 
-        result = getattr(root, "result", None)
-        if result is None:
-            return {"success": False, "error": "Invalid A2A response (missing result)"}
+        if isinstance(data, dict) and data.get("error"):
+            err = data.get("error")
+            if isinstance(err, dict):
+                return {"success": False, "error": err.get("message") or str(err)}
+            return {"success": False, "error": str(err)}
 
-        dumped = result.model_dump() if hasattr(result, "model_dump") else result
-        return {"success": True, "result": dumped}
+        if not isinstance(data, dict) or "result" not in data:
+            return {"success": False, "error": f"Invalid A2A response: {str(data)[:200]}"}
+
+        return {"success": True, "result": data.get("result")}
 
     async def get_agent_card(
         self,
