@@ -13,6 +13,8 @@ Usage:
     results = registry.find_by_capability_semantic("handle file uploads")
 """
 
+import importlib
+import importlib.util
 import json
 import logging
 from pathlib import Path
@@ -23,29 +25,48 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 logger = logging.getLogger(__name__)
 
 
-# Try to import sentence transformers for embeddings
+def _module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+# Optional dependency surface: keep static analyzers happy by avoiding hard imports.
 SentenceTransformer: Any = None
 np: Any = None
-SEMANTIC_AVAILABLE = False
+SEMANTIC_AVAILABLE = _module_available("numpy") and _module_available("sentence_transformers")
+_semantic_import_error_logged = False
 
-try:
-    import numpy as _np  # pyright: ignore[reportMissingImports]
-    from sentence_transformers import (  # pyright: ignore[reportMissingImports]
-        SentenceTransformer as _SentenceTransformer,
-    )
-    SentenceTransformer = _SentenceTransformer
-    np = _np
-    SEMANTIC_AVAILABLE = True
-except ImportError:
-    logger.info(
-        "sentence-transformers not installed. "
-        "Semantic search disabled. Install with: pip install sentence-transformers"
-    )
+
+def _ensure_semantic_imports() -> bool:
+    """Import optional deps on-demand; returns True if semantic features are usable."""
+    global SentenceTransformer, np, SEMANTIC_AVAILABLE, _semantic_import_error_logged
+
+    if SentenceTransformer is not None and np is not None:
+        return True
+    if not SEMANTIC_AVAILABLE:
+        return False
+
+    try:
+        np = importlib.import_module("numpy")
+        st_mod = importlib.import_module("sentence_transformers")
+        SentenceTransformer = getattr(st_mod, "SentenceTransformer", None)
+        if SentenceTransformer is None:
+            raise ImportError("sentence_transformers.SentenceTransformer not found")
+        return True
+    except Exception as e:
+        SEMANTIC_AVAILABLE = False
+        if not _semantic_import_error_logged:
+            logger.info(
+                "sentence-transformers not installed/available. "
+                "Semantic search disabled. Install with: pip install sentence-transformers. (%s)",
+                e,
+            )
+            _semantic_import_error_logged = True
+        return False
 
 
 def cosine_similarity(a: Any, b: Any) -> float:
     """Compute cosine similarity between two vectors."""
-    if not SEMANTIC_AVAILABLE or np is None:
+    if not _ensure_semantic_imports():
         return 0.0
     dot = np.dot(a, b)
     norm_a = np.linalg.norm(a)
@@ -85,7 +106,7 @@ class SemanticRegistry:
 
     def _load_encoder(self) -> None:
         """Lazily load the sentence transformer model."""
-        if self._encoder is not None or not SEMANTIC_AVAILABLE or SentenceTransformer is None:
+        if self._encoder is not None or not _ensure_semantic_imports() or SentenceTransformer is None:
             return
 
         try:
@@ -115,7 +136,7 @@ class SemanticRegistry:
             await self.save()
 
         # Build embeddings for all capabilities
-        if SEMANTIC_AVAILABLE:
+        if _ensure_semantic_imports():
             await self._build_embeddings()
 
     async def _build_embeddings(self) -> None:
