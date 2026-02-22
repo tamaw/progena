@@ -39,7 +39,9 @@ def _build_checkpointer(db_path: Path) -> Any:
     """
     try:
         import aiosqlite
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver  # pyright: ignore[reportMissingImports]
+        from langgraph.checkpoint.sqlite.aio import (
+            AsyncSqliteSaver,  # pyright: ignore[reportMissingImports]
+        )
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = aiosqlite.connect(str(db_path))

@@ -71,11 +71,9 @@ jobs:
           pip install -e . --no-deps
 
       - name: Lint progenitor (ruff)
-        continue-on-error: true
         run: ruff check app/progenitor tests/progenitor tests/test_scheduler.py
 
       - name: Type-check progenitor (pyright)
-        continue-on-error: true
         run: pyright app/progenitor
 
       - name: Tests progenitor (pytest)

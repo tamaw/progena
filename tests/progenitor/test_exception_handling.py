@@ -5,7 +5,7 @@ Validates that exception handlers use specific exception types and logging.
 These are primarily static code analysis tests to verify the fix was applied.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
