@@ -125,10 +125,12 @@ jobs:
           else
             # For workflow_dispatch mode=changed, diff against origin/main...HEAD so we pick up *all* branch changes.
             if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-              git fetch origin main --depth=50 || true
-              if git show-ref --verify --quiet refs/remotes/origin/main; then
-                CHANGED=$(git diff --name-only origin/main...HEAD || true)
-              else
+              if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+                git fetch origin main
+              fi
+              if ! CHANGED=$(git diff --name-only origin/main...HEAD); then
+                # If we can't compute a merge-base diff, deploy everything rather than silently skipping.
+                MODE="all"
                 CHANGED=""
               fi
             else
