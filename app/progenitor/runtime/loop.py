@@ -23,8 +23,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from .time_utils import utcnow_isoformat
 from ..state.models import redact_secrets
+from .time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
