@@ -65,6 +65,10 @@ jobs:
           pip install ruff pyright
           pip install -e . --no-deps
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Lint progenitor (ruff)
         run: ruff check app/progenitor tests/progenitor tests/test_scheduler.py
 

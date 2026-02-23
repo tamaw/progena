@@ -74,6 +74,10 @@ jobs:
           pip install ruff pyright
           pip install -e . --no-deps
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Lint (ruff)
         continue-on-error: true
         run: |
