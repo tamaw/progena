@@ -247,6 +247,11 @@ class ProgenitorLoop:
                     output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
                     logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
                     if isinstance(node_output, dict):
+                        if "messages" in node_output:
+                            node_output = {
+                                **node_output,
+                                "messages": self._coerce_messages_list(node_output.get("messages")),
+                            }
                         self._state.update(node_output)
 
                 # Check for response to send - stream it if not already streamed
@@ -512,10 +517,34 @@ class ProgenitorLoop:
         await self.state_manager.save_current_state(current_checkpoint)
         logger.debug("Checkpointed state at cycle %d", current_checkpoint["cycle_count"])
 
-    def _serialize_messages(self, messages: list) -> list:
+    def _coerce_messages_list(self, messages: Any) -> list:
+        """Coerce LangGraph/DeepAgent message updates into a plain list.
+
+        Some graph implementations return sentinel update objects (e.g. Overwrite)
+        that wrap the real list; our checkpoint expects an iterable list.
+        """
+        if messages is None:
+            return []
+        if isinstance(messages, list):
+            return messages
+        # Common wrapper pattern: obj.value holds the replacement value.
+        value = getattr(messages, "value", None)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        # Best-effort fallback.
+        if isinstance(messages, dict):
+            return [messages]
+        try:
+            return list(messages)
+        except TypeError:
+            return []
+
+    def _serialize_messages(self, messages: Any) -> list:
         """Serialize message objects for checkpoint."""
         serialized = []
-        for msg in messages:
+        for msg in self._coerce_messages_list(messages):
             if hasattr(msg, "model_dump"):
                 serialized.append(msg.model_dump())
             elif isinstance(msg, dict):
