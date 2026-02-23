@@ -2,16 +2,11 @@ name: ci
 
 on:
   push:
-    branches: [main]
     paths-ignore:
       - 'app/agents/**'
       - 'app/mcp/**'
       - '.github/workflows/agents.yml'
-  pull_request:
-    paths-ignore:
-      - 'app/agents/**'
-      - 'app/mcp/**'
-      - '.github/workflows/agents.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -112,7 +107,7 @@ jobs:
   build-and-push:
     runs-on: self-hosted
     needs: [backend, progenitor, frontend]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -165,7 +160,7 @@ jobs:
     runs-on: self-hosted
     environment: cronix
     needs: [build-and-push]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 
