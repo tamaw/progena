@@ -240,7 +240,10 @@ class ProgenitorLoop:
             source: Source of the cycle (e.g., 'user_input', 'background_backlog').
         """
         cycle_num = self._state["cycle_count"]
-        thread_id = getattr(self, "_run_id", None) or "progenitor_main"
+        # DeepAgent uses the LangGraph checkpointer keyed by thread_id.
+        # Using a constant thread_id causes unbounded conversation growth across restarts
+        # and prevents the `new_conversation` tool from actually resetting the LLM context.
+        thread_id = str(self._state.get("run_id") or "progenitor_main")
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
         # Reset per-cycle capture
