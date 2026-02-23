@@ -2,6 +2,11 @@ litellm_settings:
   callbacks:
     - langfuse_otel
 
+# Proxy-level fallback routing (LiteLLM reliability feature).
+# If gpt-5.2-chat errors (rate limit / timeout), try gpt-5-mini then gpt-4.1.
+fallbacks:
+  - gpt-5.2-chat: ["gpt-5-mini", "gpt-4.1"]
+
 model_list:
   - model_name: gpt-5.2-chat
     litellm_params:
