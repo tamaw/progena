@@ -11,8 +11,10 @@ model_list:
       api_version: preview
       tpm: 20000
       rpm: 500
-      timeout: 10
-      stream_timeout: 2
+      # NOTE: Progenitor requests include tool definitions, so first-token latency can
+      # exceed 2s. A low stream_timeout causes spurious APITimeoutError.
+      timeout: 30
+      stream_timeout: 20
   - model_name: gpt-5-mini
     litellm_params:
       model: azure/gpt-5-mini
