@@ -15,7 +15,9 @@ from pathlib import Path
 
 # Health file location (matches HEALTH_FILE in loop.py)
 HEALTH_FILE = Path("/app/data/state/health.json")
-STALE_SECONDS = 120  # Consider unhealthy if not updated in 2 minutes
+# Consider unhealthy if not updated recently.
+# A single graph cycle can take several minutes (LLM latency / tool calls), so this must be generous.
+STALE_SECONDS = 900
 
 
 def check_health() -> bool:
