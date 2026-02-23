@@ -8,6 +8,7 @@ import json
 import sys
 from io import TextIOWrapper
 from typing import cast
+from pathlib import Path
 
 # Fix Windows console encoding for Unicode characters
 if sys.platform == "win32":
@@ -20,6 +21,10 @@ if sys.platform == "win32":
         pass  # Fall back to default encoding
 
 from pydantic import BaseModel, Field
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.progenitor.config import LLMConfig
 from app.progenitor.llm.client import LLMClient, _build_json_schema_format
@@ -267,7 +272,8 @@ async def run_all_tests():
     print("\nConfiguration:")
     print(f"  Endpoint: {config.base_url}")
     print(f"  Model: {config.model_default}")
-    print(f"  API Key: {config.api_key[:20] if config.api_key else 'None'}...")
+    # Never print secrets in diagnostics (even partial prefixes can leak).
+    print(f"  API Key: {'<set>' if config.api_key else '<missing>'}")
     print()
 
     results = []
