@@ -14,13 +14,6 @@ on:
           - changed
           - all
   push:
-    branches: [main]
-    paths:
-      - "app/agents/**"
-      - "app/mcp/**"
-      - "docker/runner/**"
-      - ".github/workflows/agents.yml"
-  pull_request:
     paths:
       - "app/agents/**"
       - "app/mcp/**"
@@ -38,7 +31,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------ discover
   discover-agents:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       agents: ${{ steps.list.outputs.agents }}
     steps:
@@ -57,7 +50,7 @@ jobs:
   # ------------------------------------------------------------------ test
   test-agent:
     needs: discover-agents
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +98,7 @@ jobs:
   # ------------------------------------------------------------------ detect changes (main/dispatch only)
   detect-changes:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       agents: ${{ steps.diff.outputs.agents }}
       mcps: ${{ steps.diff.outputs.mcps }}
@@ -159,7 +152,7 @@ jobs:
   build-agent:
     needs: [test-agent, detect-changes]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
@@ -202,7 +195,7 @@ jobs:
   deploy-agent:
     needs: [detect-changes, build-agent]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: self-hosted
     environment: cronix
     strategy:
       fail-fast: false
@@ -329,7 +322,7 @@ jobs:
   build-mcp:
     needs: detect-changes
     if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
@@ -363,7 +356,7 @@ jobs:
   deploy-mcp:
     needs: [detect-changes, build-mcp]
     if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: self-hosted
     environment: cronix
     strategy:
       fail-fast: false
@@ -445,4 +438,3 @@ jobs:
             }"
           echo ""
           echo "Registered mcp/${{ matrix.mcp }} with LiteLLM at ${MCP_URL}"
-

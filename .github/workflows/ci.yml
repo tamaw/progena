@@ -2,16 +2,11 @@ name: ci
 
 on:
   push:
-    branches: [main]
     paths-ignore:
       - 'app/agents/**'
       - 'app/mcp/**'
       - '.github/workflows/agents.yml'
-  pull_request:
-    paths-ignore:
-      - 'app/agents/**'
-      - 'app/mcp/**'
-      - '.github/workflows/agents.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,7 +19,7 @@ permissions:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +46,7 @@ jobs:
         run: pytest tests/backend
 
   progenitor:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +81,7 @@ jobs:
           --ignore=tests/progenitor/test_e2e_dual_loop.py
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     defaults:
       run:
         working-directory: app/frontend
@@ -110,9 +105,9 @@ jobs:
         run: npm run build
 
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [backend, progenitor, frontend]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -162,10 +157,10 @@ jobs:
 
   deploy:
     # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: self-hosted
     environment: cronix
     needs: [build-and-push]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 
