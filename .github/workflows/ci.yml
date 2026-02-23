@@ -233,6 +233,9 @@ jobs:
 
       - name: Deploy progenitor stack
         run: |
+          # If a manual/dev container exists with the same name, docker compose will fail.
+          # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
+          docker rm -f progenitor progenitor-backend 2>/dev/null || true
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml pull
           docker compose --env-file .progenitor.env -f docker/docker-compose.progenitor.yml up -d
