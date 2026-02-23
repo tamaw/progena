@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +51,7 @@ jobs:
         run: pytest tests/backend
 
   progenitor:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +86,7 @@ jobs:
           --ignore=tests/progenitor/test_e2e_dual_loop.py
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     defaults:
       run:
         working-directory: app/frontend
@@ -110,7 +110,7 @@ jobs:
         run: npm run build
 
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: [backend, progenitor, frontend]
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:

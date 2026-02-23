@@ -38,7 +38,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------ discover
   discover-agents:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     outputs:
       agents: ${{ steps.list.outputs.agents }}
     steps:
@@ -57,7 +57,7 @@ jobs:
   # ------------------------------------------------------------------ test
   test-agent:
     needs: discover-agents
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +105,7 @@ jobs:
   # ------------------------------------------------------------------ detect changes (main/dispatch only)
   detect-changes:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     outputs:
       agents: ${{ steps.diff.outputs.agents }}
       mcps: ${{ steps.diff.outputs.mcps }}
@@ -159,7 +159,7 @@ jobs:
   build-agent:
     needs: [test-agent, detect-changes]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     strategy:
       fail-fast: false
       matrix:
@@ -329,7 +329,7 @@ jobs:
   build-mcp:
     needs: detect-changes
     if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     strategy:
       fail-fast: false
       matrix:
@@ -445,4 +445,3 @@ jobs:
             }"
           echo ""
           echo "Registered mcp/${{ matrix.mcp }} with LiteLLM at ${MCP_URL}"
-
