@@ -23,6 +23,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from ..state.models import redact_secrets
 from .time_utils import utcnow_isoformat
 
 if TYPE_CHECKING:
@@ -192,18 +193,36 @@ class ProgenitorLoop:
                     self._stream_final_sent = False
                     self._streamed_response_content = ""
 
-                    # Run graph cycle
-                    await self._run_graph_cycle(run_id, source="user_input")
+                    try:
+                        # Run graph cycle
+                        await self._run_graph_cycle(run_id, source="user_input")
+                    except Exception as e:
+                        # Prevent clients from hanging on failures: emit a final chunk + mark cycle complete.
+                        safe_error = redact_secrets(str(e))
+                        logger.error("Graph cycle failed for user input: %s", safe_error, exc_info=True)
+                        await self._push_event("error", safe_error)
 
-                    # Disable streaming mode
-                    self._streaming_enabled = False
-                    self._response_was_streamed = False
-                    self._stream_final_sent = False
-                    self._streamed_response_content = ""
+                        if self._streaming_enabled and not self._stream_final_sent:
+                            if self._response_was_streamed:
+                                await self.stream_final()
+                            else:
+                                await self._stream_response(f"Error: {safe_error}")
+                            self._stream_final_sent = True
 
-                    # Signal cycle complete for IPC synchronization
-                    logger.info("Graph cycle complete, signaling")
-                    await self._signal_cycle_complete()
+                        self._last_cycle_response = f"Error: {safe_error}"
+                        self._state["last_cycle_response"] = self._last_cycle_response
+                        await self._checkpoint_state(self._state)
+                        await self._update_health_file(self._state, status="error", error=safe_error)
+                    finally:
+                        # Disable streaming mode
+                        self._streaming_enabled = False
+                        self._response_was_streamed = False
+                        self._stream_final_sent = False
+                        self._streamed_response_content = ""
+
+                        # Signal cycle complete for IPC synchronization
+                        logger.info("Graph cycle complete, signaling")
+                        await self._signal_cycle_complete()
 
             except asyncio.CancelledError:
                 logger.info("Input handler cancelled")
@@ -221,7 +240,10 @@ class ProgenitorLoop:
             source: Source of the cycle (e.g., 'user_input', 'background_backlog').
         """
         cycle_num = self._state["cycle_count"]
-        thread_id = getattr(self, "_run_id", None) or "progenitor_main"
+        # DeepAgent uses the LangGraph checkpointer keyed by thread_id.
+        # Using a constant thread_id causes unbounded conversation growth across restarts
+        # and prevents the `new_conversation` tool from actually resetting the LLM context.
+        thread_id = str(self._state.get("run_id") or "progenitor_main")
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
         # Reset per-cycle capture
