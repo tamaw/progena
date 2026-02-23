@@ -66,7 +66,9 @@ class LLMConfig:
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
-            model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
+            # Default fallbacks help with Azure rate limits and LiteLLM upstream timeouts.
+            # Can be overridden/disabled via PROGENITOR_MODEL_FALLBACKS (set to empty string to disable).
+            model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", ["gpt-5-mini", "gpt-4.1"]),
         )
 
     def get_model_for_role(self, role: str) -> str:
