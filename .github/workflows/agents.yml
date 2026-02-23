@@ -14,13 +14,6 @@ on:
           - changed
           - all
   push:
-    branches: [main]
-    paths:
-      - "app/agents/**"
-      - "app/mcp/**"
-      - "docker/runner/**"
-      - ".github/workflows/agents.yml"
-  pull_request:
     paths:
       - "app/agents/**"
       - "app/mcp/**"
