@@ -20,7 +20,7 @@ class NewConversationTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Start a new conversation (fresh run_id, clear chat history)"
+        return "Start a new conversation (fresh run_id, clears server-side context/history)"
 
     @property
     def keywords(self) -> list[str]:
