@@ -7,7 +7,7 @@
 │                    PROGENITOR SYSTEM                                 │
 │                                                                      │
 │  ┌──────────────────────────┐     ┌──────────────────────────────┐  │
-│  │     PROGENITOR CORE      │     │       BUILDER AGENT          │  │
+│  │       PROGENITOR         │     │       BUILDER AGENT          │  │
 │  │  (app/progenitor/)       │     │  (app/agents/builder_agent/) │  │
 │  │                          │ A2A │                              │  │
 │  │  DeepAgent chat harness  │────▶│  A2A server (port 8107)      │  │
@@ -23,7 +23,7 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Progenitor Core — Outer Loop
+## Progenitor — Outer Loop
 
 ```
 ┌──────────────────── OUTER LOOP (Perpetual) ─────────────────────────┐
@@ -55,7 +55,7 @@
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-## DeepAgent Layer (inside Progenitor Core)
+## DeepAgent Layer (inside Progenitor)
 
 ```
 ┌──────────────────── DEEPAGENT LAYER ─────────────────────────────────┐
@@ -84,7 +84,7 @@ which is a self-contained A2A server with its own Dockerfile, requirements.txt, 
 ```
 ┌──────────────────── BUILDER AGENT INNER LOOP ────────────────────────┐
 │                                                                        │
-│  Triggered by: A2A Task from Progenitor Core (or any A2A client)      │
+│  Triggered by: A2A Task from Progenitor (or any A2A client)           │
 │  Runs: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN     │
 │  Repeats until: score threshold reached or max iterations hit         │
 │                                                                        │
@@ -121,15 +121,14 @@ which is a self-contained A2A server with its own Dockerfile, requirements.txt, 
 
 ```
 data/state/
-├── current_state.json     # Progenitor core: messages, conversation
+├── current_state.json     # Progenitor: messages, conversation
 ├── registry.json          # Agent/tool registry (progenitor reads, builder writes)
-├── schedule.json          # Scheduled tasks (progenitor core)
+├── schedule.json          # Scheduled tasks (progenitor)
 └── build_checkpoints.db   # Builder agent: SQLite LangGraph checkpoints
 ```
 
 ---
 
-**Key Design Principle**: Progenitor core is a stable, minimal orchestrator.
+**Key Design Principle**: Progenitor is a stable, minimal orchestrator.
 Risky capabilities (code generation, git mutation, shell execution) live in
 the isolated Builder Agent — reachable only via the A2A protocol.
-

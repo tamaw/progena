@@ -1,1 +1,1 @@
-"""Tests for Progenitor core components."""
+"""Tests for Progenitor components."""
