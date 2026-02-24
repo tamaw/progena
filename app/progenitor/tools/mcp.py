@@ -7,6 +7,7 @@ Handles communication with MCP servers via stdio or HTTP transports.
 import asyncio
 import json
 import logging
+import os
 import shlex
 import uuid
 from pathlib import Path
@@ -350,6 +351,77 @@ class A2AClient:
     HTTP agents should expose endpoints at their registered URL.
     """
 
+    def __init__(self) -> None:
+        base_url = (os.getenv("LITELLM_BASE_URL") or "").strip().rstrip("/")
+        self._litellm_base_url = base_url
+        self._litellm_api_key = (
+            os.getenv("LITELLM_API_KEY")
+            or os.getenv("LITELLM_MASTER_KEY")
+            or ""
+        ).strip()
+
+    def _litellm_enabled(self) -> bool:
+        return bool(self._litellm_base_url)
+
+    def _litellm_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._litellm_api_key:
+            headers["Authorization"] = f"Bearer {self._litellm_api_key}"
+            headers["x-litellm-api-key"] = self._litellm_api_key
+        return headers
+
+    def _litellm_agents_url(self) -> str:
+        base = self._litellm_base_url
+        if base.endswith("/v1"):
+            return f"{base}/agents"
+        return f"{base}/v1/agents"
+
+    def _litellm_a2a_url(self, agent_id: str) -> str:
+        base = self._litellm_base_url
+        if base.endswith("/v1"):
+            return f"{base}/a2a/{agent_id}/message/send"
+        return f"{base}/v1/a2a/{agent_id}/message/send"
+
+    def _litellm_agent_card_url(self, agent_id: str) -> str:
+        base = self._litellm_base_url
+        if base.endswith("/v1"):
+            return f"{base}/a2a/{agent_id}/.well-known/agent.json"
+        return f"{base}/v1/a2a/{agent_id}/.well-known/agent.json"
+
+    async def _resolve_litellm_agent(
+        self,
+        agent_config: dict[str, Any],
+        httpx_client: httpx.AsyncClient,
+    ) -> dict[str, Any] | None:
+        agent_name = str(agent_config.get("name") or "").strip()
+        if not agent_name:
+            return None
+
+        agents_url = self._litellm_agents_url()
+        resp = await httpx_client.get(agents_url)
+        if resp.status_code >= 400:
+            raise ValueError(f"LiteLLM agents lookup failed: HTTP {resp.status_code}: {resp.text[:200]}")
+
+        payload = resp.json()
+        if not isinstance(payload, list):
+            return None
+
+        for candidate in payload:
+            if not isinstance(candidate, dict):
+                continue
+            if str(candidate.get("agent_name") or "") != agent_name:
+                continue
+
+            agent_id = candidate.get("agent_id")
+            if isinstance(agent_id, str) and agent_id:
+                agent_config["litellm_agent_id"] = agent_id
+
+            card_params = candidate.get("agent_card_params")
+            if isinstance(card_params, dict):
+                agent_config["agent_card"] = card_params
+            return candidate
+        return None
+
     async def call_agent(
         self,
         agent_config: dict[str, Any],
@@ -383,7 +455,68 @@ class A2AClient:
         endpoint = agent_config.get("endpoint")
         if not endpoint:
             return {"success": False, "error": "No HTTP endpoint configured for agent"}
+        if self._litellm_enabled() and agent_config.get("name"):
+            return await self._call_litellm_agent(agent_config, request, context, timeout)
         return await self._call_http_agent(agent_config, request, context, timeout)
+
+    async def _call_litellm_agent(
+        self,
+        agent_config: dict[str, Any],
+        request: str,
+        context: dict[str, Any] | None = None,
+        timeout: float = 60.0,
+    ) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                headers=self._litellm_headers(),
+            ) as httpx_client:
+                agent_data = await self._resolve_litellm_agent(agent_config, httpx_client)
+                if not isinstance(agent_data, dict):
+                    return {"success": False, "error": f"Agent not registered in LiteLLM: {agent_config.get('name')}"}
+                agent_id = str(agent_data.get("agent_id") or "").strip()
+                if not agent_id:
+                    return {"success": False, "error": "LiteLLM agent_id missing for requested agent"}
+
+                message_id = uuid.uuid4().hex
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": uuid.uuid4().hex,
+                    "method": "message/send",
+                    "params": {
+                        "message": {
+                            "kind": "message",
+                            "message_id": message_id,
+                            "role": "user",
+                            "parts": [{"kind": "text", "text": request or ""}],
+                        },
+                        "metadata": context or {},
+                    },
+                }
+                resp = await httpx_client.post(self._litellm_a2a_url(agent_id), json=payload)
+        except TimeoutError:
+            return {"success": False, "error": f"Request timeout after {timeout}s"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+        if resp.status_code >= 400:
+            return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
+        try:
+            data = resp.json()
+        except Exception:
+            return {"success": False, "error": f"Non-JSON A2A response: {resp.text[:200]}"}
+
+        if isinstance(data, dict) and data.get("error"):
+            err = data.get("error")
+            if isinstance(err, dict):
+                return {"success": False, "error": err.get("message") or str(err)}
+            return {"success": False, "error": str(err)}
+
+        if not isinstance(data, dict) or "result" not in data:
+            return {"success": False, "error": f"Invalid A2A response: {str(data)[:200]}"}
+
+        return {"success": True, "result": data.get("result")}
 
     async def _call_http_agent(
         self,
@@ -458,6 +591,26 @@ class A2AClient:
             Agent card dict or None if unavailable.
         """
         import aiohttp
+
+        if self._litellm_enabled():
+            headers = self._litellm_headers()
+            try:
+                async with httpx.AsyncClient(timeout=timeout, headers=headers) as httpx_client:
+                    agent_data = await self._resolve_litellm_agent(agent_config, httpx_client)
+                    if isinstance(agent_data, dict):
+                        card_params = agent_data.get("agent_card_params")
+                        if isinstance(card_params, dict):
+                            return card_params
+                        agent_id = str(agent_data.get("agent_id") or "").strip()
+                        if agent_id:
+                            card_resp = await httpx_client.get(self._litellm_agent_card_url(agent_id))
+                            if card_resp.status_code == 200:
+                                body = card_resp.json()
+                                if isinstance(body, dict):
+                                    return body
+            except Exception as e:
+                logger.debug("Failed to fetch agent card from LiteLLM: %s", e)
+                return None
 
         agent_card_url = agent_config.get("agent_card_url")
         if not agent_card_url:

@@ -24,43 +24,118 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
+LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
+
+
+def _litellm_headers() -> dict[str, str]:
+    key = (LITELLM_API_KEY or LITELLM_MASTER_KEY).strip()
+    headers: dict[str, str] = {}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+        headers["x-litellm-api-key"] = key
+    return headers
+
+
+def _litellm_agents_url() -> str:
+    base = LITELLM_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/agents"
+    return f"{base}/v1/agents"
+
+
+def _derive_agent_card_url(api_base: str) -> str:
+    base = api_base.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return f"{base}/.well-known/agent.json"
 
 
 async def _register_with_litellm(
     model_name: str,
     api_base: str,
     description: str,
+    agent_card_url: str | None = None,
 ) -> bool:
     """Register an agent or MCP server with the LiteLLM proxy.
 
-    Calls POST /model/new so Progenitor can invoke the agent/mcp
-    through LiteLLM endpoints rather than directly.
+    Agent builds are registered via /v1/agents (A2A).
+    MCP builds are registered via /model/new (OpenAI model routing).
     """
-    payload = {
-        "model_name": model_name,
-        "litellm_params": {
-            "model": f"openai/{model_name}",
-            "api_base": api_base,
-            "api_key": LITELLM_MASTER_KEY,
-        },
-        "model_info": {
-            "description": description,
-            "id": model_name,
-        },
-    }
+    headers = _litellm_headers()
     try:
         async with httpx.AsyncClient(timeout=15) as client:
+            if model_name.startswith("agent/"):
+                agent_name = model_name.split("/", 1)[1]
+                card_url = agent_card_url or _derive_agent_card_url(api_base)
+                card_resp = await client.get(card_url)
+                if not card_resp.is_success:
+                    logger.warning(
+                        "REGISTER: Failed to fetch agent card for %s: %s %s",
+                        model_name, card_resp.status_code, card_resp.text[:300],
+                    )
+                    return False
+
+                agent_payload = {
+                    "agent_name": agent_name,
+                    "agent_card_params": card_resp.json(),
+                    "litellm_params": {"make_public": True},
+                }
+                agents_url = _litellm_agents_url()
+                resp = await client.post(agents_url, json=agent_payload, headers=headers)
+                if resp.is_success:
+                    logger.info("REGISTER: Registered %s with LiteLLM agents API", model_name)
+                    return True
+
+                list_resp = await client.get(agents_url, headers=headers)
+                if list_resp.is_success:
+                    agents = list_resp.json() if isinstance(list_resp.json(), list) else []
+                    agent_id = next(
+                        (
+                            str(a.get("agent_id"))
+                            for a in agents
+                            if isinstance(a, dict) and str(a.get("agent_name") or "") == agent_name and a.get("agent_id")
+                        ),
+                        "",
+                    )
+                    if agent_id:
+                        update_resp = await client.patch(
+                            f"{agents_url}/{agent_id}",
+                            json=agent_payload,
+                            headers=headers,
+                        )
+                        if update_resp.is_success:
+                            logger.info("REGISTER: Updated %s via LiteLLM agents API", model_name)
+                            return True
+
+                logger.warning(
+                    "REGISTER: LiteLLM agent registration failed for %s: %s %s",
+                    model_name, resp.status_code, resp.text[:300],
+                )
+                return False
+
+            model_payload = {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"openai/{model_name}",
+                    "api_base": api_base,
+                    "api_key": (LITELLM_API_KEY or LITELLM_MASTER_KEY),
+                },
+                "model_info": {
+                    "description": description,
+                    "id": model_name,
+                },
+            }
             resp = await client.post(
-                f"{LITELLM_BASE_URL}/model/new",
-                json=payload,
-                headers={"Authorization": f"Bearer {LITELLM_MASTER_KEY}"},
+                f"{LITELLM_BASE_URL.rstrip('/')}/model/new",
+                json=model_payload,
+                headers=headers,
             )
             if resp.is_success:
                 logger.info("REGISTER: Registered %s with LiteLLM", model_name)
                 return True
             logger.warning(
-                "REGISTER: LiteLLM registration failed for %s: %s %s",
+                "REGISTER: LiteLLM model registration failed for %s: %s %s",
                 model_name, resp.status_code, resp.text[:300],
             )
     except Exception as exc:
@@ -171,6 +246,7 @@ def create_node(
             model_name=f"agent/{agent_name}",
             api_base=f"http://localhost:{port}/v1",
             description=spec.get("description", agent_name),
+            agent_card_url=entry.agent_card_url,
         )
 
         await state_manager.log_decision({

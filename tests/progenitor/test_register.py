@@ -16,11 +16,27 @@ class TestRegisterWithLiteLLM:
         """Should return True when LiteLLM responds with success."""
         from app.progenitor.nodes.register import _register_with_litellm
 
+        mock_card_response = MagicMock()
+        mock_card_response.is_success = True
+        mock_card_response.status_code = 200
+        mock_card_response.json.return_value = {
+            "protocolVersion": "1.0",
+            "name": "Weather Agent",
+            "description": "Weather agent",
+            "url": "http://localhost:8100/",
+            "version": "1.0.0",
+            "defaultInputModes": ["text"],
+            "defaultOutputModes": ["text"],
+            "capabilities": {"streaming": True},
+            "skills": [],
+        }
+
         mock_response = MagicMock()
         mock_response.is_success = True
         mock_response.status_code = 200
 
         mock_client = AsyncMock()
+        mock_client.get.return_value = mock_card_response
         mock_client.post.return_value = mock_response
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -38,21 +54,32 @@ class TestRegisterWithLiteLLM:
         # Verify the payload structure
         call_args = mock_client.post.call_args
         payload = call_args.kwargs["json"]
-        assert payload["model_name"] == "agent/weather"
-        assert payload["litellm_params"]["model"] == "openai/agent/weather"
-        assert payload["litellm_params"]["api_base"] == "http://localhost:8100/v1"
+        assert payload["agent_name"] == "weather"
+        assert payload["litellm_params"]["make_public"] is True
+        assert isinstance(payload["agent_card_params"], dict)
 
     @pytest.mark.asyncio
     async def test_failed_registration(self):
         """Should return False when LiteLLM responds with error."""
         from app.progenitor.nodes.register import _register_with_litellm
 
+        mock_card_response = MagicMock()
+        mock_card_response.is_success = True
+        mock_card_response.status_code = 200
+        mock_card_response.json.return_value = {"name": "Broken Agent", "skills": []}
+
         mock_response = MagicMock()
         mock_response.is_success = False
         mock_response.status_code = 400
         mock_response.text = "Bad request"
 
+        mock_list_response = MagicMock()
+        mock_list_response.is_success = False
+        mock_list_response.status_code = 500
+        mock_list_response.text = "Server error"
+
         mock_client = AsyncMock()
+        mock_client.get.side_effect = [mock_card_response, mock_list_response]
         mock_client.post.return_value = mock_response
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -71,7 +98,13 @@ class TestRegisterWithLiteLLM:
         """Should return False and not raise when LiteLLM is unreachable."""
         from app.progenitor.nodes.register import _register_with_litellm
 
+        mock_card_response = MagicMock()
+        mock_card_response.is_success = True
+        mock_card_response.status_code = 200
+        mock_card_response.json.return_value = {"name": "test", "skills": []}
+
         mock_client = AsyncMock()
+        mock_client.get.return_value = mock_card_response
         mock_client.post.side_effect = ConnectionError("refused")
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -192,6 +225,7 @@ class TestRegisterNode:
             model_name="agent/weather_agent",
             api_base="http://localhost:8100/v1",
             description="Weather agent",
+            agent_card_url="http://localhost:8100/.well-known/agent.json",
         )
 
         # Should have tested the agent

@@ -305,6 +305,7 @@ class AgentRegistryEntry(BaseModel):
     port: int | None = None  # Assigned HTTP port (e.g., 8100-8199)
     endpoint: str | None = None  # Base URL (e.g., http://localhost:8100)
     agent_card_url: str | None = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)
+    litellm_agent_id: str | None = None  # LiteLLM /v1/agents ID used for proxied A2A invocation
 
     # Runtime status (updated from process stdout/stderr)
     status: AgentStatus = AgentStatus.STOPPED
