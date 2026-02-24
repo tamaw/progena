@@ -13,6 +13,7 @@ Port:       8107  (configurable via PORT env var)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -552,7 +553,6 @@ async def _start_build_from_text(request_text: str) -> str:
     assert _llm_client is not None
     assert _tool_registry is not None
 
-    import contextlib
     from .runtime import decide as decide_mod  # local import to avoid circular
 
     tool_context = ""
