@@ -22,7 +22,7 @@ class _MockConfig:
 
 
 @pytest.mark.asyncio
-async def test_slash_new_resets_context_without_graph_call(tmp_path: Path) -> None:
+async def test_new_conversation_resets_context_without_graph_call(tmp_path: Path) -> None:
     from app.progenitor.runtime.loop import ProgenitorLoop
 
     state_manager = MagicMock()
@@ -44,7 +44,7 @@ async def test_slash_new_resets_context_without_graph_call(tmp_path: Path) -> No
         "actions_this_cycle": 0,
         "shutdown_requested": False,
         "messages": [{"role": "user", "content": "hello"}],
-        "current_input": "/new",
+        "current_input": "new conversation",
     }
 
     await loop._run_graph_cycle("ignored", source="user_input")
