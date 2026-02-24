@@ -46,6 +46,8 @@ def get_current_loop() -> Optional["ProgenitorLoop"]:
 class ProgenitorLoop:
     """Manages the perpetual execution loop."""
 
+    _NEW_CONVERSATION_COMMANDS = {"/new", "/reset", "/clear", "/new_conversation"}
+
     def __init__(
         self,
         graph,
@@ -240,6 +242,48 @@ class ProgenitorLoop:
             source: Source of the cycle (e.g., 'user_input', 'background_backlog').
         """
         cycle_num = self._state["cycle_count"]
+        current_input = self._state.get("current_input") if source == "user_input" else None
+
+        # Fast-path: allow an explicit command to reset context without spending model tokens.
+        if isinstance(current_input, str) and current_input.strip().lower() in self._NEW_CONVERSATION_COMMANDS:
+            from ..tools.new_conversation import NewConversationTool
+            from ..tools.protocol import ToolContext
+
+            tool = NewConversationTool()
+            result = await tool.execute(ToolContext(
+                tool_registry=None,
+                llm_client=self.llm_client,
+                state=cast(Any, self._state),
+                state_manager=self.state_manager,
+                user_input=current_input,
+                tool_args=None,
+            ))
+
+            if not result.success:
+                response_text = result.error or "Failed to start a new conversation."
+            else:
+                if result.state_updates:
+                    self._state.update(result.state_updates)
+
+                messages_cleared = 0
+                if result.data and isinstance(result.data, dict):
+                    messages_cleared = int(result.data.get("messages_cleared") or 0)
+
+                response_text = f"Started a new conversation (cleared {messages_cleared} messages)."
+            self._last_cycle_response = response_text
+            self._state["last_cycle_response"] = response_text
+
+            if self._streaming_enabled:
+                await self._stream_response(response_text)
+                self._stream_final_sent = True
+                self._state["pending_response"] = None
+            else:
+                self._state["pending_response"] = response_text
+
+            await self._checkpoint_state(self._state)
+            await self._update_health_file(self._state)
+            return
+
         # DeepAgent uses the LangGraph checkpointer keyed by thread_id.
         # Using a constant thread_id causes unbounded conversation growth across restarts
         # and prevents the `new_conversation` tool from actually resetting the LLM context.
@@ -252,7 +296,6 @@ class ProgenitorLoop:
         # Build graph input: for user_input cycles, pass only the new HumanMessage.
         # The checkpointer (per stable thread_id) maintains conversation history.
         # Passing the full self._state would flood the model with all accumulated messages.
-        current_input = self._state.get("current_input") if source == "user_input" else None
         if current_input:
             from langchain_core.messages import HumanMessage
             graph_input: dict = {"messages": [HumanMessage(content=current_input)]}
