@@ -6,6 +6,7 @@ LLM can invoke them directly during a conversation (e.g. `current_time`).
 """
 
 import contextlib
+import inspect
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
@@ -82,6 +83,10 @@ def create_deepagent_tools(
 
     async def list_agents(refresh: bool = False) -> dict[str, Any]:
         """List known A2A agents from registry.json."""
+        load = getattr(tool_registry, "load", None)
+        if callable(load) and inspect.iscoroutinefunction(load):
+            with contextlib.suppress(Exception):
+                await load()
         if tool_registry and refresh and hasattr(tool_registry, "refresh_agent_cards"):
             with contextlib.suppress(Exception):
                 await tool_registry.refresh_agent_cards(a2a_client)
@@ -96,6 +101,10 @@ def create_deepagent_tools(
         """Call an A2A agent by name or capability."""
         if not tool_registry:
             return {"success": False, "error": "tool_registry unavailable"}
+        load = getattr(tool_registry, "load", None)
+        if callable(load) and inspect.iscoroutinefunction(load):
+            with contextlib.suppress(Exception):
+                await load()
         agent = (agent or "").strip()
         if not agent:
             return {"success": False, "error": "Missing agent name/capability"}
