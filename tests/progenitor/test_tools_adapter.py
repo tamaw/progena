@@ -14,7 +14,7 @@ def _tool_by_name(tools, name: str):
 def test_core_only_tools_present() -> None:
     tools = create_deepagent_tools()
     names = {t.name for t in tools}
-    assert {"say_to_user", "list_agents", "call_agent", "mcp_call", "mcp_refresh"}.issubset(names)
+    assert {"say_to_user", "ask_user", "notify_user", "list_agents", "call_agent", "mcp_call", "mcp_refresh"}.issubset(names)
     # System tools are dynamically discovered from app/progenitor/tools/.
     assert {"current_time", "list_tools"}.issubset(names)
     assert len(names) == len(tools)
@@ -27,8 +27,8 @@ async def test_list_agents_returns_registry_entries() -> None:
     tools = create_deepagent_tools(tool_registry=registry)
     t = _tool_by_name(tools, "list_agents")
 
-    result = await t.ainvoke({"refresh": False})
-    assert result["count"] == 1
+    result = await t.ainvoke({})
+    assert result["total_count"] == 1
     assert result["agents"][0]["name"] == "Hello World Agent"
 
 
@@ -43,13 +43,13 @@ async def test_call_agent_uses_registry_and_a2a(monkeypatch) -> None:
 
     mock_a2a = MagicMock()
     mock_a2a.call_agent = AsyncMock(return_value={"success": True, "response": "ok"})
-    monkeypatch.setattr("app.progenitor.agent.tools_adapter.A2AClient", lambda: mock_a2a)
+    monkeypatch.setattr("app.progenitor.tools.call_agent.A2AClient", lambda: mock_a2a)
 
     tools = create_deepagent_tools(tool_registry=registry)
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0})
-    assert result["success"] is True
+    result = await t.ainvoke({"tool_args": {"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0}})
+    assert result.get("success") is True
     mock_a2a.call_agent.assert_awaited_once()
 
 
@@ -62,6 +62,6 @@ async def test_call_agent_unknown_agent_returns_error() -> None:
     tools = create_deepagent_tools(tool_registry=registry)
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"agent": "does-not-exist", "request": "hello"})
-    assert result["success"] is False
-    assert "Unknown agent" in result["error"]
+    result = await t.ainvoke({"tool_args": {"agent": "does-not-exist", "request": "hello"}})
+    assert result.get("success") is False
+    assert "Unknown agent" in str(result.get("error"))

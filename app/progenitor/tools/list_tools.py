@@ -70,35 +70,6 @@ class ListToolsTool(BaseSystemTool):
 
         system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]
 
-        # Include IPC user-communication system tools that aren't implemented as BaseSystemTool.
-        from .user_communication import USER_COMMUNICATION_TOOLS
-
-        system_tools = system_tools + list(USER_COMMUNICATION_TOOLS)
-
-        # DeepAgent-only helpers (not necessarily present as BaseSystemTool instances).
-        deepagent_tools: list[dict[str, Any]] = [
-            {
-                "name": "call_agent",
-                "description": "Delegate a request to an A2A agent by name or capability",
-                "type": "deepagent_tool",
-            },
-            {
-                "name": "mcp_call",
-                "description": "Call an MCP tool by name via LiteLLM MCP (tools/call)",
-                "type": "deepagent_tool",
-            },
-            {
-                "name": "mcp_refresh",
-                "description": "Refresh MCP tool list from LiteLLM and optionally persist to registry.json",
-                "type": "deepagent_tool",
-            },
-            {
-                "name": "say_to_user",
-                "description": "Send a one-way message to the user via IPC (agent_message event)",
-                "type": "deepagent_tool",
-            },
-        ]
-
         # Get registered A2A agents from registry
         agents: list[dict[str, Any]] = []
         if hasattr(context.tool_registry, "get_agents"):
@@ -159,13 +130,11 @@ class ListToolsTool(BaseSystemTool):
         ]
 
         return ToolResult.ok({
-            "deepagent_tools": deepagent_tools,
             "system_tools": system_tools,
             "agents": agent_entries,
             "mcp_tools": mcp_tool_entries,
-            "total_count": len(deepagent_tools) + len(system_tools) + len(agent_entries) + len(mcp_tool_entries),
+            "total_count": len(system_tools) + len(agent_entries) + len(mcp_tool_entries),
             "summary": {
-                "deepagent_tools": len(deepagent_tools),
                 "system_tools": len(system_tools),
                 "agents": len(agent_entries),
                 "mcp_tools": len(mcp_tool_entries),
