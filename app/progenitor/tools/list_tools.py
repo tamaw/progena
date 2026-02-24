@@ -3,8 +3,10 @@ List Tools - Lists all available tools including system tools, agents, and MCP t
 """
 
 import logging
-from typing import Any
+from contextlib import suppress
+from typing import Any, cast
 
+from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -42,12 +44,31 @@ class ListToolsTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..nodes.node_helpers.registry import get_all_system_tools
 
+        # Best-effort refresh: registry.json, agent cards, and LiteLLM MCP tools can all
+        # change during process uptime.
+        if hasattr(context.tool_registry, "load"):
+            with suppress(Exception):
+                await context.tool_registry.load()
+        if hasattr(context.tool_registry, "refresh_agent_cards"):
+            with suppress(Exception):
+                from .mcp import A2AClient
+
+                await context.tool_registry.refresh_agent_cards(A2AClient())
+
+        llm_client = getattr(context, "llm_client", None)
+        mcp_config = getattr(llm_client, "mcp_config", None) if llm_client is not None else None
+        if llm_client is not None and isinstance(mcp_config, MCPConfig) and mcp_config.enabled:
+            with suppress(Exception):
+                from .mcp import setup_mcp_for_llm_client
+
+                await setup_mcp_for_llm_client(llm_client, cast(MCPConfig, mcp_config))
+
+            if hasattr(context.tool_registry, "register_tool") and hasattr(llm_client, "get_mcp_tool_registry_entries"):
+                with suppress(Exception):
+                    for entry in llm_client.get_mcp_tool_registry_entries() or []:
+                        await context.tool_registry.register_tool(entry)
+
         system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]
-
-        # Include IPC user-communication system tools that aren't implemented as BaseSystemTool.
-        from .user_communication import USER_COMMUNICATION_TOOLS
-
-        system_tools = system_tools + list(USER_COMMUNICATION_TOOLS)
 
         # Get registered A2A agents from registry
         agents: list[dict[str, Any]] = []
