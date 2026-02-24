@@ -7,6 +7,7 @@ invokes local tools to read mounted state/logs, and returns plain-text insights.
 import json
 import os
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -19,6 +20,29 @@ from langgraph.graph import END, StateGraph
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _extract_openai_last_user_text(body: Any) -> str:
+    if not isinstance(body, dict):
+        return ""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    parts.append(part["text"])
+            return "".join(parts).strip()
+    return ""
 
 
 def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
@@ -500,6 +524,48 @@ async def handle(req: Request) -> JSONResponse:
         body = await req.json()
     except Exception:
         body = {}
+
+    # A2A JSON-RPC: support message/send so Progenitor can call us without fallbacks.
+    if isinstance(body, dict) and body.get("jsonrpc") == "2.0" and body.get("method") == "message/send":
+        params = body.get("params") if isinstance(body.get("params"), dict) else {}
+        msg = params.get("message") if isinstance(params.get("message"), dict) else {}
+        parts = msg.get("parts") if isinstance(msg.get("parts"), list) else []
+        req_str = ""
+        for part in parts:
+            if isinstance(part, dict) and part.get("kind") == "text" and isinstance(part.get("text"), str):
+                req_str += part["text"]
+        req_str = req_str.strip()
+        ctx = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
+
+        print("STATUS:executing:Calling LiteLLM with tool access", flush=True)
+        try:
+            text = await agent.process(req_str, ctx)
+            response = {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "result": {
+                    "message": {
+                        "kind": "message",
+                        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+                        "role": "agent",
+                        "parts": [{"kind": "text", "text": text}],
+                    },
+                    "metadata": {},
+                },
+            }
+            print("STATUS:waiting:Idle, waiting for requests", flush=True)
+            return JSONResponse(content=response)
+        except Exception as e:
+            print(f"STATUS:failed:{e}", flush=True)
+            return JSONResponse(
+                content={
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "error": {"code": -32000, "message": str(e)},
+                },
+                status_code=500,
+            )
+
     req_str = body.get("request", "") if isinstance(body, dict) else ""
     ctx = body.get("context", {}) if isinstance(body, dict) else {}
 
@@ -523,3 +589,34 @@ async def handle(req: Request) -> JSONResponse:
             "metadata": {"detail": str(e)},
         }
         return JSONResponse(content=err, status_code=500)
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(req: Request) -> JSONResponse:
+    """OpenAI-compatible endpoint so LiteLLM can proxy agent/* traffic."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+
+    request_text = _extract_openai_last_user_text(body) or str((body or {}).get("input") or "").strip()
+    content = await agent.process(request_text, {}) if request_text else "Empty request."
+    payload = {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": str((body or {}).get("model") or "agent/observe_agent"),
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": len(request_text.split()),
+            "completion_tokens": len(content.split()),
+            "total_tokens": len(request_text.split()) + len(content.split()),
+        },
+    }
+    return JSONResponse(payload)

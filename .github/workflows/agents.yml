@@ -325,7 +325,9 @@ jobs:
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: |
           AGENT_HOST="progenitor-agent-${{ matrix.agent }}"
-          AGENT_URL="http://${AGENT_HOST}:8080/v1"
+          PORT=8080
+          if [ "${{ matrix.agent }}" = "builder_agent" ]; then PORT=8107; fi
+          AGENT_URL="http://${AGENT_HOST}:${PORT}/v1"
           REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://litellm:4000}"
           if echo "$REGISTER_BASE_URL" | grep -Eq "://(localhost|127\\.0\\.0\\.1)"; then
             REGISTER_BASE_URL="http://litellm:4000"
