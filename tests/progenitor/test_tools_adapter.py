@@ -14,7 +14,7 @@ def _tool_by_name(tools, name: str):
 def test_core_only_tools_present() -> None:
     tools = create_deepagent_tools()
     names = {t.name for t in tools}
-    assert names == {"list_agents", "call_agent"}
+    assert names == {"say_to_user", "list_agents", "call_agent"}
 
 
 @pytest.mark.asyncio
@@ -62,4 +62,3 @@ async def test_call_agent_unknown_agent_returns_error() -> None:
     result = await t.ainvoke({"agent": "does-not-exist", "request": "hello"})
     assert result["success"] is False
     assert "Unknown agent" in result["error"]
-
