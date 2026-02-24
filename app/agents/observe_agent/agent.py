@@ -494,13 +494,26 @@ async def shutdown_event() -> None:
 @app.get("/.well-known/agent.json")
 async def agent_card() -> JSONResponse:
     port = int(os.environ.get("PORT", "8080"))
+    skills = [
+        {
+            "id": capability,
+            "name": capability.replace("_", " ").title(),
+            "description": f"Observe capability: {capability}",
+            "tags": ["observe", "diagnostics"],
+            "examples": [f"Run {capability}"],
+        }
+        for capability in agent.CAPABILITIES
+    ]
     payload = {
+        "protocolVersion": "1.0",
         "name": agent.AGENT_NAME,
         "description": agent.DESCRIPTION,
+        "url": f"http://localhost:{port}/",
         "version": "0.1.0",
-        "protocol": "a2a",
-        "capabilities": agent.CAPABILITIES,
-        "endpoint": f"http://localhost:{port}",
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "capabilities": {"streaming": True},
+        "skills": skills,
     }
     return JSONResponse(content=payload)
 
