@@ -517,7 +517,82 @@ app = _a2a_app.build()
 # ---------------------------------------------------------------------------
 # Extra endpoints: /health (Docker healthcheck) and startup hook
 # ---------------------------------------------------------------------------
+from fastapi import Request  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
+
+
+def _extract_last_user_text(body: Any) -> str:
+    """Best-effort extraction of the last user message text from OpenAI-style payloads."""
+    if not isinstance(body, dict):
+        return ""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    parts.append(part["text"])
+            return "".join(parts).strip()
+    return ""
+
+
+async def _start_build_from_text(request_text: str) -> str:
+    """Start a background build and return an acknowledgement (no waiting)."""
+    await _ensure_initialized()
+    assert _runner is not None
+    assert _llm_client is not None
+    assert _tool_registry is not None
+
+    import contextlib
+    from .runtime import decide as decide_mod  # local import to avoid circular
+
+    tool_context = ""
+    with contextlib.suppress(Exception):
+        tool_context = _tool_registry.get_tool_context()
+
+    decision = await decide_mod._request_decision_data(
+        llm_client=_llm_client,
+        user_input=request_text,
+        conversation_history=[],
+        tool_context=tool_context,
+    )
+    action = str(decision.get("action") or "").lower().strip()
+    if action not in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
+        return (
+            f"Request not recognised as a build action (action={action or '(empty)'}). "
+            "Be explicit, e.g. 'build an agent that…'"
+        )
+
+    build_settings = await decide_mod._generate_build_settings(
+        user_input=request_text,
+        llm_client=_llm_client,
+        llm_action=action,
+        decision_data=decision,
+    )
+    target_capabilities = decide_mod._infer_target_capabilities(request_text)
+    task_description = f"{action}: {build_settings.project_name}"
+
+    try:
+        build_id, ack_message = await _runner.start_build(
+            user_input=request_text,
+            task_description=task_description,
+            target_capabilities=target_capabilities,
+            initial_state={},
+            build_settings=build_settings,
+        )
+    except Exception as exc:
+        return f"Could not start build: {exc}"
+
+    return f"{ack_message}\n\nBuild ID: {build_id}"
 
 
 async def _health(request: Any) -> JSONResponse:
@@ -537,10 +612,46 @@ async def _health(request: Any) -> JSONResponse:
 app.add_route("/health", _health, methods=["GET"])
 
 
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(req: Request) -> JSONResponse:
+    """OpenAI-compatible endpoint so LiteLLM can proxy agent/* traffic.
+
+    For builder_agent, we acknowledge and start the build in the background.
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+
+    request_text = _extract_last_user_text(body) or ""
+    if not request_text:
+        request_text = str((body or {}).get("input") or "").strip()
+
+    content = await _start_build_from_text(request_text) if request_text else "Empty request."
+    payload = {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": str((body or {}).get("model") or "agent/builder_agent"),
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": len(request_text.split()),
+            "completion_tokens": len(content.split()),
+            "total_tokens": len(request_text.split()) + len(content.split()),
+        },
+    }
+    return JSONResponse(payload)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     port = int(os.environ.get("PORT", "8107"))
     logger.info("Builder Agent starting on port %d", port)
     await _ensure_initialized()
     logger.info("Builder Agent ready — listening on port %d", port)
-
