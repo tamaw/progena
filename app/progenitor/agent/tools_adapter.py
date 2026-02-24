@@ -20,8 +20,8 @@ def create_deepagent_tools(
     tool_registry: Any = None,
     llm_client: Any = None,
     state_manager: Any = None,
-    ) -> list:
-        """Create DeepAgent-compatible tools (system tools + DeepAgent-only helpers)."""
+ ) -> list:
+    """Create DeepAgent-compatible tools (system tools + DeepAgent-only helpers)."""
     def _wrap_system_tool(system_tool: Any) -> StructuredTool:
         async def _run(request: str = "", tool_args: dict[str, Any] | None = None) -> dict[str, Any]:
             # External deploy pipelines can update registry.json; reload best-effort so new
