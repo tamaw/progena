@@ -283,3 +283,102 @@ class UserCommunicationTool(BaseSystemTool):
         )
 
         return ToolResult.ok({"status": "sent", "message": message})
+
+
+class SayToUserTool(BaseSystemTool):
+    """Send a one-way agent_message event via IPC."""
+
+    @property
+    def name(self) -> str:
+        return "say_to_user"
+
+    @property
+    def description(self) -> str:
+        return "Send a one-way message to the user via IPC (agent_message event)"
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        message = str(args.get("message") or context.user_input or "").strip()
+        if not message:
+            return ToolResult.fail("Missing 'message'")
+
+        push = getattr(context.llm_client, "_push_event", None)
+        if not callable(push):
+            return ToolResult.fail("LLM client has no IPC event pusher configured")
+
+        await cast(EventPusher, push)(
+            "agent_message",
+            message,
+            {"tool": "say_to_user"},
+        )
+        return ToolResult.ok({"status": "sent", "message": message})
+
+
+class AskUserTool(BaseSystemTool):
+    """Send a one-way agent_question event via IPC."""
+
+    @property
+    def name(self) -> str:
+        return "ask_user"
+
+    @property
+    def description(self) -> str:
+        return "Ask the user a question via IPC (agent_question event; one-way notification)"
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        question = str(args.get("question") or context.user_input or "").strip()
+        if not question:
+            return ToolResult.fail("Missing 'question'")
+
+        options = args.get("options")
+        options_out = options if isinstance(options, list) else None
+
+        push = getattr(context.llm_client, "_push_event", None)
+        if not callable(push):
+            return ToolResult.fail("LLM client has no IPC event pusher configured")
+
+        await cast(EventPusher, push)(
+            "agent_question",
+            question,
+            {
+                "tool": "ask_user",
+                "options": options_out,
+                "requires_response": True,
+            },
+        )
+        return ToolResult.ok({"status": "sent", "question": question, "options": options_out})
+
+
+class NotifyUserTool(BaseSystemTool):
+    """Send a one-way agent_notification event via IPC."""
+
+    @property
+    def name(self) -> str:
+        return "notify_user"
+
+    @property
+    def description(self) -> str:
+        return "Send a notification to the user via IPC (agent_notification event)"
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        title = str(args.get("title") or "").strip()
+        body = str(args.get("body") or context.user_input or "").strip()
+        level = str(args.get("level") or "info").strip() or "info"
+
+        if not title:
+            return ToolResult.fail("Missing 'title'")
+        if not body:
+            return ToolResult.fail("Missing 'body'")
+
+        push = getattr(context.llm_client, "_push_event", None)
+        if not callable(push):
+            return ToolResult.fail("LLM client has no IPC event pusher configured")
+
+        await cast(EventPusher, push)(
+            "agent_notification",
+            body,
+            {"tool": "notify_user", "title": title, "level": level},
+        )
+        return ToolResult.ok({"status": "sent", "title": title, "level": level})
