@@ -46,7 +46,22 @@ def get_current_loop() -> Optional["ProgenitorLoop"]:
 class ProgenitorLoop:
     """Manages the perpetual execution loop."""
 
-    _NEW_CONVERSATION_COMMANDS = {"/new", "/reset", "/clear", "/new_conversation"}
+    # Accept plain-language reset commands (mobile-friendly); exact-match after normalization.
+    _NEW_CONVERSATION_COMMANDS = {
+        "new conversation",
+        "start a new conversation",
+        "start new conversation",
+        "reset conversation",
+        "clear conversation",
+        "clear chat",
+        "reset chat",
+        "start over",
+        # Still accept slash commands for power users.
+        "/new",
+        "/reset",
+        "/clear",
+        "/new_conversation",
+    }
 
     def __init__(
         self,
@@ -245,7 +260,13 @@ class ProgenitorLoop:
         current_input = self._state.get("current_input") if source == "user_input" else None
 
         # Fast-path: allow an explicit command to reset context without spending model tokens.
-        if isinstance(current_input, str) and current_input.strip().lower() in self._NEW_CONVERSATION_COMMANDS:
+        normalized = None
+        if isinstance(current_input, str):
+            normalized = " ".join(current_input.strip().lower().split()).strip(" .!?")
+            if normalized.endswith(" please"):
+                normalized = normalized.removesuffix(" please").strip()
+
+        if normalized and normalized in self._NEW_CONVERSATION_COMMANDS:
             from ..tools.new_conversation import NewConversationTool
             from ..tools.protocol import ToolContext
 
