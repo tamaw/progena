@@ -166,7 +166,7 @@ class ToolRegistry:
         # still important routing capabilities to surface in tool context.
         lines.append("- build_agent: Build a new A2A agent in the background (explicit requests only)")
         lines.append("- build_mcp: Build a new FastMCP tool/server in the background (explicit requests only)")
-        lines.append("- build_progenitor: Improve Progenitor core in the background (explicit requests only)")
+        lines.append("- build_progenitor: Improve Progenitor in the background (explicit requests only)")
         sections.append("\n".join(lines))
 
         # A2A agents from registry
