@@ -8,8 +8,10 @@ agents can change during process uptime. It uses registry.json for lookup.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
-from typing import Any
+from collections.abc import Awaitable
+from typing import Any, cast
 
 from .mcp import A2AClient
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -39,7 +41,9 @@ class CallAgentTool(BaseSystemTool):
         load = getattr(tool_registry, "load", None)
         if callable(load):
             with contextlib.suppress(Exception):
-                await load()
+                out = load()
+                if inspect.isawaitable(out):
+                    await cast(Awaitable[Any], out)
 
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         agent = str(args.get("agent") or "").strip()

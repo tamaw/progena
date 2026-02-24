@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -50,6 +51,7 @@ class MCPCallTool(BaseSystemTool):
         if not callable(call):
             return ToolResult.fail("MCP caller unavailable")
 
-        result = await call({"name": name, "arguments": arguments})
+        call_typed = cast(Callable[[dict[str, Any]], Awaitable[dict[str, Any]]], call)
+        result = await call_typed({"name": name, "arguments": arguments})
         return ToolResult.ok(cast(dict[str, Any], result) if isinstance(result, dict) else {"result": result})
 
