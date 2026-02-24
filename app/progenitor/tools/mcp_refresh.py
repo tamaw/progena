@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from typing import Any, cast
 
 from ..config import MCPConfig
 from .mcp import setup_mcp_for_llm_client
@@ -46,7 +47,8 @@ class MCPRefreshTool(BaseSystemTool):
             entries = getattr(llm_client, "get_mcp_tool_registry_entries", None)
             if callable(entries):
                 with contextlib.suppress(Exception):
-                    for entry in entries() or []:
+                    raw_entries = entries()
+                    for entry in cast(list[dict[str, Any]], raw_entries or []):
                         await tool_registry.register_tool(entry)
 
         return ToolResult.ok({
