@@ -1,4 +1,4 @@
-# Progenitor Core Improvement Specification
+# Progenitor Improvement Specification
 
 ## Scope (CRITICAL)
 
@@ -14,4 +14,3 @@ Do NOT create new agents in `app/agents/` and do NOT create MCP tools in `app/mc
 - Preserve existing behavior unless the spec explicitly changes it
 - Add/update tests only when behavior changes
 - Prefer clear, maintainable code over cleverness
-

@@ -16,7 +16,7 @@ class DecisionAction(StrEnum):
     ANSWER_DIRECTLY = "answer_directly"
     BUILD_AGENT = "build_agent"
     BUILD_MCP = "build_mcp"  # Build FastMCP tool/server in app/mcp/
-    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor core in app/progenitor/
+    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor in app/progenitor/
 
 
 class DecisionResponse(BaseModel):

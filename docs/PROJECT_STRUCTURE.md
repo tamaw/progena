@@ -86,7 +86,7 @@ tests/
 ```
 data/
 ├── state/                       # Core state files (json)
-│   ├── current_state.json       # Progenitor core: conversation + messages
+│   ├── current_state.json       # Progenitor: conversation + messages
 │   ├── registry.json            # Agent/tool registry
 │   ├── schedule.json            # Scheduled tasks
 │   └── build_checkpoints.db    # Builder agent: SQLite LangGraph checkpoints
@@ -131,9 +131,8 @@ ruff check app/
 
 ## Design Principles
 
-- **Progenitor core** is a stable, minimal orchestrator: chat, routing, delegation
+- **Progenitor** is a stable, minimal orchestrator: chat, routing, delegation
 - **Builder Agent** owns all risky capabilities: code generation, git mutation, shell execution
 - Each agent is self-contained with its own Dockerfile, requirements.txt, and state
 - Communication between agents uses the A2A protocol (JSON-RPC over HTTP)
 - CI pipeline matrix-builds each agent's Dockerfile independently
-

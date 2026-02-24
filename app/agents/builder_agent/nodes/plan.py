@@ -726,7 +726,7 @@ async def _ensure_spec_doc(
     BL-007: Now supports project_directory from build_settings for consistent spec file location.
     BL-BUG-002: Now includes lessons_learned from LEARN phase.
 
-    Supports agents (app/agents/), MCP tools (app/mcp/), and Progenitor core (app/progenitor/)
+    Supports agents (app/agents/), MCP tools (app/mcp/), and Progenitor (app/progenitor/)
     based on item_type.
 
     Persists updates back to build_state.json and saves spec file.
@@ -817,7 +817,7 @@ async def _generate_copilot_prompt(
         base_dir = "app/mcp"
         main_file = "server.py"
     elif item_type == WorkItemType.BUILD_PROGENITOR:
-        entity_type = "Progenitor core"
+        entity_type = "Progenitor"
         base_dir = "app/progenitor"
         main_file = "__init__.py"
     else:
