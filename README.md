@@ -165,8 +165,8 @@ User: Send an email to John about the meeting
 User: Remind me every day at 9am to check my tasks
 → Schedule creation
 
-User: new conversation
-→ Start a new conversation (clears older context)
+User: reset the conversation
+→ Progenitor invokes the new_conversation system tool (clears older context)
 
 User: Build a weather MCP tool
 → A2A call to Builder Agent → OBSERVE→THINK→PLAN→BUILD→VERIFY→LEARN loop
