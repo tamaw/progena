@@ -319,37 +319,70 @@ jobs:
           AGENT_NAME: ${{ matrix.agent }}
 
       - name: Register agent with LiteLLM
-        continue-on-error: true
         env:
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: |
+          set -euo pipefail
           AGENT_HOST="progenitor-agent-${{ matrix.agent }}"
           PORT=8080
           if [ "${{ matrix.agent }}" = "builder_agent" ]; then PORT=8107; fi
           AGENT_URL="http://${AGENT_HOST}:${PORT}/v1"
+          MODEL_NAME="agent/${{ matrix.agent }}"
+          MODEL_ID="agent-${{ matrix.agent }}"
+          PROXY_MODEL="openai/${{ matrix.agent }}"
+          MODEL_DESCRIPTION="Self-contained agent: ${{ matrix.agent }}"
           REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://litellm:4000}"
           if echo "$REGISTER_BASE_URL" | grep -Eq "://(localhost|127\\.0\\.0\\.1)"; then
             REGISTER_BASE_URL="http://litellm:4000"
           fi
-          docker run --rm --network langfuse_network curlimages/curl:8.6.0 \
-            -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
-            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"model_name\": \"agent/${{ matrix.agent }}\",
-              \"litellm_params\": {
-                \"model\": \"openai/${{ matrix.agent }}\",
-                \"api_base\": \"${AGENT_URL}\",
-                \"api_key\": \"${LITELLM_MASTER_KEY}\"
+          PAYLOAD=$(python - <<'PY'
+          import json
+          import os
+          print(json.dumps({
+              "model_name": os.environ["MODEL_NAME"],
+              "litellm_params": {
+                  "model": os.environ["PROXY_MODEL"],
+                  "api_base": os.environ["AGENT_URL"],
+                  "api_key": os.environ["LITELLM_MASTER_KEY"],
               },
-              \"model_info\": {
-                \"description\": \"Self-contained agent: ${{ matrix.agent }}\",
-                \"id\": \"agent-${{ matrix.agent }}\"
-              }
-            }"
-          echo ""
-          echo "Registered agent/${{ matrix.agent }} with LiteLLM at ${AGENT_URL}"
+              "model_info": {
+                  "description": os.environ["MODEL_DESCRIPTION"],
+                  "id": os.environ["MODEL_ID"],
+              },
+          }))
+          PY
+          )
+
+          call_litellm() {
+            local endpoint="$1"
+            local response
+            response=$(docker run --rm --network langfuse_network curlimages/curl:8.6.0 \
+              -sS -X POST "${REGISTER_BASE_URL}${endpoint}" \
+              -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "${PAYLOAD}" \
+              -w '\n%{http_code}')
+            HTTP_CODE=$(echo "${response}" | tail -n1)
+            HTTP_BODY=$(echo "${response}" | sed '$d')
+          }
+
+          call_litellm "/model/new"
+          if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+            echo "Registered ${MODEL_NAME} with LiteLLM at ${AGENT_URL}"
+            exit 0
+          fi
+          echo "LiteLLM /model/new failed (${HTTP_CODE}) for ${MODEL_NAME}"
+          echo "${HTTP_BODY}"
+
+          call_litellm "/model/update"
+          if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+            echo "Updated existing ${MODEL_NAME} with LiteLLM at ${AGENT_URL}"
+            exit 0
+          fi
+          echo "LiteLLM /model/update failed (${HTTP_CODE}) for ${MODEL_NAME}"
+          echo "${HTTP_BODY}"
+          exit 1
 
   # ------------------------------------------------------------------ build + push mcps
   build-mcp:
