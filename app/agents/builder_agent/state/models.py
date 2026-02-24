@@ -31,7 +31,7 @@ class WorkItemType(StrEnum):
     """Type of work item."""
     BUILD_AGENT = "build_agent"
     BUILD_MCP = "build_mcp"  # Build FastMCP tool in app/mcp/
-    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor core in app/progenitor/
+    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor in app/progenitor/
     UPGRADE = "upgrade"
     A2A_CALL = "a2a_call"
     MCP_CALL = "mcp_call"
@@ -45,7 +45,7 @@ class DecisionAction(StrEnum):
     ANSWER_DIRECTLY = "answer_directly"
     BUILD_AGENT = "build_agent"
     BUILD_MCP = "build_mcp"  # Build FastMCP tool in app/mcp/
-    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor core in app/progenitor/
+    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor in app/progenitor/
 
 
 class BuildPhase(StrEnum):

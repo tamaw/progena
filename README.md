@@ -194,7 +194,7 @@ pytest tests/ -v
 # Builder agent tests
 pytest tests/agents/builder_agent/ -v
 
-# Progenitor core tests
+# Progenitor tests
 pytest tests/progenitor/ -v
 ```
 
@@ -225,4 +225,3 @@ Or ask Progenitor to build it for you — it will delegate to the Builder Agent 
 ## License
 
 MIT
-

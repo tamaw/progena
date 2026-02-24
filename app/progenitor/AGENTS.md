@@ -1,4 +1,4 @@
-# Progenitor Core - GitHub Copilot Agent
+# Progenitor - GitHub Copilot Agent
 
 ## LangGraph Agent Loop
 

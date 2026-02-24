@@ -443,8 +443,8 @@ AGENT_CARD = AgentCard(
         ),
         AgentSkill(
             id="build_progenitor",
-            name="Improve Progenitor Core",
-            description="Apply changes to the progenitor core agent (app/progenitor/).",
+            name="Improve Progenitor",
+            description="Apply changes to the Progenitor agent (app/progenitor/).",
             tags=["build", "progenitor", "self-improve"],
             examples=["Add a new node to the progenitor chat loop"],
         ),
@@ -497,5 +497,4 @@ async def _startup() -> None:
     logger.info("Builder Agent starting on port %d", port)
     await _ensure_initialized()
     logger.info("Builder Agent ready — listening on port %d", port)
-
 
