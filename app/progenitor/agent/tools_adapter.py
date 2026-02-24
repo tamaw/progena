@@ -7,12 +7,15 @@ It only exposes:
 """
 
 import contextlib
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from langchain_core.tools import StructuredTool
 
 from ..runtime.time_utils import utcnow_isoformat
 from ..tools.mcp import A2AClient
+
+EventPusher = Callable[[str, str, dict[str, Any] | None], Awaitable[None]]
 
 
 def create_deepagent_tools(
@@ -22,6 +25,23 @@ def create_deepagent_tools(
 ) -> list:
     """Create the minimal tool set for progenitor-core."""
     a2a_client = A2AClient()
+
+    async def say_to_user(message: str) -> dict[str, Any]:
+        """Send a one-way user notification via IPC (forwarded to Telegram when no web clients)."""
+        msg = (message or "").strip()
+        if not msg:
+            return {"success": False, "error": "message is required"}
+
+        push = getattr(llm_client, "_push_event", None)
+        if not callable(push):
+            return {"success": False, "error": "IPC event pusher unavailable"}
+
+        await cast(EventPusher, push)(
+            "agent_message",
+            msg,
+            {"tool": "say_to_user", "timestamp": utcnow_isoformat()},
+        )
+        return {"success": True}
 
     async def list_agents(refresh: bool = False) -> dict[str, Any]:
         """List known A2A agents from registry.json."""
@@ -59,6 +79,11 @@ def create_deepagent_tools(
         )
 
     return [
+        StructuredTool.from_function(
+            coroutine=say_to_user,
+            name="say_to_user",
+            description="Send a one-way message to the user via IPC (agent_message event).",
+        ),
         StructuredTool.from_function(
             coroutine=list_agents,
             name="list_agents",
