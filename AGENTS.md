@@ -58,6 +58,11 @@ progenitor/
 - Backend runs on `:8000`, Frontend on `:5173`
 - State persists in JSON files: `current_state.json`, `build_state.json`, `schedule.json`
 
+### Repo Safety Policy (Copilot)
+- **Do not merge PRs**. Create PRs and wait for human approval/merge.
+- **Do not trigger deployments** unless explicitly instructed by the human (workflow_dispatch is allowed only on request).
+- If a workflow run is accidentally started that could deploy, **cancel it immediately** and notify the human.
+
 ### References
 - Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
 - Loop Specification: `docs/loop.spec.md`
