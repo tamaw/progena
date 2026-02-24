@@ -1,4 +1,4 @@
-"""Tests for progenitor-core DeepAgent tool adapters (core-only)."""
+"""Tests for Progenitor DeepAgent tool adapters."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,7 +14,10 @@ def _tool_by_name(tools, name: str):
 def test_core_only_tools_present() -> None:
     tools = create_deepagent_tools()
     names = {t.name for t in tools}
-    assert names == {"say_to_user", "list_agents", "call_agent"}
+    assert {"say_to_user", "list_agents", "call_agent", "mcp_call", "mcp_refresh"}.issubset(names)
+    # System tools are dynamically discovered from app/progenitor/tools/.
+    assert {"current_time", "list_tools"}.issubset(names)
+    assert len(names) == len(tools)
 
 
 @pytest.mark.asyncio

@@ -3,8 +3,10 @@ List Tools - Lists all available tools including system tools, agents, and MCP t
 """
 
 import logging
-from typing import Any
+from contextlib import suppress
+from typing import Any, cast
 
+from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -42,12 +44,60 @@ class ListToolsTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..nodes.node_helpers.registry import get_all_system_tools
 
+        # Best-effort refresh: registry.json, agent cards, and LiteLLM MCP tools can all
+        # change during process uptime.
+        if hasattr(context.tool_registry, "load"):
+            with suppress(Exception):
+                await context.tool_registry.load()
+        if hasattr(context.tool_registry, "refresh_agent_cards"):
+            with suppress(Exception):
+                from .mcp import A2AClient
+
+                await context.tool_registry.refresh_agent_cards(A2AClient())
+
+        llm_client = getattr(context, "llm_client", None)
+        mcp_config = getattr(llm_client, "mcp_config", None) if llm_client is not None else None
+        if llm_client is not None and isinstance(mcp_config, MCPConfig) and mcp_config.enabled:
+            with suppress(Exception):
+                from .mcp import setup_mcp_for_llm_client
+
+                await setup_mcp_for_llm_client(llm_client, cast(MCPConfig, mcp_config))
+
+            if hasattr(context.tool_registry, "register_tool") and hasattr(llm_client, "get_mcp_tool_registry_entries"):
+                with suppress(Exception):
+                    for entry in llm_client.get_mcp_tool_registry_entries() or []:
+                        await context.tool_registry.register_tool(entry)
+
         system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]
 
         # Include IPC user-communication system tools that aren't implemented as BaseSystemTool.
         from .user_communication import USER_COMMUNICATION_TOOLS
 
         system_tools = system_tools + list(USER_COMMUNICATION_TOOLS)
+
+        # DeepAgent-only helpers (not necessarily present as BaseSystemTool instances).
+        deepagent_tools: list[dict[str, Any]] = [
+            {
+                "name": "call_agent",
+                "description": "Delegate a request to an A2A agent by name or capability",
+                "type": "deepagent_tool",
+            },
+            {
+                "name": "mcp_call",
+                "description": "Call an MCP tool by name via LiteLLM MCP (tools/call)",
+                "type": "deepagent_tool",
+            },
+            {
+                "name": "mcp_refresh",
+                "description": "Refresh MCP tool list from LiteLLM and optionally persist to registry.json",
+                "type": "deepagent_tool",
+            },
+            {
+                "name": "say_to_user",
+                "description": "Send a one-way message to the user via IPC (agent_message event)",
+                "type": "deepagent_tool",
+            },
+        ]
 
         # Get registered A2A agents from registry
         agents: list[dict[str, Any]] = []
@@ -109,11 +159,13 @@ class ListToolsTool(BaseSystemTool):
         ]
 
         return ToolResult.ok({
+            "deepagent_tools": deepagent_tools,
             "system_tools": system_tools,
             "agents": agent_entries,
             "mcp_tools": mcp_tool_entries,
-            "total_count": len(system_tools) + len(agent_entries) + len(mcp_tool_entries),
+            "total_count": len(deepagent_tools) + len(system_tools) + len(agent_entries) + len(mcp_tool_entries),
             "summary": {
+                "deepagent_tools": len(deepagent_tools),
                 "system_tools": len(system_tools),
                 "agents": len(agent_entries),
                 "mcp_tools": len(mcp_tool_entries),
