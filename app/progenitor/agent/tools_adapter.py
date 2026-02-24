@@ -38,14 +38,14 @@ def create_deepagent_tools(
         tools.append(tool)
 
     def _wrap_system_tool(system_tool: Any) -> StructuredTool:
-        async def _run(request: str = "", args: dict[str, Any] | None = None) -> dict[str, Any]:
+        async def _run(request: str = "", tool_args: dict[str, Any] | None = None) -> dict[str, Any]:
             ctx = ToolContext(
                 tool_registry=tool_registry,
                 llm_client=llm_client,
                 state=None,
                 state_manager=state_manager,
                 user_input=request or "",
-                tool_args=args,
+                tool_args=tool_args,
             )
 
             result = await system_tool.execute(ctx)
