@@ -1010,15 +1010,12 @@ async def _seed_spec_doc_from_template(
     if item_type == WorkItemType.BUILD_MCP:
         template_name = "builder_agent/tool_structure.md"
         entity_type = "tool"
-        output_dir = "app/mcp"
     elif item_type == WorkItemType.BUILD_PROGENITOR:
         template_name = "builder_agent/progenitor_structure.md"
         entity_type = "progenitor"
-        output_dir = "app/progenitor"
     else:
         template_name = "builder_agent/agent_structure.md"
         entity_type = "agent"
-        output_dir = "app/agents"
 
     # Resolve template from the prompts directory (fail fast if missing)
     template_path = Path(__file__).parent.parent.parent.parent / "prompts" / template_name
