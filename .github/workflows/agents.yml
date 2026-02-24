@@ -336,22 +336,20 @@ jobs:
           if echo "$REGISTER_BASE_URL" | grep -Eq "://(localhost|127\\.0\\.0\\.1)"; then
             REGISTER_BASE_URL="http://litellm:4000"
           fi
-          PAYLOAD=$(python - <<'PY'
-          import json
-          import os
-          print(json.dumps({
-              "model_name": os.environ["MODEL_NAME"],
-              "litellm_params": {
-                  "model": os.environ["PROXY_MODEL"],
-                  "api_base": os.environ["AGENT_URL"],
-                  "api_key": os.environ["LITELLM_MASTER_KEY"],
-              },
-              "model_info": {
-                  "description": os.environ["MODEL_DESCRIPTION"],
-                  "id": os.environ["MODEL_ID"],
-              },
-          }))
-          PY
+          PAYLOAD=$(cat <<EOF
+          {
+            "model_name": "${MODEL_NAME}",
+            "litellm_params": {
+              "model": "${PROXY_MODEL}",
+              "api_base": "${AGENT_URL}",
+              "api_key": "${LITELLM_MASTER_KEY}"
+            },
+            "model_info": {
+              "description": "${MODEL_DESCRIPTION}",
+              "id": "${MODEL_ID}"
+            }
+          }
+          EOF
           )
 
           call_litellm() {
