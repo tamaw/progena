@@ -327,6 +327,15 @@ jobs:
           chmod +x .github/scripts/register_litellm_model.sh
           ./.github/scripts/register_litellm_model.sh
 
+      - name: Validate agent card from LiteLLM
+        env:
+          AGENT_NAME: ${{ matrix.agent }}
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+        run: |
+          chmod +x .github/scripts/register_litellm_model.sh
+          ./.github/scripts/register_litellm_model.sh --validate-only
+
   # ------------------------------------------------------------------ build + push mcps
   build-mcp:
     needs: detect-changes

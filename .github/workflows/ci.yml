@@ -12,7 +12,6 @@ on:
       - 'app/agents/**'
       - 'app/mcp/**'
       - '.github/workflows/agents.yml'
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
