@@ -2,11 +2,6 @@ name: ci
 
 on:
   workflow_dispatch:
-    inputs:
-      deploy:
-        description: "Deploy progenitor stack on self-hosted runner"
-        type: boolean
-        default: true
   push:
     paths-ignore:
       - 'app/agents/**'
@@ -199,61 +194,6 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull
           docker compose -f docker/docker-compose.progenitor.yml up -d
-          docker compose -f docker/docker-compose.progenitor.yml ps
-
-      - name: Liveness checks
-        run: |
-          wait_healthy() {
-            local name="$1"
-            local attempts="${2:-60}"
-            local i status
-            for i in $(seq 1 "$attempts"); do
-              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name" 2>/dev/null || true)"
-              if [ "$status" = "healthy" ]; then
-                echo "$name is healthy"
-                return 0
-              fi
-              sleep 2
-            done
-            echo "Timed out waiting for $name to become healthy (status=$status)"
-            docker ps -a || true
-            docker logs "$name" --tail 200 || true
-            return 1
-          }
-
-          wait_healthy progenitor-backend 90
-          wait_healthy progenitor 120
-
-  deploy-dispatch:
-    # Manual deploy for non-main refs (e.g. PR branches) to validate fixes end-to-end.
-    runs-on: [self-hosted, Linux, X64]
-    environment: cronix
-    needs: [backend, progenitor, frontend]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Ensure external network
-        run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
-
-      - name: Deploy progenitor stack (build from ref)
-        env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
-          PROGENITOR_MODEL_DEFAULT: ${{ secrets.PROGENITOR_MODEL_DEFAULT }}
-          PROGENITOR_TIMEZONE: ${{ secrets.PROGENITOR_TIMEZONE }}
-          GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
-          TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
-          TELEGRAM_POLLING_ENABLED: ${{ vars.TELEGRAM_POLLING_ENABLED }}
-          TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          docker compose -f docker/docker-compose.progenitor.yml up -d --build
           docker compose -f docker/docker-compose.progenitor.yml ps
 
       - name: Liveness checks
