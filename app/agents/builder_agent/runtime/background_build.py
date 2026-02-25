@@ -13,7 +13,9 @@ The runner:
 """
 
 import asyncio
+import contextlib
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -375,7 +377,11 @@ class BackgroundBuildRunner:
         No backlog is used - the inner loop runs directly.
         """
         started_at = utcnow()
-        repo_path = Path(__file__).resolve().parents[3]
+        # Prefer the workspace repo root in Docker (PROGENITOR_PROJECT_ROOT=/app/workspace).
+        # Falling back to the module path breaks git operations because the agent code
+        # directory is not a git repo inside the container.
+        repo_root_env = os.getenv("PROGENITOR_PROJECT_ROOT")
+        repo_path = Path(repo_root_env) if repo_root_env else self.worktrees_dir.parent
         integration_branch = f"progenitor/integration/{build_id}"
         base_branch = "main"
         current_build = self._current_build  # Capture for type narrowing
@@ -505,9 +511,11 @@ class BackgroundBuildRunner:
             result.agent_name = build_state.get("agent_name") or build_state.get("build_settings", {}).get("project_name")
 
             # Extract success criteria results
-            verification_report = build_state.get("verification", {}).get("current_report", {})
+            verification_report: Any = build_state.get("verification", {}).get("current_report") or {}
             if hasattr(verification_report, "model_dump"):
                 verification_report = verification_report.model_dump()
+            if not isinstance(verification_report, dict):
+                verification_report = {}
 
             result.success_criteria_met = verification_report.get("passed_criteria", [])
             result.success_criteria_unmet = verification_report.get("gaps", [])
@@ -593,11 +601,8 @@ class BackgroundBuildRunner:
                 self._current_task = None
 
             # Best-effort: return repo to main to reduce surprises for subsequent operations.
-            try:
-                repo_path = Path(__file__).resolve().parents[3]
+            with contextlib.suppress(Exception):
                 await _run_git(["checkout", "main"], cwd=repo_path, timeout_seconds=30.0)
-            except Exception:
-                pass
 
             # Only update last_build_result in finally - don't overwrite build_phase/build_settings
             # The CancelledError/Exception handlers already set those appropriately

@@ -485,8 +485,22 @@ class ToolRegistry:
                 agent["version"] = card["version"]
                 changed = True
 
-            if isinstance(card.get("capabilities"), list) and card["capabilities"] and card["capabilities"] != agent.get("capabilities"):
-                agent["capabilities"] = card["capabilities"]
+            card_capabilities = card.get("capabilities")
+            normalized_capabilities: list[str] | None = None
+            if isinstance(card_capabilities, list):
+                normalized_capabilities = [str(c) for c in card_capabilities if isinstance(c, str) and c]
+            elif isinstance(card.get("skills"), list):
+                normalized_capabilities = []
+                for skill in card.get("skills", []):
+                    if isinstance(skill, dict):
+                        skill_id = str(skill.get("id") or "").strip()
+                        skill_name = str(skill.get("name") or "").strip()
+                        if skill_id:
+                            normalized_capabilities.append(skill_id)
+                        elif skill_name:
+                            normalized_capabilities.append(skill_name)
+            if normalized_capabilities and normalized_capabilities != agent.get("capabilities"):
+                agent["capabilities"] = normalized_capabilities
                 changed = True
 
             # Keep a copy for debugging/UI without depending on it elsewhere.

@@ -1018,7 +1018,7 @@ async def _seed_spec_doc_from_template(
         entity_type = "agent"
 
     # Resolve template from the prompts directory (fail fast if missing)
-    template_path = Path(__file__).parent.parent.parent.parent / "prompts" / template_name
+    template_path = _prompts.prompts_dir / template_name
     if not template_path.exists():
         raise FileNotFoundError(
             f"Spec template not found: {template_path}. "

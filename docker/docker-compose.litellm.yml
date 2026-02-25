@@ -14,7 +14,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     networks:
-      - langfuse_network
+      - progenitor_network
 
   litellm-db:
     container_name: litellm-db
@@ -32,7 +32,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - langfuse_network
+      - progenitor_network
 
   litellm:
     container_name: litellm
@@ -65,7 +65,7 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - langfuse_network
+      - progenitor_network
 
 volumes:
   litellm_postgres_data:
@@ -76,5 +76,5 @@ volumes:
     driver: local
 
 networks:
-  langfuse_network:
+  progenitor_network:
     external: true

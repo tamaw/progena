@@ -828,7 +828,7 @@ class LLMClient:
         if self.config.model_fallbacks:
             payload["fallbacks"] = self.config.model_fallbacks
         if response_format:
-            payload["response_format"] = response_format
+            payload["text"] = {"format": response_format}
         if merged_tools:
             payload["tools"] = merged_tools
             # When requesting strict structured output, prevent tool calling while
@@ -1047,7 +1047,6 @@ class LLMClient:
             response_format=response_format,
             tools=tools,
         )
-
         raw_data = json.loads(response)
         return response_model.model_validate(raw_data)
 
@@ -1094,9 +1093,12 @@ class LLMClient:
         """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
         messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
-        response_format = _build_json_schema_format(DecisionResponse, "decision_response")
-
-        response = await self.chat(messages, system_prompt, temperature=0.3, response_format=response_format)
+        schema_hint = json.dumps(DecisionResponse.model_json_schema(), separators=(",", ":"), ensure_ascii=True)
+        instruction = (
+            "Return ONLY valid JSON (no markdown, no extra text) that matches this JSON Schema: "
+            f"{schema_hint}"
+        )
+        response = await self.chat(messages, f"{system_prompt}\n\n{instruction}", temperature=0.3)
         if not response.strip():
             logger.warning("Empty decide response; returning default decision")
             validated = validate_decision_response({})

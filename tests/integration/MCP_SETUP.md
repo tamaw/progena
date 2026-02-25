@@ -26,7 +26,7 @@ The MCP endpoint requires authentication but has no keys configured.
 
 ## Configuration
 
-`litellm-config.yaml` has MCP configured:
+`docker/litellm/litellm-config.yaml` has MCP configured:
 
 ```yaml
 mcp_servers:
