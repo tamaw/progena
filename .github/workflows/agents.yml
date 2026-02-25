@@ -239,6 +239,15 @@ jobs:
           test -n "${PROMPTS_SRC}" || { echo "Could not resolve progenitor /app/prompts mount source"; exit 1; }
           test -n "${WORKTREES_SRC}" || { echo "Could not resolve progenitor /app/worktrees mount source"; exit 1; }
 
+          AGENT_IMAGE="ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
+          AGENT_UID=$(docker run --rm --entrypoint sh "${AGENT_IMAGE}" -c 'id -u runner 2>/dev/null || id -u')
+          AGENT_GID=$(docker run --rm --entrypoint sh "${AGENT_IMAGE}" -c 'id -g runner 2>/dev/null || id -g')
+          docker run --rm \
+            -v "${DATA_SRC}:/mnt/data" \
+            -v "${LOGS_SRC}:/mnt/logs" \
+            -v "${WORKTREES_SRC}:/mnt/workspace" \
+            alpine:3.20 sh -c "chown -R ${AGENT_UID}:${AGENT_GID} /mnt/data /mnt/logs /mnt/workspace"
+
           EXTRA_VOLUMES="-v ${DATA_SRC}:/app/data -v ${LOGS_SRC}:/app/logs -v ${PROMPTS_SRC}:/app/prompts:ro -v ${WORKTREES_SRC}:/app/workspace"
           if [ -n "${GH_TOKEN}" ]; then
             EXTRA_ENV="-e GH_TOKEN=${GH_TOKEN} -e PROGENITOR_REPO_URL=https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git"
@@ -247,7 +256,6 @@ jobs:
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
             --restart unless-stopped \
-            --user 0:0 \
             --network progenitor_network \
             -p ${PORT}:${PORT} \
             ${EXTRA_VOLUMES} \
@@ -255,7 +263,7 @@ jobs:
             -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
             -e TEST_MODE=false \
             ${EXTRA_ENV} \
-            ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest
+            "${AGENT_IMAGE}"
 
       - name: Wait for agent to become healthy
         run: |
