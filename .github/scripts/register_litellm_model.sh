@@ -92,15 +92,22 @@ AGENT_ID=$(extract_agent_id "${HTTP_BODY}")
 
 validate_agent_card() {
   local id="$1"
+  local card_base
+  local card_url
   if [ -z "$id" ]; then
     echo "No agent_id available for validation"
     return 1
   fi
-  call_litellm "GET" "${A2A_BASE_URL}/a2a/${id}/.well-known/agent.json"
+  card_base="${REGISTER_BASE_URL%/v1}"
+  card_url="${card_base}/a2a/${id}/.well-known/agent.json"
+  call_litellm "GET" "${card_url}"
   if ! is_success; then
-    echo "LiteLLM agent card fetch failed for ${AGENT_NAME} (${id}) (${HTTP_CODE})"
-    echo "${HTTP_BODY}"
-    return 1
+    call_litellm "GET" "${card_base}/a2a/${id}/.well-known/agent-card.json"
+    if ! is_success; then
+      echo "LiteLLM agent card fetch failed for ${AGENT_NAME} (${id}) (${HTTP_CODE})"
+      echo "${HTTP_BODY}"
+      return 1
+    fi
   fi
   if ! echo "${HTTP_BODY}" | jq -e '.name and .description and .skills and .defaultInputModes and .defaultOutputModes' >/dev/null 2>&1; then
     echo "LiteLLM agent card validation failed for ${AGENT_NAME} (${id})"
