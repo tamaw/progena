@@ -283,14 +283,6 @@ jobs:
           docker logs progenitor-agent-${{ matrix.agent }} --tail 50
           exit 1
 
-      - name: Update Progenitor agent registry entry
-        run: |
-          docker cp .github/scripts/update_progenitor_agent_registry.py progenitor:/tmp/update_progenitor_agent_registry.py
-          docker exec -e AGENT_NAME="${AGENT_NAME}" -e AGENT_PORT="${AGENT_PORT}" progenitor python /tmp/update_progenitor_agent_registry.py
-        env:
-          AGENT_NAME: ${{ matrix.agent }}
-          AGENT_PORT: ${{ steps.runtime.outputs.port }}
-
       - name: Register agent with LiteLLM
         env:
           AGENT_NAME: ${{ matrix.agent }}
