@@ -50,7 +50,11 @@ jobs:
   # ------------------------------------------------------------------ test
   test-agent:
     needs: discover-agents
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
+    container:
+      image: python:3.12-slim
+      volumes:
+        - /var/cache/gh-pip:/root/.cache/pip
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +66,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.lock.txt
+          cache-dependency-path: |
+            requirements.lock.txt
+            requirements.txt
+            pyproject.toml
+            app/agents/${{ matrix.agent }}/requirements.txt
 
       - name: Install Python deps
         run: |
@@ -100,7 +108,11 @@ jobs:
   # ------------------------------------------------------------------ detect changes (main/dispatch only)
   detect-changes:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
+    container:
+      image: python:3.12-slim
+      volumes:
+        - /var/cache/gh-pip:/root/.cache/pip
     outputs:
       agents: ${{ steps.diff.outputs.agents }}
       mcps: ${{ steps.diff.outputs.mcps }}
@@ -112,6 +124,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock.txt
+            requirements.txt
+            pyproject.toml
 
       - name: Detect changed agents and MCP servers
         id: diff
