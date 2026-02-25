@@ -144,8 +144,6 @@ def main() -> int:
         return fail("LITELLM_MASTER_KEY is required")
 
     port = os.environ.get("AGENT_PORT", "8080")
-    if agent_name == "builder_agent":
-        port = "8107"
     agent_host = os.environ.get("AGENT_HOST", f"progenitor-agent-{agent_name}")
     agent_card_url = f"http://{agent_host}:{port}/.well-known/agent.json"
 
