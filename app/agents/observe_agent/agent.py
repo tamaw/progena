@@ -540,15 +540,19 @@ async def handle(req: Request) -> JSONResponse:
 
     # A2A JSON-RPC: support message/send so Progenitor can call us without fallbacks.
     if isinstance(body, dict) and body.get("jsonrpc") == "2.0" and body.get("method") == "message/send":
-        params = body.get("params") if isinstance(body.get("params"), dict) else {}
-        msg = params.get("message") if isinstance(params.get("message"), dict) else {}
-        parts = msg.get("parts") if isinstance(msg.get("parts"), list) else []
+        params_raw = body.get("params")
+        params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+        message_raw = params.get("message")
+        msg: dict[str, Any] = message_raw if isinstance(message_raw, dict) else {}
+        parts_raw = msg.get("parts")
+        parts: list[Any] = parts_raw if isinstance(parts_raw, list) else []
         req_str = ""
         for part in parts:
             if isinstance(part, dict) and part.get("kind") == "text" and isinstance(part.get("text"), str):
                 req_str += part["text"]
         req_str = req_str.strip()
-        ctx = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
+        metadata_raw = params.get("metadata")
+        ctx: dict[str, Any] = metadata_raw if isinstance(metadata_raw, dict) else {}
 
         print("STATUS:executing:Calling LiteLLM with tool access", flush=True)
         try:
@@ -580,7 +584,8 @@ async def handle(req: Request) -> JSONResponse:
             )
 
     req_str = body.get("request", "") if isinstance(body, dict) else ""
-    ctx = body.get("context", {}) if isinstance(body, dict) else {}
+    context_raw = body.get("context") if isinstance(body, dict) else {}
+    ctx: dict[str, Any] = context_raw if isinstance(context_raw, dict) else {}
 
     print("STATUS:executing:Calling LiteLLM with tool access", flush=True)
     try:
