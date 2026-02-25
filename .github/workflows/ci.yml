@@ -173,30 +173,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify required secrets
-        env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          COPILOT_GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
-          TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
-          test -n "$LITELLM_API_KEY" || (echo "Missing/empty secret: LITELLM_API_KEY" && exit 1)
-          test -n "$COPILOT_GH_TOKEN" || (echo "Missing/empty secret: COPILOT_GH_TOKEN" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL" || (echo "Missing/empty secret: PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_API_KEY" || (echo "Missing/empty secret: PROGENITOR_AZURE_STRUCTURED_API_KEY" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_MODEL" || (echo "Missing/empty var: PROGENITOR_AZURE_STRUCTURED_MODEL" && exit 1)
-          TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-false}"
-          if [ "$TELEGRAM_ENABLED" = "true" ]; then
-            test -n "$TELEGRAM_BOT_TOKEN" || (echo "Missing/empty secret: TELEGRAM_BOT_TOKEN (required when TELEGRAM_ENABLED=true)" && exit 1)
-            test -n "$TELEGRAM_CHAT_ID" || (echo "Missing/empty secret: TELEGRAM_CHAT_ID (required when TELEGRAM_ENABLED=true)" && exit 1)
-          fi
-
       - name: Write env file
         env:
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
@@ -277,30 +253,6 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Verify required secrets
-        env:
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          COPILOT_GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
-          TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
-          test -n "$LITELLM_API_KEY" || (echo "Missing/empty secret: LITELLM_API_KEY" && exit 1)
-          test -n "$COPILOT_GH_TOKEN" || (echo "Missing/empty secret: COPILOT_GH_TOKEN" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL" || (echo "Missing/empty secret: PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_API_KEY" || (echo "Missing/empty secret: PROGENITOR_AZURE_STRUCTURED_API_KEY" && exit 1)
-          test -n "$PROGENITOR_AZURE_STRUCTURED_MODEL" || (echo "Missing/empty var: PROGENITOR_AZURE_STRUCTURED_MODEL" && exit 1)
-          TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-false}"
-          if [ "$TELEGRAM_ENABLED" = "true" ]; then
-            test -n "$TELEGRAM_BOT_TOKEN" || (echo "Missing/empty secret: TELEGRAM_BOT_TOKEN (required when TELEGRAM_ENABLED=true)" && exit 1)
-            test -n "$TELEGRAM_CHAT_ID" || (echo "Missing/empty secret: TELEGRAM_CHAT_ID (required when TELEGRAM_ENABLED=true)" && exit 1)
-          fi
 
       - name: Write env file
         env:
