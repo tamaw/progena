@@ -22,21 +22,18 @@ jobs:
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
+      options: --user 1001:1001
       volumes:
-        - /var/cache/gh-pip:/root/.cache/pip
+        - /var/cache/gh-pip:/github/home/.cache/pip
+    env:
+      PIP_CACHE_DIR: /github/home/.cache/pip
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.lock.txt
-            pyproject.toml
-
       - name: Install Python deps
         run: |
+          python -m venv .venv
+          . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.lock.txt
           pip install ruff
@@ -44,30 +41,31 @@ jobs:
 
       - name: Lint backend (ruff)
         continue-on-error: true
-        run: ruff check app/backend tests/backend
+        run: |
+          . .venv/bin/activate
+          ruff check app/backend tests/backend
 
       - name: Tests backend (pytest)
-        run: pytest tests/backend
+        run: |
+          . .venv/bin/activate
+          pytest tests/backend
 
   progenitor:
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
+      options: --user 1001:1001
       volumes:
-        - /var/cache/gh-pip:/root/.cache/pip
+        - /var/cache/gh-pip:/github/home/.cache/pip
+    env:
+      PIP_CACHE_DIR: /github/home/.cache/pip
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.lock.txt
-            pyproject.toml
-
       - name: Install Python deps
         run: |
+          python -m venv .venv
+          . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.lock.txt
           pip install ruff pyright
@@ -78,13 +76,18 @@ jobs:
           node-version: "20"
 
       - name: Lint progenitor (ruff)
-        run: ruff check app/progenitor tests/progenitor tests/test_scheduler.py
+        run: |
+          . .venv/bin/activate
+          ruff check app/progenitor tests/progenitor tests/test_scheduler.py
 
       - name: Type-check progenitor (pyright)
-        run: pyright app/progenitor
+        run: |
+          . .venv/bin/activate
+          pyright app/progenitor
 
       - name: Tests progenitor (pytest)
         run: >
+          . .venv/bin/activate &&
           pytest
           tests/progenitor
           tests/test_scheduler.py
