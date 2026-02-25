@@ -28,13 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.lock.txt
-            pyproject.toml
+      - name: Verify runner Python
+        run: python --version && pip --version
 
       - name: Install Python deps
         run: |
@@ -55,13 +50,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.lock.txt
-            pyproject.toml
+      - name: Verify runner Python
+        run: python --version && pip --version
 
       - name: Install Python deps
         run: |

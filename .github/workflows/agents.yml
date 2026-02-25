@@ -58,11 +58,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements.lock.txt
+      - name: Verify runner Python
+        run: python --version && pip --version
 
       - name: Install Python deps
         run: |
@@ -109,9 +106,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Verify runner Python
+        run: python --version && pip --version
 
       - name: Detect changed agents and MCP servers
         id: diff
@@ -176,9 +172,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Verify runner Python
+        run: python --version && pip --version
 
       - name: Validate agent directory exists
         run: |
