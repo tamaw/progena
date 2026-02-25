@@ -108,13 +108,6 @@ jobs:
   detect-changes:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, Linux]
-    container:
-      image: python:3.12-slim
-      options: --user 1001:1001
-      volumes:
-        - /var/cache/gh-pip:/github/home/.cache/pip
-    env:
-      PIP_CACHE_DIR: /github/home/.cache/pip
     outputs:
       agents: ${{ steps.diff.outputs.agents }}
       mcps: ${{ steps.diff.outputs.mcps }}
