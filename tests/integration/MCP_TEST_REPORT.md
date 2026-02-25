@@ -50,7 +50,7 @@ Just tell me how you'd like to proceed.
    - `JINA_API_KEY` is set to empty string in `docker/docker-compose.litellm.yml`
 
 2. **Configuration Issue**
-   - MCP is configured in `litellm-config.yaml`:
+   - MCP is configured in `docker/litellm/litellm-config.yaml`:
      ```yaml
      mcp_servers:
        jina_mcp:

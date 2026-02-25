@@ -5,8 +5,8 @@ on:
   push:
     branches: [main]
     paths:
-      - docker/litellm/**
-      - litellm-config.yaml
+      - docker/litellm/Dockerfile
+      - docker/litellm/litellm-config.yaml
       - docker/docker-compose.litellm.yml
       - .github/workflows/litellm-deploy.yml
 
