@@ -270,8 +270,8 @@ jobs:
         run: |
           PORT=8080
           if [ "${AGENT_NAME}" = "builder_agent" ]; then PORT=8107; fi
-          CODE="import json,os; from datetime import datetime,timezone; from pathlib import Path; name=os.environ['AGENT_NAME']; port=int(os.environ.get('AGENT_PORT','8080')); endpoint=f'http://progenitor-agent-{name}:{port}'; card_url=f'{endpoint}/.well-known/agent.json'; path=Path('/app/data/state/registry.json'); path.parent.mkdir(parents=True, exist_ok=True); data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'agents': [], 'tools': []}; agents=list(data.get('agents') or []); now=datetime.now(timezone.utc).isoformat(); existing=next((a for a in agents if a.get('name')==name), {}); created_at=existing.get('created_at', now); enabled=existing.get('enabled', True); entry={**existing, 'name': name, 'kind': 'a2a_agent', 'enabled': enabled, 'created_at': created_at, 'transport': 'http', 'port': port, 'endpoint': endpoint, 'agent_card_url': card_url, 'status': 'running', 'updated_at': now}; data['agents']=[a for a in agents if a.get('name')!=name]+[entry]; path.write_text(json.dumps(data, indent=2, sort_keys=False), encoding='utf-8'); print(f'Updated registry entry for {name} -> {endpoint}')"
-          docker exec -e AGENT_NAME="${AGENT_NAME}" -e AGENT_PORT="${PORT}" progenitor python -c "$CODE"
+          docker cp .github/scripts/update_progenitor_agent_registry.py progenitor:/tmp/update_progenitor_agent_registry.py
+          docker exec -e AGENT_NAME="${AGENT_NAME}" -e AGENT_PORT="${PORT}" progenitor python /tmp/update_progenitor_agent_registry.py
         env:
           AGENT_NAME: ${{ matrix.agent }}
 
