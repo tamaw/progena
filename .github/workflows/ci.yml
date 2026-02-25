@@ -18,7 +18,23 @@ permissions:
   packages: write
 
 jobs:
+  prepare-workspace:
+    runs-on: self-hosted
+    steps:
+      - name: Ensure workspace is writable
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+            else
+              chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+            fi
+          fi
+
   backend:
+    needs: prepare-workspace
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
@@ -50,6 +66,7 @@ jobs:
           pytest tests/backend
 
   progenitor:
+    needs: prepare-workspace
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
@@ -94,19 +111,12 @@ jobs:
           --ignore=tests/progenitor/test_e2e_dual_loop.py
 
   frontend:
+    needs: prepare-workspace
     runs-on: self-hosted
     defaults:
       run:
         working-directory: app/frontend
     steps:
-      - name: Normalize workspace ownership
-        run: |
-          REPO="${GITHUB_REPOSITORY#*/}"
-          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
-          if [ -d "${WORKDIR}" ]; then
-            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
-          fi
-
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -130,14 +140,6 @@ jobs:
     needs: [backend, progenitor, frontend]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
-      - name: Normalize workspace ownership
-        run: |
-          REPO="${GITHUB_REPOSITORY#*/}"
-          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
-          if [ -d "${WORKDIR}" ]; then
-            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
-          fi
-
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
@@ -191,14 +193,6 @@ jobs:
     needs: [build-and-push]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
-      - name: Normalize workspace ownership
-        run: |
-          REPO="${GITHUB_REPOSITORY#*/}"
-          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
-          if [ -d "${WORKDIR}" ]; then
-            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
-          fi
-
       - uses: actions/checkout@v4
 
       - name: Ensure external network
