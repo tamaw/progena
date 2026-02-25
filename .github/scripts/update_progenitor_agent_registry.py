@@ -16,8 +16,26 @@ def main() -> int:
     endpoint = f"http://progenitor-agent-{agent_name}:{agent_port}"
     card_url = f"{endpoint}/.well-known/agent.json"
 
-    registry_path = Path("/app/data/state/registry.json")
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    state_dir_candidates: list[Path] = []
+    state_dir_env = os.environ.get("PROGENITOR_STATE_DIR")
+    if state_dir_env:
+        state_dir_candidates.append(Path(state_dir_env))
+    state_dir_candidates.extend([Path("/data/state"), Path("/app/data/state")])
+
+    registry_path: Path | None = None
+    for state_dir in state_dir_candidates:
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            registry_path = state_dir / "registry.json"
+            break
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            continue
+
+    if registry_path is None:
+        raise RuntimeError(
+            "Could not resolve writable state dir for registry.json "
+            f"(tried: {', '.join(str(p) for p in state_dir_candidates)})"
+        )
 
     if registry_path.exists():
         data = json.loads(registry_path.read_text(encoding="utf-8"))
