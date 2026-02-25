@@ -22,7 +22,6 @@ jobs:
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
-      options: --user 1001:1001
       volumes:
         - /var/cache/gh-pip:/github/home/.cache/pip
     env:
@@ -54,7 +53,6 @@ jobs:
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
-      options: --user 1001:1001
       volumes:
         - /var/cache/gh-pip:/github/home/.cache/pip
     env:
@@ -101,6 +99,14 @@ jobs:
       run:
         working-directory: app/frontend
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -124,6 +130,14 @@ jobs:
     needs: [backend, progenitor, frontend]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
@@ -177,6 +191,14 @@ jobs:
     needs: [build-and-push]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Ensure external network
