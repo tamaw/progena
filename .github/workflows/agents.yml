@@ -79,7 +79,6 @@ jobs:
           node-version: "20"
 
       - name: Lint (ruff)
-        continue-on-error: ${{ matrix.agent != 'builder_agent' }}
         run: |
           TARGETS="app/agents/${{ matrix.agent }}"
           TEST_DIR="tests/agents/${{ matrix.agent }}"
@@ -87,7 +86,6 @@ jobs:
           ruff check $TARGETS
 
       - name: Type-check (pyright)
-        continue-on-error: ${{ matrix.agent != 'builder_agent' }}
         run: pyright "app/agents/${{ matrix.agent }}"
 
       - name: Tests (pytest)
@@ -186,6 +184,14 @@ jobs:
         run: |
           test -d "app/agents/${{ matrix.agent }}" \
             || { echo "Agent directory app/agents/${{ matrix.agent }} not found"; exit 1; }
+          test -f "app/agents/${{ matrix.agent }}/Dockerfile" \
+            || { echo "Dockerfile app/agents/${{ matrix.agent }}/Dockerfile not found"; exit 1; }
+
+      - name: Resolve agent runtime config
+        id: runtime
+        env:
+          AGENT_NAME: ${{ matrix.agent }}
+        run: python .github/scripts/get_agent_runtime_config.py
 
       - name: Docker login (GHCR)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -205,36 +211,26 @@ jobs:
           PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
           PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
         run: |
-          PORT=8080
-          EXTRA_VOLUMES=""
+          PORT=${{ steps.runtime.outputs.port }}
           EXTRA_ENV=""
+          DATA_SRC=$(docker inspect progenitor --format \
+            '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
+          LOGS_SRC=$(docker inspect progenitor --format \
+            '{{range .Mounts}}{{if eq .Destination "/app/logs"}}{{.Source}}{{end}}{{end}}')
+          PROMPTS_SRC=$(docker inspect progenitor --format \
+            '{{range .Mounts}}{{if eq .Destination "/app/prompts"}}{{.Source}}{{end}}{{end}}')
+          WORKTREES_SRC=$(docker inspect progenitor --format \
+            '{{range .Mounts}}{{if eq .Destination "/app/worktrees"}}{{.Source}}{{end}}{{end}}')
 
-          if [ "${{ matrix.agent }}" = "observe_agent" ]; then
-            DATA_SRC=$(docker inspect progenitor --format \
-              '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
-            LOGS_SRC=$(docker inspect progenitor --format \
-              '{{range .Mounts}}{{if eq .Destination "/app/logs"}}{{.Source}}{{end}}{{end}}')
-            EXTRA_VOLUMES="-v ${DATA_SRC}:/app/data:ro -v ${LOGS_SRC}:/app/logs:ro"
+          test -n "${DATA_SRC}" || { echo "Could not resolve progenitor /app/data mount source"; exit 1; }
+          test -n "${LOGS_SRC}" || { echo "Could not resolve progenitor /app/logs mount source"; exit 1; }
+          test -n "${PROMPTS_SRC}" || { echo "Could not resolve progenitor /app/prompts mount source"; exit 1; }
+          test -n "${WORKTREES_SRC}" || { echo "Could not resolve progenitor /app/worktrees mount source"; exit 1; }
+
+          EXTRA_VOLUMES="-v ${DATA_SRC}:/app/data -v ${LOGS_SRC}:/app/logs -v ${PROMPTS_SRC}:/app/prompts:ro -v ${WORKTREES_SRC}:/app/workspace"
+          if [ -n "${GH_TOKEN}" ]; then
+            EXTRA_ENV="-e GH_TOKEN=${GH_TOKEN} -e PROGENITOR_REPO_URL=https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git"
           fi
-
-           if [ "${{ matrix.agent }}" = "builder_agent" ]; then
-             PORT=8107
-             PROMPTS_SRC=$(docker inspect progenitor --format \
-               '{{range .Mounts}}{{if eq .Destination "/app/prompts"}}{{.Source}}{{end}}{{end}}')
-             docker volume create progenitor-builder-data >/dev/null 2>&1 || true
-             docker volume create progenitor-builder-logs >/dev/null 2>&1 || true
-             docker volume create progenitor-builder-workspace >/dev/null 2>&1 || true
-             # Named volumes are created root-owned; initialize/chown them so the
-             # container's non-root "runner" user can write state/logs/worktrees.
-             docker run --rm --user 0 \
-               -v progenitor-builder-data:/app/data \
-               -v progenitor-builder-logs:/app/logs \
-               -v progenitor-builder-workspace:/app/workspace \
-               ghcr.io/tamaw/progenitor-agent-builder_agent:latest \
-               sh -lc "mkdir -p /app/data/state /app/logs/builder_agent /app/workspace && chown -R runner:agent /app/data /app/logs /app/workspace"
-             EXTRA_VOLUMES="-v progenitor-builder-data:/app/data -v progenitor-builder-logs:/app/logs -v progenitor-builder-workspace:/app/workspace -v ${PROMPTS_SRC}:/app/prompts:ro"
-             EXTRA_ENV="-e GH_TOKEN=${GH_TOKEN} -e PROGENITOR_REPO_URL=https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git"
-           fi
 
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
@@ -250,8 +246,7 @@ jobs:
 
       - name: Wait for agent to become healthy
         run: |
-          PORT=8080
-          if [ "${{ matrix.agent }}" = "builder_agent" ]; then PORT=8107; fi
+          PORT=${{ steps.runtime.outputs.port }}
 
           echo "Waiting for agent ${{ matrix.agent }} on port ${PORT}..."
           for i in $(seq 1 30); do
@@ -268,16 +263,16 @@ jobs:
 
       - name: Update Progenitor agent registry entry
         run: |
-          PORT=8080
-          if [ "${AGENT_NAME}" = "builder_agent" ]; then PORT=8107; fi
           docker cp .github/scripts/update_progenitor_agent_registry.py progenitor:/tmp/update_progenitor_agent_registry.py
-          docker exec -e AGENT_NAME="${AGENT_NAME}" -e AGENT_PORT="${PORT}" progenitor python /tmp/update_progenitor_agent_registry.py
+          docker exec -e AGENT_NAME="${AGENT_NAME}" -e AGENT_PORT="${AGENT_PORT}" progenitor python /tmp/update_progenitor_agent_registry.py
         env:
           AGENT_NAME: ${{ matrix.agent }}
+          AGENT_PORT: ${{ steps.runtime.outputs.port }}
 
       - name: Register agent with LiteLLM
         env:
           AGENT_NAME: ${{ matrix.agent }}
+          AGENT_PORT: ${{ steps.runtime.outputs.port }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: python .github/scripts/register_litellm_agent.py
@@ -285,6 +280,7 @@ jobs:
       - name: Validate agent card from LiteLLM
         env:
           AGENT_NAME: ${{ matrix.agent }}
+          AGENT_PORT: ${{ steps.runtime.outputs.port }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: python .github/scripts/register_litellm_agent.py --validate-only

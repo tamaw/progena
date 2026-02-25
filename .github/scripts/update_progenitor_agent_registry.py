@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -25,7 +25,7 @@ def main() -> int:
         data = {"agents": [], "tools": []}
 
     agents = list(data.get("agents") or [])
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     existing = next((agent for agent in agents if agent.get("name") == agent_name), {})
 
     entry = {
