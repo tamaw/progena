@@ -27,22 +27,22 @@ jobs:
       - name: Capture runner ids and fix stale ownership if needed
         id: ids
         run: |
-          UID="$(id -u)"
-          GID="$(id -g)"
-          echo "uid=${UID}" >> "$GITHUB_OUTPUT"
-          echo "gid=${GID}" >> "$GITHUB_OUTPUT"
+          RUN_UID="$(id -u)"
+          RUN_GID="$(id -g)"
+          echo "uid=${RUN_UID}" >> "$GITHUB_OUTPUT"
+          echo "gid=${RUN_GID}" >> "$GITHUB_OUTPUT"
 
           REPO="${GITHUB_REPOSITORY#*/}"
           WORKDIR="/home/runner/_work/${REPO}/${REPO}"
           if [ -d "${WORKDIR}" ]; then
             MISMATCH=$(find "${WORKDIR}" -mindepth 1 -maxdepth 3 \
-              \( ! -user "${UID}" -o ! -group "${GID}" \) -print -quit 2>/dev/null || true)
+              \( ! -user "${RUN_UID}" -o ! -group "${RUN_GID}" \) -print -quit 2>/dev/null || true)
             if [ -n "${MISMATCH}" ]; then
               echo "Fixing stale workspace ownership at ${WORKDIR}"
               if command -v sudo >/dev/null 2>&1; then
-                sudo chown -R "${UID}:${GID}" "${WORKDIR}" || chown -R "${UID}:${GID}" "${WORKDIR}"
+                sudo chown -R "${RUN_UID}:${RUN_GID}" "${WORKDIR}" || chown -R "${RUN_UID}:${RUN_GID}" "${WORKDIR}"
               else
-                chown -R "${UID}:${GID}" "${WORKDIR}"
+                chown -R "${RUN_UID}:${RUN_GID}" "${WORKDIR}"
               fi
             fi
           fi
