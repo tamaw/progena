@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import shlex
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
@@ -391,43 +392,52 @@ class A2AClient:
         context: dict[str, Any] | None = None,
         timeout: float = 60.0,
     ) -> dict[str, Any]:
-        """Call an agent via HTTP."""
-        import aiohttp
-
+        """Call an A2A agent via JSON-RPC (A2A protocol v0.3.x)."""
         endpoint = agent_config.get("endpoint")
         if not endpoint:
             raise ValueError("No endpoint specified for HTTP agent")
 
-        payload = {
-            "request": request,
-            "context": context or {},
-        }
-
         try:
-            async with aiohttp.ClientSession() as session, session.post(
-                endpoint,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
-                if response.status >= 400:
-                    text = await response.text()
-                    return {
-                        "success": False,
-                        "error": f"HTTP {response.status}: {text[:200]}",
-                    }
-                return cast(dict[str, Any], await response.json())
-        except aiohttp.ClientConnectorError as e:
-            return {
-                "success": False,
-                "error": f"Connection failed: {e}. Agent may not be running.",
-            }
+            async with httpx.AsyncClient(timeout=timeout) as httpx_client:
+                message_id = uuid.uuid4().hex
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": uuid.uuid4().hex,
+                    "method": "message/send",
+                    "params": {
+                        "message": {
+                            "kind": "message",
+                            "message_id": message_id,
+                            "role": "user",
+                            "parts": [{"kind": "text", "text": request or ""}],
+                        },
+                        "metadata": context or {},
+                    },
+                }
+                resp = await httpx_client.post(str(endpoint), json=payload)
         except TimeoutError:
-            return {
-                "success": False,
-                "error": f"Request timeout after {timeout}s",
-            }
+            return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+        if resp.status_code >= 400:
+            return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
+        try:
+            data = resp.json()
+        except Exception:
+            return {"success": False, "error": f"Non-JSON A2A response: {resp.text[:200]}"}
+
+        if isinstance(data, dict) and data.get("error"):
+            err = data.get("error")
+            if isinstance(err, dict):
+                return {"success": False, "error": err.get("message") or str(err)}
+            return {"success": False, "error": str(err)}
+
+        if not isinstance(data, dict) or "result" not in data:
+            return {"success": False, "error": f"Invalid A2A response: {str(data)[:200]}"}
+
+        return {"success": True, "result": data.get("result")}
 
     async def get_agent_card(
         self,

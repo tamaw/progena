@@ -328,67 +328,84 @@ Standard four-node pattern: `prepare → llm_call ⇄ run_tools → finalize`
         return text
 ```
 
-### FastAPI app with lifespan and A2A endpoints
+### FastAPI app MUST support A2A JSON-RPC + LiteLLM proxying
 
-Use `asynccontextmanager` lifespan — **not** the deprecated `@app.on_event`.
+Agents MUST be callable via:
+
+1. A2A protocol (JSON-RPC 2.0 over HTTP) using the official `a2a-sdk` (preferred).
+   - Progenitor calls agents with method `message/send`.
+   - The server must accept JSON-RPC at POST `/` (the default for `A2AFastAPIApplication`).
+2. OpenAI-compatible API for LiteLLM registration/proxying:
+   - POST `/v1/chat/completions`
+
+Minimum pattern (use this, do not invent your own protocol):
 
 ```python
+from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.apps import A2AFastAPIApplication
+from a2a.server.events import EventQueue
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import (
+    AgentCapabilities, AgentCard, AgentSkill,
+    Message, Part, Role, TaskState, TaskStatus, TaskStatusUpdateEvent, TextPart
+)
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
 _agent = MyAgent(_config)
 _start_time = time.time()
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001
-    port = _config.port
-    print(f"STATUS:starting:Initializing {_agent.AGENT_NAME}", flush=True)
-    logger.info("Starting %s on port %d", _agent.AGENT_NAME, port)
-    print(f"STATUS:running:Server started on port {port}", flush=True)
-    print("STATUS:waiting:Idle, waiting for requests", flush=True)
-    yield
-    print(f"STATUS:stopping:Shutting down {_agent.AGENT_NAME}", flush=True)
-    print("STATUS:stopped:Agent terminated", flush=True)
+def _text_message(text: str, *, role: Role = Role.agent) -> Message:
+    return Message(message_id=str(uuid.uuid4()), role=role, parts=[Part(root=TextPart(text=text))])
 
-app = FastAPI(title=_agent.AGENT_NAME, lifespan=_lifespan)
+class MyExecutor(AgentExecutor):
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        request_text = ""
+        if context.message:
+            for part in (context.message.parts or []):
+                root = getattr(part, "root", part)
+                if isinstance(root, TextPart):
+                    request_text += root.text
+        request_text = request_text.strip()
+        text = await _agent.process(request_text, context.metadata or {})
+        await event_queue.enqueue_event(TaskStatusUpdateEvent(
+            task_id=context.task_id or str(uuid.uuid4()),
+            context_id=context.context_id or str(uuid.uuid4()),
+            status=TaskStatus(
+                state=TaskState.completed,
+                message=_text_message(text, role=Role.agent),
+                timestamp=datetime.now(UTC).isoformat(),
+            ),
+            final=True,
+        ))
 
-@app.get("/.well-known/agent.json")
-async def agent_card() -> JSONResponse:
-    return JSONResponse({
-        "name":         _agent.AGENT_NAME,
-        "description":  _agent.DESCRIPTION,
-        "version":      "0.1.0",
-        "protocol":     "a2a",
-        "capabilities": _agent.CAPABILITIES,
-        "endpoint":     f"http://localhost:{_config.port}",
-    })
+AGENT_CARD = AgentCard(
+    name=_agent.AGENT_NAME,
+    description=_agent.DESCRIPTION,
+    version="0.1.0",
+    url=f"http://localhost:{_config.port}",
+    capabilities=AgentCapabilities(streaming=False, state_transition_history=False),
+    default_input_modes=["text/plain"],
+    default_output_modes=["text/plain"],
+    skills=[AgentSkill(id=_agent.AGENT_ID, name=_agent.AGENT_NAME, description=_agent.DESCRIPTION)],
+)
+
+_executor = MyExecutor()
+_task_store = InMemoryTaskStore()
+_handler = DefaultRequestHandler(agent_executor=_executor, task_store=_task_store)
+_a2a_app = A2AFastAPIApplication(agent_card=AGENT_CARD, http_handler=_handler)
+app: FastAPI = _a2a_app.build()
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    return JSONResponse({
-        "status":         "healthy",
-        "name":           _agent.AGENT_NAME,
-        "version":        "0.1.0",
-        "uptime_seconds": time.time() - _start_time,
-        "timestamp":      datetime.now(UTC).isoformat(),
-    })
+    return JSONResponse({"status": "healthy", "uptime_seconds": time.time() - _start_time})
 
-@app.post("/")
-async def handle(req: Request) -> JSONResponse:
-    try:
-        body = await req.json()
-    except Exception:
-        body = {}
-    request_str = body.get("request", "") if isinstance(body, dict) else ""
-    ctx         = body.get("context", {}) if isinstance(body, dict) else {}
-    print("STATUS:executing:Processing request", flush=True)
-    try:
-        text = await _agent.process(request_str, ctx)
-        print("STATUS:waiting:Idle, waiting for requests", flush=True)
-        return JSONResponse({"success": True, "response": text,
-                             "error": None, "metadata": {}})
-    except Exception as exc:
-        logger.exception("Request processing failed")
-        print(f"STATUS:failed:{exc}", flush=True)
-        return JSONResponse({"success": False, "response": None,
-                             "error": str(exc), "metadata": {}}, status_code=500)
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(req: Request) -> JSONResponse:
+    body = await req.json()
+    # Extract last user message and answer via _agent.process(...)
+    ...
 ```
 
 ---
@@ -414,6 +431,7 @@ STATUS:stopped:Agent terminated
 Baseline for any LLM-backed agent:
 
 ```
+a2a-sdk[http-server]>=0.3.24
 fastapi
 uvicorn[standard]
 httpx

@@ -28,7 +28,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # Install GitHub Copilot CLI (provides `gh copilot` / `copilot --acp`)
-RUN curl -fsSL https://gh.io/copilot-install | bash
+RUN curl -fsSL --retry 8 --retry-delay 2 --retry-all-errors https://gh.io/copilot-install | bash
 
 WORKDIR /app
 
@@ -46,7 +46,8 @@ COPY prompts/ /app/prompts/
 # Runtime directories (state and logs are mounted as named volumes).
 # /app/workspace is the git workspace used for worktrees — populated on first
 # boot if PROGENITOR_REPO_URL is set, or bind-mounted with a pre-cloned repo.
-RUN mkdir -p /app/data/state /app/logs /app/workspace
+RUN mkdir -p /app/data/state /app/logs/builder_agent /app/workspace && \
+    chown -R runner:agent /app/data /app/logs /app/workspace
 
 # Named volume mount-points — Docker Compose overrides these with named volumes.
 VOLUME ["/app/data", "/app/workspace", "/app/logs"]

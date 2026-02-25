@@ -62,7 +62,6 @@ app/
 │   │   ├── llm/                 # LLM client + prompts
 │   │   ├── tools/               # Build tools (git, copilot, registry, shell, etc.)
 │   │   └── runtime/             # BackgroundBuildRunner, CopilotACPManager, etc.
-│   ├── hello_world_agent/       # Example A2A agent
 │   └── observe_agent/           # Observation/monitoring A2A agent
 │
 ├── backend/                     # FastAPI OpenAI-compatible API (:8000)
