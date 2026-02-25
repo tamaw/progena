@@ -18,26 +18,24 @@ permissions:
   packages: write
 
 jobs:
-  prepare-workspace:
+  runner-context:
     runs-on: self-hosted
+    outputs:
+      uid: ${{ steps.ids.outputs.uid }}
+      gid: ${{ steps.ids.outputs.gid }}
     steps:
-      - name: Ensure workspace is writable
+      - name: Capture runner uid/gid
+        id: ids
         run: |
-          REPO="${GITHUB_REPOSITORY#*/}"
-          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
-          if [ -d "${WORKDIR}" ]; then
-            if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
-            else
-              chown -R "$(id -u):$(id -g)" "${WORKDIR}"
-            fi
-          fi
+          echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
+          echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
 
   backend:
-    needs: prepare-workspace
+    needs: runner-context
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
+      options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
       volumes:
         - /var/cache/gh-pip:/github/home/.cache/pip
     env:
@@ -66,10 +64,11 @@ jobs:
           pytest tests/backend
 
   progenitor:
-    needs: prepare-workspace
+    needs: runner-context
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
+      options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
       volumes:
         - /var/cache/gh-pip:/github/home/.cache/pip
     env:
@@ -111,7 +110,7 @@ jobs:
           --ignore=tests/progenitor/test_e2e_dual_loop.py
 
   frontend:
-    needs: prepare-workspace
+    needs: runner-context
     runs-on: self-hosted
     defaults:
       run:
