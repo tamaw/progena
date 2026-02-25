@@ -36,6 +36,8 @@ jobs:
       agents: ${{ steps.list.outputs.agents }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Discover agents
         id: list
@@ -64,6 +66,8 @@ jobs:
         agent: ${{ fromJson(needs.discover-agents.outputs.agents) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Install Python deps
         run: |
@@ -114,6 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          clean: false
           fetch-depth: 0
 
       - name: Detect changed agents and MCP servers
@@ -134,6 +139,8 @@ jobs:
         agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: docker/setup-buildx-action@v3
 
@@ -178,6 +185,8 @@ jobs:
         agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: actions/setup-python@v5
         with:
@@ -238,6 +247,7 @@ jobs:
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
             --restart unless-stopped \
+            --user 0:0 \
             --network progenitor_network \
             -p ${PORT}:${PORT} \
             ${EXTRA_VOLUMES} \
@@ -299,6 +309,8 @@ jobs:
         mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: docker/setup-buildx-action@v3
 
@@ -334,6 +346,8 @@ jobs:
         mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Validate MCP directory exists
         run: |
