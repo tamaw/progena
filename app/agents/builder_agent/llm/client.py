@@ -14,7 +14,7 @@ from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ..config import LLMConfig, MCPConfig
 from ..tools.user_communication import EventPusher
@@ -1039,12 +1039,29 @@ class LLMClient:
     ) -> TModel:
         """Return a validated structured model.
 
-        We intentionally do NOT rely on provider-side structured output (e.g.
-        `text.format` / `response_format`) here because LiteLLM /responses support
-        varies by provider and can fail with 400s. Instead we:
-        1) Instruct the model to output strict JSON
-        2) Parse it locally and validate with Pydantic
+        Prefer provider-side structured output via /responses `text.format`.
+        If provider/LiteLLM compatibility issues occur, fall back to strict JSON
+        instructions and local Pydantic validation.
         """
+        response_format = self._get_json_response_format(response_model, schema_name)
+        try:
+            response = await self.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                tools=tools,
+            )
+            raw_data = json.loads(response)
+            return response_model.model_validate(raw_data)
+        except (httpx.HTTPStatusError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+            logger.warning(
+                "Structured /responses path failed for schema=%s; falling back to local JSON validation: %s",
+                schema_name,
+                exc,
+            )
+
         schema = response_model.model_json_schema()
         schema_hint = json.dumps(schema, separators=(",", ":"), ensure_ascii=True)
         instruction = (
