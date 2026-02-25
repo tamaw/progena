@@ -47,7 +47,7 @@ def call_via_docker_curl(
         "run",
         "--rm",
         "--network",
-        "langfuse_network",
+        "progenitor_network",
         "curlimages/curl:8.6.0",
         "-sS",
         "-X",
