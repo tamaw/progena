@@ -78,7 +78,7 @@ jobs:
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
         run: |
           test -n "$LITELLM_MASTER_KEY" || (echo "Missing/empty secret: LITELLM_MASTER_KEY" && exit 1)
-          docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
+          docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
           cat > .litellm.env <<EOF
           LITELLM_DB_PASSWORD=${LITELLM_DB_PASSWORD}
           LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}

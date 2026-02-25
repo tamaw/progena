@@ -210,7 +210,7 @@ jobs:
           if [ -n "${TELEGRAM_CHAT_ID}" ]; then echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .progenitor.env; fi
 
       - name: Ensure external network
-        run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
+        run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
 
       - name: Deploy progenitor stack
         run: |
@@ -291,7 +291,7 @@ jobs:
           if [ -n "${TELEGRAM_CHAT_ID}" ]; then echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .progenitor.env; fi
 
       - name: Ensure external network
-        run: docker network inspect langfuse_network >/dev/null 2>&1 || docker network create langfuse_network
+        run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
 
       - name: Deploy progenitor stack (build from ref)
         run: |
