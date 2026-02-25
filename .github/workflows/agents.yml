@@ -35,6 +35,14 @@ jobs:
     outputs:
       agents: ${{ steps.list.outputs.agents }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
         with:
           clean: false
@@ -55,7 +63,6 @@ jobs:
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
-      options: --user 1001:1001
       volumes:
         - /var/cache/gh-pip:/github/home/.cache/pip
     env:
@@ -116,6 +123,14 @@ jobs:
       agents: ${{ steps.diff.outputs.agents }}
       mcps: ${{ steps.diff.outputs.mcps }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
         with:
           clean: false
@@ -138,6 +153,14 @@ jobs:
       matrix:
         agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
         with:
           clean: false
@@ -184,6 +207,14 @@ jobs:
       matrix:
         agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
         with:
           clean: false
@@ -309,6 +340,14 @@ jobs:
       matrix:
         mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
         with:
           clean: false
@@ -346,6 +385,14 @@ jobs:
       matrix:
         mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
+          if [ -d "${WORKDIR}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${WORKDIR}" 2>/dev/null || chown -R "$(id -u):$(id -g)" "${WORKDIR}"
+          fi
+
       - uses: actions/checkout@v4
         with:
           clean: false
