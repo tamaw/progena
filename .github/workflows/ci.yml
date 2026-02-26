@@ -232,15 +232,21 @@ jobs:
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
           docker rm -f progenitor progenitor-backend 2>/dev/null || true
-          mkdir -p \
-            "${PROGENITOR_HOST_DATA_DIR}" \
-            "${PROGENITOR_HOST_LOGS_DIR}" \
-            "${PROGENITOR_HOST_WORKTREES_DIR}" \
-            "${PROGENITOR_HOST_TMP_DIR}" \
-            "${PROGENITOR_HOST_PROMPTS_DIR}"
           if command -v sudo >/dev/null 2>&1; then
+            sudo mkdir -p \
+              "${PROGENITOR_HOST_DATA_DIR}" \
+              "${PROGENITOR_HOST_LOGS_DIR}" \
+              "${PROGENITOR_HOST_WORKTREES_DIR}" \
+              "${PROGENITOR_HOST_TMP_DIR}" \
+              "${PROGENITOR_HOST_PROMPTS_DIR}"
             sudo chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
           else
+            mkdir -p \
+              "${PROGENITOR_HOST_DATA_DIR}" \
+              "${PROGENITOR_HOST_LOGS_DIR}" \
+              "${PROGENITOR_HOST_WORKTREES_DIR}" \
+              "${PROGENITOR_HOST_TMP_DIR}" \
+              "${PROGENITOR_HOST_PROMPTS_DIR}"
             chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
           fi
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
