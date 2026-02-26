@@ -10,6 +10,13 @@ for target in /app/data /app/logs /app/worktrees; do
 done
 ensure_dir /app/logs/builder_agent
 
-chown -R runner:agent /app/data /app/logs /app/worktrees
+if [ "$(id -u)" -eq 0 ]; then
+  # Best-effort ownership fix for mounted paths when starting as root.
+  if ! chown -R runner:agent /app/data /app/logs /app/worktrees; then
+    echo "WARN: failed to chown runtime directories; continuing with existing ownership" >&2
+  fi
+  exec runuser -u runner -- "$@"
+fi
 
-exec runuser -u runner -- "$@"
+# Container already started as non-root (--user in workflow); run directly.
+exec "$@"
