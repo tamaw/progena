@@ -494,6 +494,7 @@ async def shutdown_event() -> None:
 @app.get("/.well-known/agent.json")
 async def agent_card() -> JSONResponse:
     port = int(os.environ.get("PORT", "8080"))
+    public_host = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
     skills = [
         {
             "id": capability,
@@ -508,7 +509,7 @@ async def agent_card() -> JSONResponse:
         "protocolVersion": "1.0",
         "name": agent.AGENT_NAME,
         "description": agent.DESCRIPTION,
-        "url": f"http://localhost:{port}/",
+        "url": f"http://{public_host}:{port}/",
         "version": "0.1.0",
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
