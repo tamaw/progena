@@ -138,8 +138,8 @@ def create_progenitor_agent(
         if agents_md.is_file():
             memory_paths.append(str(agents_md))
 
-    # Load system prompt from prompts/progenitor_system.md
-    system_prompt = PromptTemplates().get("progenitor/system.md")
+    # Use the canonical genesis prompt so every conversation starts with it.
+    system_prompt = PromptTemplates().get_genesis_prompt().strip()
 
     agent = create_deep_agent(
         name="progenitor",
