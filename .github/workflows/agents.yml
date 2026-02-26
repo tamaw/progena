@@ -231,34 +231,57 @@ jobs:
           PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
         run: |
           PORT=${{ steps.runtime.outputs.port }}
-          EXTRA_ENV=""
+          MOUNTS_CSV="${{ steps.runtime.outputs.mounts_csv }}"
           DATA_SRC=$(docker inspect progenitor --format \
             '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
           LOGS_SRC=$(docker inspect progenitor --format \
             '{{range .Mounts}}{{if eq .Destination "/app/logs"}}{{.Source}}{{end}}{{end}}')
-          PROMPTS_SRC=$(docker inspect progenitor --format \
-            '{{range .Mounts}}{{if eq .Destination "/app/prompts"}}{{.Source}}{{end}}{{end}}')
           WORKTREES_SRC=$(docker inspect progenitor --format \
             '{{range .Mounts}}{{if eq .Destination "/app/worktrees"}}{{.Source}}{{end}}{{end}}')
 
           test -n "${DATA_SRC}" || { echo "Could not resolve progenitor /app/data mount source"; exit 1; }
           test -n "${LOGS_SRC}" || { echo "Could not resolve progenitor /app/logs mount source"; exit 1; }
-          test -n "${PROMPTS_SRC}" || { echo "Could not resolve progenitor /app/prompts mount source"; exit 1; }
           test -n "${WORKTREES_SRC}" || { echo "Could not resolve progenitor /app/worktrees mount source"; exit 1; }
 
-          AGENT_IMAGE="ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
+          EXTRA_VOLUMES=""
+          if [ -n "${MOUNTS_CSV}" ]; then
+            for TARGET in ${MOUNTS_CSV//,/ }; do
+              case "${TARGET}" in
+                /app/data)
+                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${DATA_SRC}:${TARGET}"
+                  ;;
+                /app/data/*)
+                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${DATA_SRC}${TARGET#/app/data}:${TARGET}"
+                  ;;
+                /app/logs)
+                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${LOGS_SRC}:${TARGET}"
+                  ;;
+                /app/logs/*)
+                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${LOGS_SRC}${TARGET#/app/logs}:${TARGET}"
+                  ;;
+                /app/workspace|/app/worktrees)
+                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${WORKTREES_SRC}:${TARGET}"
+                  ;;
+                /app/workspace/*)
+                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${WORKTREES_SRC}${TARGET#/app/workspace}:${TARGET}"
+                  ;;
+                /app/worktrees/*)
+                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${WORKTREES_SRC}${TARGET#/app/worktrees}:${TARGET}"
+                  ;;
+                *)
+                  echo "No progenitor mount mapping for ${TARGET}; using image default volume behavior"
+                  ;;
+              esac
+            done
+          fi
+
+          PROGENITOR_REPO_URL="https://github.com/tamaw/progenitor.git"
+          if [ -n "${GH_TOKEN}" ]; then
+            PROGENITOR_REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git"
+          fi
+
           HOST_UID=$(id -u)
           HOST_GID=$(id -g)
-          docker run --rm --user 0:0 --entrypoint sh \
-            -v "${DATA_SRC}:/mnt/data" \
-            -v "${LOGS_SRC}:/mnt/logs" \
-            -v "${WORKTREES_SRC}:/mnt/workspace" \
-            "${AGENT_IMAGE}" -c "chown -R ${HOST_UID}:${HOST_GID} /mnt/data /mnt/logs /mnt/workspace"
-
-          EXTRA_VOLUMES="-v ${DATA_SRC}:/app/data -v ${LOGS_SRC}:/app/logs -v ${PROMPTS_SRC}:/app/prompts:ro -v ${WORKTREES_SRC}:/app/workspace"
-          if [ -n "${GH_TOKEN}" ]; then
-            EXTRA_ENV="-e GH_TOKEN=${GH_TOKEN} -e PROGENITOR_REPO_URL=https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git"
-          fi
 
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
@@ -269,9 +292,10 @@ jobs:
             ${EXTRA_VOLUMES} \
             -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
             -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+            -e GH_TOKEN="${GH_TOKEN}" \
+            -e PROGENITOR_REPO_URL="${PROGENITOR_REPO_URL}" \
             -e TEST_MODE=false \
-            ${EXTRA_ENV} \
-            "${AGENT_IMAGE}"
+            "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
 
       - name: Wait for agent to become healthy
         run: |
