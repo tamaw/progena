@@ -3,8 +3,6 @@ System Tool Protocol and Base Types.
 
 Defined under app.progenitor.tools to avoid import cycles with app.progenitor.nodes.
 """
-
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Protocol
@@ -55,14 +53,6 @@ class SystemTool(Protocol):
     @property
     def description(self) -> str: ...
 
-    @property
-    def keywords(self) -> list[str]: ...
-
-    @property
-    def trigger_patterns(self) -> list[str]: ...
-
-    def matches_input(self, user_input: str) -> bool: ...
-
     async def execute(self, context: ToolContext) -> ToolResult: ...
 
     def to_dict(self) -> dict[str, str]: ...
@@ -81,25 +71,6 @@ class BaseSystemTool(ABC):
     def description(self) -> str:
         pass
 
-    @property
-    def keywords(self) -> list[str]:
-        return []
-
-    @property
-    def trigger_patterns(self) -> list[str]:
-        return []
-
-    def matches_input(self, user_input: str) -> bool:
-        text = (user_input or "").lower()
-        if not text.strip():
-            return False
-
-        for keyword in self.keywords:
-            if keyword in text:
-                return True
-
-        return any(re.search(pattern, text, re.IGNORECASE) for pattern in self.trigger_patterns)
-
     @abstractmethod
     async def execute(self, context: ToolContext) -> ToolResult:
         pass
@@ -110,4 +81,3 @@ class BaseSystemTool(ABC):
             "description": self.description,
             "type": "system_tool",
         }
-
