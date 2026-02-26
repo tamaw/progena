@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     from .list_schedule import ListScheduleTool
     from .list_tools import ListToolsTool
     from .new_conversation import NewConversationTool
-    from .rediscover_agents import RediscoverAgentsTool
     from .schedule_task import ScheduleTaskTool
     from .self_reflect_tool import SelfReflectTool
 
@@ -36,7 +35,6 @@ def __getattr__(name: str):
     """Lazy-load LLM-invoked tool classes to avoid circular imports with node_helpers."""
     _tool_modules = {
         "ListToolsTool": "list_tools",
-        "RediscoverAgentsTool": "rediscover_agents",
         "ListAgentsTool": "list_agents",
         "NewConversationTool": "new_conversation",
         "CurrentTimeTool": "current_time",
@@ -67,7 +65,6 @@ __all__ = [
     "USER_COMMUNICATION_TOOLS",
     # LLM-invoked system tools (lazy-loaded)
     "ListToolsTool",
-    "RediscoverAgentsTool",
     "ListAgentsTool",
     "NewConversationTool",
     "CurrentTimeTool",

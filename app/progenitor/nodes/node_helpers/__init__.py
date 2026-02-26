@@ -17,14 +17,12 @@ from .registry import (
 )
 
 if TYPE_CHECKING:
-    from ...tools.agent_discovery import AgentDiscoveryTool
     from ...tools.current_time import CurrentTimeTool
     from ...tools.list_agents import ListAgentsTool
     from ...tools.list_schedule import ListScheduleTool
     from ...tools.list_tools import ListToolsTool
     from ...tools.mcp import MCPTool
     from ...tools.new_conversation import NewConversationTool
-    from ...tools.rediscover_agents import RediscoverAgentsTool
     from ...tools.registry import RegistryTool
     from ...tools.schedule import ScheduleTool
     from ...tools.schedule_task import ScheduleTaskTool
@@ -39,9 +37,7 @@ def __getattr__(name: str):
     """Lazy-load tool classes to avoid circular imports with tools/ package."""
     _abs_map = {
         "ListToolsTool": "app.progenitor.tools.list_tools",
-        "RediscoverAgentsTool": "app.progenitor.tools.rediscover_agents",
         "ListAgentsTool": "app.progenitor.tools.list_agents",
-        "AgentDiscoveryTool": "app.progenitor.tools.agent_discovery",
         "CurrentTimeTool": "app.progenitor.tools.current_time",
         "ListScheduleTool": "app.progenitor.tools.list_schedule",
         "SelfReflectTool": "app.progenitor.tools.self_reflect_tool",
@@ -79,9 +75,7 @@ __all__ = [
     "format_schedule_result",
     # Tool implementations (lazy-loaded)
     "ListToolsTool",
-    "RediscoverAgentsTool",
     "ListAgentsTool",
-    "AgentDiscoveryTool",
     "CurrentTimeTool",
     "ListScheduleTool",
     "SelfReflectTool",
@@ -96,4 +90,3 @@ __all__ = [
     "ShellCheckTool",
     "ShellExecTool",
 ]
-

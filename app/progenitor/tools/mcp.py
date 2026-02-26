@@ -388,6 +388,32 @@ class A2AClient:
             return f"{base}/a2a/{agent_id}/.well-known/agent.json"
         return f"{base}/v1/a2a/{agent_id}/.well-known/agent.json"
 
+    async def list_litellm_agents(
+        self,
+        timeout: float = 10.0,
+    ) -> list[dict[str, Any]]:
+        """List A2A agents currently registered in LiteLLM."""
+        if not self._litellm_enabled():
+            return []
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                headers=self._litellm_headers(),
+            ) as httpx_client:
+                resp = await httpx_client.get(self._litellm_agents_url())
+            if resp.status_code >= 400:
+                logger.warning(
+                    "LiteLLM agents listing failed: HTTP %s",
+                    resp.status_code,
+                )
+                return []
+            payload = resp.json()
+            if isinstance(payload, list):
+                return [item for item in payload if isinstance(item, dict)]
+        except Exception as exc:
+            logger.warning("Failed to list LiteLLM agents: %s", exc)
+        return []
+
     async def _resolve_litellm_agent(
         self,
         agent_config: dict[str, Any],
