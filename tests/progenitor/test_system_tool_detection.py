@@ -6,16 +6,16 @@ requests that should trigger fast-path tool execution.
 
 import pytest
 
-from app.progenitor.tools.rediscover_agents import RediscoverAgentsTool
+from app.progenitor.tools.list_agents import ListAgentsTool
 from app.progenitor.tools.self_reflect_tool import SelfReflectTool
 
 
 class TestAgentDiscoveryDetection:
-    """Tests for RediscoverAgentsTool.matches_input heuristic."""
+    """Tests for ListAgentsTool.matches_input heuristic for discovery/listing."""
 
     @pytest.fixture
     def tool(self):
-        return RediscoverAgentsTool()
+        return ListAgentsTool()
 
     @pytest.mark.parametrize("input_text", [
         "rewire agents",

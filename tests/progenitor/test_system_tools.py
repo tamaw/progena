@@ -15,7 +15,6 @@ from app.progenitor.nodes.node_helpers import (
     ListAgentsTool,
     ListScheduleTool,
     ListToolsTool,
-    RediscoverAgentsTool,
     ScheduleTaskTool,
     SelfReflectTool,
     ToolContext,
@@ -308,18 +307,6 @@ class TestScheduleTaskTool:
         mock_llm.chat_structured.assert_awaited_once()
         assert mock_llm.chat_structured.await_args.kwargs.get("tools") == []
         mock_llm.chat.assert_not_awaited()
-
-
-class TestRediscoverAgentsTool:
-    """Tests for RediscoverAgentsTool implementation."""
-
-    @pytest.fixture
-    def tool(self):
-        return RediscoverAgentsTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "rediscover_agents"
 
 
 class TestListAgentsTool:
