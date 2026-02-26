@@ -1,13 +1,12 @@
 FROM python:3.12-slim
 
-# Install system dependencies (curl for healthchecks, ca-certs for TLS)
+# Install system dependencies.
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
+    git \
+    gh \
     && rm -rf /var/lib/apt/lists/*
-
-# Note: GitHub CLI and Copilot CLI are NOT installed here.
-# Build/git operations are delegated to the builder_agent (see app/agents/builder_agent/).
 
 # Set working directory
 WORKDIR /app

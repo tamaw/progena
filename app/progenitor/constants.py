@@ -69,3 +69,4 @@ class SystemToolName(StrEnum):
     SELF_REFLECT = "self_reflect"
     NEW_CONVERSATION = "new_conversation"
     COMPRESS_CONVERSATION = "compress_conversation"
+    SPAWN_GITHUB_AGENT = "spawn_github_agent"

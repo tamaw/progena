@@ -391,6 +391,26 @@ async def _send_telegram_connected_message(
             logger.warning("Failed to send fallback Telegram failure message: %s", e2)
 
 
+def _looks_like_spawn_github_agent_intent(message: str) -> bool:
+    text = (message or "").lower()
+    if "github" not in text or "agent" not in text:
+        return False
+    return any(token in text for token in ("spawn", "create", "dispatch", "run", "launch"))
+
+
+def _prepare_telegram_forward_message(message: str, metadata: dict[str, Any]) -> str:
+    if not _looks_like_spawn_github_agent_intent(message):
+        return message
+    username = str(metadata.get("username") or "unknown")
+    chat_id = str(metadata.get("chat_id") or "unknown")
+    return (
+        f"[telegram-source chat_id={chat_id} username={username}]\n"
+        "If the user is requesting a GitHub agent execution, call the "
+        "`spawn_github_agent` system tool.\n"
+        f"User request: {message}"
+    )
+
+
 async def _send_telegram_message(
     telegram: TelegramClient,
     content: str,
@@ -568,10 +588,12 @@ async def lifespan(app: FastAPI):
                     # Create a unique request ID for correlation
                     request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
 
+                    forward_message = _prepare_telegram_forward_message(message, metadata)
+
                     # Use streaming API and collect chunks into full response
                     # (The Progenitor loop always streams, so we must use stream mode)
                     response_chunks = []
-                    async for chunk in client.send_message_stream(message, request_id=request_id):
+                    async for chunk in client.send_message_stream(forward_message, request_id=request_id):
                         if chunk:
                             response_chunks.append(chunk)
 
