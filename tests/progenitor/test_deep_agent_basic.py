@@ -139,3 +139,28 @@ class TestDeepAgentFactory:
 
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["checkpointer"] is custom_checkpointer
+
+    def test_create_agent_uses_genesis_prompt(self):
+        """DeepAgent factory uses the canonical genesis prompt."""
+        with patch(
+            "app.progenitor.agent.deep_agent.create_langchain_model"
+        ) as mock_create_model, patch(
+            "app.progenitor.agent.deep_agent.create_deep_agent"
+        ) as mock_create_deep_agent, patch(
+            "app.progenitor.agent.deep_agent.PromptTemplates"
+        ) as mock_prompt_templates:
+            mock_create_model.return_value = MagicMock()
+            mock_create_deep_agent.return_value = MagicMock()
+            mock_prompt_templates.return_value.get_genesis_prompt.return_value = "GENESIS"
+
+            from app.progenitor.agent.deep_agent import create_progenitor_agent
+            from app.progenitor.config import ProgenitorConfig
+
+            create_progenitor_agent(
+                config=ProgenitorConfig(),
+                checkpointer=MagicMock(),
+            )
+
+            call_kwargs = mock_create_deep_agent.call_args
+            assert call_kwargs.kwargs["system_prompt"] == "GENESIS"
+            mock_prompt_templates.return_value.get_genesis_prompt.assert_called_once()

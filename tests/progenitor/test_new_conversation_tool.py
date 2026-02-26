@@ -95,3 +95,27 @@ async def test_loop_clears_messages_when_run_id_changes_mid_cycle(tmp_path: Path
     assert loop._state["run_id"] == "run_new"
     assert loop._state["messages"] == []
 
+
+@pytest.mark.asyncio
+async def test_loop_preserves_persisted_run_id_on_startup(tmp_path: Path) -> None:
+    from app.progenitor.runtime.loop import ProgenitorLoop
+
+    state_manager = MagicMock()
+    state_manager.get_current_state = AsyncMock(return_value={"run_id": "run_persisted"})
+    state_manager.save_current_state = AsyncMock()
+    state_manager.state_dir = tmp_path
+
+    loop = ProgenitorLoop(
+        graph=MagicMock(),
+        state_manager=state_manager,
+        config=cast(Any, _MockConfig()),
+    )
+
+    loop._input_handler_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    loop._checkpoint_state = AsyncMock()  # type: ignore[method-assign]
+    loop._update_health_file = AsyncMock()  # type: ignore[method-assign]
+    loop._push_event = AsyncMock()  # type: ignore[method-assign]
+
+    await loop.run_forever()
+
+    assert loop._state["run_id"] == "run_persisted"
