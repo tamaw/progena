@@ -108,3 +108,43 @@ async def test_get_agent_card_uses_litellm_agent_registry(monkeypatch) -> None:
 
     assert card == expected_card
     assert cfg["litellm_agent_id"] == "agent-123"
+
+
+@pytest.mark.asyncio
+async def test_call_agent_retries_with_master_key_for_admin_only_a2a_401(monkeypatch) -> None:
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm:4000")
+    monkeypatch.setenv("LITELLM_API_KEY", "runtime-key")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-key")
+
+    list_resp = MagicMock()
+    list_resp.status_code = 200
+    list_resp.json.return_value = [
+        {
+            "agent_id": "agent-123",
+            "agent_name": "builder_agent",
+            "agent_card_params": {"name": "Builder Agent"},
+        }
+    ]
+
+    denied_resp = MagicMock()
+    denied_resp.status_code = 401
+    denied_resp.text = "Authentication Error, Only proxy admin can be used"
+
+    ok_resp = MagicMock()
+    ok_resp.status_code = 200
+    ok_resp.json.return_value = {"jsonrpc": "2.0", "id": "1", "result": {"ok": True}}
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = list_resp
+    mock_client.post.side_effect = [denied_resp, ok_resp]
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    monkeypatch.setattr("app.progenitor.tools.mcp.httpx.AsyncClient", lambda *a, **k: mock_client)
+
+    cfg = {"name": "builder_agent", "transport": "http", "status": "running"}
+    result = await A2AClient().call_agent(cfg, "build hello world")
+
+    assert result["success"] is True
+    assert mock_client.post.call_count == 2
+    assert mock_client.post.call_args_list[1].kwargs["headers"]["x-litellm-api-key"] == "master-key"
