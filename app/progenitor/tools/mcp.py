@@ -476,13 +476,14 @@ class A2AClient:
                 "error": f"Agent is in failed state: {agent_config.get('last_error', 'Unknown error')}",
             }
 
+        if self._litellm_enabled() and agent_config.get("name"):
+            return await self._call_litellm_agent(agent_config, request, context, timeout)
+
         if transport != "http":
             return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
         endpoint = agent_config.get("endpoint")
         if not endpoint:
             return {"success": False, "error": "No HTTP endpoint configured for agent"}
-        if self._litellm_enabled() and agent_config.get("name"):
-            return await self._call_litellm_agent(agent_config, request, context, timeout)
         return await self._call_http_agent(agent_config, request, context, timeout)
 
     async def _call_litellm_agent(
