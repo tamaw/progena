@@ -518,6 +518,109 @@ class ToolRegistry:
 
         return {"agents_checked": len(agents), "agents_updated": updated, "errors": errors}
 
+    async def sync_agents_from_litellm(
+        self,
+        a2a_client: Any,
+        *,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
+        """Sync agent entries from LiteLLM /v1/agents into registry memory/state."""
+        list_agents = getattr(a2a_client, "list_litellm_agents", None)
+        if not callable(list_agents):
+            return {"agents_seen": 0, "agents_added": 0, "agents_updated": 0, "errors": ["A2A client missing list_litellm_agents"]}
+
+        try:
+            remote_agents = await list_agents(timeout=timeout)
+        except Exception as exc:
+            return {"agents_seen": 0, "agents_added": 0, "agents_updated": 0, "errors": [str(exc)]}
+
+        if not isinstance(remote_agents, list):
+            return {"agents_seen": 0, "agents_added": 0, "agents_updated": 0, "errors": []}
+
+        agents = self._registry.setdefault("agents", [])
+        agents_added = 0
+        agents_updated = 0
+        changed_any = False
+
+        for remote in remote_agents:
+            if not isinstance(remote, dict):
+                continue
+            name = str(remote.get("agent_name") or "").strip()
+            if not name:
+                continue
+            agent_id = str(remote.get("agent_id") or "").strip() or None
+            card = remote.get("agent_card_params")
+            card = card if isinstance(card, dict) else {}
+
+            capabilities: list[str] = []
+            if isinstance(card.get("capabilities"), list):
+                capabilities = [str(c) for c in card.get("capabilities", []) if isinstance(c, str) and c]
+            elif isinstance(card.get("skills"), list):
+                for skill in card.get("skills", []):
+                    if isinstance(skill, dict):
+                        sid = str(skill.get("id") or "").strip()
+                        sname = str(skill.get("name") or "").strip()
+                        if sid:
+                            capabilities.append(sid)
+                        elif sname:
+                            capabilities.append(sname)
+
+            existing = next((a for a in agents if isinstance(a, dict) and a.get("name") == name), None)
+            if existing is None:
+                agents.append({
+                    "name": name,
+                    "kind": "a2a_agent",
+                    "version": str(card.get("version") or "0.1.0"),
+                    "description": str(card.get("description") or f"LiteLLM agent: {name}"),
+                    "capabilities": capabilities,
+                    "entrypoint": f"external:{name}",
+                    "transport": "http",
+                    "port": None,
+                    "endpoint": None,
+                    "agent_card_url": None,
+                    "litellm_agent_id": agent_id,
+                    "agent_card": card or None,
+                    "status": AgentStatus.STOPPED.value,
+                    "enabled": True,
+                    "created_at": utcnow().isoformat(),
+                    "updated_at": utcnow().isoformat(),
+                })
+                agents_added += 1
+                changed_any = True
+                continue
+
+            changed = False
+            if agent_id and existing.get("litellm_agent_id") != agent_id:
+                existing["litellm_agent_id"] = agent_id
+                changed = True
+            if card:
+                description = str(card.get("description") or "").strip()
+                version = str(card.get("version") or "").strip()
+                if description and existing.get("description") != description:
+                    existing["description"] = description
+                    changed = True
+                if version and existing.get("version") != version:
+                    existing["version"] = version
+                    changed = True
+                if capabilities and existing.get("capabilities") != capabilities:
+                    existing["capabilities"] = capabilities
+                    changed = True
+                existing["agent_card"] = card
+            if changed:
+                existing["updated_at"] = utcnow().isoformat()
+                agents_updated += 1
+                changed_any = True
+
+        if changed_any:
+            await self.save()
+
+        return {
+            "agents_seen": len([a for a in remote_agents if isinstance(a, dict) and a.get("agent_name")]),
+            "agents_added": agents_added,
+            "agents_updated": agents_updated,
+            "errors": [],
+        }
+
 
 class RegistryTool(BaseSystemTool):
     """Expose the current agent/tool registry summary."""

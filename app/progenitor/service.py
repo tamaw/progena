@@ -380,6 +380,16 @@ class ProgenitorService:
                 registry=self.tool_registry,
             )
 
+            from .tools.mcp import A2AClient
+
+            litellm_summary = await self.tool_registry.sync_agents_from_litellm(A2AClient())
+            logger.info(
+                "LiteLLM sync: seen=%d added=%d updated=%d",
+                litellm_summary.get("agents_seen", 0),
+                litellm_summary.get("agents_added", 0),
+                litellm_summary.get("agents_updated", 0),
+            )
+
             if result.get("agents_registered", 0) > 0:
                 logger.info(
                     "Agent discovery complete: %d agents registered",
