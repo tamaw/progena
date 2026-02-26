@@ -286,10 +286,26 @@ jobs:
             if command -v sudo >/dev/null 2>&1; then
               sudo chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS} || \
                 chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS}
+              sudo chmod -R u+rwX ${CHOWN_PATHS} || chmod -R u+rwX ${CHOWN_PATHS}
             else
               chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS}
+              chmod -R u+rwX ${CHOWN_PATHS}
             fi
           fi
+
+          # Ensure canonical progenitor runtime dirs are writable even if path
+          # detection misses or prior root-owned files remain.
+          for HOST_PATH in /var/lib/progenitor/data /var/lib/progenitor/logs /var/lib/progenitor/worktrees; do
+            if command -v sudo >/dev/null 2>&1; then
+              sudo mkdir -p "${HOST_PATH}" || mkdir -p "${HOST_PATH}"
+              sudo chown -R "${HOST_UID}:${HOST_GID}" "${HOST_PATH}" || chown -R "${HOST_UID}:${HOST_GID}" "${HOST_PATH}"
+              sudo chmod -R u+rwX "${HOST_PATH}" || chmod -R u+rwX "${HOST_PATH}"
+            else
+              mkdir -p "${HOST_PATH}"
+              chown -R "${HOST_UID}:${HOST_GID}" "${HOST_PATH}"
+              chmod -R u+rwX "${HOST_PATH}"
+            fi
+          done
 
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
