@@ -459,6 +459,7 @@ def _utc_now_iso() -> str:
 # AgentCard — advertised at /.well-known/agent.json
 # ---------------------------------------------------------------------------
 _PORT = int(os.environ.get("PORT", "8107"))
+_PUBLIC_HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
 
 AGENT_CARD = AgentCard(
     name="Builder Agent",
@@ -468,7 +469,7 @@ AGENT_CARD = AgentCard(
         "Uses GitHub Copilot CLI and git worktrees for concurrent, isolated builds."
     ),
     version="0.2.0",
-    url=f"http://localhost:{_PORT}",
+    url=f"http://{_PUBLIC_HOST}:{_PORT}",
     capabilities=AgentCapabilities(streaming=False, state_transition_history=True),
     default_input_modes=["text/plain"],
     default_output_modes=["text/plain"],
