@@ -180,49 +180,21 @@ def main() -> int:
         "agent_card_params": agent_card,
         "litellm_params": {"make_public": True},
     }
-    wrapped_payload = {"agent": payload}
 
-    status, body = call_via_docker_curl("POST", agents_url, api_key, payload)
-    if is_success(status):
-        agent_id = extract_agent_id(parse_json(body), agent_name)
-        print(f"Registered {agent_name} via {agents_url}")
+    if agent_id:
+        patch_url = f"{agents_url}/{agent_id}"
+        status, body = call_via_docker_curl("PATCH", patch_url, api_key, payload)
+        if not is_success(status):
+            return fail(f"LiteLLM PATCH {patch_url} failed ({status})", body)
+        print(f"Patched existing agent {agent_name} ({agent_id})")
     else:
-        print(f"LiteLLM POST {agents_url} failed ({status})")
-        print(body)
-
-        status2, body2 = call_via_docker_curl("POST", agents_url, api_key, wrapped_payload)
-        if is_success(status2):
-            agent_id = extract_agent_id(parse_json(body2), agent_name)
-            print(f"Registered {agent_name} via wrapped payload at {agents_url}")
-        else:
-            print(f"LiteLLM POST wrapped payload failed ({status2})")
-            print(body2)
-            if not agent_id:
-                status3, body3 = call_via_docker_curl("GET", agents_url, api_key)
-                if is_success(status3):
-                    agent_id = extract_agent_id(parse_json(body3), agent_name)
-            if not agent_id:
-                return fail(f"Could not find existing agent_id for {agent_name}")
-
-            patch_url = f"{agents_url}/{agent_id}"
-            status4, body4 = call_via_docker_curl("PATCH", patch_url, api_key, payload)
-            if is_success(status4):
-                print(f"Patched existing agent {agent_name} ({agent_id})")
-            else:
-                print(f"LiteLLM PATCH {patch_url} failed ({status4})")
-                print(body4)
-                status5, body5 = call_via_docker_curl("PUT", patch_url, api_key, payload)
-                if is_success(status5):
-                    print(f"Updated existing agent {agent_name} ({agent_id})")
-                else:
-                    return fail(f"LiteLLM PUT {patch_url} failed ({status5})", body5)
-
-    if not agent_id:
-        status, body = call_via_docker_curl("GET", agents_url, api_key)
-        if is_success(status):
-            agent_id = extract_agent_id(parse_json(body), agent_name)
-    if not agent_id:
-        return fail(f"Registration completed but no agent_id found for {agent_name}")
+        status, body = call_via_docker_curl("POST", agents_url, api_key, payload)
+        if not is_success(status):
+            return fail(f"LiteLLM POST {agents_url} failed ({status})", body)
+        agent_id = extract_agent_id(parse_json(body), agent_name)
+        if not agent_id:
+            return fail(f"Registration completed but no agent_id found for {agent_name}", body)
+        print(f"Registered {agent_name} via {agents_url}")
 
     return validate_agent_card(api_key, card_base, agent_name, agent_id)
 
