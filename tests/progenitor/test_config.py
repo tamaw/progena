@@ -88,7 +88,7 @@ class TestLLMConfig:
         """Test loading LLM config from environment."""
         env = {
             "LITELLM_BASE_URL": "http://localhost:5000",
-            "LITELLM_MASTER_KEY": "sk-test-key",
+            "LITELLM_API_KEY": "sk-test-key",
             "PROGENITOR_MODEL_DEFAULT": "gpt-4o",
         }
         with patch.dict(os.environ, env, clear=False):
