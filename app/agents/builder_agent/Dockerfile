@@ -4,7 +4,21 @@ FROM python:3.12-slim
 # Requires git, GitHub CLI (gh), and GitHub Copilot CLI for build execution.
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    LITELLM_BASE_URL=http://litellm:4000 \
+    LITELLM_MASTER_KEY= \
+    LITELLM_API_KEY= \
+    GH_TOKEN= \
+    PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
+    PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL= \
+    PROGENITOR_AZURE_STRUCTURED_API_KEY= \
+    PROGENITOR_AZURE_STRUCTURED_MODEL= \
+    TEST_MODE=false \
+    PROGENITOR_PROJECT_ROOT=/app/worktrees \
+    PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
+    PROGENITOR_STATE_DIR=/app/data/state \
+    PROGENITOR_LOG_DIR=/app/logs/builder_agent
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 
@@ -44,23 +58,13 @@ COPY app/agents/builder_agent/ /app/agent/
 COPY prompts/ /app/prompts/
 
 # Runtime directories (state and logs are mounted as named volumes).
-# /app/workspace is the git workspace used for worktrees — populated on first
+# /app/worktrees is the git workspace used for worktrees — populated on first
 # boot if PROGENITOR_REPO_URL is set, or bind-mounted with a pre-cloned repo.
-RUN mkdir -p /app/data/state /app/logs/builder_agent /app/workspace && \
-    chown -R runner:agent /app/data /app/logs /app/workspace
+RUN mkdir -p /app/data/state /app/logs/builder_agent /app/worktrees && \
+    chown -R runner:agent /app/data /app/logs /app/worktrees
 
 # Named volume mount-points — Docker Compose overrides these with named volumes.
-VOLUME ["/app/data", "/app/workspace", "/app/logs"]
-
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-# Point git operations at the workspace volume by default.
-ENV PROGENITOR_PROJECT_ROOT=/app/workspace
-# Worktrees live inside the workspace so they share the same git repo.
-ENV PROGENITOR_WORKTREE_DIR=/app/workspace/worktrees
-# Storage paths — align with the directories created above.
-ENV PROGENITOR_STATE_DIR=/app/data/state
-ENV PROGENITOR_LOG_DIR=/app/logs/builder_agent
+VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
 USER runner
 
