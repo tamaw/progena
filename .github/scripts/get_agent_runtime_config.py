@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 from pathlib import Path
 
 
@@ -37,6 +38,59 @@ def _parse_volume_arg(arg: str) -> list[str]:
             return []
         return [v for v in values if isinstance(v, str)]
     return [token for token in shlex.split(arg) if token]
+
+
+def _load_progenitor_mounts() -> dict[str, str]:
+    mounts_json = os.environ.get("PROGENITOR_MOUNTS_JSON")
+    if mounts_json:
+        parsed = json.loads(mounts_json)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("PROGENITOR_MOUNTS_JSON must be a JSON object")
+        return {str(k): str(v) for k, v in parsed.items()}
+
+    container_name = os.environ.get("PROGENITOR_CONTAINER", "progenitor")
+    proc = subprocess.run(
+        ["docker", "inspect", container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Failed to inspect container '{container_name}': {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+
+    payload = json.loads(proc.stdout)
+    if not payload:
+        raise RuntimeError(f"Container '{container_name}' not found")
+
+    mounts = payload[0].get("Mounts") or []
+    mapping: dict[str, str] = {}
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            continue
+        dest = mount.get("Destination")
+        source = mount.get("Source")
+        if isinstance(dest, str) and isinstance(source, str):
+            mapping[dest] = source
+    return mapping
+
+
+def _map_target_to_host(target: str, mounts: dict[str, str]) -> str | None:
+    mapping_roots = [
+        ("/app/data", "/app/data"),
+        ("/app/logs", "/app/logs"),
+        ("/app/workspace", "/app/worktrees"),
+        ("/app/worktrees", "/app/worktrees"),
+    ]
+    for target_root, progenitor_root in mapping_roots:
+        if target == target_root or target.startswith(f"{target_root}/"):
+            source_root = mounts.get(progenitor_root)
+            if not source_root:
+                return None
+            suffix = target[len(target_root) :]
+            return f"{source_root}{suffix}"
+    return None
 
 
 def main() -> int:
@@ -76,16 +130,33 @@ def main() -> int:
         seen.add(path)
         unique_volumes.append(path)
 
-    mounts_csv = ",".join(unique_volumes)
+    progenitor_mounts = _load_progenitor_mounts()
+    volume_args: list[str] = []
+    chown_paths: list[str] = []
+    seen_paths: set[str] = set()
+
+    for target in unique_volumes:
+        host_path = _map_target_to_host(target, progenitor_mounts)
+        if not host_path:
+            continue
+        volume_args.append(f"-v {host_path}:{target}")
+        if host_path not in seen_paths:
+            seen_paths.add(host_path)
+            chown_paths.append(host_path)
+
+    volume_args_str = " ".join(volume_args)
+    chown_paths_str = " ".join(chown_paths)
 
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path:
         with Path(output_path).open("a", encoding="utf-8") as f:
             f.write(f"port={port}\n")
-            f.write(f"mounts_csv={mounts_csv}\n")
+            f.write(f"volume_args={volume_args_str}\n")
+            f.write(f"chown_paths={chown_paths_str}\n")
     else:
         print(f"port={port}")
-        print(f"mounts_csv={mounts_csv}")
+        print(f"volume_args={volume_args_str}")
+        print(f"chown_paths={chown_paths_str}")
     return 0
 
 

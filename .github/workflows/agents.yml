@@ -231,49 +231,8 @@ jobs:
           PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
         run: |
           PORT=${{ steps.runtime.outputs.port }}
-          MOUNTS_CSV="${{ steps.runtime.outputs.mounts_csv }}"
-          DATA_SRC=$(docker inspect progenitor --format \
-            '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
-          LOGS_SRC=$(docker inspect progenitor --format \
-            '{{range .Mounts}}{{if eq .Destination "/app/logs"}}{{.Source}}{{end}}{{end}}')
-          WORKTREES_SRC=$(docker inspect progenitor --format \
-            '{{range .Mounts}}{{if eq .Destination "/app/worktrees"}}{{.Source}}{{end}}{{end}}')
-
-          test -n "${DATA_SRC}" || { echo "Could not resolve progenitor /app/data mount source"; exit 1; }
-          test -n "${LOGS_SRC}" || { echo "Could not resolve progenitor /app/logs mount source"; exit 1; }
-          test -n "${WORKTREES_SRC}" || { echo "Could not resolve progenitor /app/worktrees mount source"; exit 1; }
-
-          EXTRA_VOLUMES=""
-          if [ -n "${MOUNTS_CSV}" ]; then
-            for TARGET in ${MOUNTS_CSV//,/ }; do
-              case "${TARGET}" in
-                /app/data)
-                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${DATA_SRC}:${TARGET}"
-                  ;;
-                /app/data/*)
-                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${DATA_SRC}${TARGET#/app/data}:${TARGET}"
-                  ;;
-                /app/logs)
-                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${LOGS_SRC}:${TARGET}"
-                  ;;
-                /app/logs/*)
-                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${LOGS_SRC}${TARGET#/app/logs}:${TARGET}"
-                  ;;
-                /app/workspace|/app/worktrees)
-                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${WORKTREES_SRC}:${TARGET}"
-                  ;;
-                /app/workspace/*)
-                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${WORKTREES_SRC}${TARGET#/app/workspace}:${TARGET}"
-                  ;;
-                /app/worktrees/*)
-                  EXTRA_VOLUMES="${EXTRA_VOLUMES} -v ${WORKTREES_SRC}${TARGET#/app/worktrees}:${TARGET}"
-                  ;;
-                *)
-                  echo "No progenitor mount mapping for ${TARGET}; using image default volume behavior"
-                  ;;
-              esac
-            done
-          fi
+          VOLUME_ARGS="${{ steps.runtime.outputs.volume_args }}"
+          CHOWN_PATHS="${{ steps.runtime.outputs.chown_paths }}"
 
           PROGENITOR_REPO_URL="https://github.com/tamaw/progenitor.git"
           if [ -n "${GH_TOKEN}" ]; then
@@ -282,11 +241,8 @@ jobs:
 
           HOST_UID=$(id -u)
           HOST_GID=$(id -g)
-          CHOWN_PATHS=""
-          for HOST_PATH in "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}"; do
-            if [ -z "${HOST_PATH}" ]; then
-              continue
-            fi
+          CHOWN_PATHS="$(echo "${CHOWN_PATHS}" | xargs)"
+          for HOST_PATH in ${CHOWN_PATHS}; do
             if [ ! -e "${HOST_PATH}" ]; then
               if command -v sudo >/dev/null 2>&1; then
                 sudo mkdir -p "${HOST_PATH}" || mkdir -p "${HOST_PATH}"
@@ -294,12 +250,8 @@ jobs:
                 mkdir -p "${HOST_PATH}"
               fi
             fi
-            if [ -e "${HOST_PATH}" ]; then
-              CHOWN_PATHS="${CHOWN_PATHS} ${HOST_PATH}"
-            fi
           done
 
-          CHOWN_PATHS="$(echo "${CHOWN_PATHS}" | xargs)"
           if [ -n "${CHOWN_PATHS}" ]; then
             if command -v sudo >/dev/null 2>&1; then
               sudo chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS} || \
@@ -315,7 +267,7 @@ jobs:
             --user ${HOST_UID}:${HOST_GID} \
             --network progenitor_network \
             -p ${PORT}:${PORT} \
-            ${EXTRA_VOLUMES} \
+            ${VOLUME_ARGS} \
             -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
             -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
             -e GH_TOKEN="${GH_TOKEN}" \
