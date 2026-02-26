@@ -249,6 +249,16 @@ jobs:
               "${PROGENITOR_HOST_PROMPTS_DIR}"
             chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
           fi
+          # Keep prompt bind mount populated; empty host dir masks image prompts at /app/prompts.
+          if command -v sudo >/dev/null 2>&1; then
+            sudo rm -rf "${PROGENITOR_HOST_PROMPTS_DIR:?}/"*
+            sudo cp -a prompts/. "${PROGENITOR_HOST_PROMPTS_DIR}/"
+            sudo chown -R "$(id -u):$(id -g)" "${PROGENITOR_HOST_PROMPTS_DIR}" || true
+          else
+            rm -rf "${PROGENITOR_HOST_PROMPTS_DIR:?}/"*
+            cp -a prompts/. "${PROGENITOR_HOST_PROMPTS_DIR}/"
+            chown -R "$(id -u):$(id -g)" "${PROGENITOR_HOST_PROMPTS_DIR}" || true
+          fi
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull
           docker compose -f docker/docker-compose.progenitor.yml up -d
