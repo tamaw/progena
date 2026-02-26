@@ -66,7 +66,10 @@ RUN mkdir -p /app/data/state /app/logs/builder_agent /app/worktrees && \
 # Named volume mount-points — Docker Compose overrides these with named volumes.
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
-USER runner
+COPY app/agents/builder_agent/docker-entrypoint.sh /usr/local/bin/builder-entrypoint.sh
+RUN chmod +x /usr/local/bin/builder-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/builder-entrypoint.sh"]
 
 EXPOSE 8107
 
