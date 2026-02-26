@@ -4,7 +4,12 @@ FROM python:3.12-slim
 # Requires git, GitHub CLI (gh), and GitHub Copilot CLI for build execution.
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PROGENITOR_PROJECT_ROOT=/app/workspace \
+    PROGENITOR_WORKTREE_DIR=/app/workspace/worktrees \
+    PROGENITOR_STATE_DIR=/app/data/state \
+    PROGENITOR_LOG_DIR=/app/logs/builder_agent
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 
@@ -50,17 +55,7 @@ RUN mkdir -p /app/data/state /app/logs/builder_agent /app/workspace && \
     chown -R runner:agent /app/data /app/logs /app/workspace
 
 # Named volume mount-points — Docker Compose overrides these with named volumes.
-VOLUME ["/app/data", "/app/workspace", "/app/logs"]
-
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-# Point git operations at the workspace volume by default.
-ENV PROGENITOR_PROJECT_ROOT=/app/workspace
-# Worktrees live inside the workspace so they share the same git repo.
-ENV PROGENITOR_WORKTREE_DIR=/app/workspace/worktrees
-# Storage paths — align with the directories created above.
-ENV PROGENITOR_STATE_DIR=/app/data/state
-ENV PROGENITOR_LOG_DIR=/app/logs/builder_agent
+VOLUME ["/app/data", "/app/logs", "/app/workspace"]
 
 USER runner
 
