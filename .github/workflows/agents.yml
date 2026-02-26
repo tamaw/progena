@@ -282,11 +282,31 @@ jobs:
 
           HOST_UID=$(id -u)
           HOST_GID=$(id -g)
-          if command -v sudo >/dev/null 2>&1; then
-            sudo chown -R "${HOST_UID}:${HOST_GID}" "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}" || \
-              chown -R "${HOST_UID}:${HOST_GID}" "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}"
-          else
-            chown -R "${HOST_UID}:${HOST_GID}" "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}"
+          CHOWN_PATHS=""
+          for HOST_PATH in "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}"; do
+            if [ -z "${HOST_PATH}" ]; then
+              continue
+            fi
+            if [ ! -e "${HOST_PATH}" ]; then
+              if command -v sudo >/dev/null 2>&1; then
+                sudo mkdir -p "${HOST_PATH}" || mkdir -p "${HOST_PATH}"
+              else
+                mkdir -p "${HOST_PATH}"
+              fi
+            fi
+            if [ -e "${HOST_PATH}" ]; then
+              CHOWN_PATHS="${CHOWN_PATHS} ${HOST_PATH}"
+            fi
+          done
+
+          CHOWN_PATHS="$(echo "${CHOWN_PATHS}" | xargs)"
+          if [ -n "${CHOWN_PATHS}" ]; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS} || \
+                chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS}
+            else
+              chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS}
+            fi
           fi
 
           docker run -d \
