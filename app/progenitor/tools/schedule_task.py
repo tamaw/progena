@@ -117,7 +117,7 @@ class ScheduleTaskTool(BaseSystemTool):
                 "description": description,
                 "instruction": instruction,
                 "next_run": result.next_run,
-                "recurring": "repeat_minutes" in entry_data if entry_data else False,
+                "recurring": not entry_data.get("one_off", False) if entry_data else False,
             }
 
             # Build state_updates so the decide node can merge the new

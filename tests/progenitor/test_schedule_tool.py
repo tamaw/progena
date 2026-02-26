@@ -35,8 +35,9 @@ class TestAddScheduledTask:
         assert entry_data is not None
         assert entry_data["instruction"] == "Output the message 'Hello, World!' to the user."
         assert entry_data["description"] == "Greeting task"
-        assert entry_data["repeat_minutes"] == 1440  # Daily
-        assert "run_at" in entry_data
+        assert entry_data["cron_expression"] == "0 9 * * *"
+        assert "next_run" in entry_data
+        assert entry_data["one_off"] is False
 
     @pytest.mark.asyncio
     async def test_add_task_in_minutes(self):
@@ -49,9 +50,9 @@ class TestAddScheduledTask:
 
         assert result.success is True
         assert entry_data is not None
-        assert "run_at" in entry_data
+        assert "next_run" in entry_data
         assert entry_data["instruction"] == "Remind the user to stretch and take a break."
-        assert entry_data.get("repeat_minutes") is None  # One-off
+        assert entry_data["one_off"] is True
 
     @pytest.mark.asyncio
     async def test_add_task_every_n_minutes(self):
@@ -64,7 +65,8 @@ class TestAddScheduledTask:
 
         assert result.success is True
         assert entry_data is not None
-        assert entry_data["repeat_minutes"] == 15
+        assert entry_data["cron_expression"] == "*/15 * * * *"
+        assert entry_data["one_off"] is False
 
     @pytest.mark.asyncio
     async def test_add_task_invalid_time(self):
@@ -107,12 +109,15 @@ class TestAddScheduledTask:
         assert "id" in entry_data
         assert "description" in entry_data
         assert "instruction" in entry_data
-        assert "run_at" in entry_data
+        assert "cron_expression" in entry_data
+        assert "next_run" in entry_data
         assert "enabled" in entry_data
+        assert "one_off" in entry_data
         # Old fields should not exist
         assert "action_type" not in entry_data
         assert "action_config" not in entry_data
-        assert "cron_expression" not in entry_data
+        assert "run_at" not in entry_data
+        assert "repeat_minutes" not in entry_data
 
     @pytest.mark.asyncio
     async def test_add_task_tomorrow(self):
@@ -125,7 +130,8 @@ class TestAddScheduledTask:
 
         assert result.success is True
         assert entry_data is not None
-        assert "run_at" in entry_data
+        assert "next_run" in entry_data
+        assert entry_data["one_off"] is True
 
 
 class TestRemoveScheduledTask:
@@ -160,7 +166,8 @@ class TestListScheduledTasks:
                 "id": "sched_1",
                 "description": "Morning greeting",
                 "instruction": "Say good morning",
-                "run_at": (utcnow() + timedelta(hours=1)).isoformat(),
+                "cron_expression": "0 9 * * *",
+                "next_run": (utcnow() + timedelta(hours=1)).isoformat(),
                 "enabled": True,
             },
             {
@@ -168,6 +175,7 @@ class TestListScheduledTasks:
                 "description": "Stock check",
                 "instruction": "Check stocks",
                 "cron_expression": "0 9 * * *",
+                "next_run": (utcnow() + timedelta(hours=2)).isoformat(),
                 "enabled": True,
             },
         ]
@@ -189,7 +197,8 @@ class TestListScheduledTasks:
                 "id": "sched_1",
                 "description": "Test task",
                 "instruction": "Test instruction here",
-                "run_at": utcnow().isoformat(),
+                "cron_expression": "*/5 * * * *",
+                "next_run": utcnow().isoformat(),
             },
         ]
 
@@ -267,23 +276,25 @@ class TestScheduleEntryIntegration:
             id="test_123",
             description="Test task",
             instruction="Execute this instruction",
-            run_at=utcnow(),
+            cron_expression="*/5 * * * *",
+            next_run=utcnow(),
         )
 
         assert entry.instruction == "Execute this instruction"
-        assert entry.run_at is not None
+        assert entry.next_run is not None
 
     def test_schedule_entry_recurring(self):
-        """Test ScheduleEntry with repeat_minutes."""
+        """Test ScheduleEntry recurring cron fields."""
         entry = ScheduleEntry(
             id="test_456",
             description="Recurring task",
             instruction="Do something",
-            run_at=utcnow(),
-            repeat_minutes=60,
+            cron_expression="0 * * * *",
+            next_run=utcnow(),
         )
 
-        assert entry.repeat_minutes == 60
+        assert entry.cron_expression == "0 * * * *"
+        assert entry.one_off is False
         assert entry.enabled is True
 
     def test_schedule_entry_model_dump(self):
@@ -292,17 +303,18 @@ class TestScheduleEntryIntegration:
             id="test_789",
             description="Dump test",
             instruction="Test instruction",
-            run_at=utcnow(),
-            repeat_minutes=30,
+            cron_expression="*/30 * * * *",
+            next_run=utcnow(),
         )
 
         data = entry.model_dump()
         assert "instruction" in data
-        assert "run_at" in data
-        assert "repeat_minutes" in data
+        assert "cron_expression" in data
+        assert "next_run" in data
         assert data["instruction"] == "Test instruction"
-        assert data["repeat_minutes"] == 30
+        assert data["cron_expression"] == "*/30 * * * *"
         # Old fields should not be present
-        assert "cron_expression" not in data
+        assert "run_at" not in data
+        assert "repeat_minutes" not in data
         assert "user_request" not in data
         assert "action_type" not in data
