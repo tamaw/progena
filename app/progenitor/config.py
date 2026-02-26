@@ -293,22 +293,6 @@ class ValidationConfig:
 
 
 @dataclass
-class SchedulerConfig:
-    """Scheduler configuration."""
-
-    enabled: bool = True
-    poll_seconds: int = 30
-
-    @classmethod
-    def from_env(cls) -> "SchedulerConfig":
-        """Load scheduler config from environment."""
-        return cls(
-            enabled=env_bool("PROGENITOR_SCHEDULER_ENABLED", True),
-            poll_seconds=env_int("PROGENITOR_SCHEDULER_POLL_SECONDS", 30),
-        )
-
-
-@dataclass
 class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
@@ -349,7 +333,6 @@ class ProgenitorConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     copilot: CopilotConfig = field(default_factory=CopilotConfig)
-    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -366,7 +349,6 @@ class ProgenitorConfig:
             runtime=RuntimeConfig.from_env(),
             storage=storage_config,
             copilot=CopilotConfig.from_env(),
-            scheduler=SchedulerConfig.from_env(),
             validation=ValidationConfig.from_env(),
             mcp=MCPConfig.from_env(),
         )
@@ -445,10 +427,6 @@ class ProgenitorConfig:
                 "max_tokens": self.copilot.max_tokens,
                 "acp_port": self.copilot.acp_port,
                 "acp_allowed_dirs": self.copilot.acp_allowed_dirs,
-            },
-            "scheduler": {
-                "enabled": self.scheduler.enabled,
-                "poll_seconds": self.scheduler.poll_seconds,
             },
             "mcp": {
                 "enabled": self.mcp.enabled,

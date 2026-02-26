@@ -81,13 +81,6 @@ class CopilotConfigValidator(BaseModel):
     max_tokens: int = Field(gt=0, le=1000000)
 
 
-class SchedulerConfigValidator(BaseModel):
-    """Validates scheduler configuration."""
-
-    enabled: bool = True
-    poll_seconds: int = Field(gt=0, le=3600)
-
-
 def validate_llm_config(config) -> list[str]:
     """Validate LLM configuration and return list of warnings/errors."""
     issues = []
@@ -168,21 +161,6 @@ def validate_copilot_config(config) -> list[str]:
     return issues
 
 
-def validate_scheduler_config(config) -> list[str]:
-    """Validate scheduler configuration and return list of warnings/errors."""
-    issues = []
-
-    try:
-        SchedulerConfigValidator(
-            enabled=config.enabled,
-            poll_seconds=config.poll_seconds,
-        )
-    except Exception as e:
-        issues.append(f"Scheduler Config Error: {e}")
-
-    return issues
-
-
 def validate_config(config) -> tuple[bool, list[str]]:
     """
     Validate the entire Progenitor configuration.
@@ -197,7 +175,6 @@ def validate_config(config) -> tuple[bool, list[str]]:
     issues.extend(validate_runtime_config(config.runtime))
     issues.extend(validate_storage_config(config.storage))
     issues.extend(validate_copilot_config(config.copilot))
-    issues.extend(validate_scheduler_config(config.scheduler))
 
     is_valid = len(issues) == 0
 

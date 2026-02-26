@@ -10,7 +10,6 @@ from app.progenitor.config import (
     LLMConfig,
     ProgenitorConfig,
     RuntimeConfig,
-    SchedulerConfig,
     StorageConfig,
     get_config,
     reload_config,
@@ -187,27 +186,6 @@ class TestStorageConfig:
             assert config.log_dir == Path("/custom/logs")
             assert config.worktree_dir == Path("/custom/worktrees")
             assert config.state_lock_timeout_seconds == 30
-
-
-class TestSchedulerConfig:
-    """Tests for scheduler configuration."""
-
-    def test_defaults(self):
-        """Test default values."""
-        config = SchedulerConfig()
-        assert config.enabled is True
-        assert config.poll_seconds == 30
-
-    def test_from_env(self):
-        """Test loading from environment."""
-        env = {
-            "PROGENITOR_SCHEDULER_ENABLED": "false",
-            "PROGENITOR_SCHEDULER_POLL_SECONDS": "60",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            config = SchedulerConfig.from_env()
-            assert config.enabled is False
-            assert config.poll_seconds == 60
 
 
 class TestProgenitorConfig:

@@ -52,6 +52,38 @@ services:
         reservations:
           memory: 512M
 
+  scheduler:
+    image: ghcr.io/tamaw/progenitor-scheduler:latest
+    build:
+      context: ..
+      dockerfile: docker/scheduler/Dockerfile
+    container_name: progenitor-scheduler
+    restart: unless-stopped
+    environment:
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      SCHEDULER_POLL_SECONDS: ${SCHEDULER_POLL_SECONDS:-5}
+      SCHEDULER_SCHEDULE_PATH: ${SCHEDULER_SCHEDULE_PATH:-/app/data/schedule.json}
+      SCHEDULER_IPC_HOST: ${SCHEDULER_IPC_HOST:-progenitor}
+      SCHEDULER_IPC_PORT: ${SCHEDULER_IPC_PORT:-9500}
+      SCHEDULER_REQUEST_TIMEOUT_SECONDS: ${SCHEDULER_REQUEST_TIMEOUT_SECONDS:-300}
+      SCHEDULER_LOG_LEVEL: ${SCHEDULER_LOG_LEVEL:-INFO}
+    depends_on:
+      progenitor:
+        condition: service_started
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+    networks:
+      - progenitor-net
+      - progenitor_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+
   backend:
     image: ghcr.io/tamaw/progenitor-backend:latest
     build:

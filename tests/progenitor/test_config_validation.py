@@ -259,35 +259,6 @@ class TestCopilotConfigValidation:
         assert "bin_path" in str(exc_info.value)
 
 
-class TestSchedulerConfigValidation:
-    """Test scheduler configuration validation."""
-
-    def test_valid_scheduler_config(self):
-        """Test that valid scheduler config passes validation."""
-        from app.progenitor.config_validation import SchedulerConfigValidator
-
-        config = SchedulerConfigValidator(
-            enabled=True,
-            poll_seconds=60,
-        )
-
-        assert config.enabled is True
-
-    def test_negative_poll_seconds_rejected(self):
-        """Test that negative poll seconds is rejected."""
-        import pydantic
-
-        from app.progenitor.config_validation import SchedulerConfigValidator
-
-        with pytest.raises(pydantic.ValidationError) as exc_info:
-            SchedulerConfigValidator(
-                enabled=True,
-                poll_seconds=-1,  # Invalid
-            )
-
-        assert "poll_seconds" in str(exc_info.value)
-
-
 class TestConfigValidationIntegration:
     """Test full configuration validation integration."""
 
@@ -337,17 +308,11 @@ class TestConfigValidationIntegration:
             max_tokens = 8192
 
         @dataclass
-        class MockSchedulerConfig:
-            enabled = True
-            poll_seconds = 60
-
-        @dataclass
         class MockConfig:
             llm = MockLLMConfig()
             runtime = MockRuntimeConfig()
             storage = MockStorageConfig()
             copilot = MockCopilotConfig()
-            scheduler = MockSchedulerConfig()
 
         is_valid, issues = validate_config(MockConfig())
 

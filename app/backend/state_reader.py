@@ -302,9 +302,11 @@ class StateReader:
         """Get scheduled items from schedule.json.
 
         Schedule is a system feature that persists beyond user sessions.
-        It is stored in schedule.json, not in current_state.json.
+        It is stored in ../schedule.json (data/schedule.json) for the standalone scheduler.
         """
-        data = self._read_json("schedule.json")
+        data = self._read_json("../schedule.json")
+        if not data:
+            data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data]

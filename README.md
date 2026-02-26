@@ -115,7 +115,7 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 
 - `data/state/current_state.json` - Conversation state (messages, tool calls)
 - `data/state/registry.json` - Agent and tool registry
-- `data/state/schedule.json` - Scheduled tasks
+- `data/schedule.json` - Scheduled tasks (managed by app/scheduler)
 - `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
 
 ### Log Files

@@ -153,9 +153,36 @@ jobs:
       - name: Build
         run: npm run build
 
+  scheduler:
+    needs: runner-context
+    runs-on: [self-hosted, Linux]
+    container:
+      image: python:3.12-slim
+      options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
+      volumes:
+        - /var/cache/gh-pip:/github/home/.cache/pip
+    env:
+      PIP_CACHE_DIR: /github/home/.cache/pip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python deps
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+          pip install croniter ruff
+          pip install -e . --no-deps
+
+      - name: Lint scheduler (ruff)
+        run: |
+          . .venv/bin/activate
+          ruff check app/scheduler
+
   build-and-push:
     runs-on: self-hosted
-    needs: [backend, progenitor, frontend]
+    needs: [backend, progenitor, frontend, scheduler]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
@@ -204,6 +231,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push scheduler image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/scheduler/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/tamaw/progenitor-scheduler:latest
+            ghcr.io/tamaw/progenitor-scheduler:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
     runs-on: self-hosted
@@ -232,10 +271,17 @@ jobs:
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SCHEDULER_ENABLED: ${{ vars.SCHEDULER_ENABLED }}
+          SCHEDULER_POLL_SECONDS: ${{ vars.SCHEDULER_POLL_SECONDS }}
+          SCHEDULER_SCHEDULE_PATH: ${{ vars.SCHEDULER_SCHEDULE_PATH }}
+          SCHEDULER_IPC_HOST: ${{ vars.SCHEDULER_IPC_HOST }}
+          SCHEDULER_IPC_PORT: ${{ vars.SCHEDULER_IPC_PORT }}
+          SCHEDULER_REQUEST_TIMEOUT_SECONDS: ${{ vars.SCHEDULER_REQUEST_TIMEOUT_SECONDS }}
+          SCHEDULER_LOG_LEVEL: ${{ vars.SCHEDULER_LOG_LEVEL }}
         run: |
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
-          docker rm -f progenitor progenitor-backend 2>/dev/null || true
+          docker rm -f progenitor progenitor-backend progenitor-scheduler 2>/dev/null || true
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull
           docker compose -f docker/docker-compose.progenitor.yml up -d

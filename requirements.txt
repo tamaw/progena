@@ -18,6 +18,7 @@ fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
 agent-client-protocol>=0.7.1,<0.8.0
+croniter>=2.0.5
 
 # Testing
 pytest>=8.0.0

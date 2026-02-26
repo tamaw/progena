@@ -72,7 +72,7 @@ class StateManager:
         "build_state": "build_state.json",      # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
         "registry": "registry.json",
-        "schedule": "schedule.json",
+        "schedule": "../schedule.json",
     }
 
     LOG_FILES: dict[str, str] = {

@@ -1,0 +1,2 @@
+"""Standalone scheduler service."""
+
