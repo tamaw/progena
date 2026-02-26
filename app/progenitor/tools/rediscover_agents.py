@@ -46,10 +46,11 @@ class RediscoverAgentsTool(BaseSystemTool):
 
     async def execute(self, context: ToolContext) -> ToolResult:
         from .agent_discovery import discover_agents
+        from .mcp import A2AClient
 
         # Get agents directory
         project_root = Path(__file__).parent.parent.parent.parent
-        agents_dir = project_root / "build" / "agents"
+        agents_dir = project_root / "app" / "agents"
 
         logger.info("Executing system tool: rediscover_agents")
 
@@ -59,4 +60,12 @@ class RediscoverAgentsTool(BaseSystemTool):
             registry=context.tool_registry,
         )
 
-        return ToolResult.ok(result)
+        litellm_sync = None
+        if hasattr(context.tool_registry, "sync_agents_from_litellm"):
+            litellm_sync = await context.tool_registry.sync_agents_from_litellm(A2AClient())
+
+        return ToolResult.ok({
+            **result,
+            "agents_dir": str(agents_dir),
+            "litellm_sync": litellm_sync,
+        })

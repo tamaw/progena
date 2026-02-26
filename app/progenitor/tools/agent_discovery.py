@@ -469,7 +469,7 @@ class AgentDiscoveryTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         # Mirror RediscoverAgentsTool behavior but keep this module self-contained.
         project_root = Path(__file__).parent.parent.parent.parent
-        agents_dir = project_root / "build" / "agents"
+        agents_dir = project_root / "app" / "agents"
 
         logger.info("Executing system tool: agent_discovery")
         result = await discover_agents(

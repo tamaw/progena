@@ -70,11 +70,39 @@ class Progenitor:
 
         # Load tool/agent registry
         await self.tool_registry.load()
-        # Refresh agent metadata from agent cards (best-effort).
+        # Startup discovery: scan local agents and persist to registry.
+        try:
+            from .tools.agent_discovery import discover_agents
+
+            agents_dir = PROJECT_ROOT / "app" / "agents"
+            if agents_dir.exists():
+                discovery = await discover_agents(
+                    agents_dir=agents_dir,
+                    llm_client=self.llm_client,
+                    registry=self.tool_registry,
+                )
+                logger.info(
+                    "Startup discovery: found=%d registered=%d",
+                    discovery.get("agents_found", 0),
+                    discovery.get("agents_registered", 0),
+                )
+        except Exception as exc:
+            logger.debug("Startup local agent discovery skipped: %s", exc)
+
+        # Sync from LiteLLM and refresh live agent card metadata (best-effort).
         try:
             from .tools.mcp import A2AClient
 
-            summary = await self.tool_registry.refresh_agent_cards(A2AClient())
+            a2a_client = A2AClient()
+            litellm_summary = await self.tool_registry.sync_agents_from_litellm(a2a_client)
+            logger.info(
+                "LiteLLM sync: seen=%d added=%d updated=%d",
+                litellm_summary.get("agents_seen", 0),
+                litellm_summary.get("agents_added", 0),
+                litellm_summary.get("agents_updated", 0),
+            )
+
+            summary = await self.tool_registry.refresh_agent_cards(a2a_client)
             logger.info(
                 "Agent card refresh: checked=%d updated=%d errors=%d",
                 summary.get("agents_checked", 0),
