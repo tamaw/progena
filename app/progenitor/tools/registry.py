@@ -582,7 +582,7 @@ class ToolRegistry:
                     "agent_card_url": None,
                     "litellm_agent_id": agent_id,
                     "agent_card": card or None,
-                    "status": AgentStatus.STOPPED.value,
+                    "status": AgentStatus.RUNNING.value,
                     "enabled": True,
                     "created_at": utcnow().isoformat(),
                     "updated_at": utcnow().isoformat(),
@@ -594,6 +594,9 @@ class ToolRegistry:
             changed = False
             if agent_id and existing.get("litellm_agent_id") != agent_id:
                 existing["litellm_agent_id"] = agent_id
+                changed = True
+            if existing.get("status") != AgentStatus.RUNNING.value:
+                existing["status"] = AgentStatus.RUNNING.value
                 changed = True
             if card:
                 description = str(card.get("description") or "").strip()
