@@ -61,6 +61,8 @@ jobs:
       PIP_CACHE_DIR: /github/home/.cache/pip
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Install Python deps
         run: |
@@ -94,6 +96,8 @@ jobs:
       PIP_CACHE_DIR: /github/home/.cache/pip
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Install Python deps
         run: |
@@ -136,6 +140,8 @@ jobs:
         working-directory: app/frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: actions/setup-node@v4
         with:
@@ -159,6 +165,8 @@ jobs:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: docker/setup-buildx-action@v3
 
@@ -212,6 +220,8 @@ jobs:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Ensure external network
         run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
@@ -231,10 +241,26 @@ jobs:
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PROGENITOR_HOST_DATA_DIR: /var/lib/progenitor/data
+          PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
+          PROGENITOR_HOST_WORKTREES_DIR: /var/lib/progenitor/worktrees
+          PROGENITOR_HOST_TMP_DIR: /var/lib/progenitor/tmp
+          PROGENITOR_HOST_PROMPTS_DIR: /var/lib/progenitor/prompts
         run: |
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
           docker rm -f progenitor progenitor-backend 2>/dev/null || true
+          mkdir -p \
+            "${PROGENITOR_HOST_DATA_DIR}" \
+            "${PROGENITOR_HOST_LOGS_DIR}" \
+            "${PROGENITOR_HOST_WORKTREES_DIR}" \
+            "${PROGENITOR_HOST_TMP_DIR}" \
+            "${PROGENITOR_HOST_PROMPTS_DIR}"
+          if command -v sudo >/dev/null 2>&1; then
+            sudo chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
+          else
+            chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
+          fi
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull
           docker compose -f docker/docker-compose.progenitor.yml up -d
