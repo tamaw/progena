@@ -121,8 +121,8 @@ class TestStateManager:
             id="schedule-1",
             description="Daily task",
             instruction="Do the daily task",
-            run_at=utcnow(),
-            repeat_minutes=1440,
+            cron_expression="0 9 * * *",
+            next_run=utcnow(),
         )
 
         await manager.save_schedule([entry])

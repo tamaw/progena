@@ -20,6 +20,7 @@ dependencies = [
     "openai>=1.0.0",
     "langgraph>=0.2.0",
     "pydantic>=2.0.0",
+    "croniter>=2.0.5",
     "aiohttp>=3.9.0",
     "aiofiles>=24.1.0",
     "pytz>=2024.1",

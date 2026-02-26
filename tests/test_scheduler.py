@@ -16,12 +16,12 @@ class TestScheduler:
     def test_get_due_items_one_off(self):
         """Test finding due one-off scheduled items."""
         now = utcnow()
-        past_time = (now - timedelta(hours=1)).isoformat()
-        future_time = (now + timedelta(hours=1)).isoformat()
+        past_time = (now - timedelta(hours=1)).replace(second=0, microsecond=0).isoformat()
+        future_time = (now + timedelta(hours=1)).replace(second=0, microsecond=0).isoformat()
 
         schedule = [
-            {"id": "past", "run_at": past_time, "enabled": True},
-            {"id": "future", "run_at": future_time, "enabled": True},
+            {"id": "past", "cron_expression": "* * * * *", "next_run": past_time, "one_off": True, "enabled": True},
+            {"id": "future", "cron_expression": "* * * * *", "next_run": future_time, "one_off": True, "enabled": True},
         ]
 
         due = self.scheduler.get_due_items(schedule, now)
@@ -32,23 +32,21 @@ class TestScheduler:
     def test_get_due_items_interval(self):
         """Test finding due interval-based items."""
         now = utcnow()
-        (now - timedelta(minutes=30)).isoformat()
-        # For recurring tasks, run_at advances after each run
-        # A task is due when run_at <= now
-        past_run_at = (now - timedelta(minutes=5)).isoformat()
-        future_run_at = (now + timedelta(minutes=30)).isoformat()
+        # For recurring tasks, next_run advances after each run.
+        past_run_at = (now - timedelta(minutes=5)).replace(second=0, microsecond=0).isoformat()
+        future_run_at = (now + timedelta(minutes=30)).replace(second=0, microsecond=0).isoformat()
 
         schedule = [
             {
                 "id": "interval-due",
-                "repeat_minutes": 15,
-                "run_at": past_run_at,
+                "cron_expression": "*/15 * * * *",
+                "next_run": past_run_at,
                 "enabled": True,
             },
             {
                 "id": "interval-not-due",
-                "repeat_minutes": 60,
-                "run_at": future_run_at,
+                "cron_expression": "0 * * * *",
+                "next_run": future_run_at,
                 "enabled": True,
             },
         ]
@@ -61,10 +59,10 @@ class TestScheduler:
     def test_disabled_items_not_due(self):
         """Test that disabled items are not returned."""
         now = utcnow()
-        past_time = (now - timedelta(hours=1)).isoformat()
+        past_time = (now - timedelta(hours=1)).replace(second=0, microsecond=0).isoformat()
 
         schedule = [
-            {"id": "disabled", "run_at": past_time, "enabled": False},
+            {"id": "disabled", "cron_expression": "* * * * *", "next_run": past_time, "one_off": True, "enabled": False},
         ]
 
         due = self.scheduler.get_due_items(schedule, now)
@@ -75,63 +73,60 @@ class TestScheduler:
         """Test parsing 'every day at X' expressions."""
         result = self.scheduler.parse_time_expression("every day at 9am")
 
-        # Now returns repeat_minutes (1440 for daily) instead of cron
-        assert "repeat_minutes" in result
-        assert result["repeat_minutes"] == 1440
-        assert "run_at" in result
+        assert result["cron_expression"] == "0 9 * * *"
+        assert "next_run" in result
+        assert result["one_off"] is False
         assert "description" in result
 
     def test_parse_every_minutes(self):
         """Test parsing 'every X minutes' expressions."""
         result = self.scheduler.parse_time_expression("every 30 minutes")
 
-        # Uses repeat_minutes instead of interval_minutes
-        assert "repeat_minutes" in result
-        assert result["repeat_minutes"] == 30
+        assert result["cron_expression"] == "*/30 * * * *"
+        assert result["one_off"] is False
 
     def test_parse_every_hours(self):
         """Test parsing 'every X hours' expressions."""
         result = self.scheduler.parse_time_expression("every 2 hours")
 
-        # Uses repeat_minutes instead of interval_minutes
-        assert "repeat_minutes" in result
-        assert result["repeat_minutes"] == 120
+        assert result["cron_expression"] == "0 */2 * * *"
+        assert result["one_off"] is False
 
     def test_parse_tomorrow(self):
         """Test parsing 'tomorrow' expression."""
         result = self.scheduler.parse_time_expression("tomorrow")
 
-        assert "run_at" in result
-        run_at = datetime.fromisoformat(result["run_at"])
+        assert "next_run" in result
+        run_at = datetime.fromisoformat(result["next_run"])
         assert run_at > utcnow()
 
     def test_parse_in_minutes(self):
         """Test parsing 'in X minutes' expression."""
         result = self.scheduler.parse_time_expression("in 15 minutes")
 
-        assert "run_at" in result
-        run_at = datetime.fromisoformat(result["run_at"])
+        assert "next_run" in result
+        run_at = datetime.fromisoformat(result["next_run"])
         now = utcnow()
         diff = (run_at - now).total_seconds() / 60
         assert 14 <= diff <= 16
 
     def test_advance_recurring(self):
-        """Test advancing recurring task's run_at time."""
+        """Test advancing recurring task's next_run time."""
         now = utcnow()
-        past_run_at = (now - timedelta(minutes=10)).isoformat()
+        past_run_at = (now - timedelta(minutes=10)).replace(second=0, microsecond=0).isoformat()
 
         schedule = [
-            {"id": "task-1", "repeat_minutes": 30, "run_at": past_run_at, "last_run": None},
-            {"id": "task-2", "repeat_minutes": 60, "run_at": past_run_at, "last_run": None},
+            {"id": "task-1", "cron_expression": "*/30 * * * *", "next_run": past_run_at, "last_run": None},
+            {"id": "task-2", "cron_expression": "0 * * * *", "next_run": past_run_at, "last_run": None},
         ]
 
         run_time = now
         updated = self.scheduler.advance_recurring(schedule, "task-1", run_time)
 
-        # task-1's last_run should be set and run_at should be advanced
+        # task-1's last_run should be set and next_run should be advanced
         assert updated[0]["last_run"] == run_time.isoformat()
-        # run_at should now be in the future
-        new_run_at = datetime.fromisoformat(updated[0]["run_at"])
+        # next_run should now be in the future
+        new_run_at = datetime.fromisoformat(updated[0]["next_run"])
         assert new_run_at > run_time
 
         # task-2 should be unchanged
@@ -140,10 +135,10 @@ class TestScheduler:
     def test_advance_recurring_one_off_keeps_last_run(self):
         """Test that one-off tasks get last_run set but no run_at advance."""
         now = utcnow()
-        past_run_at = (now - timedelta(minutes=5)).isoformat()
+        past_run_at = (now - timedelta(minutes=5)).replace(second=0, microsecond=0).isoformat()
 
         schedule = [
-            {"id": "one-off", "run_at": past_run_at, "enabled": True},
+            {"id": "one-off", "cron_expression": "* * * * *", "next_run": past_run_at, "one_off": True, "enabled": True},
         ]
 
         run_time = now
@@ -151,5 +146,5 @@ class TestScheduler:
 
         # last_run should be set
         assert updated[0]["last_run"] == run_time.isoformat()
-        # run_at should NOT be advanced (no repeat_minutes)
-        assert updated[0]["run_at"] == past_run_at
+        # next_run should NOT be advanced for one-off
+        assert updated[0]["next_run"] == past_run_at

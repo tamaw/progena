@@ -12,7 +12,7 @@ Two nodes handle the full scheduled-task lifecycle:
   create_schedule_finalize_node
     Runs after the scheduled chat path (intake → chat → respond) completes.
     Responsibilities:
-      - Advances recurring task run_at (or deletes one-off entry)
+      - Advances recurring task next_run (or deletes one-off entry)
       - Always pushes the result back to the user, including failure/empty cases
 """
 
@@ -103,8 +103,8 @@ def create_schedule_dispatch_node(
                 "type": "scheduled",
                 "schedule_id": schedule_id,
                 "schedule_description": entry.get("description"),
-                "schedule_run_at": entry.get("run_at"),
-                "schedule_repeat_minutes": entry.get("repeat_minutes"),
+                "schedule_next_run": entry.get("next_run"),
+                "schedule_cron_expression": entry.get("cron_expression"),
             },
         })
 
@@ -121,7 +121,7 @@ def create_schedule_finalize_node(
     Runs after the scheduled chat path completes (regardless of success/failure).
     Responsibilities:
       - One-off tasks  : deleted immediately from storage
-      - Recurring tasks: run_at advanced by repeat_minutes, last_run set
+      - Recurring tasks: next_run advanced by cron expression, last_run set
       - Result event   : always pushed back to the user (empty response is
                          reported explicitly rather than silently dropped)
     """
@@ -146,10 +146,10 @@ def create_schedule_finalize_node(
             logger.warning("schedule_finalize: entry %s not found — already removed?", schedule_id)
             return {"bg_schedule_id": None}
 
-        is_recurring = bool(entry.get("repeat_minutes"))
+        is_recurring = not entry.get("one_off", False)
 
         if is_recurring:
-            # Advance run_at to next occurrence and persist last_run.
+            # Advance next_run to next occurrence and persist last_run.
             updated_schedule = scheduler.advance_recurring(schedule_dicts, schedule_id, utcnow())
             updated_entry = next(
                 (e for e in updated_schedule if str(e.get("id")) == str(schedule_id)),
@@ -158,13 +158,13 @@ def create_schedule_finalize_node(
             if updated_entry:
                 updates: dict[str, Any] = {
                     "last_run": updated_entry.get("last_run"),
-                    "run_at": updated_entry.get("run_at"),
+                    "next_run": updated_entry.get("next_run"),
                 }
                 await state_manager.update_schedule_entry(schedule_id, updates)
                 logger.info(
-                    "schedule_finalize: advanced recurring %s → next run_at=%s",
+                    "schedule_finalize: advanced recurring %s → next_run=%s",
                     schedule_id,
-                    updates.get("run_at"),
+                    updates.get("next_run"),
                 )
         else:
             # One-off: delete immediately — it ran, it's done.

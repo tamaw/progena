@@ -123,13 +123,13 @@ class TestNormalizeScheduleEntry:
             "id": "sched-1",
             "description": "Daily task",
             "instruction": "Do something daily",
-            "run_at": "2026-01-20T09:00:00+00:00",
-            "repeat_minutes": 1440,
+            "cron_expression": "0 9 * * *",
+            "next_run": "2026-01-20T09:00:00+00:00",
         }
         result = normalize_schedule_entry(data)
         assert isinstance(result, ScheduleEntry)
         assert result.id == "sched-1"
-        assert result.repeat_minutes == 1440
+        assert result.cron_expression == "0 9 * * *"
 
     def test_normalize_dict_legacy_interval(self):
         """Test that legacy interval_minutes field is not supported."""
@@ -140,7 +140,7 @@ class TestNormalizeScheduleEntry:
             "interval_minutes": 60,  # Old field name - no longer supported
         }
         result = normalize_schedule_entry(data)
-        # Without run_at, should return None
+        # Without cron_expression/next_run, should return None
         assert result is None
 
 

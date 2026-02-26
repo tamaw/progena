@@ -256,21 +256,18 @@ class Decision(BaseModel):
 class ScheduleEntry(BaseModel):
     """A scheduled task entry.
 
-    Simplified model:
-    - One-off tasks: Just set `run_at`, leave `repeat_minutes` as None
-    - Recurring tasks: Set `run_at` for first run, `repeat_minutes` for interval
-
-    After execution, `last_run` is updated. For one-off tasks, having
-    `last_run` set means it's complete (won't re-trigger).
-    For recurring tasks, `run_at` is updated to the next occurrence.
+    Cron-based model:
+    - Recurring tasks: cron_expression defines cadence, next_run tracks due time
+    - One-off tasks: one_off=True, next_run is fixed, removed after execution
     """
     model_config = {"use_enum_values": True}
 
     id: str
     description: str
     instruction: str  # What the agent should do at the scheduled time
-    run_at: datetime  # When to execute (updated for recurring tasks)
-    repeat_minutes: int | None = None  # If set, repeat every N minutes
+    cron_expression: str
+    next_run: datetime
+    one_off: bool = False
     last_run: datetime | None = None  # When it last executed
     enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)

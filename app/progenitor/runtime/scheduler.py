@@ -1,16 +1,11 @@
-"""
-Scheduler for Progenitor.
-
-Handles recurring and one-off scheduled tasks.
-
-Simplified model:
-- One-off: run_at is set, repeat_minutes is None. Runs once, then last_run is set.
-- Recurring: run_at + repeat_minutes. After each run, run_at advances by repeat_minutes.
-"""
+"""Scheduler for Progenitor using cron expressions."""
 
 import re
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any
+
+from croniter import croniter
 
 from .time_utils import utcnow
 
@@ -30,9 +25,8 @@ class Scheduler:
 
         An item is due if:
         - enabled is True
-        - run_at <= current_time
-        - For one-off (no repeat_minutes): last_run must be None
-        - For recurring: always check run_at (it advances after each execution)
+        - next_run <= current_time
+        - For one-off tasks: last_run must be None
         """
         due = []
 
@@ -40,16 +34,14 @@ class Scheduler:
             if not item.get("enabled", True):
                 continue
 
-            run_at = self._parse_datetime(item.get("run_at"))
-            if not run_at:
+            next_run = self._parse_datetime(item.get("next_run"))
+            if not next_run:
                 continue
 
-            # Check if run_at has passed
-            if run_at > current_time:
+            if next_run > current_time:
                 continue
 
-            # One-off task: skip if already executed
-            if not item.get("repeat_minutes") and item.get("last_run"):
+            if item.get("one_off", False) and item.get("last_run"):
                 continue
 
             due.append(item)
@@ -60,14 +52,16 @@ class Scheduler:
         """Parse a natural language time expression.
 
         Returns dict with:
-        - run_at: ISO datetime string for when to first execute
-        - repeat_minutes: Optional int for recurring interval
+        - cron_expression: cron expression used for scheduling
+        - next_run: ISO datetime string for next execution
+        - one_off: whether the task should run only once
         - description: Human-readable description
         """
         expression = expression.lower().strip()
         result: dict[str, Any] = {}
+        now = utcnow()
 
-        # "every day at 9am" -> daily = 1440 minutes
+        # "every day at 9am"
         match = re.search(r"every day at (\d{1,2})(:\d{2})?\s*(am|pm)?", expression)
         if match:
             hour = int(match.group(1))
@@ -79,14 +73,10 @@ class Scheduler:
             elif period == "am" and hour == 12:
                 hour = 0
 
-            # Set run_at to next occurrence of this time
-            now = utcnow()
-            run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if run_at <= now:
-                run_at += timedelta(days=1)
-
-            result["run_at"] = run_at.isoformat()
-            result["repeat_minutes"] = 1440  # 24 hours
+            cron_expression = f"{minute} {hour} * * *"
+            result["cron_expression"] = cron_expression
+            result["next_run"] = self._next_run_iso(cron_expression, now)
+            result["one_off"] = False
             result["description"] = f"Daily at {hour:02d}:{minute:02d}"
             return result
 
@@ -96,16 +86,21 @@ class Scheduler:
             value = int(match.group(1))
             unit = match.group(2)
 
-            repeat_minutes = value * 60 if unit in ("hour", "hr") else value
+            if unit in ("hour", "hr"):
+                cron_expression = f"0 */{value} * * *"
+                result["description"] = f"Every {value} hour(s)"
+            else:
+                cron_expression = f"*/{value} * * * *"
+                result["description"] = f"Every {value} minute(s)"
 
-            result["run_at"] = utcnow().isoformat()  # Start now
-            result["repeat_minutes"] = repeat_minutes
-            result["description"] = f"Every {repeat_minutes} minutes"
+            result["cron_expression"] = cron_expression
+            result["next_run"] = self._next_run_iso(cron_expression, now)
+            result["one_off"] = False
             return result
 
         # "tomorrow" / "tomorrow at Xam"
         if "tomorrow" in expression:
-            run_at = utcnow() + timedelta(days=1)
+            run_at = now + timedelta(days=1)
             # Check for specific time
             time_match = re.search(r"at (\d{1,2})(:\d{2})?\s*(am|pm)?", expression)
             if time_match:
@@ -119,7 +114,10 @@ class Scheduler:
                 run_at = run_at.replace(hour=hour, minute=minute, second=0, microsecond=0)
             else:
                 run_at = run_at.replace(hour=9, minute=0, second=0, microsecond=0)
-            result["run_at"] = run_at.isoformat()
+            cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
+            result["cron_expression"] = cron_expression
+            result["next_run"] = run_at.isoformat()
+            result["one_off"] = True
             result["description"] = f"Tomorrow at {run_at.strftime('%H:%M')}"
             return result
 
@@ -131,8 +129,11 @@ class Scheduler:
 
             delta = timedelta(hours=value) if unit in ("hour", "hr") else timedelta(minutes=value)
 
-            run_at = utcnow() + delta
-            result["run_at"] = run_at.isoformat()
+            run_at = now + delta
+            cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
+            result["cron_expression"] = cron_expression
+            result["next_run"] = run_at.isoformat()
+            result["one_off"] = True
             result["description"] = f"In {value} {unit}(s)"
             return result
 
@@ -148,12 +149,14 @@ class Scheduler:
             elif period == "am" and hour == 12:
                 hour = 0
 
-            now = utcnow()
             run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if run_at <= now:
                 run_at += timedelta(days=1)
 
-            result["run_at"] = run_at.isoformat()
+            cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
+            result["cron_expression"] = cron_expression
+            result["next_run"] = run_at.isoformat()
+            result["one_off"] = True
             result["description"] = f"At {hour:02d}:{minute:02d}"
             return result
 
@@ -178,24 +181,23 @@ class Scheduler:
     ) -> list[dict[str, Any]]:
         """Update schedule entry after execution.
 
-        For recurring tasks: advances run_at by repeat_minutes.
+        For recurring tasks: advances next_run using croniter.
         For all tasks: sets last_run.
         """
         for item in schedule:
             if item.get("id") == item_id:
                 item["last_run"] = run_time.isoformat()
 
-                # Advance recurring tasks
-                repeat = item.get("repeat_minutes")
-                if repeat:
-                    current_run_at = self._parse_datetime(item.get("run_at"))
-                    if current_run_at:
-                        next_run = current_run_at + timedelta(minutes=repeat)
-                        # If next_run is still in the past, advance to future
-                        while next_run <= run_time:
-                            next_run += timedelta(minutes=repeat)
-                        item["run_at"] = next_run.isoformat()
+                if not item.get("one_off", False):
+                    cron_expression = item.get("cron_expression")
+                    if isinstance(cron_expression, str):
+                        with suppress(ValueError, KeyError):
+                            item["next_run"] = croniter(cron_expression, run_time).get_next(datetime).isoformat()
 
                 break
 
         return schedule
+
+    def _next_run_iso(self, cron_expression: str, base_time: datetime) -> str:
+        """Get the next run time for a cron expression."""
+        return croniter(cron_expression, base_time).get_next(datetime).isoformat()
