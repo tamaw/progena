@@ -282,6 +282,12 @@ jobs:
 
           HOST_UID=$(id -u)
           HOST_GID=$(id -g)
+          if command -v sudo >/dev/null 2>&1; then
+            sudo chown -R "${HOST_UID}:${HOST_GID}" "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}" || \
+              chown -R "${HOST_UID}:${HOST_GID}" "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}"
+          else
+            chown -R "${HOST_UID}:${HOST_GID}" "${DATA_SRC}" "${LOGS_SRC}" "${WORKTREES_SRC}"
+          fi
 
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
