@@ -296,6 +296,7 @@ jobs:
             --restart unless-stopped \
             --user ${HOST_UID}:${HOST_GID} \
             --network progenitor_network \
+            -e A2A_PUBLIC_HOST=progenitor-agent-${{ matrix.agent }} \
             -p ${PORT}:${PORT} \
             ${VOLUME_ARGS} \
             ${ENV_ARGS} \
