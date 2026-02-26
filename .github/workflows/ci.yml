@@ -24,23 +24,6 @@ jobs:
       uid: ${{ steps.ids.outputs.uid }}
       gid: ${{ steps.ids.outputs.gid }}
     steps:
-      - name: Normalize workspace permissions
-        run: |
-          fix_owner() {
-            local path="$1"
-            [ -e "$path" ] || return 0
-            if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R "$(id -u):$(id -g)" "$path" || true
-            else
-              chown -R "$(id -u):$(id -g)" "$path" || true
-            fi
-            chmod -R u+rwX "$path" || true
-          }
-          fix_owner "$GITHUB_WORKSPACE/logs"
-          fix_owner "$GITHUB_WORKSPACE/data"
-          fix_owner "$GITHUB_WORKSPACE/tmp"
-          fix_owner "$GITHUB_WORKSPACE/worktrees"
-
       - name: Capture runner uid/gid
         id: ids
         run: |
@@ -174,6 +157,9 @@ jobs:
           context: .
           file: docker/progenitor/Dockerfile
           push: true
+          labels: |
+            com.progenitor.managed=true
+            com.progenitor.component=progenitor
           tags: |
             ghcr.io/tamaw/progenitor:latest
             ghcr.io/tamaw/progenitor:${{ github.sha }}
@@ -186,6 +172,9 @@ jobs:
           context: .
           file: docker/backend/Dockerfile
           push: true
+          labels: |
+            com.progenitor.managed=true
+            com.progenitor.component=backend
           tags: |
             ghcr.io/tamaw/progenitor-backend:latest
             ghcr.io/tamaw/progenitor-backend:${{ github.sha }}
@@ -198,6 +187,9 @@ jobs:
           context: app/frontend
           file: docker/frontend/Dockerfile
           push: true
+          labels: |
+            com.progenitor.managed=true
+            com.progenitor.component=frontend
           tags: |
             ghcr.io/tamaw/progenitor-frontend:latest
             ghcr.io/tamaw/progenitor-frontend:${{ github.sha }}
@@ -231,10 +223,26 @@ jobs:
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PROGENITOR_HOST_DATA_DIR: /var/lib/progenitor/data
+          PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
+          PROGENITOR_HOST_WORKTREES_DIR: /var/lib/progenitor/worktrees
+          PROGENITOR_HOST_TMP_DIR: /var/lib/progenitor/tmp
+          PROGENITOR_HOST_PROMPTS_DIR: /var/lib/progenitor/prompts
         run: |
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
           docker rm -f progenitor progenitor-backend 2>/dev/null || true
+          mkdir -p \
+            "${PROGENITOR_HOST_DATA_DIR}" \
+            "${PROGENITOR_HOST_LOGS_DIR}" \
+            "${PROGENITOR_HOST_WORKTREES_DIR}" \
+            "${PROGENITOR_HOST_TMP_DIR}" \
+            "${PROGENITOR_HOST_PROMPTS_DIR}"
+          if command -v sudo >/dev/null 2>&1; then
+            sudo chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
+          else
+            chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
+          fi
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull
           docker compose -f docker/docker-compose.progenitor.yml up -d
@@ -262,3 +270,10 @@ jobs:
 
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
+
+      - name: Cleanup unused managed images
+        if: success()
+        run: |
+          docker image prune -af \
+            --filter "label=com.progenitor.managed=true" \
+            --filter "until=168h" || true
