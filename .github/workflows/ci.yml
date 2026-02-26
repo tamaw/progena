@@ -24,6 +24,23 @@ jobs:
       uid: ${{ steps.ids.outputs.uid }}
       gid: ${{ steps.ids.outputs.gid }}
     steps:
+      - name: Normalize workspace permissions
+        run: |
+          fix_owner() {
+            local path="$1"
+            [ -e "$path" ] || return 0
+            if command -v sudo >/dev/null 2>&1; then
+              sudo chown -R "$(id -u):$(id -g)" "$path" || true
+            else
+              chown -R "$(id -u):$(id -g)" "$path" || true
+            fi
+            chmod -R u+rwX "$path" || true
+          }
+          fix_owner "$GITHUB_WORKSPACE/logs"
+          fix_owner "$GITHUB_WORKSPACE/data"
+          fix_owner "$GITHUB_WORKSPACE/tmp"
+          fix_owner "$GITHUB_WORKSPACE/worktrees"
+
       - name: Capture runner uid/gid
         id: ids
         run: |

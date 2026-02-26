@@ -127,9 +127,11 @@ class ProgenitorLoop:
         current_state = await self.state_manager.get_current_state()
         self._state.update(current_state)
 
-        self._state["run_id"] = run_id  # New run ID for this session
-
-        logger.info("Starting perpetual loop (run_id: %s)", run_id)
+        logger.info(
+            "Starting perpetual loop (boot_run_id: %s, conversation_run_id: %s)",
+            run_id,
+            self._state.get("run_id"),
+        )
 
         # Update health immediately on startup
         await self._update_health_file(self._state)
@@ -243,8 +245,8 @@ class ProgenitorLoop:
         current_input = self._state.get("current_input") if source == "user_input" else None
 
         # DeepAgent uses the LangGraph checkpointer keyed by thread_id.
-        # Using a constant thread_id causes unbounded conversation growth across restarts
-        # and prevents the `new_conversation` tool from actually resetting the LLM context.
+        # Keep thread_id aligned to persisted conversation run_id so context survives restarts.
+        # The new_conversation tool rotates run_id, intentionally starting a fresh thread.
         thread_id = str(self._state.get("run_id") or "progenitor_main")
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
