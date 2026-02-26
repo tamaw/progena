@@ -333,6 +333,22 @@ class TestListAgentsTool:
         """Should have correct name."""
         assert tool.name == "list_agents"
 
+    @pytest.mark.asyncio
+    async def test_execute_syncs_litellm_before_listing(self, tool):
+        """list_agents should sync LiteLLM agents before returning output."""
+        mock_registry = MagicMock()
+        mock_registry.load = AsyncMock()
+        mock_registry.sync_agents_from_litellm = AsyncMock()
+        mock_registry.refresh_agent_cards = AsyncMock()
+        mock_registry.get_agents.return_value = []
+        ctx = ToolContext(tool_registry=mock_registry, llm_client=MagicMock())
+
+        result = await tool.execute(ctx)
+
+        assert result.success is True
+        mock_registry.sync_agents_from_litellm.assert_awaited_once()
+        mock_registry.refresh_agent_cards.assert_awaited_once()
+
 
 class TestSelfReflectTool:
     """Tests for SelfReflectTool implementation."""
