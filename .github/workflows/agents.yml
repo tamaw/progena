@@ -210,6 +210,15 @@ jobs:
         id: runtime
         env:
           AGENT_NAME: ${{ matrix.agent }}
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY || vars.LITELLM_API_KEY }}
+          GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
+          PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
+          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
+          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
+          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
+          TEST_MODE: "false"
         run: python .github/scripts/get_agent_runtime_config.py
 
       - name: Docker login (GHCR)
@@ -225,14 +234,18 @@ jobs:
         env:
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY || vars.LITELLM_API_KEY }}
           GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
+          PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
           PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
           PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
           PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
+          TEST_MODE: "false"
         run: |
           PORT=${{ steps.runtime.outputs.port }}
           VOLUME_ARGS="${{ steps.runtime.outputs.volume_args }}"
           CHOWN_PATHS="${{ steps.runtime.outputs.chown_paths }}"
+          ENV_ARGS="${{ steps.runtime.outputs.env_args }}"
 
           PROGENITOR_REPO_URL="https://github.com/tamaw/progenitor.git"
           if [ -n "${GH_TOKEN}" ]; then
@@ -268,11 +281,7 @@ jobs:
             --network progenitor_network \
             -p ${PORT}:${PORT} \
             ${VOLUME_ARGS} \
-            -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
-            -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
-            -e GH_TOKEN="${GH_TOKEN}" \
-            -e PROGENITOR_REPO_URL="${PROGENITOR_REPO_URL}" \
-            -e TEST_MODE=false \
+            ${ENV_ARGS} \
             "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
 
       - name: Wait for agent to become healthy

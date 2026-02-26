@@ -377,7 +377,7 @@ class BackgroundBuildRunner:
         No backlog is used - the inner loop runs directly.
         """
         started_at = utcnow()
-        # Prefer the workspace repo root in Docker (PROGENITOR_PROJECT_ROOT=/app/workspace).
+        # Prefer the workspace repo root in Docker (PROGENITOR_PROJECT_ROOT=/app/worktrees).
         # Falling back to the module path breaks git operations because the agent code
         # directory is not a git repo inside the container.
         repo_root_env = os.getenv("PROGENITOR_PROJECT_ROOT")
