@@ -8,7 +8,7 @@ from app.progenitor.tools.mcp import A2AClient
 @pytest.mark.asyncio
 async def test_call_agent_uses_litellm_a2a_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm:4000")
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-key")
+    monkeypatch.setenv("LITELLM_API_KEY", "test-key")
 
     list_resp = MagicMock()
     list_resp.status_code = 200
@@ -48,7 +48,7 @@ async def test_call_agent_uses_litellm_a2a_endpoint(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_call_agent_uses_litellm_without_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm:4000")
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-key")
+    monkeypatch.setenv("LITELLM_API_KEY", "test-key")
 
     list_resp = MagicMock()
     list_resp.status_code = 200
@@ -83,7 +83,7 @@ async def test_call_agent_uses_litellm_without_endpoint(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_get_agent_card_uses_litellm_agent_registry(monkeypatch) -> None:
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm:4000")
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-key")
+    monkeypatch.setenv("LITELLM_API_KEY", "test-key")
 
     expected_card = {"name": "Builder Agent", "description": "Builds agents"}
     list_resp = MagicMock()

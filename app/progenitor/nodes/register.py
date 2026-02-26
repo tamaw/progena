@@ -25,11 +25,10 @@ logger = logging.getLogger(__name__)
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
-LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 
 
 def _litellm_headers() -> dict[str, str]:
-    key = (LITELLM_API_KEY or LITELLM_MASTER_KEY).strip()
+    key = LITELLM_API_KEY.strip()
     headers: dict[str, str] = {}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -119,7 +118,7 @@ async def _register_with_litellm(
                 "litellm_params": {
                     "model": f"openai/{model_name}",
                     "api_base": api_base,
-                    "api_key": (LITELLM_API_KEY or LITELLM_MASTER_KEY),
+                    "api_key": LITELLM_API_KEY,
                 },
                 "model_info": {
                     "description": description,
