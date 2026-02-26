@@ -196,6 +196,24 @@ class TestStateManager:
         assert len(backlog) == 10
 
     @pytest.mark.asyncio
+    async def test_atomic_write_recreates_missing_parent_dir(self, temp_dirs):
+        """Atomic writes recreate missing parent directories before writing."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        # Simulate the mounted state directory disappearing at runtime.
+        for file_path in state_dir.iterdir():
+            if file_path.is_file():
+                file_path.unlink()
+        state_dir.rmdir()
+
+        await manager.save_current_state({"run_id": "restored", "cycle_count": 1})
+
+        assert state_dir.exists()
+        assert (state_dir / "current_state.json").exists()
+
+    @pytest.mark.asyncio
     async def test_commit_state(self, temp_dirs):
         """Test committing all state."""
         state_dir, logs_dir = temp_dirs

@@ -281,6 +281,7 @@ class StateManager:
         file remains intact. No partial writes possible.
         """
         filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
 
         # Write to temp file in same directory
         fd, tmp_path = tempfile.mkstemp(
