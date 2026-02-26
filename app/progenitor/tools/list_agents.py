@@ -33,6 +33,21 @@ class ListAgentsTool(BaseSystemTool):
             "active agents",
             "agent status",
             "agent list",
+            "discover agents",
+            "rediscover agents",
+            "refresh agents",
+            "reload agents",
+            "rescan agents",
+            "scan agents",
+            "rewire agents",
+            "rewire the agents",
+            "refresh registry",
+            "re-scan agents",
+            "re-discover agents",
+            "agent registry",
+            "run discovery",
+            "sync agents",
+            "agent discovery",
         ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
@@ -41,12 +56,30 @@ class ListAgentsTool(BaseSystemTool):
             with suppress(Exception):
                 await context.tool_registry.load()
 
+        # Keep local folder-based discovery available via this single tool path.
+        with suppress(Exception):
+            from pathlib import Path
+
+            from .agent_discovery import discover_agents
+
+            project_root = Path(__file__).parent.parent.parent.parent
+            agents_dir = project_root / "app" / "agents"
+            if agents_dir.exists():
+                await discover_agents(
+                    agents_dir=agents_dir,
+                    llm_client=context.llm_client,
+                    registry=context.tool_registry,
+                )
+
         # Best-effort: keep agent metadata aligned to live agent cards.
         if hasattr(context.tool_registry, "refresh_agent_cards"):
             with suppress(Exception):
                 from .mcp import A2AClient
 
-                await context.tool_registry.refresh_agent_cards(A2AClient())
+                a2a_client = A2AClient()
+                if hasattr(context.tool_registry, "sync_agents_from_litellm"):
+                    await context.tool_registry.sync_agents_from_litellm(a2a_client)
+                await context.tool_registry.refresh_agent_cards(a2a_client)
 
         agents = context.tool_registry.get_agents()
         all_agents = [
