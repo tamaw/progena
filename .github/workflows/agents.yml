@@ -176,6 +176,9 @@ jobs:
           build-args: |
             AGENT_NAME=${{ matrix.agent }}
           push: true
+          labels: |
+            com.progenitor.managed=true
+            com.progenitor.component=agent
           tags: |
             ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest
             ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:${{ github.sha }}
@@ -318,6 +321,13 @@ jobs:
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: python .github/scripts/register_litellm_agent.py --validate-only
 
+      - name: Cleanup unused managed images
+        if: success()
+        run: |
+          docker image prune -af \
+            --filter "label=com.progenitor.managed=true" \
+            --filter "until=168h" || true
+
   # ------------------------------------------------------------------ build + push mcps
   build-mcp:
     needs: detect-changes
@@ -346,6 +356,9 @@ jobs:
           build-args: |
             MCP_NAME=${{ matrix.mcp }}
           push: true
+          labels: |
+            com.progenitor.managed=true
+            com.progenitor.component=mcp
           tags: |
             ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
             ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:${{ github.sha }}
@@ -438,3 +451,10 @@ jobs:
             }"
           echo ""
           echo "Registered mcp/${{ matrix.mcp }} with LiteLLM at ${MCP_URL}"
+
+      - name: Cleanup unused managed images
+        if: success()
+        run: |
+          docker image prune -af \
+            --filter "label=com.progenitor.managed=true" \
+            --filter "until=168h" || true
