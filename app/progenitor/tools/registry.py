@@ -10,9 +10,9 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypedDict, cast
-from collections.abc import Awaitable, Callable
 
 from ..runtime.port_utils import find_available_port
 from ..runtime.time_utils import utcnow
