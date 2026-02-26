@@ -11,7 +11,8 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
+from collections.abc import Awaitable, Callable
 
 from ..runtime.port_utils import find_available_port
 from ..runtime.time_utils import utcnow
@@ -528,9 +529,10 @@ class ToolRegistry:
         list_agents = getattr(a2a_client, "list_litellm_agents", None)
         if not callable(list_agents):
             return {"agents_seen": 0, "agents_added": 0, "agents_updated": 0, "errors": ["A2A client missing list_litellm_agents"]}
+        list_agents_fn = cast(Callable[..., Awaitable[list[dict[str, Any]]]], list_agents)
 
         try:
-            remote_agents = await list_agents(timeout=timeout)
+            remote_agents = await list_agents_fn(timeout=timeout)
         except Exception as exc:
             return {"agents_seen": 0, "agents_added": 0, "agents_updated": 0, "errors": [str(exc)]}
 
