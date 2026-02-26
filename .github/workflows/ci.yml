@@ -61,8 +61,6 @@ jobs:
       PIP_CACHE_DIR: /github/home/.cache/pip
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
 
       - name: Install Python deps
         run: |
@@ -96,8 +94,6 @@ jobs:
       PIP_CACHE_DIR: /github/home/.cache/pip
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
 
       - name: Install Python deps
         run: |
@@ -140,8 +136,6 @@ jobs:
         working-directory: app/frontend
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
 
       - uses: actions/setup-node@v4
         with:
@@ -165,8 +159,6 @@ jobs:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
 
       - uses: docker/setup-buildx-action@v3
 
@@ -220,8 +212,6 @@ jobs:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
 
       - name: Ensure external network
         run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
