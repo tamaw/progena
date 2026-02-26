@@ -354,19 +354,16 @@ class A2AClient:
     def __init__(self) -> None:
         base_url = (os.getenv("LITELLM_BASE_URL") or "").strip().rstrip("/")
         self._litellm_base_url = base_url
-        self._litellm_master_key = (os.getenv("LITELLM_MASTER_KEY") or "").strip()
         self._litellm_api_key = (os.getenv("LITELLM_API_KEY") or "").strip()
-        self._litellm_primary_key = (self._litellm_api_key or self._litellm_master_key).strip()
 
     def _litellm_enabled(self) -> bool:
         return bool(self._litellm_base_url)
 
-    def _litellm_headers(self, api_key: str | None = None) -> dict[str, str]:
+    def _litellm_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
-        key = (api_key if api_key is not None else self._litellm_primary_key).strip()
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-            headers["x-litellm-api-key"] = key
+        if self._litellm_api_key:
+            headers["Authorization"] = f"Bearer {self._litellm_api_key}"
+            headers["x-litellm-api-key"] = self._litellm_api_key
         return headers
 
     def _litellm_agents_url(self) -> str:
@@ -520,17 +517,6 @@ class A2AClient:
                     },
                 }
                 resp = await httpx_client.post(self._litellm_a2a_url(agent_id), json=payload)
-                if (
-                    resp.status_code == 401
-                    and self._litellm_master_key
-                    and self._litellm_master_key != self._litellm_primary_key
-                    and "only proxy admin" in resp.text.lower()
-                ):
-                    resp = await httpx_client.post(
-                        self._litellm_a2a_url(agent_id),
-                        json=payload,
-                        headers=self._litellm_headers(self._litellm_master_key),
-                    )
         except TimeoutError:
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
