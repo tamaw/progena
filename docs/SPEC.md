@@ -319,7 +319,7 @@ Core JSON contains:
 Background scheduling graph nodes:
 
 * **PickDueSchedule**: find the next due schedule entry and materialize its instruction into `current_input`
-* **AdvanceSchedule**: update `schedule.json` (set `last_run`, and next `run_at` for recurring entries)
+* **AdvanceSchedule**: update `schedule.json` (set `last_run`, and next `next_run` from `cron_expression` for recurring entries)
 
 ### Flow
 
@@ -454,7 +454,7 @@ Progenitor is time-aware and maintains a simple internal scheduler.
 * Wall-clock time is read by the background scheduler (container time + configured timezone)
 * Time-based intents ("every day at 9am", "next Tuesday") create or modify schedule entries
 * Due schedules are executed in a dedicated background job graph
-* After execution, `schedule.json` is advanced (set `last_run`, and next `run_at` for recurring entries)
+* After execution, `schedule.json` is advanced (set `last_run`, and next `next_run` from `cron_expression` for recurring entries)
 
 Scheduled items may:
 
