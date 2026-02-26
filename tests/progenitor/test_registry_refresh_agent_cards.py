@@ -110,4 +110,6 @@ async def test_sync_agents_from_litellm_upserts_registry(tmp_path) -> None:
     assert by_name["observe_agent"]["litellm_agent_id"] == "agt_observe_1"
     assert by_name["observe_agent"]["description"] == "LiteLLM description"
     assert by_name["observe_agent"]["capabilities"] == ["observe", "health_checks"]
+    assert by_name["observe_agent"]["status"] == "running"
     assert by_name["external_agent"]["entrypoint"] == "external:external_agent"
+    assert by_name["external_agent"]["status"] == "running"
