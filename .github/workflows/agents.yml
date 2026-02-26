@@ -293,10 +293,10 @@ jobs:
             fi
           done
 
+          # Let each image use its own USER/entrypoint ownership model.
           docker run -d \
             --name progenitor-agent-${{ matrix.agent }} \
             --restart unless-stopped \
-            --user ${HOST_UID}:${HOST_GID} \
             --network progenitor_network \
             -e A2A_PUBLIC_HOST=progenitor-agent-${{ matrix.agent }} \
             -p ${PORT}:${PORT} \
