@@ -55,7 +55,7 @@ app/
 │   │   ├── graph.py             # Inner loop graph: OBSERVE→THINK→PLAN→BUILD→
 │   │   │                        #   EXECUTE→VERIFY→LEARN (SQLite checkpointing)
 │   │   ├── routing.py           # Graph routing helpers
-│   │   ├── Dockerfile           # Self-contained: git + gh CLI + Copilot CLI
+│   │   ├── Dockerfile           # Self-contained: git + gh CLI + Copilot CLI plus an entrypoint that ensures mounted volumes are owned by runner
 │   │   ├── requirements.txt     # Isolated dependencies (a2a-sdk, langgraph, etc.)
 │   │   ├── nodes/               # Inner loop node implementations
 │   │   ├── state/               # Build state models
