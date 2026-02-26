@@ -182,19 +182,19 @@ def main() -> int:
     }
 
     if agent_id:
-        patch_url = f"{agents_url}/{agent_id}"
-        status, body = call_via_docker_curl("PATCH", patch_url, api_key, payload)
+        delete_url = f"{agents_url}/{agent_id}"
+        status, body = call_via_docker_curl("DELETE", delete_url, api_key)
         if not is_success(status):
-            return fail(f"LiteLLM PATCH {patch_url} failed ({status})", body)
-        print(f"Patched existing agent {agent_name} ({agent_id})")
-    else:
-        status, body = call_via_docker_curl("POST", agents_url, api_key, payload)
-        if not is_success(status):
-            return fail(f"LiteLLM POST {agents_url} failed ({status})", body)
-        agent_id = extract_agent_id(parse_json(body), agent_name)
-        if not agent_id:
-            return fail(f"Registration completed but no agent_id found for {agent_name}", body)
-        print(f"Registered {agent_name} via {agents_url}")
+            return fail(f"LiteLLM DELETE {delete_url} failed ({status})", body)
+        print(f"Deleted existing agent {agent_name} ({agent_id})")
+
+    status, body = call_via_docker_curl("POST", agents_url, api_key, payload)
+    if not is_success(status):
+        return fail(f"LiteLLM POST {agents_url} failed ({status})", body)
+    agent_id = extract_agent_id(parse_json(body), agent_name)
+    if not agent_id:
+        return fail(f"Registration completed but no agent_id found for {agent_name}", body)
+    print(f"Registered {agent_name} via {agents_url}")
 
     return validate_agent_card(api_key, card_base, agent_name, agent_id)
 
