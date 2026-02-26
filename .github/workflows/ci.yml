@@ -24,23 +24,13 @@ jobs:
       uid: ${{ steps.ids.outputs.uid }}
       gid: ${{ steps.ids.outputs.gid }}
     steps:
-      - name: Capture runner ids and normalize workspace ownership
+      - name: Capture runner uid/gid
         id: ids
         run: |
           RUN_UID="$(id -u)"
           RUN_GID="$(id -g)"
           echo "uid=${RUN_UID}" >> "$GITHUB_OUTPUT"
           echo "gid=${RUN_GID}" >> "$GITHUB_OUTPUT"
-
-          REPO="${GITHUB_REPOSITORY#*/}"
-          WORKDIR="/home/runner/_work/${REPO}/${REPO}"
-          if [ -d "${WORKDIR}" ]; then
-            if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R "${RUN_UID}:${RUN_GID}" "${WORKDIR}" || chown -R "${RUN_UID}:${RUN_GID}" "${WORKDIR}"
-            else
-              chown -R "${RUN_UID}:${RUN_GID}" "${WORKDIR}"
-            fi
-          fi
 
   backend:
     needs: runner-context
