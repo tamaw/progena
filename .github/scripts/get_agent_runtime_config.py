@@ -40,6 +40,28 @@ def _parse_volume_arg(arg: str) -> list[str]:
     return [token for token in shlex.split(arg) if token]
 
 
+def _parse_env_arg(arg: str) -> list[str]:
+    tokens = shlex.split(arg)
+    if not tokens:
+        return []
+
+    keys: list[str] = []
+    if any("=" in token for token in tokens):
+        for token in tokens:
+            if "=" not in token:
+                continue
+            key = token.split("=", 1)[0].strip()
+            if key:
+                keys.append(key)
+        return keys
+
+    for idx in range(0, len(tokens), 2):
+        key = tokens[idx].strip()
+        if key:
+            keys.append(key)
+    return keys
+
+
 def _load_progenitor_mounts() -> dict[str, str]:
     mounts_json = os.environ.get("PROGENITOR_MOUNTS_JSON")
     if mounts_json:
@@ -80,7 +102,6 @@ def _map_target_to_host(target: str, mounts: dict[str, str]) -> str | None:
     mapping_roots = [
         ("/app/data", "/app/data"),
         ("/app/logs", "/app/logs"),
-        ("/app/workspace", "/app/worktrees"),
         ("/app/worktrees", "/app/worktrees"),
     ]
     for target_root, progenitor_root in mapping_roots:
@@ -105,6 +126,7 @@ def main() -> int:
     instructions = _iter_instructions(dockerfile.read_text(encoding="utf-8"))
     port = None
     volume_paths: list[str] = []
+    env_keys: list[str] = []
     for line in instructions:
         upper = line.upper()
         if upper.startswith("EXPOSE ") and not port:
@@ -117,6 +139,10 @@ def main() -> int:
 
         if upper.startswith("VOLUME "):
             volume_paths.extend(_parse_volume_arg(line[7:]))
+            continue
+
+        if upper.startswith("ENV "):
+            env_keys.extend(_parse_env_arg(line[4:]))
 
     if not port:
         raise RuntimeError(f"Could not determine EXPOSE port from {dockerfile}")
@@ -129,6 +155,15 @@ def main() -> int:
             continue
         seen.add(path)
         unique_volumes.append(path)
+
+    unique_env_keys: list[str] = []
+    seen_env_keys: set[str] = set()
+    for key in env_keys:
+        if key in seen_env_keys:
+            continue
+        seen_env_keys.add(key)
+        unique_env_keys.append(key)
+    runtime_env_keys = [key for key in unique_env_keys if key in os.environ]
 
     progenitor_mounts = _load_progenitor_mounts()
     volume_args: list[str] = []
@@ -146,6 +181,7 @@ def main() -> int:
 
     volume_args_str = " ".join(volume_args)
     chown_paths_str = " ".join(chown_paths)
+    env_args_str = " ".join(f"-e {key}" for key in runtime_env_keys)
 
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path:
@@ -153,10 +189,12 @@ def main() -> int:
             f.write(f"port={port}\n")
             f.write(f"volume_args={volume_args_str}\n")
             f.write(f"chown_paths={chown_paths_str}\n")
+            f.write(f"env_args={env_args_str}\n")
     else:
         print(f"port={port}")
         print(f"volume_args={volume_args_str}")
         print(f"chown_paths={chown_paths_str}")
+        print(f"env_args={env_args_str}")
     return 0
 
 

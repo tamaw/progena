@@ -2,6 +2,12 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    LITELLM_BASE_URL=http://litellm:4000 \
+    LITELLM_MASTER_KEY= \
+    LITELLM_API_KEY= \
+    GH_TOKEN= \
+    PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
+    TEST_MODE=false \
     PROGENITOR_STATE_DIR=/app/data/state \
     PROGENITOR_LOG_DIR=/app/logs \
     OBSERVE_STATE_DIR=/app/data/state \
