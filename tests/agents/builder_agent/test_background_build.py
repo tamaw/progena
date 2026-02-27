@@ -4,6 +4,7 @@ import pytest
 
 from app.agents.builder_agent.runtime.background_build import (
     _assert_expected_output_exists,
+    _assert_pr_created_if_required,
     _resolve_repo_path,
 )
 
@@ -27,3 +28,19 @@ def test_assert_expected_output_exists_fails_when_directory_missing(tmp_path: Pa
 def test_resolve_repo_path_finds_project_root_from_module():
     resolved = _resolve_repo_path(Path("worktrees"))
     assert (resolved / ".git").exists()
+
+
+def test_assert_pr_created_if_required_fails_without_publish_result():
+    build_state = {"build_settings": {"build_type": "agent"}}
+
+    with pytest.raises(RuntimeError, match="creating a GitHub PR"):
+        _assert_pr_created_if_required(build_state)
+
+
+def test_assert_pr_created_if_required_returns_url():
+    build_state = {
+        "build_settings": {"build_type": "agent"},
+        "build_messages": [{"phase": "publish", "pr_status": "created", "pr_url": "https://github.com/o/r/pull/1"}],
+    }
+
+    assert _assert_pr_created_if_required(build_state) == "https://github.com/o/r/pull/1"
