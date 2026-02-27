@@ -57,18 +57,13 @@ class LLMConfig:
 
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = False
-    reasoning_effort: str | None = None
+    reasoning_budget_tokens: int | None = None
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
-        reasoning_effort = os.getenv("PROGENITOR_REASONING_EFFORT", "").strip().lower() or None
-        if reasoning_effort not in {None, "low", "medium", "high"}:
-            logger.warning(
-                "Invalid PROGENITOR_REASONING_EFFORT=%s (expected low|medium|high); using default",
-                reasoning_effort,
-            )
-            reasoning_effort = None
+        budget_tokens_str = os.getenv("PROGENITOR_REASONING_BUDGET_TOKENS", "").strip()
+        budget_tokens = int(budget_tokens_str) if budget_tokens_str else None
 
         return cls(
             base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
@@ -79,7 +74,7 @@ class LLMConfig:
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", False),
-            reasoning_effort=reasoning_effort,
+            reasoning_budget_tokens=budget_tokens,
         )
 
     def get_model_for_role(self, role: str) -> str:
