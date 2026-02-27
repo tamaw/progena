@@ -25,9 +25,13 @@ def test_assert_expected_output_exists_fails_when_directory_missing(tmp_path: Pa
         _assert_expected_output_exists(tmp_path, build_state)
 
 
-def test_resolve_repo_path_finds_project_root_from_module():
+def test_resolve_repo_path_prefers_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    repo_root = tmp_path / "repo-root"
+    repo_root.mkdir(parents=True)
+    monkeypatch.setenv("PROGENITOR_PROJECT_ROOT", str(repo_root))
+
     resolved = _resolve_repo_path(Path("worktrees"))
-    assert (resolved / ".git").exists()
+    assert resolved == repo_root
 
 
 def test_assert_pr_created_if_required_fails_without_publish_result():
