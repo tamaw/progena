@@ -254,22 +254,13 @@ class Decision(BaseModel):
 
 
 class ScheduleEntry(BaseModel):
-    """A scheduled task entry.
-
-    Cron-based model:
-    - Recurring tasks: cron_expression defines cadence, next_run tracks due time
-    - One-off tasks: one_off=True, next_run is fixed, removed after execution
-    """
+    """A scheduled task entry."""
     model_config = {"use_enum_values": True}
 
     id: str
-    description: str
-    instruction: str  # What the agent should do at the scheduled time
+    message: str
     cron_expression: str
-    next_run: datetime
-    one_off: bool = False
     last_run: datetime | None = None  # When it last executed
-    enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)
 
 

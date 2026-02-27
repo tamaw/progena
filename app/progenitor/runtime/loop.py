@@ -287,37 +287,32 @@ class ProgenitorLoop:
         schedule_id = str(entry.get("id") or "")
         if not schedule_id:
             return False
-        instruction = str(entry.get("instruction") or entry.get("description") or "").strip()
-        if not instruction:
+        message = str(entry.get("message") or "").strip()
+        if not message:
             return False
 
         queued = await self.enqueue_input(
-            f"[Scheduled Task]\n{instruction}",
+            f"[Scheduled Task]\n{message}",
             timeout=0.5,
         )
         if not queued:
             return False
 
         now = utcnow()
-        is_one_off = bool(entry.get("one_off", False))
-        if is_one_off:
+        cron_expression = str(entry.get("cron_expression") or "")
+        is_one_shot = scheduler.is_one_shot_expression(cron_expression)
+        if is_one_shot:
             await self.state_manager.remove_schedule_entry(schedule_id)
         else:
-            advanced = scheduler.advance_recurring(schedule_dicts, schedule_id, now)
-            updated = next((item for item in advanced if str(item.get("id")) == schedule_id), None)
-            if updated:
-                await self.state_manager.update_schedule_entry(
-                    schedule_id,
-                    {
-                        "last_run": updated.get("last_run"),
-                        "next_run": updated.get("next_run"),
-                    },
-                )
+            await self.state_manager.update_schedule_entry(
+                schedule_id,
+                {"last_run": now.isoformat()},
+            )
 
         await self._push_event(
             "scheduled_task_triggered",
-            f"Scheduled task triggered: {entry.get('description') or schedule_id}",
-            {"schedule_id": schedule_id, "one_off": is_one_off},
+            f"Scheduled task triggered: {entry.get('message') or schedule_id}",
+            {"schedule_id": schedule_id, "one_shot": is_one_shot},
         )
         return True
 

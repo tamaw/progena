@@ -196,19 +196,21 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert result is True
 
     async def test_scheduler_dispatches_one_off_task(self):
-        """Due one-off tasks should enqueue input and be removed."""
+        """Due one-off-like cron tasks should enqueue input and be removed."""
+        from datetime import timedelta
+
         from app.progenitor.runtime.scheduler import Scheduler
         from app.progenitor.runtime.time_utils import utcnow
 
-        due_time = (utcnow()).replace(microsecond=0).isoformat()
+        now = utcnow().replace(microsecond=0)
+        due_time = (now - timedelta(minutes=1)).isoformat()
         self.state_manager.get_schedule = AsyncMock(return_value=[
             {
                 "id": "sched_one_off",
-                "description": "one-off test",
-                "instruction": "say hello",
-                "next_run": due_time,
-                "one_off": True,
-                "enabled": True,
+                "message": "say hello",
+                "cron_expression": f"{now.minute} {now.hour} {now.day} {now.month} *",
+                "created_at": due_time,
+                "last_run": None,
             }
         ])
         self.loop.enqueue_input = AsyncMock(return_value=True)
@@ -221,19 +223,19 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
     async def test_scheduler_dispatches_recurring_task(self):
         """Due recurring tasks should enqueue input and advance schedule."""
+        from datetime import timedelta
+
         from app.progenitor.runtime.scheduler import Scheduler
         from app.progenitor.runtime.time_utils import utcnow
 
-        due_time = (utcnow()).replace(microsecond=0).isoformat()
+        due_time = (utcnow() - timedelta(minutes=10)).replace(microsecond=0).isoformat()
         self.state_manager.get_schedule = AsyncMock(return_value=[
             {
                 "id": "sched_recurring",
-                "description": "recurring test",
-                "instruction": "check status",
+                "message": "check status",
                 "cron_expression": "*/5 * * * *",
-                "next_run": due_time,
-                "one_off": False,
-                "enabled": True,
+                "created_at": due_time,
+                "last_run": None,
             }
         ])
         self.loop.enqueue_input = AsyncMock(return_value=True)
