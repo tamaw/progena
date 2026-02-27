@@ -52,7 +52,6 @@ class LLMConfig:
     # Per-role model overrides (optional)
     model_planner: str | None = None
     model_builder: str | None = None
-    model_summary: str | None = None
     model_fallbacks: list[str] = field(default_factory=list)
 
     @classmethod
@@ -64,7 +63,6 @@ class LLMConfig:
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
-            model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
         )
 
@@ -73,7 +71,6 @@ class LLMConfig:
         role_models = {
             "planner": self.model_planner,
             "builder": self.model_builder,
-            "summary": self.model_summary,
         }
         return role_models.get(role) or self.model_default
 
@@ -414,7 +411,6 @@ class ProgenitorConfig:
                 "model_default": self.llm.model_default,
                 "model_planner": self.llm.model_planner,
                 "model_builder": self.llm.model_builder,
-                "model_summary": self.llm.model_summary,
             },
             "runtime": {
                 "timezone": self.runtime.timezone,
