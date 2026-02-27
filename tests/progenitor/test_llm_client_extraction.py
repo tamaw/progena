@@ -1,6 +1,14 @@
-"""Tests for LLM response text extraction edge cases."""
+"""Tests for LLM client helpers and message handling."""
 
-from app.progenitor.llm.client import LLMClient
+from types import MethodType, SimpleNamespace
+
+import pytest
+
+from app.progenitor.llm.client import (
+    DECISION_HISTORY_LIMIT,
+    RESPONSE_HISTORY_LIMIT,
+    LLMClient,
+)
 
 
 def _extract(data: dict):
@@ -165,3 +173,52 @@ def test_resolve_request_tools_keeps_tools_for_non_structured_requests():
     )
     assert isinstance(resolved, list)
     assert any(t.get("function", {}).get("name") == "primer" for t in resolved)
+
+
+@pytest.mark.asyncio
+async def test_decide_trims_history_to_recent_messages():
+    client = LLMClient.__new__(LLMClient)
+    captured: dict[str, object] = {}
+    client.prompts = SimpleNamespace(get_decide_prompt=lambda _: "decide prompt")
+
+    async def fake_chat(self, messages, system_prompt=None, temperature=0.7, max_tokens=4096, tools=None, response_format=None):
+        captured["messages"] = messages
+        captured["system_prompt"] = system_prompt
+        return '{"action":"answer_directly","confidence":0.9,"reasoning":"ok","requires_planning":false}'
+
+    client.chat = MethodType(fake_chat, client)
+    history = [{"role": "user", "content": f"message-{i}"} for i in range(10)]
+
+    await LLMClient.decide(client, "latest-input", history, "tools")
+
+    sent_messages = captured["messages"]
+    assert isinstance(sent_messages, list)
+    assert [msg["content"] for msg in sent_messages] == [
+        *(f"message-{i}" for i in range(10 - DECISION_HISTORY_LIMIT, 10)),
+        "latest-input",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_response_trims_history_to_recent_messages():
+    client = LLMClient.__new__(LLMClient)
+    captured: dict[str, object] = {}
+    client.prompts = SimpleNamespace(get_genesis_prompt=lambda: "genesis")
+
+    async def fake_chat(self, messages, system_prompt=None, temperature=0.7, max_tokens=4096, tools=None, response_format=None):
+        captured["messages"] = messages
+        captured["system_prompt"] = system_prompt
+        return "ok"
+
+    client.chat = MethodType(fake_chat, client)
+    history = [{"role": "assistant", "content": f"message-{i}"} for i in range(20)]
+
+    result = await LLMClient.generate_response(client, "latest-input", history)
+
+    assert result == "ok"
+    sent_messages = captured["messages"]
+    assert isinstance(sent_messages, list)
+    assert [msg["content"] for msg in sent_messages] == [
+        *(f"message-{i}" for i in range(20 - RESPONSE_HISTORY_LIMIT, 20)),
+        "latest-input",
+    ]
