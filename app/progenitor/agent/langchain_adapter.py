@@ -44,25 +44,18 @@ def create_langchain_model(
     # The /v1 path is appended automatically by ChatOpenAI.
     base_url = config.base_url.rstrip("/")
 
-    # Build model kwargs for extended reasoning if enabled.
-    # LiteLLM's Azure chat path supports `reasoning_effort` (not `thinking`).
-    reasoning_effort: str | None = None
+    # DeepAgent should use the Responses API path for reasoning-aware metadata.
+    use_responses_api = True
+
+    # Build model kwargs for extended reasoning when enabled.
+    reasoning: dict[str, str] | None = None
     if config.reasoning_enabled:
-        budget = config.reasoning_budget_tokens
-        if budget is not None:
-            if budget <= 1024:
-                reasoning_effort = "low"
-            elif budget <= 4096:
-                reasoning_effort = "medium"
-            else:
-                reasoning_effort = "high"
-        else:
-            reasoning_effort = "medium"
+        reasoning_effort = config.reasoning_effort or "medium"
+        reasoning = {"effort": reasoning_effort, "summary": "auto"}
         logger.info(
-            "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
+            "Reasoning enabled for model %s (effort=%s)",
             model_name,
             reasoning_effort,
-            config.reasoning_budget_tokens or "default",
         )
 
     model = ChatOpenAI(
@@ -73,7 +66,8 @@ def create_langchain_model(
             "x-litellm-api-key": config.api_key or "",
         },
         streaming=True,
-        reasoning_effort=reasoning_effort,
+        use_responses_api=use_responses_api,
+        reasoning=reasoning,
     )
 
     logger.info(
