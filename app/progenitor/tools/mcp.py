@@ -481,15 +481,26 @@ class A2AClient:
                 "error": f"Agent is in failed state: {agent_config.get('last_error', 'Unknown error')}",
             }
 
+        if transport != "http":
+            return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
+
+        # Prefer direct endpoint invocation first.
+        endpoint = str(agent_config.get("endpoint") or "").strip()
+        if not endpoint:
+            card = agent_config.get("agent_card")
+            if isinstance(card, dict):
+                endpoint = str(card.get("url") or "").strip()
+
+        if endpoint:
+            direct_cfg = dict(agent_config)
+            direct_cfg["endpoint"] = endpoint
+            return await self._call_http_agent(direct_cfg, request, context, timeout)
+
+        # If endpoint is missing, resolve via LiteLLM registry and invoke directly.
         if self._litellm_enabled() and agent_config.get("name"):
             return await self._call_litellm_agent(agent_config, request, context, timeout)
 
-        if transport != "http":
-            return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
-        endpoint = agent_config.get("endpoint")
-        if not endpoint:
-            return {"success": False, "error": "No HTTP endpoint configured for agent"}
-        return await self._call_http_agent(agent_config, request, context, timeout)
+        return {"success": False, "error": "No HTTP endpoint configured for agent"}
 
     async def _call_litellm_agent(
         self,
