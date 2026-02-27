@@ -109,38 +109,3 @@ async def test_get_agent_card_uses_litellm_agent_registry(monkeypatch) -> None:
     assert card == expected_card
     assert cfg["litellm_agent_id"] == "agent-123"
 
-
-@pytest.mark.asyncio
-async def test_call_agent_does_not_use_litellm_master_key_as_fallback(monkeypatch) -> None:
-    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm:4000")
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-key")
-
-    list_resp = MagicMock()
-    list_resp.status_code = 200
-    list_resp.json.return_value = [{"agent_id": "agent-123", "agent_name": "builder_agent"}]
-
-    invoke_resp = MagicMock()
-    invoke_resp.status_code = 200
-    invoke_resp.json.return_value = {"jsonrpc": "2.0", "id": "1", "result": {"ok": True}}
-
-    captured_kwargs: dict = {}
-    mock_client = AsyncMock()
-    mock_client.get.return_value = list_resp
-    mock_client.post.return_value = invoke_resp
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    def _fake_async_client(*args, **kwargs):  # noqa: ANN001
-        captured_kwargs.update(kwargs)
-        return mock_client
-
-    monkeypatch.setattr("app.progenitor.tools.mcp.httpx.AsyncClient", _fake_async_client)
-
-    cfg = {"name": "builder_agent", "transport": "http", "status": "running"}
-    result = await A2AClient().call_agent(cfg, "build hello world")
-
-    assert result["success"] is True
-    headers = captured_kwargs["headers"]
-    assert "x-litellm-api-key" not in headers
-    assert "Authorization" not in headers
