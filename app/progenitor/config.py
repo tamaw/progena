@@ -62,6 +62,9 @@ class LLMConfig:
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
+        budget_tokens_str = os.getenv("PROGENITOR_REASONING_BUDGET_TOKENS", "").strip()
+        budget_tokens = int(budget_tokens_str) if budget_tokens_str else None
+
         return cls(
             base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
             api_key=os.getenv("LITELLM_API_KEY"),
@@ -71,7 +74,7 @@ class LLMConfig:
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", False),
-            reasoning_budget_tokens=env_int("PROGENITOR_REASONING_BUDGET_TOKENS", None),
+            reasoning_budget_tokens=budget_tokens,
         )
 
     def get_model_for_role(self, role: str) -> str:
