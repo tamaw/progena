@@ -91,6 +91,7 @@ class ProgenitorLoop:
         # Captures the most recent pending_response emitted by the graph during a cycle.
         # Used for background job cycles where we don't stream to the client.
         self._last_cycle_response: str | None = None
+        self._last_reasoning_trace: str | None = None
 
         # Lock to prevent concurrent graph cycles
         self._graph_lock = asyncio.Lock()
@@ -312,6 +313,13 @@ class ProgenitorLoop:
                 if not self._stream_final_sent:
                     await self.stream_final()
                     self._stream_final_sent = True
+
+            last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
+            reasoning_trace = self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+            self._last_reasoning_trace = reasoning_trace
+            self._state["last_reasoning_trace"] = reasoning_trace
+            if reasoning_trace:
+                logger.info("Extracted reasoning trace (%d chars)", len(reasoning_trace))
 
             # If the run_id changed during this cycle (e.g. the LLM invoked the
             # new_conversation system tool), treat it as a hard context reset.
@@ -543,6 +551,7 @@ class ProgenitorLoop:
             "attachments": state.get("attachments", []),  # Attachment path links
             "current_input": state.get("current_input"),
             "pending_response": state.get("pending_response"),
+            "last_reasoning_trace": state.get("last_reasoning_trace"),
             "current_decision": self._serialize_decision(state.get("current_decision")),
         }
 
@@ -591,6 +600,67 @@ class ProgenitorLoop:
             return cast(dict, decision.model_dump())
         elif isinstance(decision, dict):
             return decision
+        return None
+
+    def _get_last_ai_message(self, messages: Any) -> Any | None:
+        """Get the last assistant/AI message from a messages collection."""
+        for msg in reversed(self._coerce_messages_list(messages)):
+            msg_type = str(getattr(msg, "type", "")).lower()
+            msg_role = str(getattr(msg, "role", "")).lower()
+            if msg_type == "ai" or msg_role == "assistant":
+                return msg
+            if isinstance(msg, dict):
+                role = str(msg.get("role", "")).lower()
+                mtype = str(msg.get("type", "")).lower()
+                if role == "assistant" or mtype == "ai":
+                    return msg
+        return None
+
+    def _extract_reasoning_trace(self, msg: Any) -> str | None:
+        """Extract provider reasoning/thinking metadata from a message."""
+        if msg is None:
+            return None
+
+        def _coerce(value: Any) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                stripped = value.strip()
+                return stripped or None
+            try:
+                text = json.dumps(value, default=str).strip()
+            except Exception:
+                text = str(value).strip()
+            return text or None
+
+        containers: list[dict[str, Any]] = []
+        if isinstance(msg, dict):
+            containers.append(msg)
+        else:
+            for attr in ("additional_kwargs", "response_metadata"):
+                value = getattr(msg, attr, None)
+                if isinstance(value, dict):
+                    containers.append(value)
+
+        for container in containers:
+            for key in ("reasoning", "thinking"):
+                if key in container and (text := _coerce(container.get(key))):
+                    return text
+
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "")).lower()
+                if part_type in {"reasoning", "reasoning_text", "reasoning_summary", "thinking"}:
+                    candidate = part.get("text") or part.get("summary") or part.get("content")
+                    if text := _coerce(candidate):
+                        parts.append(text)
+            if parts:
+                return "\n".join(parts)
+
         return None
 
     async def enqueue_input(self, message: str, timeout: float | None = 30.0) -> bool:
