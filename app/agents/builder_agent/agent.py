@@ -378,6 +378,8 @@ class BuilderAgentExecutor(AgentExecutor):
             f"**Iterations**: {result.iterations}",
             f"**Verification score**: {result.verification_score}",
         ]
+        if result.pr_url:
+            summary_lines.append(f"**PR**: {result.pr_url}")
         if result.output_summary:
             summary_lines.append(f"\n{result.output_summary}")
         if result.error_message:
