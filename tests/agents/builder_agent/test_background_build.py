@@ -1,0 +1,29 @@
+from pathlib import Path
+
+import pytest
+
+from app.agents.builder_agent.runtime.background_build import (
+    _assert_expected_output_exists,
+    _resolve_repo_path,
+)
+
+
+def test_assert_expected_output_exists_passes_when_directory_has_files(tmp_path: Path):
+    project_dir = tmp_path / "app" / "agents" / "demo_agent"
+    project_dir.mkdir(parents=True)
+    (project_dir / "main.py").write_text("print('ok')", encoding="utf-8")
+    build_state = {"build_settings": {"project_directory": "app/agents/demo_agent"}}
+
+    _assert_expected_output_exists(tmp_path, build_state)
+
+
+def test_assert_expected_output_exists_fails_when_directory_missing(tmp_path: Path):
+    build_state = {"build_settings": {"project_directory": "app/agents/missing_agent"}}
+
+    with pytest.raises(RuntimeError, match="expected output path"):
+        _assert_expected_output_exists(tmp_path, build_state)
+
+
+def test_resolve_repo_path_finds_project_root_from_module():
+    resolved = _resolve_repo_path(Path("worktrees"))
+    assert (resolved / ".git").exists()
