@@ -48,11 +48,10 @@ def create_langchain_model(
     # Build model kwargs for extended thinking/reasoning if enabled
     model_kwargs: dict[str, Any] = {}
     if config.reasoning_enabled:
-        model_kwargs["thinking"] = {
-            "type": "enabled",
-        }
+        thinking_config: dict[str, Any] = {"type": "enabled"}
         if config.reasoning_budget_tokens:
-            model_kwargs["thinking"]["budget_tokens"] = config.reasoning_budget_tokens
+            thinking_config["budget_tokens"] = config.reasoning_budget_tokens
+        model_kwargs["thinking"] = thinking_config
         logger.info(
             "Reasoning enabled for model %s (budget_tokens=%s)",
             model_name,
@@ -67,7 +66,7 @@ def create_langchain_model(
             "x-litellm-api-key": config.api_key or "",
         },
         streaming=True,
-        model_kwargs=model_kwargs if model_kwargs else None,
+        model_kwargs=model_kwargs if model_kwargs else {},
     )
 
     logger.info(
