@@ -70,11 +70,10 @@ class ListScheduleTool(BaseSystemTool):
 
             tasks.append({
                 "id": item_dict.get("id"),
-                "description": item_dict.get("description", "No description"),
+                "message": item_dict.get("message", "No message"),
                 "cron_expression": item_dict.get("cron_expression"),
-                "next_run": item_dict.get("next_run"),
-                "action_type": item_dict.get("action_type"),
-                "enabled": item_dict.get("enabled", True),
+                "last_run": item_dict.get("last_run"),
+                "created_at": item_dict.get("created_at"),
             })
 
         return ToolResult.ok({

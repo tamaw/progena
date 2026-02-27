@@ -58,6 +58,9 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.state_manager = MagicMock()
         self.state_manager.get_build_state = AsyncMock(return_value={})
         self.state_manager.save_build_state = AsyncMock()
+        self.state_manager.get_schedule = AsyncMock(return_value=[])
+        self.state_manager.remove_schedule_entry = AsyncMock(return_value=True)
+        self.state_manager.update_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.state_dir = Path(tempfile.mkdtemp())
 
         self.graph = MagicMock()
@@ -191,6 +194,57 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert task.done()
         result = await task
         assert result is True
+
+    async def test_scheduler_dispatches_one_off_task(self):
+        """Due one-off-like cron tasks should enqueue input and be removed."""
+        from datetime import timedelta
+
+        from app.progenitor.runtime.scheduler import Scheduler
+        from app.progenitor.runtime.time_utils import utcnow
+
+        now = utcnow().replace(microsecond=0)
+        due_time = (now - timedelta(minutes=1)).isoformat()
+        self.state_manager.get_schedule = AsyncMock(return_value=[
+            {
+                "id": "sched_one_off",
+                "message": "say hello",
+                "cron_expression": f"{now.minute} {now.hour} {now.day} {now.month} *",
+                "created_at": due_time,
+                "last_run": None,
+            }
+        ])
+        self.loop.enqueue_input = AsyncMock(return_value=True)
+
+        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+
+        assert fired is True
+        self.loop.enqueue_input.assert_awaited_once()
+        self.state_manager.remove_schedule_entry.assert_awaited_once_with("sched_one_off")
+
+    async def test_scheduler_dispatches_recurring_task(self):
+        """Due recurring tasks should enqueue input and advance schedule."""
+        from datetime import timedelta
+
+        from app.progenitor.runtime.scheduler import Scheduler
+        from app.progenitor.runtime.time_utils import utcnow
+
+        due_time = (utcnow() - timedelta(minutes=10)).replace(microsecond=0).isoformat()
+        self.state_manager.get_schedule = AsyncMock(return_value=[
+            {
+                "id": "sched_recurring",
+                "message": "check status",
+                "cron_expression": "*/5 * * * *",
+                "created_at": due_time,
+                "last_run": None,
+            }
+        ])
+        self.loop.enqueue_input = AsyncMock(return_value=True)
+
+        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+
+        assert fired is True
+        self.loop.enqueue_input.assert_awaited_once()
+        self.state_manager.update_schedule_entry.assert_awaited_once()
 
 
 class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):

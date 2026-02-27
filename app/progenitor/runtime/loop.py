@@ -24,7 +24,8 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ..state.models import redact_secrets
-from .time_utils import utcnow_isoformat
+from .scheduler import Scheduler
+from .time_utils import utcnow, utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -140,16 +141,38 @@ class ProgenitorLoop:
         # Push startup event
         await self._push_event("loop_started", f"Perpetual loop started (run_id: {run_id})")
 
-        # Core-only: input handler only
+        # Core-only input handling plus scheduler dispatch loop.
         input_task = asyncio.create_task(self._input_handler_loop(run_id))
+        scheduler_task: asyncio.Task | None = None
+        if self._is_scheduler_enabled():
+            scheduler_task = asyncio.create_task(self._scheduler_loop())
+            logger.info("Scheduler loop started")
 
         try:
-            await input_task
+            if scheduler_task:
+                done, pending = await asyncio.wait(
+                    [input_task, scheduler_task],
+                    return_when=asyncio.FIRST_EXCEPTION,
+                )
+                for task in pending:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                for task in done:
+                    exc = task.exception()
+                    if exc:
+                        raise exc
+            else:
+                await input_task
         except asyncio.CancelledError:
             logger.info("Loop cancelled by signal")
             input_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await input_task
+            if scheduler_task:
+                scheduler_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await scheduler_task
 
         # Final checkpoint
         await self._checkpoint_state(self._state)
@@ -234,6 +257,77 @@ class ProgenitorLoop:
                 logger.error("Input handler error: %s", e, exc_info=True)
                 await self._push_event("error", f"Input handler error: {e}")
                 await asyncio.sleep(1.0)
+
+    def _is_scheduler_enabled(self) -> bool:
+        scheduler_cfg = getattr(self.config, "scheduler", None)
+        if scheduler_cfg is not None and hasattr(scheduler_cfg, "enabled"):
+            return bool(scheduler_cfg.enabled)
+        return False
+
+    def _scheduler_poll_seconds(self) -> float:
+        scheduler_cfg = getattr(self.config, "scheduler", None)
+        if scheduler_cfg is not None and hasattr(scheduler_cfg, "poll_seconds"):
+            try:
+                return max(1.0, float(scheduler_cfg.poll_seconds))
+            except (TypeError, ValueError):
+                return 30.0
+        return 30.0
+
+    async def _check_and_enqueue_scheduled_work(self, scheduler: Scheduler) -> bool:
+        schedule_entries = await self.state_manager.get_schedule()
+        schedule_dicts: list[dict[str, Any]] = [
+            entry.model_dump() if hasattr(entry, "model_dump") else entry
+            for entry in schedule_entries
+        ]
+        due_items = scheduler.get_due_items(schedule_dicts, current_time=utcnow())
+        if not due_items:
+            return False
+
+        entry = due_items[0]
+        schedule_id = str(entry.get("id") or "")
+        if not schedule_id:
+            return False
+        message = str(entry.get("message") or "").strip()
+        if not message:
+            return False
+
+        queued = await self.enqueue_input(
+            f"[Scheduled Task]\n{message}",
+            timeout=0.5,
+        )
+        if not queued:
+            return False
+
+        now = utcnow()
+        cron_expression = str(entry.get("cron_expression") or "")
+        is_one_shot = scheduler.is_one_shot_expression(cron_expression)
+        if is_one_shot:
+            await self.state_manager.remove_schedule_entry(schedule_id)
+        else:
+            await self.state_manager.update_schedule_entry(
+                schedule_id,
+                {"last_run": now.isoformat()},
+            )
+
+        await self._push_event(
+            "scheduled_task_triggered",
+            f"Scheduled task triggered: {entry.get('message') or schedule_id}",
+            {"schedule_id": schedule_id, "one_shot": is_one_shot},
+        )
+        return True
+
+    async def _scheduler_loop(self) -> None:
+        scheduler = Scheduler(timezone=getattr(self.config.runtime, "timezone", "UTC"))
+        poll_seconds = self._scheduler_poll_seconds()
+        while self.running:
+            try:
+                await self._check_and_enqueue_scheduled_work(scheduler)
+                await asyncio.sleep(poll_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Scheduler loop error: %s", e, exc_info=True)
+                await asyncio.sleep(poll_seconds)
 
     async def _run_graph_cycle(self, _run_id: str, source: str = "unknown") -> None:
         """Run a single graph cycle.

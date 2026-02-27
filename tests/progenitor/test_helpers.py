@@ -121,10 +121,9 @@ class TestNormalizeScheduleEntry:
         """Test normalizing a dict to ScheduleEntry (simplified model)."""
         data = {
             "id": "sched-1",
-            "description": "Daily task",
-            "instruction": "Do something daily",
+            "message": "Do something daily",
             "cron_expression": "0 9 * * *",
-            "next_run": "2026-01-20T09:00:00+00:00",
+            "created_at": "2026-01-20T09:00:00+00:00",
         }
         result = normalize_schedule_entry(data)
         assert isinstance(result, ScheduleEntry)

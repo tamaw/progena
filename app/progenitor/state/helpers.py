@@ -172,18 +172,16 @@ def normalize_schedule_entry(item: Any) -> ScheduleEntry | None:
 
     if isinstance(item, dict):
         cron_expression = item.get("cron_expression")
-        next_run = item.get("next_run")
-        if cron_expression is None or next_run is None:
+        message = item.get("message")
+        created_at = item.get("created_at")
+        if cron_expression is None or message is None or created_at is None:
             return None
 
         return ScheduleEntry(
             id=item.get("id", "unknown"),
-            description=item.get("description", ""),
-            instruction=item.get("instruction", ""),
+            message=message,
             cron_expression=cron_expression,
-            next_run=next_run,
-            one_off=item.get("one_off", False),
-            enabled=item.get("enabled", True),
+            created_at=created_at,
             last_run=item.get("last_run"),
         )
 
