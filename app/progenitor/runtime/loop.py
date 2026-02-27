@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
+SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -202,6 +203,12 @@ class ProgenitorLoop:
                     continue
 
                 logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
+                is_scheduled_input = user_input.startswith(SCHEDULED_INPUT_PREFIX)
+                scheduled_message = (
+                    user_input[len(SCHEDULED_INPUT_PREFIX):].strip()
+                    if is_scheduled_input
+                    else ""
+                )
 
                 # Acquire lock to run graph cycle
                 async with self._graph_lock:
@@ -240,6 +247,28 @@ class ProgenitorLoop:
                         await self._checkpoint_state(self._state)
                         await self._update_health_file(self._state, status="error", error=safe_error)
                     finally:
+                        # Background scheduled work is processed through the same input
+                        # path as user messages, so emit an explicit completion event here.
+                        if is_scheduled_input:
+                            response_text = str(self._state.get("last_cycle_response") or "").strip()
+                            result_status = "completed" if response_text else "completed_no_response"
+                            await self._push_event(
+                                "scheduled_response",
+                                response_text or "(no response)",
+                                {
+                                    "schedule_message": scheduled_message or None,
+                                    "status": result_status,
+                                },
+                            )
+                            await self._push_event(
+                                "work_completed",
+                                f"Completed scheduled work: {scheduled_message or 'Scheduled task'}",
+                                {
+                                    "work_type": "scheduled",
+                                    "status": result_status,
+                                },
+                            )
+
                         # Disable streaming mode
                         self._streaming_enabled = False
                         self._response_was_streamed = False
@@ -292,7 +321,7 @@ class ProgenitorLoop:
             return False
 
         queued = await self.enqueue_input(
-            f"[Scheduled Task]\n{message}",
+            f"{SCHEDULED_INPUT_PREFIX}{message}",
             timeout=0.5,
         )
         if not queued:
