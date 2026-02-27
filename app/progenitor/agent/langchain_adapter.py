@@ -12,7 +12,6 @@ Supports optional extended thinking/reasoning for models that support it
 
 import logging
 import os
-from typing import Any
 
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
@@ -45,16 +44,24 @@ def create_langchain_model(
     # The /v1 path is appended automatically by ChatOpenAI.
     base_url = config.base_url.rstrip("/")
 
-    # Build model kwargs for extended thinking/reasoning if enabled
-    extra_body: dict[str, Any] | None = None
+    # Build model kwargs for extended reasoning if enabled.
+    # LiteLLM's Azure chat path supports `reasoning_effort` (not `thinking`).
+    reasoning_effort: str | None = None
     if config.reasoning_enabled:
-        thinking_config: dict[str, Any] = {"type": "enabled"}
-        if config.reasoning_budget_tokens:
-            thinking_config["budget_tokens"] = config.reasoning_budget_tokens
-        extra_body = {"thinking": thinking_config}
+        budget = config.reasoning_budget_tokens
+        if budget is not None:
+            if budget <= 1024:
+                reasoning_effort = "low"
+            elif budget <= 4096:
+                reasoning_effort = "medium"
+            else:
+                reasoning_effort = "high"
+        else:
+            reasoning_effort = "medium"
         logger.info(
-            "Reasoning enabled for model %s (budget_tokens=%s)",
+            "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
             model_name,
+            reasoning_effort,
             config.reasoning_budget_tokens or "default",
         )
 
@@ -66,7 +73,7 @@ def create_langchain_model(
             "x-litellm-api-key": config.api_key or "",
         },
         streaming=True,
-        extra_body=extra_body,
+        reasoning_effort=reasoning_effort,
     )
 
     logger.info(
