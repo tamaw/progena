@@ -125,18 +125,66 @@ def _expected_output_path(repo_path: Path, build_state: dict[str, Any]) -> Path 
     if not isinstance(project_directory, str) or not project_directory.strip():
         return None
     project_path = Path(project_directory.strip())
-    return project_path if project_path.is_absolute() else repo_path / project_path
+    if project_path.is_absolute():
+        return project_path
+    return repo_path / project_path
+
+
+def _expected_output_path_candidates(repo_path: Path, build_state: dict[str, Any]) -> list[Path]:
+    """Return candidate expected output paths for relative project_directory values."""
+    expected = _expected_output_path(repo_path, build_state)
+    if expected is None:
+        return []
+    if expected.is_absolute() and str(expected) == str(Path(expected)):
+        # For absolute paths, there is only one valid candidate.
+        build_settings = build_state.get("build_settings")
+        project_directory = build_settings.get("project_directory") if isinstance(build_settings, dict) else None
+        if isinstance(project_directory, str) and Path(project_directory.strip()).is_absolute():
+            return [expected]
+
+    build_settings = build_state.get("build_settings")
+    project_directory = build_settings.get("project_directory") if isinstance(build_settings, dict) else None
+    if not isinstance(project_directory, str):
+        return [expected]
+    project_path = Path(project_directory.strip())
+    if project_path.is_absolute():
+        return [project_path]
+
+    candidate_bases: list[Path] = [repo_path]
+    if repo_path.parent != repo_path:
+        candidate_bases.append(repo_path.parent)
+    project_root_env = os.getenv("PROGENITOR_PROJECT_ROOT")
+    if project_root_env:
+        candidate_bases.append(Path(project_root_env))
+    candidate_bases.append(Path.cwd())
+
+    seen: set[str] = set()
+    candidates: list[Path] = []
+    for base in candidate_bases:
+        candidate = (base / project_path).resolve()
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    return candidates
 
 
 def _assert_expected_output_exists(repo_path: Path, build_state: dict[str, Any]) -> None:
     """Fail fast if a build reports success but expected filesystem output is missing."""
-    expected_path = _expected_output_path(repo_path, build_state)
-    if expected_path is None:
+    candidates = _expected_output_path_candidates(repo_path, build_state)
+    if not candidates:
         return
-    if not expected_path.exists():
-        raise RuntimeError(f"Build completed without creating expected output path: {expected_path}")
-    if expected_path.is_dir() and not any(p.is_file() for p in expected_path.rglob("*")):
-        raise RuntimeError(f"Build output directory is empty: {expected_path}")
+    for expected_path in candidates:
+        if not expected_path.exists():
+            continue
+        if expected_path.is_dir() and not any(p.is_file() for p in expected_path.rglob("*")):
+            raise RuntimeError(f"Build output directory is empty: {expected_path}")
+        return
+    raise RuntimeError(
+        "Build completed without creating expected output path: "
+        f"{candidates[0]}"
+    )
 
 
 def _extract_published_pr_url(build_state: dict[str, Any]) -> str | None:
