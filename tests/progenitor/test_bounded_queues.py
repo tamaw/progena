@@ -287,6 +287,11 @@ class TestReasoningTraceExtraction(unittest.TestCase):
         trace = self.loop._extract_reasoning_trace(msg)
         assert trace is not None and "summary" in trace
 
+    def test_extracts_summary_effort_schema(self):
+        msg = SimpleNamespace(response_metadata={"effort": "medium", "summary": "detailed"})
+        trace = self.loop._extract_reasoning_trace(msg)
+        assert trace is not None and "medium" in trace and "detailed" in trace
+
     def test_extracts_from_content_parts(self):
         msg = {
             "role": "assistant",
