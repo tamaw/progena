@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -264,6 +265,43 @@ class TestConfigQueueSettings(unittest.TestCase):
         assert config.max_input_queue_size == 75
         assert config.max_output_queue_size == 60
         assert config.max_stream_queue_size == 800
+
+
+class TestReasoningTraceExtraction(unittest.TestCase):
+    """Tests for runtime reasoning extraction helpers."""
+
+    def setUp(self):
+        from app.progenitor.runtime.loop import ProgenitorLoop
+
+        config = MockConfig()
+        state_manager = MagicMock()
+        state_manager.state_dir = Path(tempfile.mkdtemp())
+        self.loop = ProgenitorLoop(
+            graph=MagicMock(),
+            state_manager=state_manager,
+            config=cast(Any, config),
+        )
+
+    def test_extracts_from_response_metadata(self):
+        msg = SimpleNamespace(response_metadata={"reasoning": {"summary": "done"}})
+        trace = self.loop._extract_reasoning_trace(msg)
+        assert trace is not None and "summary" in trace
+
+    def test_extracts_from_content_parts(self):
+        msg = {
+            "role": "assistant",
+            "content": [{"type": "reasoning", "text": "step-by-step"}],
+        }
+        assert self.loop._extract_reasoning_trace(msg) == "step-by-step"
+
+    def test_finds_last_assistant_message(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello", "response_metadata": {"thinking": "brief"}},
+        ]
+        msg = self.loop._get_last_ai_message(messages)
+        assert isinstance(msg, dict)
+        assert msg["role"] == "assistant"
 
 
 if __name__ == "__main__":
