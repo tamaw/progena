@@ -481,51 +481,22 @@ class A2AClient:
                 "error": f"Agent is in failed state: {agent_config.get('last_error', 'Unknown error')}",
             }
 
-        if self._litellm_enabled() and agent_config.get("name"):
-            return await self._call_litellm_agent(agent_config, request, context, timeout)
-
         if transport != "http":
             return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
-        endpoint = agent_config.get("endpoint")
+
+        # Prefer direct endpoint invocation first.
+        endpoint = str(agent_config.get("endpoint") or "").strip()
         if not endpoint:
-            return {"success": False, "error": "No HTTP endpoint configured for agent"}
-        return await self._call_http_agent(agent_config, request, context, timeout)
+            card = agent_config.get("agent_card")
+            if isinstance(card, dict):
+                endpoint = str(card.get("url") or "").strip()
 
-    async def _call_litellm_agent(
-        self,
-        agent_config: dict[str, Any],
-        request: str,
-        context: dict[str, Any] | None = None,
-        timeout: float = 60.0,
-    ) -> dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                headers=self._litellm_headers(),
-            ) as httpx_client:
-                agent_data = await self._resolve_litellm_agent(agent_config, httpx_client)
-                if not isinstance(agent_data, dict):
-                    return {"success": False, "error": f"Agent not registered in LiteLLM: {agent_config.get('name')}"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-        direct_endpoint = self._extract_agent_url_from_litellm(agent_data)
-        if direct_endpoint:
+        if endpoint:
             direct_cfg = dict(agent_config)
-            direct_cfg["endpoint"] = direct_endpoint
+            direct_cfg["endpoint"] = endpoint
             return await self._call_http_agent(direct_cfg, request, context, timeout)
 
-        fallback_endpoint = str(agent_config.get("endpoint") or "").strip()
-        if fallback_endpoint:
-            return await self._call_http_agent(agent_config, request, context, timeout)
-
-        return {
-            "success": False,
-            "error": (
-                "LiteLLM agent resolved but no direct endpoint found "
-                "(agent_card_params.url/agent_url missing)"
-            ),
-        }
+        return {"success": False, "error": "No HTTP endpoint configured for agent"}
 
     async def _call_http_agent(
         self,
