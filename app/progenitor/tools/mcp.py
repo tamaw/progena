@@ -356,11 +356,7 @@ class A2AClient:
     def __init__(self) -> None:
         base_url = (os.getenv("LITELLM_BASE_URL") or "").strip().rstrip("/")
         self._litellm_base_url = base_url
-        self._litellm_api_key = (
-            os.getenv("LITELLM_API_KEY")
-            or os.getenv("LITELLM_MASTER_KEY")
-            or ""
-        ).strip()
+        self._litellm_api_key = (os.getenv("LITELLM_API_KEY") or "").strip()
 
     def _litellm_enabled(self) -> bool:
         return bool(self._litellm_base_url)

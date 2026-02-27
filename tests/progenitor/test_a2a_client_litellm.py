@@ -111,7 +111,7 @@ async def test_get_agent_card_uses_litellm_agent_registry(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_call_agent_uses_litellm_master_key_headers(monkeypatch) -> None:
+async def test_call_agent_does_not_use_litellm_master_key_as_fallback(monkeypatch) -> None:
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm:4000")
     monkeypatch.delenv("LITELLM_API_KEY", raising=False)
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-key")
@@ -142,5 +142,5 @@ async def test_call_agent_uses_litellm_master_key_headers(monkeypatch) -> None:
 
     assert result["success"] is True
     headers = captured_kwargs["headers"]
-    assert headers["x-litellm-api-key"] == "master-key"
-    assert headers["Authorization"] == "Bearer master-key"
+    assert "x-litellm-api-key" not in headers
+    assert "Authorization" not in headers
