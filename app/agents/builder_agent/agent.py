@@ -42,7 +42,7 @@ from a2a.types import (
 )
 
 from .config import get_config, setup_logging
-from .llm.client import LLMClient
+from .llm.mock_client import create_llm_client
 from .runtime.background_build import BackgroundBuildRunner
 from .runtime.copilot_acp import CopilotACPManager
 from .runtime.time_utils import utcnow_isoformat
@@ -57,7 +57,7 @@ _start_time = time.time()
 # ---------------------------------------------------------------------------
 _config = None
 _state_manager: StateManager | None = None
-_llm_client: LLMClient | None = None
+_llm_client: Any = None
 _tool_registry: ToolRegistry | None = None
 _copilot_acp: CopilotACPManager | None = None
 _runner: BackgroundBuildRunner | None = None
@@ -177,7 +177,7 @@ async def _ensure_initialized() -> None:
     )
     await _state_manager.initialize()
 
-    _llm_client = LLMClient(config=config.llm, mcp_config=config.mcp)
+    _llm_client = create_llm_client(config=config.llm, mcp_config=config.mcp)
 
     _tool_registry = ToolRegistry(config.storage.state_dir / "registry.json")
     await _tool_registry.load()
@@ -288,6 +288,8 @@ class BuilderAgentExecutor(AgentExecutor):
             tool_context=tool_context,
         )
         action = str(decision.get("action") or "").lower().strip()
+        if action == "execute":
+            action = "build_agent"
 
         if action not in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
             await event_queue.enqueue_event(
