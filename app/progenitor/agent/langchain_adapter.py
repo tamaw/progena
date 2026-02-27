@@ -5,10 +5,14 @@ Routes all LLM calls through the existing LiteLLM proxy using LangChain's
 ChatOpenAI, which is compatible with any OpenAI-compatible endpoint.
 This preserves Progenitor's model routing, auth, and observability (Langfuse)
 while enabling DeepAgent integration.
+
+Supports optional extended thinking/reasoning for models that support it
+(e.g., GPT-5.2-chat with reasoning enabled).
 """
 
 import logging
 import os
+from typing import Any
 
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
@@ -41,6 +45,20 @@ def create_langchain_model(
     # The /v1 path is appended automatically by ChatOpenAI.
     base_url = config.base_url.rstrip("/")
 
+    # Build model kwargs for extended thinking/reasoning if enabled
+    model_kwargs: dict[str, Any] = {}
+    if config.reasoning_enabled:
+        model_kwargs["thinking"] = {
+            "type": "enabled",
+        }
+        if config.reasoning_budget_tokens:
+            model_kwargs["thinking"]["budget_tokens"] = config.reasoning_budget_tokens
+        logger.info(
+            "Reasoning enabled for model %s (budget_tokens=%s)",
+            model_name,
+            config.reasoning_budget_tokens or "default",
+        )
+
     model = ChatOpenAI(
         model=model_name,
         base_url=base_url,
@@ -49,13 +67,15 @@ def create_langchain_model(
             "x-litellm-api-key": config.api_key or "",
         },
         streaming=True,
+        model_kwargs=model_kwargs if model_kwargs else None,
     )
 
     logger.info(
-        "Created LangChain model adapter: model=%s, base_url=%s, role=%s",
+        "Created LangChain model adapter: model=%s, base_url=%s, role=%s, reasoning=%s",
         model_name,
         base_url,
         role,
+        config.reasoning_enabled,
     )
     return model
 

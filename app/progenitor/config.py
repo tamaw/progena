@@ -55,6 +55,10 @@ class LLMConfig:
     model_summary: str | None = None
     model_fallbacks: list[str] = field(default_factory=list)
 
+    # Reasoning/thinking feature (for models that support it)
+    reasoning_enabled: bool = False
+    reasoning_budget_tokens: int | None = None
+
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
@@ -66,6 +70,8 @@ class LLMConfig:
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
+            reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", False),
+            reasoning_budget_tokens=env_int("PROGENITOR_REASONING_BUDGET_TOKENS", None),
         )
 
     def get_model_for_role(self, role: str) -> str:
