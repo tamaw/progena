@@ -10,6 +10,8 @@ from a2a.types import (
     TextPart,
 )
 
+from app.agents.builder_agent.agent import _normalize_build_action
+
 
 def _make_text_message(text: str) -> Message:
     """Helper to create a simple A2A text message."""
@@ -99,3 +101,13 @@ async def test_execute_no_message_emits_failed(executor, mock_event_queue):
     terminal = [e for e in events if getattr(e, "final", False)]
     assert len(terminal) >= 1
     assert terminal[-1].status.state == TaskState.failed
+
+
+def test_normalize_build_action_maps_execute_aliases():
+    assert _normalize_build_action("execute") == "build_agent"
+    assert _normalize_build_action("answer_directly") == "build_agent"
+
+
+def test_normalize_build_action_keeps_build_actions():
+    assert _normalize_build_action("build_mcp") == "build_mcp"
+    assert _normalize_build_action("upgrade") == "upgrade"

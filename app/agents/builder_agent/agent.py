@@ -287,9 +287,7 @@ class BuilderAgentExecutor(AgentExecutor):
             conversation_history=[],
             tool_context=tool_context,
         )
-        action = str(decision.get("action") or "").lower().strip()
-        if action == "execute":
-            action = "build_agent"
+        action = _normalize_build_action(decision.get("action"))
 
         if action not in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
             await event_queue.enqueue_event(
@@ -380,6 +378,8 @@ class BuilderAgentExecutor(AgentExecutor):
             f"**Iterations**: {result.iterations}",
             f"**Verification score**: {result.verification_score}",
         ]
+        if result.pr_url:
+            summary_lines.append(f"**PR**: {result.pr_url}")
         if result.output_summary:
             summary_lines.append(f"\n{result.output_summary}")
         if result.error_message:
@@ -451,6 +451,13 @@ def _text_message(text: str, *, role: Role = Role.agent) -> Message:
         role=role,
         parts=[Part(root=TextPart(text=text))],
     )
+
+
+def _normalize_build_action(raw_action: Any) -> str:
+    action = str(raw_action or "").lower().strip()
+    if action in {"execute", "answer_directly"}:
+        return "build_agent"
+    return action
 
 
 def _utc_now_iso() -> str:
