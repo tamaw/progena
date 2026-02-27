@@ -7,7 +7,7 @@ Profile:
   - /self/ -> <project_root>/app (read-only)
   - /data/ -> <project_root>/data (read-only)
   - /logs/ -> <project_root>/logs (read-only)
-  - /prompts/ -> <project_root>/prompts (read-write)
+  - /prompts/ -> <project_root>/prompts (read-only)
 """
 
 import logging
@@ -74,7 +74,7 @@ def create_progenitor_backend(
             ("/self/", root / "app", True),
             ("/data/", root / "data", True),
             ("/logs/", root / "logs", True),
-            ("/prompts/", root / "prompts", False),
+            ("/prompts/", root / "prompts", True),
         ]
         for route, mount_path, ro in mounts:
             backend = _route_backend(mount_path, read_only=ro)

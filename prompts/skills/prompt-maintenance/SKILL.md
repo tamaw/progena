@@ -3,7 +3,6 @@ name: prompt-maintenance
 description: Safely update prompt assets through /prompts with minimal, auditable edits while preserving tone and operating constraints
 allowed-tools:
   - read_file
-  - write_file
   - shell
 ---
 
@@ -15,8 +14,8 @@ allowed-tools:
 - Prompt drift or inconsistency needs correction
 
 ## Mount Usage
-- `/prompts/` is read-write.
-- Keep edits minimal and scoped to requested behavior.
+- `/prompts/` is read-only in runtime.
+- Propose minimal patch-ready edits and delegate file mutation to Builder Agent/git workflow.
 - Avoid rewriting large prompt sections unless explicitly requested.
 
 ## Editing Rules

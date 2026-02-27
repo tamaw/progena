@@ -55,6 +55,7 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/self/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/data/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/logs/"], ReadOnlyFilesystemBackend)
+            assert isinstance(backend.routes["/prompts/"], ReadOnlyFilesystemBackend)
 
     def test_factory_defaults_to_cwd(self):
         """Factory defaults to cwd when no project_root specified."""
