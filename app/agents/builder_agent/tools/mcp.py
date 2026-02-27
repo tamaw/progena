@@ -111,6 +111,7 @@ async def initialize_mcp_tools(
         }
         if mcp_config.api_key:
             headers["Authorization"] = f"Bearer {mcp_config.api_key}"
+            headers["x-litellm-api-key"] = mcp_config.api_key
 
         mcp_client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
@@ -315,6 +316,7 @@ class MCPClient:
             mcp_config = MCPConfig.from_env()
             if mcp_config.api_key:
                 headers["Authorization"] = f"Bearer {mcp_config.api_key}"
+                headers["x-litellm-api-key"] = mcp_config.api_key
 
         try:
             async with aiohttp.ClientSession() as session, session.post(

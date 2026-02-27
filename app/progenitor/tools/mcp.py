@@ -112,6 +112,7 @@ async def initialize_mcp_tools(
         }
         if mcp_config.api_key:
             headers["Authorization"] = f"Bearer {mcp_config.api_key}"
+            headers["x-litellm-api-key"] = mcp_config.api_key
 
         mcp_client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
@@ -316,6 +317,7 @@ class MCPClient:
             mcp_config = MCPConfig.from_env()
             if mcp_config.api_key:
                 headers["Authorization"] = f"Bearer {mcp_config.api_key}"
+                headers["x-litellm-api-key"] = mcp_config.api_key
 
         try:
             async with aiohttp.ClientSession() as session, session.post(
@@ -354,7 +356,11 @@ class A2AClient:
     def __init__(self) -> None:
         base_url = (os.getenv("LITELLM_BASE_URL") or "").strip().rstrip("/")
         self._litellm_base_url = base_url
-        self._litellm_api_key = (os.getenv("LITELLM_API_KEY") or "").strip()
+        self._litellm_api_key = (
+            os.getenv("LITELLM_API_KEY")
+            or os.getenv("LITELLM_MASTER_KEY")
+            or ""
+        ).strip()
 
     def _litellm_enabled(self) -> bool:
         return bool(self._litellm_base_url)
