@@ -25,6 +25,17 @@ def test_assert_expected_output_exists_fails_when_directory_missing(tmp_path: Pa
         _assert_expected_output_exists(tmp_path, build_state)
 
 
+def test_assert_expected_output_exists_checks_parent_repo_candidate(tmp_path: Path):
+    repo_path = tmp_path / "workspace" / "worktrees"
+    repo_path.mkdir(parents=True)
+    project_dir = tmp_path / "workspace" / "app" / "agents" / "demo_agent"
+    project_dir.mkdir(parents=True)
+    (project_dir / "agent.py").write_text("print('ok')", encoding="utf-8")
+    build_state = {"build_settings": {"project_directory": "app/agents/demo_agent"}}
+
+    _assert_expected_output_exists(repo_path, build_state)
+
+
 def test_resolve_repo_path_prefers_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     repo_root = tmp_path / "repo-root"
     repo_root.mkdir(parents=True)
