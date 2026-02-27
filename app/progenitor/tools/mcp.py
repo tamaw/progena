@@ -384,6 +384,15 @@ class A2AClient:
             return f"{base}/a2a/{agent_id}/.well-known/agent.json"
         return f"{base}/v1/a2a/{agent_id}/.well-known/agent.json"
 
+    @staticmethod
+    def _extract_agent_url_from_litellm(agent_data: dict[str, Any]) -> str:
+        card_params = agent_data.get("agent_card_params")
+        if isinstance(card_params, dict):
+            url = str(card_params.get("url") or "").strip()
+            if url:
+                return url
+        return str(agent_data.get("agent_url") or "").strip()
+
     async def list_litellm_agents(
         self,
         timeout: float = 10.0,
@@ -497,49 +506,26 @@ class A2AClient:
                 agent_data = await self._resolve_litellm_agent(agent_config, httpx_client)
                 if not isinstance(agent_data, dict):
                     return {"success": False, "error": f"Agent not registered in LiteLLM: {agent_config.get('name')}"}
-                agent_id = str(agent_data.get("agent_id") or "").strip()
-                if not agent_id:
-                    return {"success": False, "error": "LiteLLM agent_id missing for requested agent"}
-
-                message_id = uuid.uuid4().hex
-                payload = {
-                    "jsonrpc": "2.0",
-                    "id": uuid.uuid4().hex,
-                    "method": "message/send",
-                    "params": {
-                        "message": {
-                            "kind": "message",
-                            "message_id": message_id,
-                            "role": "user",
-                            "parts": [{"kind": "text", "text": request or ""}],
-                        },
-                        "metadata": context or {},
-                    },
-                }
-                resp = await httpx_client.post(self._litellm_a2a_url(agent_id), json=payload)
-        except TimeoutError:
-            return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-        if resp.status_code >= 400:
-            return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        direct_endpoint = self._extract_agent_url_from_litellm(agent_data)
+        if direct_endpoint:
+            direct_cfg = dict(agent_config)
+            direct_cfg["endpoint"] = direct_endpoint
+            return await self._call_http_agent(direct_cfg, request, context, timeout)
 
-        try:
-            data = resp.json()
-        except Exception:
-            return {"success": False, "error": f"Non-JSON A2A response: {resp.text[:200]}"}
+        fallback_endpoint = str(agent_config.get("endpoint") or "").strip()
+        if fallback_endpoint:
+            return await self._call_http_agent(agent_config, request, context, timeout)
 
-        if isinstance(data, dict) and data.get("error"):
-            err = data.get("error")
-            if isinstance(err, dict):
-                return {"success": False, "error": err.get("message") or str(err)}
-            return {"success": False, "error": str(err)}
-
-        if not isinstance(data, dict) or "result" not in data:
-            return {"success": False, "error": f"Invalid A2A response: {str(data)[:200]}"}
-
-        return {"success": True, "result": data.get("result")}
+        return {
+            "success": False,
+            "error": (
+                "LiteLLM agent resolved but no direct endpoint found "
+                "(agent_card_params.url/agent_url missing)"
+            ),
+        }
 
     async def _call_http_agent(
         self,

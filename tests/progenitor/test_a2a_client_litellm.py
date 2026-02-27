@@ -16,7 +16,7 @@ async def test_call_agent_uses_litellm_a2a_endpoint(monkeypatch) -> None:
         {
             "agent_id": "agent-123",
             "agent_name": "builder_agent",
-            "agent_card_params": {"name": "Builder Agent"},
+            "agent_card_params": {"name": "Builder Agent", "url": "http://progenitor-agent-builder_agent:8107"},
         }
     ]
 
@@ -42,7 +42,7 @@ async def test_call_agent_uses_litellm_a2a_endpoint(monkeypatch) -> None:
 
     assert result["success"] is True
     assert cfg["litellm_agent_id"] == "agent-123"
-    assert mock_client.post.call_args.args[0] == "http://litellm:4000/v1/a2a/agent-123/message/send"
+    assert mock_client.post.call_args.args[0] == "http://progenitor-agent-builder_agent:8107"
 
 
 @pytest.mark.asyncio
@@ -56,7 +56,7 @@ async def test_call_agent_uses_litellm_without_endpoint(monkeypatch) -> None:
         {
             "agent_id": "agent-123",
             "agent_name": "builder_agent",
-            "agent_card_params": {"name": "Builder Agent"},
+            "agent_card_params": {"name": "Builder Agent", "url": "http://progenitor-agent-builder_agent:8107"},
         }
     ]
 
@@ -77,7 +77,7 @@ async def test_call_agent_uses_litellm_without_endpoint(monkeypatch) -> None:
 
     assert result["success"] is True
     assert cfg["litellm_agent_id"] == "agent-123"
-    assert mock_client.post.call_args.args[0] == "http://litellm:4000/v1/a2a/agent-123/message/send"
+    assert mock_client.post.call_args.args[0] == "http://progenitor-agent-builder_agent:8107"
 
 
 @pytest.mark.asyncio
