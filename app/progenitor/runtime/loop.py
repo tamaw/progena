@@ -320,6 +320,11 @@ class ProgenitorLoop:
             self._state["last_reasoning_trace"] = reasoning_trace
             if reasoning_trace:
                 logger.info("Extracted reasoning trace (%d chars)", len(reasoning_trace))
+            elif last_ai_msg is not None and self.config.llm.reasoning_enabled:
+                logger.info(
+                    "No reasoning trace found in assistant message schema: %s",
+                    json.dumps(self._summarize_message_schema(last_ai_msg), default=str),
+                )
 
             # If the run_id changed during this cycle (e.g. the LLM invoked the
             # new_conversation system tool), treat it as a hard context reset.
@@ -646,6 +651,14 @@ class ProgenitorLoop:
             for key in ("reasoning", "thinking"):
                 if key in container and (text := _coerce(container.get(key))):
                     return text
+            # Some providers surface reasoning summary fields directly.
+            if "summary" in container or "effort" in container:
+                summary_obj = {
+                    "effort": container.get("effort"),
+                    "summary": container.get("summary"),
+                }
+                if text := _coerce(summary_obj):
+                    return text
 
         content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
         if isinstance(content, list):
@@ -662,6 +675,32 @@ class ProgenitorLoop:
                 return "\n".join(parts)
 
         return None
+
+    def _summarize_message_schema(self, msg: Any) -> dict[str, Any]:
+        """Return a compact schema summary for assistant messages."""
+        if isinstance(msg, dict):
+            additional = msg.get("additional_kwargs")
+            metadata = msg.get("response_metadata")
+            content = msg.get("content")
+            return {
+                "type": msg.get("type"),
+                "role": msg.get("role"),
+                "keys": sorted(msg.keys()),
+                "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
+                "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
+                "content_type": type(content).__name__,
+            }
+
+        additional = getattr(msg, "additional_kwargs", None)
+        metadata = getattr(msg, "response_metadata", None)
+        content = getattr(msg, "content", None)
+        return {
+            "type": getattr(msg, "type", None),
+            "role": getattr(msg, "role", None),
+            "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
+            "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
+            "content_type": type(content).__name__,
+        }
 
     async def enqueue_input(self, message: str, timeout: float | None = 30.0) -> bool:
         """Add a message to the input queue.
