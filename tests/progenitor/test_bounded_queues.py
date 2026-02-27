@@ -353,6 +353,20 @@ class TestReasoningTraceExtraction(unittest.TestCase):
         }
         assert self.loop._extract_reasoning_trace(msg) == "step-by-step"
 
+    def test_extract_message_text_from_string_content(self):
+        msg = {"role": "assistant", "content": "hello there"}
+        assert self.loop._extract_message_text(msg) == "hello there"
+
+    def test_extract_message_text_from_list_blocks(self):
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": "one"},
+                {"type": "text", "text": "two"},
+            ],
+        }
+        assert self.loop._extract_message_text(msg) == "one\ntwo"
+
     def test_finds_last_assistant_message(self):
         messages = [
             {"role": "user", "content": "hi"},

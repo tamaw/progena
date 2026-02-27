@@ -167,9 +167,14 @@ def create_schedule_finalize_node(
         result_status = "completed" if response_text.strip() else "completed_no_response"
 
         if event_pusher:
+            event_content = (
+                response_text
+                if response_text.strip()
+                else "Scheduled task completed, but the agent returned no response text."
+            )
             await event_pusher(
                 "scheduled_response",
-                response_text or "(no response)",
+                event_content,
                 {
                     "schedule_id": schedule_id,
                     "schedule_message": entry.get("message"),
