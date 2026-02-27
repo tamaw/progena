@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from deepagents.backends import (
-    BackendPolicyHooks,
     CompositeBackend,
     FilesystemBackend,
     StateBackend,
@@ -25,7 +24,7 @@ from deepagents.backends import (
 logger = logging.getLogger(__name__)
 
 
-class ReadOnlyFilesystemBackend(BackendPolicyHooks):
+class ReadOnlyFilesystemBackend:
     """Deny all mutation operations while allowing reads/listing."""
 
     def __init__(self, backend: Any):
@@ -61,7 +60,7 @@ def create_progenitor_backend(
         if not path.exists():
             logger.warning("Skipping backend mount for missing path: %s", path)
             return None
-        backend = FilesystemBackend(root_path=str(path))
+        backend = FilesystemBackend(root_dir=str(path), virtual_mode=True)
         if read_only:
             return ReadOnlyFilesystemBackend(backend)
         return backend
