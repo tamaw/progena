@@ -115,6 +115,79 @@ async def _cleanup_worktrees(*, repo_path: Path, worktrees: list[str]) -> None:
         except Exception:
             continue
 
+
+def _expected_output_path(repo_path: Path, build_state: dict[str, Any]) -> Path | None:
+    """Resolve the expected output path for builds that specify project_directory."""
+    build_settings = build_state.get("build_settings")
+    if not isinstance(build_settings, dict):
+        return None
+    project_directory = build_settings.get("project_directory")
+    if not isinstance(project_directory, str) or not project_directory.strip():
+        return None
+    project_path = Path(project_directory.strip())
+    return project_path if project_path.is_absolute() else repo_path / project_path
+
+
+def _assert_expected_output_exists(repo_path: Path, build_state: dict[str, Any]) -> None:
+    """Fail fast if a build reports success but expected filesystem output is missing."""
+    expected_path = _expected_output_path(repo_path, build_state)
+    if expected_path is None:
+        return
+    if not expected_path.exists():
+        raise RuntimeError(f"Build completed without creating expected output path: {expected_path}")
+    if expected_path.is_dir() and not any(p.is_file() for p in expected_path.rglob("*")):
+        raise RuntimeError(f"Build output directory is empty: {expected_path}")
+
+
+def _extract_published_pr_url(build_state: dict[str, Any]) -> str | None:
+    build_messages = build_state.get("build_messages")
+    if isinstance(build_messages, list):
+        for msg in reversed(build_messages):
+            pr_url = msg.get("pr_url") if isinstance(msg, dict) else None
+            if (
+                isinstance(msg, dict)
+                and msg.get("phase") == "publish"
+                and msg.get("pr_status") == "created"
+                and isinstance(pr_url, str)
+                and pr_url.strip()
+            ):
+                return pr_url.strip()
+
+    current_work_item = build_state.get("current_work_item")
+    if isinstance(current_work_item, dict):
+        context = current_work_item.get("context")
+        if isinstance(context, dict):
+            pr_url = context.get("pr_url")
+            if isinstance(pr_url, str) and pr_url.strip():
+                return pr_url.strip()
+    return None
+
+
+def _assert_pr_created_if_required(build_state: dict[str, Any]) -> str | None:
+    build_settings = build_state.get("build_settings")
+    build_type = ""
+    if isinstance(build_settings, dict):
+        build_type = str(build_settings.get("build_type") or "").lower().strip()
+
+    if build_type not in {"agent", "mcp", "progenitor", "upgrade"}:
+        return None
+
+    pr_url = _extract_published_pr_url(build_state)
+    if not pr_url:
+        raise RuntimeError("Build completed without creating a GitHub PR")
+    return pr_url
+
+
+def _resolve_repo_path(worktrees_dir: Path) -> Path:
+    """Resolve the git repo root for builds in local and container environments."""
+    repo_root_env = os.getenv("PROGENITOR_PROJECT_ROOT")
+    if repo_root_env:
+        return Path(repo_root_env)
+    candidate = Path(__file__).resolve().parents[4]
+    if (candidate / ".git").exists():
+        return candidate
+    return worktrees_dir.parent
+
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
     from ..llm.client import LLMClient
@@ -147,6 +220,7 @@ class BuildResult:
     verification_score: float = 0.0
     success_criteria_met: list[str] = field(default_factory=list)
     success_criteria_unmet: list[str] = field(default_factory=list)
+    pr_url: str | None = None
 
 
 @dataclass
@@ -377,11 +451,7 @@ class BackgroundBuildRunner:
         No backlog is used - the inner loop runs directly.
         """
         started_at = utcnow()
-        # Prefer the workspace repo root in Docker (PROGENITOR_PROJECT_ROOT=/app/worktrees).
-        # Falling back to the module path breaks git operations because the agent code
-        # directory is not a git repo inside the container.
-        repo_root_env = os.getenv("PROGENITOR_PROJECT_ROOT")
-        repo_path = Path(repo_root_env) if repo_root_env else self.worktrees_dir.parent
+        repo_path = _resolve_repo_path(self.worktrees_dir)
         integration_branch = f"progenitor/integration/{build_id}"
         base_branch = "main"
         current_build = self._current_build  # Capture for type narrowing
@@ -503,6 +573,9 @@ class BackgroundBuildRunner:
 
             # Note: build artifacts live in the main repo now (no submodules), so
             # PR creation is handled by the inner-loop PUBLISH node.
+
+            _assert_expected_output_exists(repo_path, build_state)
+            result.pr_url = _assert_pr_created_if_required(build_state)
 
             # Build completed successfully
             result.status = BuildStatus.COMPLETED
