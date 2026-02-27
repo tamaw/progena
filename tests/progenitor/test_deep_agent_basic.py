@@ -67,8 +67,8 @@ class TestLangChainAdapter:
         model = create_langchain_model(config)
         assert not str(model.openai_api_base).endswith("//")
 
-    def test_reasoning_uses_extra_body_thinking(self):
-        """Reasoning config is sent via extra_body, not top-level kwargs."""
+    def test_reasoning_uses_reasoning_effort(self):
+        """Reasoning config is sent via reasoning_effort for LiteLLM/Azure."""
         config = LLMConfig(
             base_url="http://localhost:4000",
             api_key="test-key",
@@ -78,8 +78,7 @@ class TestLangChainAdapter:
         )
         model = create_langchain_model(config)
         assert "thinking" not in model.model_kwargs
-        assert model.extra_body["thinking"]["type"] == "enabled"
-        assert model.extra_body["thinking"]["budget_tokens"] == 2048
+        assert model.reasoning_effort == "medium"
 
     def test_azure_structured_model_not_configured(self):
         """Returns None when Azure env vars not set."""
