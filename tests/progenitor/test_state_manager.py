@@ -119,10 +119,9 @@ class TestStateManager:
 
         entry = ScheduleEntry(
             id="schedule-1",
-            description="Daily task",
-            instruction="Do the daily task",
+            message="Do the daily task",
             cron_expression="0 9 * * *",
-            next_run=utcnow(),
+            created_at=utcnow(),
         )
 
         await manager.save_schedule([entry])
