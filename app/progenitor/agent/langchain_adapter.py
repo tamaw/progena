@@ -50,22 +50,12 @@ def create_langchain_model(
     # Build model kwargs for extended reasoning when enabled.
     reasoning: dict[str, str] | None = None
     if config.reasoning_enabled:
-        budget = config.reasoning_budget_tokens
-        if budget is not None:
-            if budget <= 1024:
-                reasoning_effort = "low"
-            elif budget <= 4096:
-                reasoning_effort = "medium"
-            else:
-                reasoning_effort = "high"
-        else:
-            reasoning_effort = "medium"
+        reasoning_effort = config.reasoning_effort or "medium"
         reasoning = {"effort": reasoning_effort, "summary": "auto"}
         logger.info(
-            "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
+            "Reasoning enabled for model %s (effort=%s)",
             model_name,
             reasoning_effort,
-            config.reasoning_budget_tokens or "default",
         )
 
     model = ChatOpenAI(

@@ -75,7 +75,7 @@ class TestLangChainAdapter:
             api_key="test-key",
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
-            reasoning_budget_tokens=2048,
+            reasoning_effort="medium",
         )
         model = create_langchain_model(config)
         assert "thinking" not in model.model_kwargs
