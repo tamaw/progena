@@ -77,34 +77,27 @@ class TestScheduleEntry:
     """Tests for ScheduleEntry model (simplified)."""
 
     def test_create_recurring_schedule(self):
-        """Test creating a recurring schedule with cron_expression."""
-        next_run = datetime(2026, 1, 20, 9, 0, 0, tzinfo=UTC)
+        """Test creating a schedule entry with cron expression."""
         entry = ScheduleEntry(
             id="schedule-1",
-            description="Daily reminder",
-            instruction="Say good morning",
+            message="Say good morning",
             cron_expression="0 9 * * *",
-            next_run=next_run,
         )
 
         assert entry.cron_expression == "0 9 * * *"
-        assert entry.one_off is False
-        assert entry.enabled
+        assert entry.message == "Say good morning"
 
-    def test_create_one_off_schedule(self):
-        """Test creating a one-off schedule."""
+    def test_schedule_with_last_run(self):
+        """Test schedule entry with explicit last_run."""
         run_time = datetime(2026, 1, 20, 10, 0, 0, tzinfo=UTC)
         entry = ScheduleEntry(
             id="schedule-2",
-            description="One-time reminder",
-            instruction="Send the report",
+            message="Send the report",
             cron_expression="0 10 20 1 *",
-            next_run=run_time,
-            one_off=True,
+            last_run=run_time,
         )
 
-        assert entry.next_run == run_time
-        assert entry.one_off is True
+        assert entry.last_run == run_time
 
 
 class TestAgentRegistryEntry:

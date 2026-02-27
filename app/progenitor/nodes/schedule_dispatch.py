@@ -5,7 +5,7 @@ Two nodes handle the full scheduled-task lifecycle:
   create_schedule_dispatch_node
     Entry point for every background cycle. Fetches the schedule, finds the
     first due item, and either:
-      - Routes to the scheduled path (sets current_input from the instruction)
+      - Routes to the scheduled path (sets current_input from the message)
       - Routes to the backlog path (bg_work_type = "backlog")
       - Routes to END (no work)
 
@@ -47,7 +47,7 @@ def create_schedule_dispatch_node(
       bg_had_work   : True if work was found
       bg_work_type  : "scheduled" | "backlog" | None
       bg_schedule_id: ID of the chosen schedule entry (scheduled path only)
-      current_input : instruction text (scheduled path only)
+      current_input : scheduled message text (scheduled path only)
     """
     scheduler = Scheduler(timezone=timezone)
 
@@ -80,10 +80,10 @@ def create_schedule_dispatch_node(
 
         entry = due_items[0]
         schedule_id = str(entry["id"])
-        instruction = entry.get("instruction") or entry.get("description") or "Scheduled task"
+        message = entry.get("message") or "Scheduled task"
 
         prefix = _prompts.get("progenitor/scheduled_prefix.md").strip()
-        scheduled_input = f"{prefix}\n\n{instruction}".strip()
+        scheduled_input = f"{prefix}\n\n{message}".strip()
 
         if event_pusher:
             await event_pusher(
@@ -102,8 +102,7 @@ def create_schedule_dispatch_node(
             "current_input_metadata": {
                 "type": "scheduled",
                 "schedule_id": schedule_id,
-                "schedule_description": entry.get("description"),
-                "schedule_next_run": entry.get("next_run"),
+                "schedule_message": entry.get("message"),
                 "schedule_cron_expression": entry.get("cron_expression"),
             },
         })
@@ -120,8 +119,8 @@ def create_schedule_finalize_node(
 
     Runs after the scheduled chat path completes (regardless of success/failure).
     Responsibilities:
-      - One-off tasks  : deleted immediately from storage
-      - Recurring tasks: next_run advanced by cron expression, last_run set
+      - One-shot expressions: deleted immediately from storage after execution
+      - Recurring expressions: last_run set after execution
       - Result event   : always pushed back to the user (empty response is
                          reported explicitly rather than silently dropped)
     """
@@ -146,34 +145,22 @@ def create_schedule_finalize_node(
             logger.warning("schedule_finalize: entry %s not found — already removed?", schedule_id)
             return {"bg_schedule_id": None}
 
-        is_recurring = not entry.get("one_off", False)
+        cron_expression = str(entry.get("cron_expression") or "")
+        is_one_shot = scheduler.is_one_shot_expression(cron_expression)
 
-        if is_recurring:
-            # Advance next_run to next occurrence and persist last_run.
-            updated_schedule = scheduler.advance_recurring(schedule_dicts, schedule_id, utcnow())
-            updated_entry = next(
-                (e for e in updated_schedule if str(e.get("id")) == str(schedule_id)),
-                None,
-            )
-            if updated_entry:
-                updates: dict[str, Any] = {
-                    "last_run": updated_entry.get("last_run"),
-                    "next_run": updated_entry.get("next_run"),
-                }
-                await state_manager.update_schedule_entry(schedule_id, updates)
-                logger.info(
-                    "schedule_finalize: advanced recurring %s → next_run=%s",
-                    schedule_id,
-                    updates.get("next_run"),
-                )
-        else:
-            # One-off: delete immediately — it ran, it's done.
+        if is_one_shot:
             removed = await state_manager.remove_schedule_entry(schedule_id)
             logger.info(
-                "schedule_finalize: removed one-off entry %s (removed=%s)",
+                "schedule_finalize: removed one-shot entry %s (removed=%s)",
                 schedule_id,
                 removed,
             )
+        else:
+            await state_manager.update_schedule_entry(
+                schedule_id,
+                {"last_run": utcnow().isoformat()},
+            )
+            logger.info("schedule_finalize: marked recurring entry %s as executed", schedule_id)
 
         # Always report the result back, even if empty or failed.
         response_text: str = state.get("last_cycle_response") or ""
@@ -185,14 +172,14 @@ def create_schedule_finalize_node(
                 response_text or "(no response)",
                 {
                     "schedule_id": schedule_id,
-                    "schedule_description": entry.get("description"),
-                    "is_recurring": is_recurring,
+                    "schedule_message": entry.get("message"),
+                    "is_recurring": not is_one_shot,
                     "status": result_status,
                 },
             )
             await event_pusher(
                 "work_completed",
-                f"Completed scheduled work: {entry.get('description', schedule_id)}",
+                f"Completed scheduled work: {entry.get('message', schedule_id)}",
                 {"work_type": "scheduled", "schedule_id": schedule_id, "status": result_status},
             )
 
