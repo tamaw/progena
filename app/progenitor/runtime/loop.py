@@ -424,20 +424,19 @@ class ProgenitorLoop:
 
             # Ensure streaming clients never hang waiting for an is_final marker.
             # Extract the last AI message from messages if nothing was streamed yet.
+            last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
             if self._streaming_enabled and not self._stream_final_sent:
-                messages = self._state.get("messages")
-                if messages and isinstance(messages, list):
-                    last_msg = messages[-1]
-                    content = getattr(last_msg, "content", None)
-                    if content and isinstance(content, str):
-                        logger.info("Extracting AI response from messages (%d chars)", len(content))
-                        await self._stream_response(content)
-                        self._stream_final_sent = True
+                response_text = self._extract_message_text(last_ai_msg)
+                if response_text:
+                    logger.info("Extracting AI response from messages (%d chars)", len(response_text))
+                    await self._stream_response(response_text)
+                    self._last_cycle_response = response_text
+                    self._state["last_cycle_response"] = response_text
+                    self._stream_final_sent = True
                 if not self._stream_final_sent:
                     await self.stream_final()
                     self._stream_final_sent = True
 
-            last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
             reasoning_trace = self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
             self._last_reasoning_trace = reasoning_trace
             self._state["last_reasoning_trace"] = reasoning_trace
@@ -794,6 +793,36 @@ class ProgenitorLoop:
                     candidate = part.get("text") or part.get("summary") or part.get("content")
                     if text := _coerce(candidate):
                         parts.append(text)
+            if parts:
+                return "\n".join(parts)
+
+        return None
+
+    def _extract_message_text(self, msg: Any) -> str | None:
+        """Extract assistant-facing text from message content payloads."""
+        if msg is None:
+            return None
+
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, str):
+            text = content.strip()
+            return text or None
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text = part.strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "")).lower()
+                if part_type in {"text", "output_text", "message"}:
+                    candidate = part.get("text") or part.get("content")
+                    if isinstance(candidate, str) and candidate.strip():
+                        parts.append(candidate.strip())
             if parts:
                 return "\n".join(parts)
 
