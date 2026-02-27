@@ -4,7 +4,10 @@ Tests for Phase 3: Backend configuration for DeepAgent.
 
 from unittest.mock import MagicMock
 
-from app.progenitor.agent.backends import create_progenitor_backend
+from app.progenitor.agent.backends import (
+    ReadOnlyFilesystemBackend,
+    create_progenitor_backend,
+)
 
 
 class TestBackendFactory:
@@ -33,12 +36,25 @@ class TestBackendFactory:
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path
+
+            root = Path(tmpdir)
+            for rel in ("app", "data", "logs", "prompts"):
+                (root / rel).mkdir(parents=True, exist_ok=True)
+
             factory = create_progenitor_backend(project_root=tmpdir)
             runtime = MagicMock()
             runtime.store = MagicMock()
 
             backend = factory(runtime)
             assert backend is not None
+            assert "/self/" in backend.routes
+            assert "/data/" in backend.routes
+            assert "/logs/" in backend.routes
+            assert "/prompts/" in backend.routes
+            assert isinstance(backend.routes["/self/"], ReadOnlyFilesystemBackend)
+            assert isinstance(backend.routes["/data/"], ReadOnlyFilesystemBackend)
+            assert isinstance(backend.routes["/logs/"], ReadOnlyFilesystemBackend)
 
     def test_factory_defaults_to_cwd(self):
         """Factory defaults to cwd when no project_root specified."""

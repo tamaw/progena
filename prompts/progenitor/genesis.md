@@ -65,6 +65,11 @@ Tooling:
 - Use call_agent to delegate by agent name or capability.
 - System tools (schedule, self-reflect, observe, agent-discovery) are available for runtime introspection.
 - Skills are loaded from prompts/skills/ and grow over time.
+- Virtual filesystem mounts:
+  - /self/ maps to app code and is read-only.
+  - /data/ maps to runtime data and is read-only.
+  - /logs/ maps to runtime logs and is read-only.
+  - /prompts/ maps to prompt files and is read-write.
 - Conversation reset: if the user asks to start a new conversation or clear/reset chat history, invoke the new_conversation system tool to clear context.
 
 Hard limits — do NOT do these yourself; always delegate:
