@@ -7,6 +7,7 @@ Configuration is read from environment variables. Per SPEC.md.
 import logging
 import logging.handlers
 import os
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC
 from pathlib import Path
@@ -531,8 +532,12 @@ def setup_logging(config: ProgenitorConfig, agent_name: str = "progenitor") -> N
     - "text": Human-readable format (default)
     - "json": Structured JSON format for production/log aggregation
 
-    Always writes to {log_dir}/{agent_name}.log with rotation (10 MB × 5 backups)
-    in addition to stdout.
+    Writes split rotating log files under {log_dir}/{agent_name}/:
+    - {log_dir}/{agent_name}/{agent_name}.stdout.log for records below ERROR
+    - {log_dir}/{agent_name}/{agent_name}.stderr.log for ERROR and above
+
+    Also emits non-error logs to stdout and errors to stderr so container logs
+    preserve the same split for mounted inspection and diagnostics.
     """
     log_levels = {
         "debug": logging.DEBUG,
@@ -547,44 +552,72 @@ def setup_logging(config: ProgenitorConfig, agent_name: str = "progenitor") -> N
     if config.runtime.log_format.lower() == "json":
         # JSON structured logging for production
         formatter: logging.Formatter = JsonLogFormatter()
-        handler: logging.Handler = logging.StreamHandler()
-        handler.setFormatter(formatter)
-        logging.root.handlers = [handler]
-        logging.root.setLevel(level)
     else:
         # Standard text format
         formatter = logging.Formatter(
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-        logging.basicConfig(
-            level=level,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
 
-    # Add rotating file handler → {log_dir}/{agent_name}.log
+    root_logger = logging.getLogger()
+    for existing_handler in root_logger.handlers[:]:
+        existing_handler.close()
+        root_logger.removeHandler(existing_handler)
+    root_logger.setLevel(level)
+
+    stdout_handler = logging.StreamHandler(stream=sys.stdout)
+    stdout_handler.setLevel(level)
+    stdout_handler.addFilter(_BelowErrorFilter())
+    stdout_handler.setFormatter(formatter)
+    root_logger.addHandler(stdout_handler)
+
+    stderr_handler = logging.StreamHandler(stream=sys.stderr)
+    stderr_handler.setLevel(logging.ERROR)
+    stderr_handler.setFormatter(formatter)
+    root_logger.addHandler(stderr_handler)
+
+    # Add rotating file handlers with the same split as stdout/stderr.
     try:
-        log_dir = config.storage.log_dir
+        log_dir = config.storage.log_dir / agent_name
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"{agent_name}.log"
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file,
+        stdout_log_file = log_dir / f"{agent_name}.stdout.log"
+        stdout_file_handler = logging.handlers.RotatingFileHandler(
+            stdout_log_file,
             maxBytes=10 * 1024 * 1024,  # 10 MB per file
             backupCount=5,
             encoding="utf-8",
         )
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        logging.root.addHandler(file_handler)
+        stdout_file_handler.setLevel(level)
+        stdout_file_handler.addFilter(_BelowErrorFilter())
+        stdout_file_handler.setFormatter(formatter)
+        root_logger.addHandler(stdout_file_handler)
+
+        stderr_log_file = log_dir / f"{agent_name}.stderr.log"
+        stderr_file_handler = logging.handlers.RotatingFileHandler(
+            stderr_log_file,
+            maxBytes=10 * 1024 * 1024,  # 10 MB per file
+            backupCount=5,
+            encoding="utf-8",
+        )
+        stderr_file_handler.setLevel(logging.ERROR)
+        stderr_file_handler.setFormatter(formatter)
+        root_logger.addHandler(stderr_file_handler)
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning(
-            "Could not create log file for %s: %s", agent_name, exc
+            "Could not create split log files for %s: %s", agent_name, exc
         )
 
     # Reduce noise from httpx and openai
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
+
+
+class _BelowErrorFilter(logging.Filter):
+    """Allow only records below ERROR."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return True for records that should stay on stdout."""
+        return record.levelno < logging.ERROR
 
 
 class JsonLogFormatter(logging.Formatter):
