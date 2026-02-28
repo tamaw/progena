@@ -2,6 +2,7 @@
 Tests for the centralized configuration module.
 """
 
+import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from app.progenitor.config import (
     StorageConfig,
     get_config,
     reload_config,
+    setup_logging,
 )
 from app.progenitor.utils import env_bool, env_float, env_int, env_list
 
@@ -278,3 +280,42 @@ class TestGlobalConfig:
         config2 = reload_config()
 
         assert config1 is not config2
+
+
+class TestLoggingSetup:
+    """Tests for logger setup."""
+
+    def test_setup_logging_splits_stdout_and_stderr_files(self, tmp_path):
+        original_handlers = logging.root.handlers[:]
+        original_level = logging.root.level
+        logger = logging.getLogger("tests.progenitor.logging")
+
+        config = ProgenitorConfig(
+            storage=StorageConfig(
+                state_dir=tmp_path / "state",
+                log_dir=tmp_path,
+                worktree_dir=tmp_path / "worktrees",
+                prompts_dir=tmp_path / "prompts",
+            )
+        )
+
+        try:
+            setup_logging(config, "progenitor")
+            logger.info("info line")
+            logger.error("error line")
+
+            for handler in logging.root.handlers:
+                handler.flush()
+
+            stdout_log = (tmp_path / "progenitor" / "progenitor.stdout.log").read_text(encoding="utf-8")
+            stderr_log = (tmp_path / "progenitor" / "progenitor.stderr.log").read_text(encoding="utf-8")
+
+            assert "info line" in stdout_log
+            assert "error line" not in stdout_log
+            assert "error line" in stderr_log
+        finally:
+            for handler in logging.root.handlers[:]:
+                handler.close()
+                logging.root.removeHandler(handler)
+            logging.root.handlers = original_handlers
+            logging.root.setLevel(original_level)
