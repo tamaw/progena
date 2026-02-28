@@ -1,12 +1,7 @@
 ---
 name: build-agent
-description: Build A2A agents and MCP tools following Progenitor's directory structure, HTTP endpoints, LLM integration, and registry patterns
-allowed-tools:
-  - shell
-  - git
-  - write_file
-  - edit_file
-  - read_file
+description: Build A2A agents and MCP tools that follow Progenitor's directory structure, HTTP endpoints, LLM integration, and registry patterns. Use when creating a new agent, adding an MCP tool, or building a new Progenitor component.
+allowed-tools: shell git write_file edit_file read_file
 ---
 
 # Build Agent Skill
