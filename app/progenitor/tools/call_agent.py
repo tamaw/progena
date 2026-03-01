@@ -66,7 +66,20 @@ class CallAgentTool(BaseSystemTool):
         if not isinstance(cfg, dict):
             return ToolResult.fail(f"Unknown agent: {agent}")
 
-        result = await A2AClient().call_agent(
+        a2a_client = A2AClient()
+
+        # Pull latest agent card into memory before invocation.
+        with contextlib.suppress(Exception):
+            card = await a2a_client.get_agent_card(cfg, timeout=min(timeout_seconds, 5.0))
+            if isinstance(card, dict):
+                cfg = dict(cfg)
+                cfg["agent_card"] = card
+                if not cfg.get("endpoint"):
+                    endpoint = str(card.get("url") or "").strip()
+                    if endpoint:
+                        cfg["endpoint"] = endpoint
+
+        result = await a2a_client.call_agent(
             agent_config=cfg,
             request=request,
             context={"caller": "progenitor"},
