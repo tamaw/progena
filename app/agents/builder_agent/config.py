@@ -223,7 +223,7 @@ class CopilotConfig:
     bin_path: str = "copilot"
     timeout_seconds: int = 1200  # 20 minutes per ACP request
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
-    model: str = "claude-haiku-4.5"
+    model: str = "gpt-5.3-codex"
     max_tokens: int = 8192
 
     # ACP (Agent Client Protocol) settings
@@ -237,7 +237,7 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
-            model=os.getenv("PROGENITOR_COPILOT_MODEL", "claude-haiku-4.5"),
+            model=os.getenv("PROGENITOR_COPILOT_MODEL", "gpt-5.3-codex"),
             max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", 8192),
             # ACP settings
             acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
