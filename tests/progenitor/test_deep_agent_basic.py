@@ -23,6 +23,8 @@ class TestLangChainAdapter:
         assert model.model_name == "gpt-5.2-chat"
         assert "azure.com" in str(model.openai_api_base)
         assert model.streaming is True
+        assert model.use_responses_api is True
+        assert model.output_version == "responses/v1"
 
     def test_create_model_with_role(self):
         """Role-specific model selection works."""

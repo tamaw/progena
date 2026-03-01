@@ -67,15 +67,18 @@ def create_langchain_model(
         default_headers={
             "api-key": config.api_key or "",
         },
+        use_responses_api=True,
+        output_version="responses/v1",
         streaming=True,
         reasoning_effort=reasoning_effort,
     )
 
     logger.info(
-        "Created LangChain model adapter: model=%s, base_url=%s, role=%s, reasoning=%s",
+        "Created LangChain model adapter: model=%s, base_url=%s, role=%s, responses_api=%s, reasoning=%s",
         model_name,
         base_url,
         role,
+        True,
         config.reasoning_enabled,
     )
     return model
