@@ -210,8 +210,8 @@ jobs:
 
       - name: Deploy progenitor stack
         env:
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY || secrets.AZURE_RESPONSES_API_KEY }}
-          AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL || secrets.AZURE_RESPONSES_API_BASE || vars.AZURE_OPENAI_BASE_URL }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           PROGENITOR_MODEL_DEFAULT: ${{ secrets.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_TIMEZONE: ${{ secrets.PROGENITOR_TIMEZONE }}
           GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
