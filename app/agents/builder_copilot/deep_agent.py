@@ -10,14 +10,13 @@ from deepagents.backends import LocalShellBackend
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
-from app.progenitor.agent.langchain_adapter import create_langchain_model
-from app.progenitor.agent.middleware import (
+from .config import BuilderCopilotConfig, get_config
+from .langchain_adapter import create_langchain_model
+from .middleware import (
     AuditLoggingMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
-from app.progenitor.config import ProgenitorConfig, get_config
-
 from .tools import create_builder_copilot_tools
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,7 @@ Rules:
 
 def create_builder_copilot_agent(
     *,
-    config: ProgenitorConfig | None = None,
+    config: BuilderCopilotConfig | None = None,
     project_root: str | Path | None = None,
     log_dir: str | Path | None = None,
 ) -> CompiledStateGraph:
@@ -52,7 +51,7 @@ def create_builder_copilot_agent(
     config = config or get_config(validate=False)
     root = Path(project_root) if project_root else Path(__file__).resolve().parents[3]
 
-    model = create_langchain_model(config.llm)
+    model = create_langchain_model(config.llm, role="builder")
     backend = LocalShellBackend(
         root_dir=root,
         virtual_mode=False,

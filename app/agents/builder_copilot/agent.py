@@ -13,8 +13,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.progenitor.config import ProgenitorConfig, get_config, setup_logging
-
+from .client import BuilderCopilotClient, ReasonedPlan
+from .config import BuilderCopilotConfig, get_config, setup_logging
 from .deep_agent import create_builder_copilot_agent
 from .tools import ensure_workspace
 
@@ -65,7 +65,8 @@ class BuilderCopilotService:
 
     def __init__(self) -> None:
         self._graph = None
-        self._config: ProgenitorConfig | None = None
+        self._config: BuilderCopilotConfig | None = None
+        self._planner_client: BuilderCopilotClient | None = None
         self._initialized = False
         self._start_time = time.time()
 
@@ -88,6 +89,7 @@ class BuilderCopilotService:
             log_dir=config.storage.log_dir / "builder_copilot",
         )
         self._config = config
+        self._planner_client = BuilderCopilotClient(config.llm, role="planner")
         self._initialized = True
         logger.info("Builder Copilot initialized")
 
@@ -95,13 +97,10 @@ class BuilderCopilotService:
         """Run the DeepAgent for a single request."""
         await self.initialize()
         assert self._graph is not None
+        assert self._planner_client is not None
 
-        ctx_json = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
-        prompt = (
-            f"User request:\n{request_text.strip()}\n\n"
-            f"Execution context (JSON):\n{ctx_json}\n\n"
-            "Complete the work using the step skills and return a concise final report."
-        )
+        planning_result = await _build_preflight_plan(self._planner_client, request_text, context)
+        prompt = _build_execution_prompt(request_text, context, planning_result)
         result = await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
             {"configurable": {"thread_id": f"builder_copilot_{uuid.uuid4().hex[:12]}"}},
@@ -147,6 +146,49 @@ def _extract_result_text(result: dict[str, Any]) -> str:
             return candidate.strip()
 
     return "Builder Copilot completed, but no text response was returned."
+
+
+async def _build_preflight_plan(
+    planner_client: BuilderCopilotClient,
+    request_text: str,
+    context: dict[str, Any],
+) -> ReasonedPlan | None:
+    try:
+        return await planner_client.plan_step(request_text, context)
+    except Exception:
+        logger.warning("Builder Copilot preflight planning failed; continuing without it", exc_info=True)
+        return None
+
+
+def _build_execution_prompt(
+    request_text: str,
+    context: dict[str, Any],
+    planning_result: ReasonedPlan | None,
+) -> str:
+    ctx_json = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
+    plan_block = ""
+    if planning_result is not None:
+        step_lines = []
+        for item in planning_result.plan.steps:
+            commands = ", ".join(item.commands) if item.commands else "none"
+            step_lines.append(f"- {item.step}: {item.objective} (commands: {commands})")
+        risk_lines = planning_result.plan.risks or ["none"]
+        plan_block = (
+            "Preflight plan:\n"
+            f"Summary: {planning_result.plan.summary or 'No summary'}\n"
+            "Steps:\n"
+            f"{chr(10).join(step_lines) if step_lines else '- none'}\n"
+            "Risks:\n"
+            f"{chr(10).join(f'- {risk}' for risk in risk_lines)}\n"
+            f"Planning reasoning summary: {planning_result.reasoning or 'No reasoning summary returned.'}\n\n"
+        )
+
+    return (
+        f"User request:\n{request_text.strip()}\n\n"
+        f"Execution context (JSON):\n{ctx_json}\n\n"
+        f"{plan_block}"
+        "Complete the work using the step skills and return a concise final report."
+    )
 
 
 app = FastAPI()
