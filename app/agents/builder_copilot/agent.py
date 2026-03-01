@@ -354,9 +354,54 @@ async def _health(request: Any) -> JSONResponse:
 app.add_route("/health", _health, methods=["GET"])
 
 
+def _register_agent_in_shared_registry(port: int, *, registry_path: Path | None = None) -> None:
+    if registry_path is None:
+        config = get_config(Path(__file__).resolve().parents[3], Path(__file__).resolve().parents[3] / "config", validate=False)
+        registry_path = config.storage.state_dir.parent / "config" / "agents.json"
+
+    host = os.environ.get("A2A_PUBLIC_HOST", "").strip() or os.environ.get("HOSTNAME", "").strip() or "localhost"
+
+    payload: dict[str, Any] = {"agents": []}
+    if registry_path.exists():
+        try:
+            with registry_path.open(encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                agents = loaded.get("agents")
+                if isinstance(agents, list):
+                    payload["agents"] = agents
+        except (OSError, json.JSONDecodeError):
+            payload = {"agents": []}
+
+    payload["agents"] = [agent for agent in payload["agents"] if agent.get("name") != AGENT_NAME]
+    payload["agents"].append(
+        {
+            "name": AGENT_NAME,
+            "kind": "a2a_agent",
+            "version": AGENT_VERSION,
+            "description": AGENT_CARD.description,
+            "capabilities": [skill_id for skill_id, _ in STEP_SKILLS],
+            "entrypoint": "app.agents.builder_copilot.agent:app",
+            "transport": "http",
+            "port": port,
+            "endpoint": f"http://{host}:{port}",
+            "agent_card_url": f"http://{host}:{port}/.well-known/agent.json",
+            "status": "running",
+            "enabled": True,
+            "updated_at": _utc_now_iso(),
+        }
+    )
+
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    with registry_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     port = int(os.environ.get("PORT", str(DEFAULT_PORT)))
     logger.info("Builder Copilot starting on port %d", port)
     await service.initialize()
+    if service.health_payload().get("status") == "healthy":
+        _register_agent_in_shared_registry(port)
     logger.info("Builder Copilot ready on port %d", port)
