@@ -39,8 +39,10 @@ RUN curl -fsSL --retry 8 --retry-delay 2 --retry-all-errors https://gh.io/copilo
 WORKDIR /app
 
 COPY requirements.lock.txt /app/requirements.lock.txt
+COPY app/agents/builder_copilot/requirements.txt /app/requirements.builder_copilot.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.lock.txt
+    pip install --no-cache-dir -r /app/requirements.lock.txt && \
+    pip install --no-cache-dir -r /app/requirements.builder_copilot.txt
 
 COPY app/ /app/app/
 COPY prompts/ /app/prompts/
