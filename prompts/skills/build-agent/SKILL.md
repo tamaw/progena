@@ -49,7 +49,7 @@ app/mcp/<tool_name>/
 
 ## LLM Integration Pattern
 - Use Azure OpenAI `/responses` endpoint via httpx
-- Headers: `api-key` from `PROGENITOR_AZURE_API_KEY`
+- Headers: `api-key` from `AZURE_OPENAI_API_KEY`
 - Model: `PROGENITOR_MODEL_DEFAULT`
 - Implement a local tool-calling loop for multi-step reasoning
 

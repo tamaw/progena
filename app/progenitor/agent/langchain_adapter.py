@@ -10,6 +10,7 @@ Supports optional extended thinking/reasoning for models that support it
 """
 
 import logging
+
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 

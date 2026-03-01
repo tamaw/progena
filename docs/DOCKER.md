@@ -42,8 +42,8 @@ curl http://localhost:8000/health
 
 Set values in your shell or `.env` before startup:
 
-- `PROGENITOR_AZURE_BASE_URL` (for example `https://<resource>.openai.azure.com/openai/v1`)
-- `PROGENITOR_AZURE_API_KEY`
+- `AZURE_OPENAI_BASE_URL` (for example `https://<resource>.openai.azure.com/openai/v1`)
+- `AZURE_OPENAI_API_KEY`
 - `PROGENITOR_MODEL_DEFAULT` (optional override)
 
 ## Notes

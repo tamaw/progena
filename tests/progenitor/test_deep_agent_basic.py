@@ -48,8 +48,8 @@ class TestLangChainAdapter:
     def test_create_model_from_env(self):
         """Model created from environment when no config provided."""
         with patch.dict("os.environ", {
-            "PROGENITOR_AZURE_BASE_URL": "https://env.openai.azure.com/openai/v1",
-            "PROGENITOR_AZURE_API_KEY": "env-key",
+            "AZURE_OPENAI_BASE_URL": "https://env.openai.azure.com/openai/v1",
+            "AZURE_OPENAI_API_KEY": "env-key",
             "PROGENITOR_MODEL_DEFAULT": "test-model",
         }):
             model = create_langchain_model()

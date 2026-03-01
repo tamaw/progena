@@ -46,8 +46,8 @@ class AgentConfig:
     @classmethod
     def from_env(cls) -> "AgentConfig":
         return cls(
-            azure_base_url=os.getenv("PROGENITOR_AZURE_BASE_URL", "").rstrip("/"),
-            azure_api_key=os.getenv("PROGENITOR_AZURE_API_KEY", ""),
+            azure_base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
+            azure_api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
             model=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max"),
             data_dir=Path(os.getenv("AGENT_DATA_DIR", "/app/data")),
             log_dir=Path(os.getenv("AGENT_LOG_DIR", "/app/logs")),
@@ -176,7 +176,7 @@ Define tools as OpenAI function-calling objects. Dispatch in `_execute_tool`.
 
 ### Azure /responses helpers
 
-All LLM calls go directly to Azure at `PROGENITOR_AZURE_BASE_URL/responses`.
+All LLM calls go directly to Azure at `AZURE_OPENAI_BASE_URL/responses`.
 
 ```python
     def _responses_endpoint(self) -> str:
@@ -497,8 +497,8 @@ CMD ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "{po
       - ./data:/app/data        # state persists on host
       - ./logs:/app/logs        # logs visible on host
     environment:
-      PROGENITOR_AZURE_BASE_URL: ${PROGENITOR_AZURE_BASE_URL}
-      PROGENITOR_AZURE_API_KEY: ${PROGENITOR_AZURE_API_KEY}
+      AZURE_OPENAI_BASE_URL: ${AZURE_OPENAI_BASE_URL}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
     restart: unless-stopped
 ```
 
@@ -508,8 +508,8 @@ CMD ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "{po
 
 | Variable | Default | Description |
 |---|---|---|
-| `PROGENITOR_AZURE_BASE_URL` | _(required)_ | Azure OpenAI base URL |
-| `PROGENITOR_AZURE_API_KEY` | _(required)_ | Azure OpenAI API key |
+| `AZURE_OPENAI_BASE_URL` | _(required)_ | Azure OpenAI base URL |
+| `AZURE_OPENAI_API_KEY` | _(required)_ | Azure OpenAI API key |
 | `PROGENITOR_MODEL_DEFAULT` | `gpt-5.1-codex-max` | LLM model name |
 | `AGENT_DATA_DIR` | `/app/data` | Root for SQLite state files |
 | `AGENT_LOG_DIR` | `/app/logs` | Root for rotating log files |
