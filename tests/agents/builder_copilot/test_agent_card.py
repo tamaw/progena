@@ -1,12 +1,10 @@
 """Tests for the Builder Copilot agent card."""
 
-from app.agents.builder_copilot.agent import AGENT_NAME, STEP_SKILLS, build_agent_card_payload
+from app.agents.builder_copilot.agent import AGENT_CARD, AGENT_NAME, STEP_SKILLS
 
 
-def test_agent_card_payload_includes_expected_metadata():
-    payload = build_agent_card_payload(8108, "localhost")
-
-    assert payload["name"] == AGENT_NAME
-    assert payload["url"] == "http://localhost:8108/"
-    assert len(payload["skills"]) == len(STEP_SKILLS)
-    assert any(skill["id"] == "pr" for skill in payload["skills"])
+def test_agent_card_includes_expected_metadata():
+    assert AGENT_CARD.name == AGENT_NAME
+    assert AGENT_CARD.url.startswith("http://")
+    assert len(AGENT_CARD.skills) == len(STEP_SKILLS)
+    assert any(skill.id == "pr" for skill in AGENT_CARD.skills)

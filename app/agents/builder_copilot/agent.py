@@ -7,10 +7,29 @@ import logging
 import os
 import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.apps import A2AFastAPIApplication
+from a2a.server.events import EventQueue
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Artifact,
+    Message,
+    Part,
+    Role,
+    TaskArtifactUpdateEvent,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+)
 from fastapi.responses import JSONResponse
 
 from .client import BuilderCopilotClient, ReasonedPlan
@@ -31,34 +50,6 @@ STEP_SKILLS = [
     ("pr", "Commit, push, and create a pull request once validation passes."),
     ("python-search", "Search Python sources quickly before editing."),
 ]
-
-
-def build_agent_card_payload(port: int, public_host: str) -> dict[str, Any]:
-    """Build the A2A-style agent card payload."""
-    return {
-        "protocolVersion": "1.0",
-        "name": AGENT_NAME,
-        "description": (
-            "Minimal DeepAgent builder that uses git worktrees, GitHub Copilot, "
-            "test/lint commands, and GitHub CLI to produce small pull requests."
-        ),
-        "url": f"http://{public_host}:{port}/",
-        "version": AGENT_VERSION,
-        "defaultInputModes": ["text"],
-        "defaultOutputModes": ["text"],
-        "capabilities": {"streaming": False},
-        "skills": [
-            {
-                "id": skill_id,
-                "name": skill_id.replace("-", " ").title(),
-                "description": description,
-                "tags": ["builder", "copilot", skill_id],
-                "examples": [description],
-            }
-            for skill_id, description in STEP_SKILLS
-        ],
-    }
-
 
 class BuilderCopilotService:
     """Lazy-initialized wrapper around the DeepAgent graph."""
@@ -191,62 +182,181 @@ def _build_execution_prompt(
     )
 
 
-app = FastAPI()
+def _text_message(text: str, *, role: Role = Role.agent) -> Message:
+    return Message(
+        message_id=str(uuid.uuid4()),
+        role=role,
+        parts=[Part(root=TextPart(text=text))],
+    )
+
+
+def _extract_request_text(message: Message | None) -> str:
+    if message is None:
+        return ""
+    text_parts: list[str] = []
+    for part in (message.parts or []):
+        root = getattr(part, "root", part)
+        if isinstance(root, TextPart):
+            text_parts.append(root.text)
+    return "".join(text_parts).strip()
+
+
+def _extract_request_context(message: Message | None) -> dict[str, Any]:
+    if message is None:
+        return {}
+    metadata = getattr(message, "metadata", None)
+    if isinstance(metadata, dict):
+        return metadata
+    return {}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+class BuilderCopilotExecutor(AgentExecutor):
+    """SDK-backed A2A executor for Builder Copilot."""
+
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        task_id = context.task_id or str(uuid.uuid4())
+        ctx_id = context.context_id or str(uuid.uuid4())
+        request_text = _extract_request_text(context.message)
+        request_context = _extract_request_context(context.message)
+
+        if not request_text:
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=_text_message("Empty request. Describe the repository change to make."),
+                        timestamp=_utc_now_iso(),
+                    ),
+                    final=True,
+                )
+            )
+            return
+
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=ctx_id,
+                status=TaskStatus(
+                    state=TaskState.working,
+                    message=_text_message(f"Starting Builder Copilot run: {request_text[:120]}"),
+                    timestamp=_utc_now_iso(),
+                ),
+                final=False,
+            )
+        )
+
+        try:
+            response_text = await service.process(request_text, request_context)
+        except Exception as exc:
+            logger.exception("Builder Copilot execution failed")
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=_text_message(f"Builder Copilot failed: {exc}"),
+                        timestamp=_utc_now_iso(),
+                    ),
+                    final=True,
+                )
+            )
+            return
+
+        await event_queue.enqueue_event(
+            TaskArtifactUpdateEvent(
+                task_id=task_id,
+                context_id=ctx_id,
+                artifact=Artifact(
+                    artifact_id=str(uuid.uuid4()),
+                    name="builder-copilot-result",
+                    description="Final Builder Copilot response",
+                    parts=[Part(root=TextPart(text=response_text))],
+                ),
+                append=False,
+            )
+        )
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=ctx_id,
+                status=TaskStatus(
+                    state=TaskState.completed,
+                    message=_text_message("Builder Copilot completed successfully."),
+                    timestamp=_utc_now_iso(),
+                ),
+                final=True,
+            )
+        )
+
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        task_id = context.task_id or ""
+        ctx_id = context.context_id or ""
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=ctx_id,
+                status=TaskStatus(
+                    state=TaskState.canceled,
+                    message=_text_message("Builder Copilot task cancelled."),
+                    timestamp=_utc_now_iso(),
+                ),
+                final=True,
+            )
+        )
+
+
 service = BuilderCopilotService()
+_PORT = int(os.environ.get("PORT", str(DEFAULT_PORT)))
+_PUBLIC_HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
+
+AGENT_CARD = AgentCard(
+    name=AGENT_NAME,
+    description=(
+        "Minimal DeepAgent builder that uses git worktrees, GitHub Copilot, "
+        "test/lint commands, and GitHub CLI to produce small pull requests."
+    ),
+    version=AGENT_VERSION,
+    url=f"http://{_PUBLIC_HOST}:{_PORT}",
+    capabilities=AgentCapabilities(streaming=False, state_transition_history=True),
+    default_input_modes=["text/plain"],
+    default_output_modes=["text/plain"],
+    skills=[
+        AgentSkill(
+            id=skill_id,
+            name=skill_id.replace("-", " ").title(),
+            description=description,
+            tags=["builder", "copilot", skill_id],
+            examples=[description],
+        )
+        for skill_id, description in STEP_SKILLS
+    ],
+)
+
+_executor = BuilderCopilotExecutor()
+_task_store = InMemoryTaskStore()
+_request_handler = DefaultRequestHandler(agent_executor=_executor, task_store=_task_store)
+_a2a_app = A2AFastAPIApplication(agent_card=AGENT_CARD, http_handler=_request_handler)
+app = _a2a_app.build()
 
 
-@app.get("/.well-known/agent.json")
-async def agent_card() -> JSONResponse:
-    port = int(os.environ.get("PORT", str(DEFAULT_PORT)))
-    public_host = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
-    return JSONResponse(content=build_agent_card_payload(port, public_host))
-
-
-@app.get("/health")
-async def health() -> JSONResponse:
+async def _health(request: Any) -> JSONResponse:
+    del request
     return JSONResponse(content=service.health_payload())
 
 
-@app.post("/")
-@app.post("/a2a")
-async def handle(req: Request) -> JSONResponse:
-    try:
-        body = await req.json()
-    except Exception:
-        body = {}
+app.add_route("/health", _health, methods=["GET"])
 
-    if isinstance(body, dict) and body.get("jsonrpc") == "2.0" and body.get("method") == "message/send":
-        params_raw = body.get("params")
-        params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
-        message_raw = params.get("message")
-        msg: dict[str, Any] = message_raw if isinstance(message_raw, dict) else {}
-        parts_raw = msg.get("parts")
-        parts: list[Any] = parts_raw if isinstance(parts_raw, list) else []
-        request_text = ""
-        for part in parts:
-            if isinstance(part, dict) and part.get("kind") == "text" and isinstance(part.get("text"), str):
-                request_text += part["text"]
-        metadata_raw = params.get("metadata")
-        context: dict[str, Any] = metadata_raw if isinstance(metadata_raw, dict) else {}
-        text = await service.process(request_text, context)
-        return JSONResponse(
-            content={
-                "jsonrpc": "2.0",
-                "id": body.get("id"),
-                "result": {
-                    "message": {
-                        "kind": "message",
-                        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
-                        "role": "agent",
-                        "parts": [{"kind": "text", "text": text}],
-                    },
-                    "metadata": {},
-                },
-            }
-        )
 
-    request_text = body.get("request", "") if isinstance(body, dict) else ""
-    context_raw = body.get("context") if isinstance(body, dict) else {}
-    context: dict[str, Any] = context_raw if isinstance(context_raw, dict) else {}
-    text = await service.process(str(request_text), context)
-    return JSONResponse(content={"success": True, "response": text, "error": None, "metadata": {}})
+@app.on_event("startup")
+async def _startup() -> None:
+    port = int(os.environ.get("PORT", str(DEFAULT_PORT)))
+    logger.info("Builder Copilot starting on port %d", port)
+    await service.initialize()
+    logger.info("Builder Copilot ready on port %d", port)
