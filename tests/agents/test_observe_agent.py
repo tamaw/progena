@@ -41,3 +41,12 @@ async def test_observe_agent_uses_llm_and_tools(tmp_path: Path) -> None:
     text = await agent.process("why did you error last time", {})
     assert "health.json" in agent.tool_read_state_json("health.json")["path"]
     assert "boom" in text.lower()
+
+
+def test_observe_agent_accepts_full_responses_base_url(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(
+        "AZURE_OPENAI_BASE_URL",
+        "https://example.openai.azure.com/openai/v1/responses?api-version=preview",
+    )
+    agent = ObserveAgent(state_dir=tmp_path / "state", logs_dir=tmp_path / "logs")
+    assert agent._responses_endpoint() == "https://example.openai.azure.com/openai/v1/responses?api-version=preview"

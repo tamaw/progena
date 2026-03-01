@@ -8,12 +8,25 @@ from app.progenitor.llm.client import (
     DECISION_HISTORY_LIMIT,
     RESPONSE_HISTORY_LIMIT,
     LLMClient,
+    _build_responses_endpoint,
 )
 
 
 def _extract(data: dict):
     client = LLMClient.__new__(LLMClient)
     return LLMClient._extract_text_and_reasoning(client, data)
+
+
+def test_build_responses_endpoint_from_base_url():
+    endpoint = _build_responses_endpoint("https://example.openai.azure.com/openai/v1")
+    assert endpoint == "https://example.openai.azure.com/openai/v1/responses"
+
+
+def test_build_responses_endpoint_keeps_existing_responses_path_and_query():
+    endpoint = _build_responses_endpoint(
+        "https://example.openai.azure.com/openai/v1/responses?api-version=preview"
+    )
+    assert endpoint == "https://example.openai.azure.com/openai/v1/responses?api-version=preview"
 
 
 def test_extracts_top_level_text_string():
