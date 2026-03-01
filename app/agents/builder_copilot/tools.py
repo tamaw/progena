@@ -15,7 +15,8 @@ from langchain_core.tools import StructuredTool
 from app.agents.builder_agent.tools.copilot import CopilotCLI
 from app.agents.builder_agent.tools.gh import gh_create_pr_from_worktree
 from app.agents.builder_agent.tools.git import GitWorktreeManager
-from app.progenitor.config import ProgenitorConfig
+
+from .config import BuilderCopilotConfig
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,12 @@ async def ensure_workspace() -> None:
 class BuilderCopilotToolRuntime:
     """Thin wrapper over the existing builder-agent utilities."""
 
-    def __init__(self, config: ProgenitorConfig, project_root: str | Path, log_dir: str | Path | None = None):
+    def __init__(
+        self,
+        config: BuilderCopilotConfig,
+        project_root: str | Path,
+        log_dir: str | Path | None = None,
+    ):
         repo_path = Path(os.getenv("PROGENITOR_PROJECT_ROOT") or project_root)
         self.repo_path = repo_path
         self.worktree_manager = GitWorktreeManager(
@@ -145,7 +151,7 @@ class BuilderCopilotToolRuntime:
 
 def create_builder_copilot_tools(
     *,
-    config: ProgenitorConfig,
+    config: BuilderCopilotConfig,
     project_root: str | Path,
     log_dir: str | Path | None = None,
 ) -> list[StructuredTool]:
