@@ -559,7 +559,7 @@ class TestChatAPIStreaming:
 
         # Mock the client to avoid IPC connection issues
         mock_client = AsyncMock()
-        mock_client.chat_completion.return_value = {"error": "mocked"}
+        mock_client.send_message.return_value = "mocked"
         mock_get_client.return_value = mock_client
 
         client = TestClient(app)
@@ -584,7 +584,7 @@ class TestChatAPIStreaming:
 
         # Mock the client to avoid IPC connection issues
         mock_client = AsyncMock()
-        mock_client.respond.return_value = {"error": "mocked"}
+        mock_client.send_message.return_value = "mocked"
         mock_get_client.return_value = mock_client
 
         client = TestClient(app)

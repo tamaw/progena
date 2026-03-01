@@ -43,8 +43,8 @@ app/mcp/<tool_name>/
 3. **POST `/a2a`** — Main task endpoint (accepts `{"message": "...", "context": {...}}`)
 
 ## LLM Integration Pattern
-- Use LiteLLM `/responses` endpoint via httpx
-- Headers: `x-litellm-api-key` from `LITELLM_API_KEY`
+- Use Azure OpenAI `/responses` endpoint via httpx
+- Headers: `api-key` from `AZURE_OPENAI_API_KEY`
 - Model: `PROGENITOR_MODEL_DEFAULT`
 - Implement a local tool-calling loop for multi-step reasoning
 
@@ -57,5 +57,5 @@ Extract a descriptive snake_case name from the description:
 ## Build Discipline
 - Keep diffs minimal
 - Update tests if behaviour changes
-- Make it registrable in registry.json
+- Make it registrable in agents.json
 - Follow existing patterns in `app/agents/` for reference

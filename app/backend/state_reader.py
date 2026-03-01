@@ -1,12 +1,13 @@
 """
 State Reader Module.
 
-Reads state files from data/state/ directory and provides them to the UI.
+Reads state files from data/state/ and data/config/ and provides them to the UI.
 Watches for changes and notifies subscribers.
 
 State files:
 - health.json: Agent health status (status, last_active, run_id, cycle_count, pid)
-- registry.json: Registered agents and tools
+- agents.json: Registered agents
+- mcp.json: Registered MCP tools
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
 - schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
@@ -221,13 +222,14 @@ class StateSnapshot:
 
 class StateReader:
     """
-    Reads state from data/state/ directory.
+    Reads state from data/state/ and data/config/ directories.
 
     Provides methods to get current state and watch for changes.
     """
 
-    def __init__(self, state_dir: Path | None = None):
+    def __init__(self, state_dir: Path | None = None, config_dir: Path | None = None):
         self.state_dir = state_dir or Path("data/state")
+        self.config_dir = config_dir or self.state_dir.parent / "config"
         self._cache: dict[str, tuple[float, Any]] = {}  # path -> (mtime, data)
         self._cache_ttl = 2.0  # Cache for 2 seconds
         self._last_snapshot: StateSnapshot | None = None
@@ -241,6 +243,11 @@ class StateReader:
         after reading to avoid blocking atomic renames by the progenitor agent.
         """
         filepath = self.state_dir / filename
+        return self._read_json_from_path(filepath)
+
+    def _read_json_from_path(self, filepath: Path) -> Any:
+        """Read and parse a JSON file at an explicit path with caching."""
+        filepath = Path(filepath)
 
         try:
             if not filepath.exists():
@@ -265,10 +272,10 @@ class StateReader:
             return data
 
         except json.JSONDecodeError as e:
-            logger.warning("Invalid JSON in %s: %s", filename, e)
+            logger.warning("Invalid JSON in %s: %s", filepath, e)
             return None
         except Exception as e:
-            logger.debug("Failed to read %s: %s", filename, e)
+            logger.debug("Failed to read %s: %s", filepath, e)
             return None
 
     def get_health(self) -> HealthInfo:
@@ -280,12 +287,11 @@ class StateReader:
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
         """Get registered agents and tools."""
-        data = self._read_json("registry.json")
-        if not data:
-            return [], []
+        agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
+        mcp_data = self._read_json_from_path(self.config_dir / "mcp.json") or {}
 
-        agents = [AgentInfo.from_dict(a) for a in data.get("agents", [])]
-        tools = [ToolInfo.from_dict(t) for t in data.get("tools", [])]
+        agents = [AgentInfo.from_dict(a) for a in agents_data.get("agents", [])]
+        tools = [ToolInfo.from_dict(t) for t in mcp_data.get("tools", [])]
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:

@@ -88,7 +88,7 @@ def create_inner_loop_graph(
         logs_dir=config.storage.log_dir,
     )
 
-    registry_path = config.storage.state_dir / "registry.json"
+    registry_path = config.storage.state_dir.parent / "config" / "agents.json"
     tool_registry = ToolRegistry(registry_path)
 
     # Prefer an explicit env override (required in Docker where the full repo is

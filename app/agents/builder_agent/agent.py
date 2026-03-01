@@ -167,7 +167,12 @@ async def _ensure_initialized() -> None:
 
     await _ensure_workspace()
 
-    for p in [config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir]:
+    for p in [
+        config.storage.state_dir,
+        config.storage.state_dir.parent / "config",
+        config.storage.log_dir,
+        config.storage.worktree_dir,
+    ]:
         p.mkdir(parents=True, exist_ok=True)
 
     _state_manager = StateManager(
@@ -179,7 +184,7 @@ async def _ensure_initialized() -> None:
 
     _llm_client = create_llm_client(config=config.llm, mcp_config=config.mcp)
 
-    _tool_registry = ToolRegistry(config.storage.state_dir / "registry.json")
+    _tool_registry = ToolRegistry(config.storage.state_dir.parent / "config" / "agents.json")
     await _tool_registry.load()
 
     _copilot_acp = CopilotACPManager(

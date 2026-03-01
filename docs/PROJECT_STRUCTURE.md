@@ -86,9 +86,11 @@ tests/
 data/
 ├── state/                       # Core state files (json)
 │   ├── current_state.json       # Progenitor: conversation + messages
-│   ├── registry.json            # Agent/tool registry
 │   ├── schedule.json            # Scheduled tasks
 │   └── build_checkpoints.db    # Builder agent: SQLite LangGraph checkpoints
+├── config/                      # Editable runtime registries
+│   ├── agents.json              # Agent registry
+│   └── mcp.json                 # MCP tool registry
 ├── sessions/                    # Session persistence for backend/UI
 ├── attachments/                 # Uploaded file storage/cache
 └── memory/                      # Additional memory artifacts
@@ -98,8 +100,7 @@ data/
 
 ```
 docker/
-├── docker-compose.progenitor.yml  # Main stack (litellm + progenitor + backend)
-├── docker-compose.litellm.yml     # LiteLLM-focused stack
+├── docker-compose.progenitor.yml  # Main stack (progenitor + backend)
 └── runner/
     ├── Dockerfile.agent           # Generic runner image for A2A agent processes
     └── Dockerfile.mcp             # Runner image for MCP processes

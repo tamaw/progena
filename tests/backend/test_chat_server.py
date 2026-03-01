@@ -12,9 +12,6 @@ import pytest
 from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
 from app.backend.models import (
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    ChatMessage,
     ResponsePayload,
     ResponseRequest,
 )
@@ -44,34 +41,8 @@ class TestChatServerConfig:
         assert config.model_name == "test-model"
 
 
-class TestChatModels:
-    """Tests for Pydantic models."""
-
-    def test_chat_message(self):
-        """Test ChatMessage model."""
-        msg = ChatMessage(role="user", content="Hello")
-        assert msg.role == "user"
-        assert msg.content == "Hello"
-
-    def test_chat_completion_request(self):
-        """Test ChatCompletionRequest model."""
-        request = ChatCompletionRequest(
-            model="test",
-            messages=[ChatMessage(role="user", content="Hi")],
-        )
-        assert request.model == "test"
-        assert len(request.messages) == 1
-        assert request.stream is False
-
-    def test_chat_completion_response(self):
-        """Test ChatCompletionResponse model."""
-        response = ChatCompletionResponse(
-            id="test-123",
-            model="progenitor-v1",
-            choices=[],
-        )
-        assert response.id == "test-123"
-        assert response.object == "chat.completion"
+class TestResponseModels:
+    """Tests for Responses API models."""
 
     def test_response_request_and_payload(self):
         """Test Responses API models."""

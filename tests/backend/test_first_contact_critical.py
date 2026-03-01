@@ -44,7 +44,9 @@ def complete_state_files(tmp_path):
     Progenitor agent with multiple sub-agents - ready for alien inspection.
     """
     state_dir = tmp_path / "state"
+    config_dir = tmp_path / "config"
     state_dir.mkdir()
+    config_dir.mkdir()
 
     # Health file - agent is running strong
     health_data = {
@@ -57,7 +59,7 @@ def complete_state_files(tmp_path):
     (state_dir / "health.json").write_text(json.dumps(health_data))
 
     # Registry with multiple diverse agents
-    registry_data = {
+    agents_data = {
         "agents": [
             {
                 "name": "diplomatic-protocol",
@@ -103,14 +105,17 @@ def complete_state_files(tmp_path):
                 "updated_at": "2024-01-31T00:00:00Z",
                 "status": "ready",
             },
-        ],
+        ]
+    }
+    mcp_data = {
         "tools": [
             {"name": "universal_translator", "description": "Translates any language", "enabled": True},
             {"name": "spectrum_analyzer", "description": "Analyzes signal spectrums", "enabled": True},
             {"name": "pattern_matcher", "description": "Matches complex patterns", "enabled": True},
-        ],
+        ]
     }
-    (state_dir / "registry.json").write_text(json.dumps(registry_data))
+    (config_dir / "agents.json").write_text(json.dumps(agents_data))
+    (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
 
     # Build state - actively working on first contact
     build_state = {
@@ -379,15 +384,14 @@ class TestErrorRecoveryAndGracefulDegradation:
         state_dir.mkdir()
 
         # Write corrupt JSON to all files
-        corrupt_files = [
-            "health.json",
-            "registry.json",
-            "build_state.json",
-            "schedule.json",
-        ]
+        corrupt_files = ["health.json", "build_state.json", "schedule.json"]
 
         for filename in corrupt_files:
             (state_dir / filename).write_text("{this is not valid json!!!")
+        config_dir = state_dir.parent / "config"
+        config_dir.mkdir()
+        (config_dir / "agents.json").write_text("{this is not valid json!!!")
+        (config_dir / "mcp.json").write_text("{this is not valid json!!!")
 
         reader = StateReader(state_dir=state_dir)
 
@@ -502,7 +506,7 @@ class TestDataIntegrityUnderAllConditions:
         valid_statuses = ["ready", "busy", "offline", "stopped", "error", "starting"]
 
         for status in valid_statuses:
-            registry_file = complete_state_files / "registry.json"
+            registry_file = complete_state_files.parent / "config" / "agents.json"
             registry = json.loads(registry_file.read_text())
             registry["agents"][0]["status"] = status
             registry_file.write_text(json.dumps(registry))

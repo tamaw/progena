@@ -6,7 +6,6 @@ const defaultConfig = {
   api: {
     baseUrl: 'http://localhost:8000',
     endpoints: {
-      chat: '/v1/chat/completions',
       responses: '/v1/responses',
       health: '/health',
       healthDetailed: '/health/detailed',

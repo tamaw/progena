@@ -55,7 +55,7 @@ async def test_feature_name():
 # Pattern: test_<component>_<scenario>_<expected_result>
 def test_decide_node_with_user_message_returns_decision()
 def test_state_manager_save_state_creates_file()
-def test_api_chat_completion_invalid_request_returns_400()
+def test_api_responses_invalid_request_returns_400()
 ```
 
 ### Async Testing

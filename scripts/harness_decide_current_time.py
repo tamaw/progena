@@ -8,8 +8,8 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.progenitor.llm.client import LLMClient
-from app.progenitor.runtime.decide import create_node
 from app.progenitor.runtime import loop as loop_module
+from app.progenitor.runtime.decide import create_node
 from app.progenitor.tools.registry import ToolRegistry
 
 
@@ -70,7 +70,7 @@ async def main() -> None:
 
     llm._extract_text_and_reasoning = wrapped_extract  # type: ignore[method-assign]
 
-    registry_path = Path("data/state/registry.json")
+    registry_path = Path("data/config/agents.json")
     tool_registry = ToolRegistry(registry_path)
     await tool_registry.load()
 

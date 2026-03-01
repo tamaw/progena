@@ -106,7 +106,6 @@ async def initialize_mcp_tools(
     try:
         headers = {
             "Content-Type": "application/json",
-            # LiteLLM MCP requires clients to accept both JSON and SSE.
             "Accept": "application/json, text/event-stream",
         }
         if mcp_config.api_key:
@@ -119,7 +118,7 @@ async def initialize_mcp_tools(
 
         logger.info("Fetching MCP tools from %s", mcp_config.base_url)
 
-        # LiteLLM MCP is session-based; initialize to obtain mcp-session-id.
+        # Initialize to obtain an optional mcp-session-id.
         init_request = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -137,7 +136,7 @@ async def initialize_mcp_tools(
         if session_id:
             mcp_client.headers["mcp-session-id"] = session_id
 
-        # Now list tools (session header required for LiteLLM MCP).
+        # Now list tools.
         list_request = {
             "jsonrpc": "2.0",
             "id": 2,
