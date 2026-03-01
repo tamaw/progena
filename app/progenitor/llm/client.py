@@ -1,17 +1,11 @@
-"""
-LiteLLM API Client for Progenitor.
-
-Uses the LiteLLM /responses endpoint for all model calls.
-LiteLLM handles retries, provider routing, and observability upstream.
-"""
+"""Azure Responses API client for Progenitor."""
 
 import json
 import logging
-import os
 import re
 from collections.abc import AsyncIterator
 from typing import Any, TypeVar, cast
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel
@@ -52,6 +46,21 @@ MODEL_CONTEXT_WINDOWS = {
 }
 
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
+DECISION_HISTORY_LIMIT = 6
+RESPONSE_HISTORY_LIMIT = 12
+
+
+def _build_responses_endpoint(base_url: str) -> str:
+    """Build a valid /responses endpoint from either base URL or full endpoint URL."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return "/responses"
+
+    parsed = urlsplit(raw)
+    path = (parsed.path or "").rstrip("/")
+    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
+
+    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
 def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str, Any]:
@@ -80,7 +89,7 @@ def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str
 
 
 class LLMClient:
-    """Simple wrapper for LiteLLM /responses endpoint."""
+    """Simple wrapper for Azure OpenAI /responses endpoint."""
 
     def __init__(
         self,
@@ -101,28 +110,18 @@ class LLMClient:
         self.role = role
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 
-        base_url = self.config.base_url.rstrip('/')
-        self.endpoint_url = f"{base_url}/responses"
+        self.endpoint_url = _build_responses_endpoint(self.config.base_url)
 
-        # LiteLLM expects an API key in the `x-litellm-api-key` header.
-        # Keep `Authorization: Bearer` as a compatibility fallback when a key is set.
         api_key = self.config.api_key or ""
         headers = {
             "Content-Type": "application/json",
-            "x-litellm-api-key": api_key,
+            "api-key": api_key,
         }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
 
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0),
             headers=headers,
         )
-
-        self.structured_override_url = self._resolve_structured_override_url()
-        # Structured output bypasses LiteLLM (bug workaround); these env vars are required.
-        self.structured_override_api_key = os.getenv("PROGENITOR_AZURE_STRUCTURED_API_KEY")
-        self.structured_override_model = os.getenv("PROGENITOR_AZURE_STRUCTURED_MODEL")
 
         # MCP context is initialized externally (startup)
         self.mcp_client: httpx.AsyncClient | None = None
@@ -240,7 +239,7 @@ class LLMClient:
                 "name": name,
                 "description": tool.get("description", "MCP tool"),
                 "type": "mcp_tool",
-                "source": "litellm",
+                "source": "mcp",
                 "endpoint": self.mcp_config.base_url,
                 "transport": "http",
                 "capabilities": tool.get("capabilities") or [name],
@@ -313,7 +312,7 @@ class LLMClient:
         """Resolve effective tools for a request.
 
         For structured-output requests, we still include the tool list in the
-        upstream payload (so providers like Azure/OpenAI via LiteLLM can see
+        upstream payload (so the provider can see
         the full tool registry), but the call site should typically force
         tool_choice='none' to avoid tool calls breaking strict JSON outputs.
         """
@@ -483,27 +482,6 @@ class LLMClient:
         return _build_json_schema_format(response_model, schema_name)
 
     @staticmethod
-    def _normalize_azure_base(endpoint: str) -> str:
-        endpoint = endpoint.strip()
-        parsed = urlparse(endpoint)
-        if parsed.scheme and parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}"
-        return endpoint.rstrip("/")
-
-    def _resolve_structured_override_url(self) -> str | None:
-        explicit_url = os.getenv("PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL")
-        if explicit_url:
-            return explicit_url
-        return None
-
-    def _can_use_structured_override(self) -> bool:
-        return bool(
-            self.structured_override_url
-            and self.structured_override_api_key
-            and self.structured_override_model
-        )
-
-    @staticmethod
     def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
         if response_format.get("type") != "json_schema":
             return response_format
@@ -519,68 +497,8 @@ class LLMClient:
             "strict": bool(json_schema.get("strict", True)),
         }
 
-    async def _post_structured_response_override(
-        self,
-        input_messages: list[dict[str, Any]],
-        response_format: dict[str, Any],
-        include_reasoning: bool,
-        temperature: float,
-        max_tokens: int,
-    ) -> dict[str, Any]:
-        if not self._can_use_structured_override():
-            raise RuntimeError("Azure structured override is not configured")
-
-        override_url = self.structured_override_url
-        if not override_url:
-            raise RuntimeError("Azure structured override URL is missing")
-
-        payload: dict[str, Any] = {
-            "model": self.structured_override_model,
-            "input": input_messages,
-            "max_output_tokens": max_tokens,
-            "text": {
-                "format": self._to_azure_text_format(response_format),
-            },
-        }
-
-        if include_reasoning:
-            payload["reasoning"] = {"summary": "auto"}
-        if self._supports_temperature():
-            payload["temperature"] = temperature
-
-        headers: dict[str, str] = {
-            "Content-Type": "application/json",
-        }
-        if self.structured_override_api_key:
-            headers["api-key"] = self.structured_override_api_key
-
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0), headers=headers) as azure_client:
-            try:
-                response = await azure_client.post(override_url, json=payload)
-                response.raise_for_status()
-                return cast(dict[str, Any], response.json())
-            except httpx.HTTPStatusError as exc:
-                if self._is_temperature_unsupported(exc.response):
-                    payload.pop("temperature", None)
-                    retry_response = await azure_client.post(override_url, json=payload)
-                    retry_response.raise_for_status()
-                    return cast(dict[str, Any], retry_response.json())
-                raise
-
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
         """Extract response text and optional reasoning trace from /responses output.
-
-        LiteLLM /responses format:
-        {
-            "output_text": "...",  # Primary text response
-            "output": [            # Structured output items
-                {"type": "message", "content": "..."},
-                {"type": "text", "text": "..."},
-                {"type": "reasoning", "content": "..."},
-                ...
-            ],
-            "reasoning": "..."     # Top-level reasoning if requested
-        }
         """
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -785,27 +703,9 @@ class LLMClient:
         max_tool_rounds: int = 4,
         system_tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Call LiteLLM /responses endpoint with optional tool calling loop.
-
-        LiteLLM handles retries, fallbacks, and provider routing upstream.
-        """
+        """Call /responses endpoint with optional tool calling loop."""
         # Check token usage before making the call
         self._check_token_usage(input_messages)
-
-        # Structured output must bypass LiteLLM (litellm bug workaround).
-        if response_format is not None:
-            if not self._can_use_structured_override():
-                raise RuntimeError(
-                    "Structured output requires PROGENITOR_AZURE_STRUCTURED_* env vars "
-                    "(RESPONSES_URL, API_KEY, MODEL)."
-                )
-            return await self._post_structured_response_override(
-                input_messages=input_messages,
-                response_format=response_format,
-                include_reasoning=include_reasoning,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
 
         merged_tools = self._resolve_request_tools(tools, response_format)
 
@@ -815,10 +715,8 @@ class LLMClient:
             "max_output_tokens": max_tokens,
         }
 
-        if self.config.model_fallbacks:
-            payload["fallbacks"] = self.config.model_fallbacks
         if response_format:
-            payload["response_format"] = response_format
+            payload["text"] = {"format": self._to_azure_text_format(response_format)}
         if merged_tools:
             payload["tools"] = merged_tools
             # When requesting strict structured output, prevent tool calling while
@@ -1083,7 +981,7 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
-        messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
+        messages = conversation_history[-DECISION_HISTORY_LIMIT:] + [{"role": "user", "content": user_input}]
         response_format = _build_json_schema_format(DecisionResponse, "decision_response")
 
         response = await self.chat(messages, system_prompt, temperature=0.3, response_format=response_format)
@@ -1118,7 +1016,7 @@ class LLMClient:
     ) -> str:
         """Generate a response to the user."""
         system_prompt = self.prompts.get_genesis_prompt()
-        messages = conversation_history[-20:]
+        messages = conversation_history[-RESPONSE_HISTORY_LIMIT:]
 
         if action_results:
             results_summary = "\n".join([

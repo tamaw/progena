@@ -11,6 +11,7 @@ from inspect import iscoroutinefunction
 from pydantic import BaseModel
 
 from ..llm.prompts import PromptTemplates
+from ..runtime.scheduler import Scheduler
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -111,13 +112,17 @@ class ScheduleTaskTool(BaseSystemTool):
             if not result.success:
                 return ToolResult.fail(result.message)
 
+            scheduler = Scheduler()
             tool_data = {
                 "success": True,
                 "schedule_id": result.schedule_id,
-                "description": description,
-                "instruction": instruction,
+                "message": entry_data.get("message") if entry_data else instruction,
                 "next_run": result.next_run,
-                "recurring": not entry_data.get("one_off", False) if entry_data else False,
+                "recurring": (
+                    not scheduler.is_one_shot_expression(str(entry_data.get("cron_expression", "")))
+                    if entry_data
+                    else True
+                ),
             }
 
             # Build state_updates so the decide node can merge the new

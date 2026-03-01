@@ -1,7 +1,6 @@
 """Scheduler for Progenitor using cron expressions."""
 
 import re
-from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -21,31 +20,20 @@ class Scheduler:
         schedule: list[dict[str, Any]],
         current_time: datetime,
     ) -> list[dict[str, Any]]:
-        """Get all schedule items that are due.
-
-        An item is due if:
-        - enabled is True
-        - next_run <= current_time
-        - For one-off tasks: last_run must be None
-        """
-        due = []
+        """Get all schedule items that are due based on cron + last_run/created_at."""
+        due: list[dict[str, Any]] = []
+        due_with_time: list[tuple[datetime, dict[str, Any]]] = []
 
         for item in schedule:
-            if not item.get("enabled", True):
-                continue
-
-            next_run = self._parse_datetime(item.get("next_run"))
+            next_run = self.next_run_for_entry(item)
             if not next_run:
                 continue
+            if next_run <= current_time:
+                due_with_time.append((next_run, item))
 
-            if next_run > current_time:
-                continue
-
-            if item.get("one_off", False) and item.get("last_run"):
-                continue
-
+        due_with_time.sort(key=lambda pair: pair[0])
+        for _, item in due_with_time:
             due.append(item)
-
         return due
 
     def parse_time_expression(self, expression: str) -> dict[str, Any]:
@@ -53,8 +41,6 @@ class Scheduler:
 
         Returns dict with:
         - cron_expression: cron expression used for scheduling
-        - next_run: ISO datetime string for next execution
-        - one_off: whether the task should run only once
         - description: Human-readable description
         """
         expression = expression.lower().strip()
@@ -75,8 +61,6 @@ class Scheduler:
 
             cron_expression = f"{minute} {hour} * * *"
             result["cron_expression"] = cron_expression
-            result["next_run"] = self._next_run_iso(cron_expression, now)
-            result["one_off"] = False
             result["description"] = f"Daily at {hour:02d}:{minute:02d}"
             return result
 
@@ -94,8 +78,6 @@ class Scheduler:
                 result["description"] = f"Every {value} minute(s)"
 
             result["cron_expression"] = cron_expression
-            result["next_run"] = self._next_run_iso(cron_expression, now)
-            result["one_off"] = False
             return result
 
         # "tomorrow" / "tomorrow at Xam"
@@ -116,8 +98,6 @@ class Scheduler:
                 run_at = run_at.replace(hour=9, minute=0, second=0, microsecond=0)
             cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
             result["cron_expression"] = cron_expression
-            result["next_run"] = run_at.isoformat()
-            result["one_off"] = True
             result["description"] = f"Tomorrow at {run_at.strftime('%H:%M')}"
             return result
 
@@ -132,8 +112,6 @@ class Scheduler:
             run_at = now + delta
             cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
             result["cron_expression"] = cron_expression
-            result["next_run"] = run_at.isoformat()
-            result["one_off"] = True
             result["description"] = f"In {value} {unit}(s)"
             return result
 
@@ -155,8 +133,6 @@ class Scheduler:
 
             cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
             result["cron_expression"] = cron_expression
-            result["next_run"] = run_at.isoformat()
-            result["one_off"] = True
             result["description"] = f"At {hour:02d}:{minute:02d}"
             return result
 
@@ -173,31 +149,41 @@ class Scheduler:
                 return None
         return None
 
-    def advance_recurring(
+    def mark_executed(
         self,
         schedule: list[dict[str, Any]],
         item_id: str,
         run_time: datetime,
     ) -> list[dict[str, Any]]:
-        """Update schedule entry after execution.
-
-        For recurring tasks: advances next_run using croniter.
-        For all tasks: sets last_run.
-        """
+        """Update schedule entry after execution."""
         for item in schedule:
             if item.get("id") == item_id:
                 item["last_run"] = run_time.isoformat()
-
-                if not item.get("one_off", False):
-                    cron_expression = item.get("cron_expression")
-                    if isinstance(cron_expression, str):
-                        with suppress(ValueError, KeyError):
-                            item["next_run"] = croniter(cron_expression, run_time).get_next(datetime).isoformat()
-
                 break
 
         return schedule
 
-    def _next_run_iso(self, cron_expression: str, base_time: datetime) -> str:
-        """Get the next run time for a cron expression."""
-        return croniter(cron_expression, base_time).get_next(datetime).isoformat()
+    def next_run_for_entry(self, item: dict[str, Any]) -> datetime | None:
+        """Compute next run for an entry from cron_expression and reference time."""
+        cron_expression = item.get("cron_expression")
+        if not isinstance(cron_expression, str):
+            return None
+        last_run = self._parse_datetime(item.get("last_run"))
+        created_at = self._parse_datetime(item.get("created_at"))
+        reference = last_run or created_at or utcnow()
+        try:
+            return croniter(cron_expression, reference).get_next(datetime)
+        except Exception:
+            return None
+
+    def is_one_shot_expression(self, cron_expression: str) -> bool:
+        """Infer one-shot intent from cron shape.
+
+        Expressions with fixed day and month are treated as one-shot.
+        """
+        parts = cron_expression.split()
+        if len(parts) != 5:
+            return False
+        day = parts[2]
+        month = parts[3]
+        return day != "*" and month != "*"

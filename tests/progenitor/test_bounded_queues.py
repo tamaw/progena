@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -57,6 +58,9 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.state_manager = MagicMock()
         self.state_manager.get_build_state = AsyncMock(return_value={})
         self.state_manager.save_build_state = AsyncMock()
+        self.state_manager.get_schedule = AsyncMock(return_value=[])
+        self.state_manager.remove_schedule_entry = AsyncMock(return_value=True)
+        self.state_manager.update_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.state_dir = Path(tempfile.mkdtemp())
 
         self.graph = MagicMock()
@@ -191,6 +195,57 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         result = await task
         assert result is True
 
+    async def test_scheduler_dispatches_one_off_task(self):
+        """Due one-off-like cron tasks should enqueue input and be removed."""
+        from datetime import timedelta
+
+        from app.progenitor.runtime.scheduler import Scheduler
+        from app.progenitor.runtime.time_utils import utcnow
+
+        now = utcnow().replace(microsecond=0)
+        due_time = (now - timedelta(minutes=1)).isoformat()
+        self.state_manager.get_schedule = AsyncMock(return_value=[
+            {
+                "id": "sched_one_off",
+                "message": "say hello",
+                "cron_expression": f"{now.minute} {now.hour} {now.day} {now.month} *",
+                "created_at": due_time,
+                "last_run": None,
+            }
+        ])
+        self.loop.enqueue_input = AsyncMock(return_value=True)
+
+        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+
+        assert fired is True
+        self.loop.enqueue_input.assert_awaited_once()
+        self.state_manager.remove_schedule_entry.assert_awaited_once_with("sched_one_off")
+
+    async def test_scheduler_dispatches_recurring_task(self):
+        """Due recurring tasks should enqueue input and advance schedule."""
+        from datetime import timedelta
+
+        from app.progenitor.runtime.scheduler import Scheduler
+        from app.progenitor.runtime.time_utils import utcnow
+
+        due_time = (utcnow() - timedelta(minutes=10)).replace(microsecond=0).isoformat()
+        self.state_manager.get_schedule = AsyncMock(return_value=[
+            {
+                "id": "sched_recurring",
+                "message": "check status",
+                "cron_expression": "*/5 * * * *",
+                "created_at": due_time,
+                "last_run": None,
+            }
+        ])
+        self.loop.enqueue_input = AsyncMock(return_value=True)
+
+        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+
+        assert fired is True
+        self.loop.enqueue_input.assert_awaited_once()
+        self.state_manager.update_schedule_entry.assert_awaited_once()
+
 
 class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
     """Test queue configuration from settings."""
@@ -264,6 +319,62 @@ class TestConfigQueueSettings(unittest.TestCase):
         assert config.max_input_queue_size == 75
         assert config.max_output_queue_size == 60
         assert config.max_stream_queue_size == 800
+
+
+class TestReasoningTraceExtraction(unittest.TestCase):
+    """Tests for runtime reasoning extraction helpers."""
+
+    def setUp(self):
+        from app.progenitor.runtime.loop import ProgenitorLoop
+
+        config = MockConfig()
+        state_manager = MagicMock()
+        state_manager.state_dir = Path(tempfile.mkdtemp())
+        self.loop = ProgenitorLoop(
+            graph=MagicMock(),
+            state_manager=state_manager,
+            config=cast(Any, config),
+        )
+
+    def test_extracts_from_response_metadata(self):
+        msg = SimpleNamespace(response_metadata={"reasoning": {"summary": "done"}})
+        trace = self.loop._extract_reasoning_trace(msg)
+        assert trace is not None and "summary" in trace
+
+    def test_extracts_summary_effort_schema(self):
+        msg = SimpleNamespace(response_metadata={"effort": "medium", "summary": "detailed"})
+        trace = self.loop._extract_reasoning_trace(msg)
+        assert trace is not None and "medium" in trace and "detailed" in trace
+
+    def test_extracts_from_content_parts(self):
+        msg = {
+            "role": "assistant",
+            "content": [{"type": "reasoning", "text": "step-by-step"}],
+        }
+        assert self.loop._extract_reasoning_trace(msg) == "step-by-step"
+
+    def test_extract_message_text_from_string_content(self):
+        msg = {"role": "assistant", "content": "hello there"}
+        assert self.loop._extract_message_text(msg) == "hello there"
+
+    def test_extract_message_text_from_list_blocks(self):
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": "one"},
+                {"type": "text", "text": "two"},
+            ],
+        }
+        assert self.loop._extract_message_text(msg) == "one\ntwo"
+
+    def test_finds_last_assistant_message(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello", "response_metadata": {"thinking": "brief"}},
+        ]
+        msg = self.loop._get_last_ai_message(messages)
+        assert isinstance(msg, dict)
+        assert msg["role"] == "assistant"
 
 
 if __name__ == "__main__":

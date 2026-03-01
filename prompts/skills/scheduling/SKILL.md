@@ -1,11 +1,7 @@
 ---
 name: scheduling
-description: Create, manage, and troubleshoot scheduled tasks including one-off and recurring jobs with natural language time parsing
-allowed-tools:
-  - schedule_task
-  - list_schedule
-  - current_time
-  - shell
+description: Create, manage, and troubleshoot scheduled tasks, including one-off and recurring jobs with natural language time parsing. Use when users ask to schedule work, review upcoming jobs, or debug task timing.
+allowed-tools: schedule_task list_schedule current_time shell
 ---
 
 # Scheduling Skill

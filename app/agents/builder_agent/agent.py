@@ -42,7 +42,7 @@ from a2a.types import (
 )
 
 from .config import get_config, setup_logging
-from .llm.client import LLMClient
+from .llm.mock_client import create_llm_client
 from .runtime.background_build import BackgroundBuildRunner
 from .runtime.copilot_acp import CopilotACPManager
 from .runtime.time_utils import utcnow_isoformat
@@ -57,7 +57,7 @@ _start_time = time.time()
 # ---------------------------------------------------------------------------
 _config = None
 _state_manager: StateManager | None = None
-_llm_client: LLMClient | None = None
+_llm_client: Any = None
 _tool_registry: ToolRegistry | None = None
 _copilot_acp: CopilotACPManager | None = None
 _runner: BackgroundBuildRunner | None = None
@@ -167,7 +167,12 @@ async def _ensure_initialized() -> None:
 
     await _ensure_workspace()
 
-    for p in [config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir]:
+    for p in [
+        config.storage.state_dir,
+        config.storage.state_dir.parent / "config",
+        config.storage.log_dir,
+        config.storage.worktree_dir,
+    ]:
         p.mkdir(parents=True, exist_ok=True)
 
     _state_manager = StateManager(
@@ -177,9 +182,9 @@ async def _ensure_initialized() -> None:
     )
     await _state_manager.initialize()
 
-    _llm_client = LLMClient(config=config.llm, mcp_config=config.mcp)
+    _llm_client = create_llm_client(config=config.llm, mcp_config=config.mcp)
 
-    _tool_registry = ToolRegistry(config.storage.state_dir / "registry.json")
+    _tool_registry = ToolRegistry(config.storage.state_dir.parent / "config" / "agents.json")
     await _tool_registry.load()
 
     _copilot_acp = CopilotACPManager(
@@ -287,7 +292,7 @@ class BuilderAgentExecutor(AgentExecutor):
             conversation_history=[],
             tool_context=tool_context,
         )
-        action = str(decision.get("action") or "").lower().strip()
+        action = _normalize_build_action(decision.get("action"))
 
         if action not in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
             await event_queue.enqueue_event(
@@ -378,6 +383,8 @@ class BuilderAgentExecutor(AgentExecutor):
             f"**Iterations**: {result.iterations}",
             f"**Verification score**: {result.verification_score}",
         ]
+        if result.pr_url:
+            summary_lines.append(f"**PR**: {result.pr_url}")
         if result.output_summary:
             summary_lines.append(f"\n{result.output_summary}")
         if result.error_message:
@@ -449,6 +456,13 @@ def _text_message(text: str, *, role: Role = Role.agent) -> Message:
         role=role,
         parts=[Part(root=TextPart(text=text))],
     )
+
+
+def _normalize_build_action(raw_action: Any) -> str:
+    action = str(raw_action or "").lower().strip()
+    if action in {"execute", "answer_directly"}:
+        return "build_agent"
+    return action
 
 
 def _utc_now_iso() -> str:

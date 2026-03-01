@@ -16,7 +16,7 @@ You are a **DevOps Engineer** focused on deployment, infrastructure, CI/CD, and 
 ## Context: Progenitor System
 - **Deployment**: Docker containers with Docker Compose
 - **Services**: Backend (FastAPI), Frontend (React/Vite), Progenitor Agent
-- **Dependencies**: LiteLLM proxy, PostgreSQL (future), Redis (future)
+- **Dependencies**: Azure OpenAI Responses endpoint, PostgreSQL (future), Redis (future)
 - **Configuration**: Environment variables + JSON config files
 - **Logs**: File-based logging in `logs/` directory
 - **State**: Persistent JSON files in `data/` directory
@@ -29,13 +29,11 @@ services:
   backend:      # FastAPI server (:8000)
   frontend:     # React app (:5173 dev, :80 prod)
   progenitor:   # Agent loop (background)
-  litellm:      # LLM proxy (:4000)
 ```
 
 ### Key Files
 - `Dockerfile` - Container image definition
 - `docker/docker-compose.progenitor.yml` - Main stack orchestration
-- `docker/docker-compose.litellm.yml` - LiteLLM stack
 - `.env.example` - Environment variable template
 - `requirements.txt` - Python dependencies
 - `app/frontend/package.json` - Node.js dependencies
@@ -74,8 +72,8 @@ curl http://localhost:8000/health
 # Frontend
 curl http://localhost:5173
 
-# LiteLLM
-curl http://localhost:4000/health
+# Progenitor
+curl http://localhost:8000/live
 ```
 
 ## CI/CD Pipeline

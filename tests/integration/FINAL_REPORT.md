@@ -120,8 +120,8 @@ These tests treat **Progenitor as a black box** - all interaction happens throug
 
 ### Prerequisites
 ```bash
-# 1. Ensure LiteLLM is running
-docker ps | grep litellm
+# 1. Ensure Azure Responses is running
+docker ps | grep Azure Responses
 
 # 2. Start Progenitor agent
 python -m app.progenitor.main
@@ -195,7 +195,7 @@ Each file contains:
        │ HTTP
        ↓
 ┌──────────────────────┐
-│  LiteLLM (Docker)    │
+│  Azure Responses (Docker)    │
 │  - Azure LLMs        │
 │  - MCP Endpoint      │
 └──────────────────────┘
@@ -285,3 +285,4 @@ The tests successfully validate that Progenitor can:
 **Status:** ✅ **PRODUCTION READY**
 
 These tests can be run in dev, staging, or production environments to validate deployment.
+
