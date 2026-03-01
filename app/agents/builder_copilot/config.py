@@ -115,7 +115,7 @@ class CopilotConfig:
     bin_path: str = "copilot"
     timeout_seconds: int = 1200
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
-    model: str = "claude-haiku-4.5"
+    model: str = "gpt-5.3-codex"
     acp_allowed_dirs: list[str] = field(default_factory=list)
 
     @classmethod
@@ -124,7 +124,7 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             default_flags=_env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
-            model=os.getenv("PROGENITOR_COPILOT_MODEL", "claude-haiku-4.5"),
+            model=os.getenv("PROGENITOR_COPILOT_MODEL", "gpt-5.3-codex"),
             acp_allowed_dirs=_env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", []),
         )
 

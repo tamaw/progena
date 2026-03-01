@@ -2,18 +2,20 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HOME=/home/runner \
     PYTHONPATH=/app \
     AZURE_OPENAI_BASE_URL= \
     AZURE_OPENAI_API_KEY= \
     GH_TOKEN= \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
+    PROGENITOR_COPILOT_MODEL=gpt-5.3-codex \
     TEST_MODE=false \
     PROGENITOR_PROJECT_ROOT=/app/worktrees \
     PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
     PROGENITOR_STATE_DIR=/app/data/state \
     PROGENITOR_LOG_DIR=/app/logs/builder_copilot
 
-RUN addgroup --system agent && adduser --system --ingroup agent runner
+RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
 
 RUN apt-get update && apt-get install -y \
     git \
@@ -48,8 +50,8 @@ COPY app/ /app/app/
 COPY prompts/ /app/prompts/
 COPY scripts/ /app/scripts/
 
-RUN mkdir -p /app/data/state /app/logs/builder_copilot /app/worktrees && \
-    chown -R runner:agent /app/data /app/logs /app/worktrees
+RUN mkdir -p /app/data/state /app/logs/builder_copilot /app/worktrees /home/runner && \
+    chown -R runner:agent /app/data /app/logs /app/worktrees /home/runner
 
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
