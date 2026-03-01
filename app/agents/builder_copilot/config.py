@@ -39,22 +39,20 @@ def _env_list(key: str, default: list[str] | None = None) -> list[str]:
 class LLMConfig:
     """LLM provider settings shared by the Builder Copilot runtime."""
 
-    base_url: str = "http://localhost:4000"
+    base_url: str = ""
     api_key: str | None = None
     model_default: str = "gpt-5.2-chat"
     model_planner: str | None = None
     model_builder: str | None = None
-    model_fallbacks: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_env(cls) -> "LLMConfig":
+    def from_env(cls) -> LLMConfig:
         return cls(
-            base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
-            api_key=os.getenv("LITELLM_API_KEY") or os.getenv("LITELLM_MASTER_KEY"),
+            base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
-            model_fallbacks=_env_list("PROGENITOR_MODEL_FALLBACKS", []),
         )
 
     def get_model_for_role(self, role: str | None = None) -> str:
@@ -73,7 +71,7 @@ class RuntimeConfig:
     log_format: str = "text"
 
     @classmethod
-    def from_env(cls) -> "RuntimeConfig":
+    def from_env(cls) -> RuntimeConfig:
         return cls(
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
@@ -90,7 +88,7 @@ class StorageConfig:
     prompts_dir: Path = field(default_factory=lambda: Path("/prompts"))
 
     @classmethod
-    def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
+    def from_env(cls, project_root: Path | None = None) -> StorageConfig:
         if project_root is None:
             default_state = Path("/data/state")
             default_logs = Path("/logs")
@@ -121,7 +119,7 @@ class CopilotConfig:
     acp_allowed_dirs: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_env(cls) -> "CopilotConfig":
+    def from_env(cls) -> CopilotConfig:
         return cls(
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
@@ -145,7 +143,7 @@ class BuilderCopilotConfig:
         cls,
         project_root: Path | None = None,
         _config_dir: Path | None = None,
-    ) -> "BuilderCopilotConfig":
+    ) -> BuilderCopilotConfig:
         return cls(
             llm=LLMConfig.from_env(),
             runtime=RuntimeConfig.from_env(),

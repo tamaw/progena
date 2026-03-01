@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import uuid
@@ -188,6 +187,19 @@ def create_builder_copilot_tools(
             "diff": str(result.get("diff") or "")[-12000:],
         }
 
+    async def build_progenitor_tool(
+        work_item_id: str,
+        worktree_path: str,
+        prompt: str,
+    ) -> dict[str, Any]:
+        """Run GitHub Copilot in ACP mode scoped to app/progenitor."""
+        return await run_copilot_build_tool(
+            work_item_id=work_item_id,
+            worktree_path=worktree_path,
+            prompt=prompt,
+            target_path="app/progenitor",
+        )
+
     async def run_worktree_command_tool(
         worktree_path: str,
         command: str,
@@ -252,6 +264,11 @@ def create_builder_copilot_tools(
             coroutine=run_copilot_build_tool,
             name="run_copilot_build",
             description="Run GitHub Copilot in ACP mode to implement changes inside a worktree.",
+        ),
+        StructuredTool.from_function(
+            coroutine=build_progenitor_tool,
+            name="build_progenitor",
+            description="Run GitHub Copilot in ACP mode to implement progenitor changes under app/progenitor.",
         ),
         StructuredTool.from_function(
             coroutine=run_worktree_command_tool,
