@@ -36,8 +36,8 @@ from pathlib import Path
 
 @dataclass
 class AgentConfig:
-    litellm_base_url: str = "http://litellm:4000"
-    litellm_api_key: str = ""
+    azure_base_url: str = "https://example.openai.azure.com/openai/v1"
+    azure_api_key: str = ""
     model: str = "gpt-5.1-codex-max"
     data_dir: Path = Path("/app/data")   # bind-mounted from host
     log_dir: Path = Path("/app/logs")    # bind-mounted from host
@@ -46,10 +46,8 @@ class AgentConfig:
     @classmethod
     def from_env(cls) -> "AgentConfig":
         return cls(
-            litellm_base_url=os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
-            litellm_api_key=(
-                os.getenv("LITELLM_API_KEY") or os.getenv("LITELLM_MASTER_KEY") or ""
-            ),
+            azure_base_url=os.getenv("PROGENITOR_AZURE_BASE_URL", "").rstrip("/"),
+            azure_api_key=os.getenv("PROGENITOR_AZURE_API_KEY", ""),
             model=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max"),
             data_dir=Path(os.getenv("AGENT_DATA_DIR", "/app/data")),
             log_dir=Path(os.getenv("AGENT_LOG_DIR", "/app/logs")),
@@ -176,26 +174,25 @@ Define tools as OpenAI function-calling objects. Dispatch in `_execute_tool`.
         return {"error": f"Unknown tool: {name}"}
 ```
 
-### LiteLLM /responses helpers
+### Azure /responses helpers
 
-All LLM calls go through the LiteLLM proxy at `LITELLM_BASE_URL/responses`.
+All LLM calls go directly to Azure at `PROGENITOR_AZURE_BASE_URL/responses`.
 
 ```python
-    def _litellm_endpoint(self) -> str:
-        return f"{self.config.litellm_base_url.rstrip('/')}/responses"
+    def _responses_endpoint(self) -> str:
+        return f"{self.config.azure_base_url.rstrip('/')}/responses"
 
-    def _litellm_headers(self) -> dict[str, str]:
-        key = self.config.litellm_api_key
+    def _responses_headers(self) -> dict[str, str]:
+        key = self.config.azure_api_key
         h: dict[str, str] = {"Content-Type": "application/json"}
         if key:
-            h["x-litellm-api-key"] = key
-            h["Authorization"] = f"Bearer {key}"
+            h["api-key"] = key
         return h
 
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0),
-                                     headers=self._litellm_headers()) as c:
-            r = await c.post(self._litellm_endpoint(), json=payload)
+                                     headers=self._responses_headers()) as c:
+            r = await c.post(self._responses_endpoint(), json=payload)
             r.raise_for_status()
             return cast(dict[str, Any], r.json())
 
@@ -328,15 +325,15 @@ Standard four-node pattern: `prepare → llm_call ⇄ run_tools → finalize`
         return text
 ```
 
-### FastAPI app MUST support A2A JSON-RPC + LiteLLM proxying
+### FastAPI app MUST support A2A JSON-RPC + Responses API
 
 Agents MUST be callable via:
 
 1. A2A protocol (JSON-RPC 2.0 over HTTP) using the official `a2a-sdk` (preferred).
    - Progenitor calls agents with method `message/send`.
    - The server must accept JSON-RPC at POST `/` (the default for `A2AFastAPIApplication`).
-2. OpenAI-compatible API for LiteLLM registration/proxying:
-   - POST `/v1/chat/completions`
+2. OpenAI Responses API for direct runtime calls:
+   - POST `/v1/responses`
 
 Minimum pattern (use this, do not invent your own protocol):
 
@@ -401,10 +398,10 @@ app: FastAPI = _a2a_app.build()
 async def health() -> JSONResponse:
     return JSONResponse({"status": "healthy", "uptime_seconds": time.time() - _start_time})
 
-@app.post("/v1/chat/completions")
-async def openai_chat_completions(req: Request) -> JSONResponse:
+@app.post("/v1/responses")
+async def openai_responses(req: Request) -> JSONResponse:
     body = await req.json()
-    # Extract last user message and answer via _agent.process(...)
+    # Extract last user input and answer via _agent.process(...)
     ...
 ```
 
@@ -500,10 +497,8 @@ CMD ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "{po
       - ./data:/app/data        # state persists on host
       - ./logs:/app/logs        # logs visible on host
     environment:
-      LITELLM_BASE_URL: http://litellm:4000
-      LITELLM_API_KEY: ${LITELLM_API_KEY}
-    depends_on:
-      - litellm
+      PROGENITOR_AZURE_BASE_URL: ${PROGENITOR_AZURE_BASE_URL}
+      PROGENITOR_AZURE_API_KEY: ${PROGENITOR_AZURE_API_KEY}
     restart: unless-stopped
 ```
 
@@ -513,8 +508,8 @@ CMD ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "{po
 
 | Variable | Default | Description |
 |---|---|---|
-| `LITELLM_BASE_URL` | `http://litellm:4000` | LiteLLM proxy URL |
-| `LITELLM_API_KEY` | _(empty)_ | Proxy API key (`LITELLM_MASTER_KEY` also accepted) |
+| `PROGENITOR_AZURE_BASE_URL` | _(required)_ | Azure OpenAI base URL |
+| `PROGENITOR_AZURE_API_KEY` | _(required)_ | Azure OpenAI API key |
 | `PROGENITOR_MODEL_DEFAULT` | `gpt-5.1-codex-max` | LLM model name |
 | `AGENT_DATA_DIR` | `/app/data` | Root for SQLite state files |
 | `AGENT_LOG_DIR` | `/app/logs` | Root for rotating log files |

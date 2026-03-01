@@ -48,8 +48,8 @@ app/mcp/<tool_name>/
 3. **POST `/a2a`** — Main task endpoint (accepts `{"message": "...", "context": {...}}`)
 
 ## LLM Integration Pattern
-- Use LiteLLM `/responses` endpoint via httpx
-- Headers: `x-litellm-api-key` from `LITELLM_API_KEY`
+- Use Azure OpenAI `/responses` endpoint via httpx
+- Headers: `api-key` from `PROGENITOR_AZURE_API_KEY`
 - Model: `PROGENITOR_MODEL_DEFAULT`
 - Implement a local tool-calling loop for multi-step reasoning
 

@@ -4,10 +4,7 @@ Tests for Phase 1: DeepAgent foundation — LangChain adapter and agent factory.
 
 from unittest.mock import MagicMock, patch
 
-from app.progenitor.agent.langchain_adapter import (
-    create_azure_structured_model,
-    create_langchain_model,
-)
+from app.progenitor.agent.langchain_adapter import create_langchain_model
 from app.progenitor.config import LLMConfig
 
 
@@ -15,22 +12,22 @@ class TestLangChainAdapter:
     """Tests for the LangChain model adapter."""
 
     def test_create_model_with_defaults(self):
-        """Model created with LiteLLM proxy defaults."""
+        """Model created with configured Azure endpoint."""
         config = LLMConfig(
-            base_url="http://localhost:4000",
+            base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
             model_default="gpt-5.2-chat",
         )
         model = create_langchain_model(config)
 
         assert model.model_name == "gpt-5.2-chat"
-        assert "localhost:4000" in str(model.openai_api_base)
+        assert "azure.com" in str(model.openai_api_base)
         assert model.streaming is True
 
     def test_create_model_with_role(self):
         """Role-specific model selection works."""
         config = LLMConfig(
-            base_url="http://localhost:4000",
+            base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
             model_default="gpt-5.2-chat",
             model_planner="gpt-4.1",
@@ -41,7 +38,7 @@ class TestLangChainAdapter:
     def test_create_model_role_fallback(self):
         """Falls back to default model when role model not configured."""
         config = LLMConfig(
-            base_url="http://localhost:4000",
+            base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
             model_default="gpt-5.2-chat",
         )
@@ -51,8 +48,8 @@ class TestLangChainAdapter:
     def test_create_model_from_env(self):
         """Model created from environment when no config provided."""
         with patch.dict("os.environ", {
-            "LITELLM_BASE_URL": "http://litellm:4000",
-            "LITELLM_API_KEY": "env-key",
+            "PROGENITOR_AZURE_BASE_URL": "https://env.openai.azure.com/openai/v1",
+            "PROGENITOR_AZURE_API_KEY": "env-key",
             "PROGENITOR_MODEL_DEFAULT": "test-model",
         }):
             model = create_langchain_model()
@@ -61,16 +58,16 @@ class TestLangChainAdapter:
     def test_base_url_trailing_slash_stripped(self):
         """Trailing slash on base_url is stripped."""
         config = LLMConfig(
-            base_url="http://localhost:4000/",
+            base_url="https://example.openai.azure.com/openai/v1/",
             api_key="test-key",
         )
         model = create_langchain_model(config)
         assert not str(model.openai_api_base).endswith("//")
 
     def test_reasoning_uses_reasoning_effort(self):
-        """Reasoning config is sent via reasoning_effort for LiteLLM/Azure."""
+        """Reasoning config is sent via reasoning_effort."""
         config = LLMConfig(
-            base_url="http://localhost:4000",
+            base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
@@ -79,23 +76,6 @@ class TestLangChainAdapter:
         model = create_langchain_model(config)
         assert "thinking" not in model.model_kwargs
         assert model.reasoning_effort == "medium"
-
-    def test_azure_structured_model_not_configured(self):
-        """Returns None when Azure env vars not set."""
-        with patch.dict("os.environ", {}, clear=True):
-            model = create_azure_structured_model()
-            assert model is None
-
-    def test_azure_structured_model_configured(self):
-        """Returns model when all Azure env vars set."""
-        with patch.dict("os.environ", {
-            "PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL": "https://azure.example.com",
-            "PROGENITOR_AZURE_STRUCTURED_API_KEY": "azure-key",
-            "PROGENITOR_AZURE_STRUCTURED_MODEL": "gpt-4o",
-        }):
-            model = create_azure_structured_model()
-            assert model is not None
-            assert model.model_name == "gpt-4o"
 
 
 class TestDeepAgentFactory:

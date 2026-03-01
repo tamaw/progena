@@ -6,7 +6,7 @@ from app.agents.observe_agent.agent import agent, agent_card
 
 
 @pytest.mark.asyncio
-async def test_observe_agent_card_matches_litellm_agent_contract() -> None:
+async def test_observe_agent_card_matches_a2a_agent_contract() -> None:
     response = await agent_card()
     payload = json.loads(response.body.decode("utf-8"))
 

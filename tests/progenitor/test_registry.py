@@ -15,10 +15,14 @@ class TestToolRegistry:
 
     @pytest.fixture
     def temp_registry(self):
-        """Create a temporary registry file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump({"agents": [], "tools": []}, f)
-            return Path(f.name)
+        """Create isolated temporary registry + mcp files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            registry_path = root / "registry.json"
+            mcp_path = root / "mcp.json"
+            registry_path.write_text(json.dumps({"agents": []}), encoding="utf-8")
+            mcp_path.write_text(json.dumps({"tools": []}), encoding="utf-8")
+            yield registry_path
 
     @pytest.mark.asyncio
     async def test_load_empty_registry(self, temp_registry):

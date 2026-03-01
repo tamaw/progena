@@ -232,11 +232,11 @@ client = OpenAI(
     api_key="not-needed"  # API key not required for local
 )
 
-response = client.chat.completions.create(
+response = client.responses.create(
     model="progenitor-v1",
-    messages=[{"role": "user", "content": "Hello!"}]
+    input=[{"role": "user", "content": "Hello!"}]
 )
-print(response.choices[0].message.content)
+print(response.output_text)
 ```
 
 ---

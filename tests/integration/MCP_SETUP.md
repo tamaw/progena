@@ -6,19 +6,19 @@ The integration test for MCP tools (`test_mcp_tool`) is currently **not function
 
 ## Issue
 
-LiteLLM's MCP endpoint at `http://localhost:4000/mcp/` returns `500 Internal Server Error` due to missing authentication:
+Azure Responses's MCP endpoint at `http://localhost:4000/mcp/` returns `500 Internal Server Error` due to missing authentication:
 
 ```
-litellm/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py", line 120, in process_mcp_request
+Azure Responses/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py", line 120, in process_mcp_request
   validated_user_api_key_auth = await user_api_key_auth(...)
 ```
 
 ## Root Cause
 
-In `docker/docker-compose.litellm.yml`, these environment variables are set to empty strings:
+In `docker/docker-compose.Azure Responses.yml`, these environment variables are set to empty strings:
 
 ```yaml
-LITELLM_MASTER_KEY: ""
+PROGENITOR_AZURE_MASTER_KEY: ""
 JINA_API_KEY: ""
 ```
 
@@ -26,7 +26,7 @@ The MCP endpoint requires authentication but has no keys configured.
 
 ## Configuration
 
-`docker/litellm/litellm-config.yaml` has MCP configured:
+`docker/Azure Responses/Azure Responses-config.yaml` has MCP configured:
 
 ```yaml
 mcp_servers:
@@ -42,17 +42,17 @@ But the `JINA_API_KEY` environment variable is empty.
 ## To Fix
 
 1. **Get a Jina API key** from https://jina.ai/
-2. **Set the key in `docker/docker-compose.litellm.yml`:**
+2. **Set the key in `docker/docker-compose.Azure Responses.yml`:**
    ```yaml
    JINA_API_KEY: "your-api-key-here"
    ```
-3. **Set a LiteLLM master key for API authentication:**
+3. **Set a Azure Responses master key for API authentication:**
    ```yaml
-   LITELLM_MASTER_KEY: "sk-your-master-key-here"
+   PROGENITOR_AZURE_MASTER_KEY: "sk-your-master-key-here"
    ```
-4. **Restart LiteLLM:**
+4. **Restart Azure Responses:**
    ```bash
-  docker compose -f docker/docker-compose.litellm.yml restart litellm
+  docker compose -f docker/docker-compose.Azure Responses.yml restart Azure Responses
    ```
 5. **Update Progenitor config:**
    ```bash
@@ -119,3 +119,4 @@ message = "Tell me the current BTC price using the BTC Price Agent"
 ```
 
 This uses the local `app/agents/BTC Price Agent/` which is already registered.
+

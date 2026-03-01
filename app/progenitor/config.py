@@ -38,12 +38,11 @@ DEFAULT_MAX_CONVERSATION_HISTORY = 10
 class LLMConfig:
     """LLM provider configuration.
 
-    All LLM calls are routed through a LiteLLM proxy (OpenAI-compatible).
-    The proxy handles provider routing, auth, and observability (Langfuse).
+    All LLM calls are routed directly to Azure OpenAI Responses API.
     """
 
-    # LiteLLM proxy
-    base_url: str = "http://localhost:4000"
+    # Azure OpenAI base URL (without trailing /responses)
+    base_url: str = ""
     api_key: str | None = None
 
     # Model selection
@@ -53,8 +52,6 @@ class LLMConfig:
     model_planner: str | None = None
     model_builder: str | None = None
     model_summary: str | None = None
-    model_fallbacks: list[str] = field(default_factory=list)
-
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = False
     reasoning_budget_tokens: int | None = None
@@ -66,13 +63,12 @@ class LLMConfig:
         budget_tokens = int(budget_tokens_str) if budget_tokens_str else None
 
         return cls(
-            base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
-            api_key=os.getenv("LITELLM_API_KEY"),
+            base_url=os.getenv("PROGENITOR_AZURE_BASE_URL", "").rstrip("/"),
+            api_key=os.getenv("PROGENITOR_AZURE_API_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
-            model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", False),
             reasoning_budget_tokens=budget_tokens,
         )
@@ -321,26 +317,14 @@ class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
     enabled: bool = True
-    base_url: str = "http://localhost:4000/mcp"
+    base_url: str = "http://localhost:8080/mcp/"
     api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "MCPConfig":
         """Load MCP config from environment."""
-        # If PROGENITOR_MCP_BASE_URL is not set, default to LiteLLM base URL + /mcp/
-        # because Progenitor routes all model/tool calls through LiteLLM in docker.
-        base_url = os.getenv("PROGENITOR_MCP_BASE_URL", "").strip()
-        if not base_url:
-            litellm_base = os.getenv("LITELLM_BASE_URL", "").strip().rstrip("/")
-            if litellm_base:
-                base_url = f"{litellm_base}/mcp/"
-
-        if not base_url:
-            base_url = "http://localhost:4000/mcp/"  # Note trailing slash
-
+        base_url = os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:8080/mcp/").strip()
         api_key = os.getenv("PROGENITOR_MCP_API_KEY")
-        if not api_key:
-            api_key = os.getenv("LITELLM_API_KEY")
 
         return cls(
             enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
@@ -394,7 +378,7 @@ class ProgenitorConfig:
 
         # Validate LLM configuration
         if not self.llm.base_url:
-            errors.append("LITELLM_BASE_URL must be set")
+            errors.append("PROGENITOR_AZURE_BASE_URL must be set")
 
         # Validate storage paths are sensible
         for name, path in [

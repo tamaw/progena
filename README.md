@@ -18,7 +18,7 @@ Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A a
 
 - Python 3.12+
 - Docker (optional, recommended)
-- LiteLLM proxy with configured models
+- Azure OpenAI Responses deployment
 - Copilot CLI (for build operations — required by Builder Agent only)
 
 ### Environment Setup
@@ -27,8 +27,9 @@ Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A a
 # Activate venv (Windows)
 & .\.venv\Scripts\Activate.ps1
 
-# Set your LiteLLM master key
-export LITELLM_MASTER_KEY=your_key_here
+# Set Azure Responses endpoint credentials
+export PROGENITOR_AZURE_BASE_URL=https://<resource>.openai.azure.com/openai/v1
+export PROGENITOR_AZURE_API_KEY=your_key_here
 
 # Install dependencies
 pip install -r requirements.txt
@@ -114,7 +115,8 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 ### State Files
 
 - `data/state/current_state.json` - Conversation state (messages, tool calls)
-- `data/state/registry.json` - Agent and tool registry
+- `data/state/registry.json` - Agent registry
+- `data/state/mcp.json` - MCP tool registry
 - `data/state/schedule.json` - Scheduled tasks
 - `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
 
