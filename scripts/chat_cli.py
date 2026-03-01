@@ -60,14 +60,6 @@ def _extract_text(response: dict[str, Any]) -> str:
         if texts:
             return "".join(texts)
 
-    # Chat Completions format fallback
-    for choice in response.get("choices", []):
-        message = choice.get("message")
-        if isinstance(message, dict):
-            text = message.get("content")
-            if isinstance(text, str):
-                return text
-
     # Simple chat format
     if "response" in response:
         return str(response["response"])
@@ -211,22 +203,6 @@ def _post_streaming(payload: dict[str, Any]) -> str:
                         sys.stdout.write(text)
                         sys.stdout.flush()
                         accumulated_text.append(text)
-
-                # Handle Chat Completions streaming format
-                elif event_type == "chat.completion.chunk":
-                    for choice in event.get("choices", []):
-                        delta = choice.get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            spinner.text_received()
-                            spinner.stop()
-                            if not printed_prefix:
-                                sys.stdout.write("\r" + " " * 15 + "\r")
-                                sys.stdout.write("\n\033[1;32mProgenitor:\033[0m ")
-                                printed_prefix = True
-                            sys.stdout.write(content)
-                            sys.stdout.flush()
-                            accumulated_text.append(content)
 
     finally:
         spinner.stop()

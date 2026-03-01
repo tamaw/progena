@@ -44,7 +44,7 @@ class ListToolsTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..nodes.node_helpers.registry import get_all_system_tools
 
-        # Best-effort refresh: registry.json, agent cards, and LiteLLM MCP tools can all
+        # Best-effort refresh: registry.json, agent cards, and MCP tools can all
         # change during process uptime.
         if hasattr(context.tool_registry, "load"):
             with suppress(Exception):
@@ -95,18 +95,18 @@ class ListToolsTool(BaseSystemTool):
         if hasattr(context.tool_registry, "get_local_mcp_tools"):
             local_mcp_tools = context.tool_registry.get_local_mcp_tools()
 
-        # Include MCP tools discovered via LiteLLM even if they haven't been
+        # Include in-memory discovered MCP tools even if they haven't been
         # persisted to registry.json yet (e.g. in-process service path).
-        litellm_mcp_tools: list[dict] = []
+        discovered_mcp_tools: list[dict] = []
         if getattr(context, "llm_client", None) is not None and hasattr(context.llm_client, "get_mcp_tool_registry_entries"):
             try:
-                litellm_mcp_tools = context.llm_client.get_mcp_tool_registry_entries() or []
+                discovered_mcp_tools = context.llm_client.get_mcp_tool_registry_entries() or []
             except Exception:
-                litellm_mcp_tools = []
+                discovered_mcp_tools = []
 
         combined_mcp_tools = list(mcp_tools or [])
         combined_mcp_tools.extend(local_mcp_tools or [])
-        combined_mcp_tools.extend(litellm_mcp_tools or [])
+        combined_mcp_tools.extend(discovered_mcp_tools or [])
 
         # De-duplicate by name
         deduped_mcp_tools: list[dict] = []

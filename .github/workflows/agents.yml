@@ -213,14 +213,10 @@ jobs:
         id: runtime
         env:
           AGENT_NAME: ${{ matrix.agent }}
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY || vars.LITELLM_API_KEY }}
+          PROGENITOR_AZURE_BASE_URL: ${{ secrets.PROGENITOR_AZURE_BASE_URL || vars.PROGENITOR_AZURE_BASE_URL }}
+          PROGENITOR_AZURE_API_KEY: ${{ secrets.PROGENITOR_AZURE_API_KEY }}
           GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
           TEST_MODE: "false"
         run: python .github/scripts/get_agent_runtime_config.py
 
@@ -235,14 +231,10 @@ jobs:
 
       - name: Run agent container
         env:
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY || vars.LITELLM_API_KEY }}
+          PROGENITOR_AZURE_BASE_URL: ${{ secrets.PROGENITOR_AZURE_BASE_URL || vars.PROGENITOR_AZURE_BASE_URL }}
+          PROGENITOR_AZURE_API_KEY: ${{ secrets.PROGENITOR_AZURE_API_KEY }}
           GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
           TEST_MODE: "false"
         run: |
           PORT=${{ steps.runtime.outputs.port }}
@@ -321,22 +313,6 @@ jobs:
           docker logs progenitor-agent-${{ matrix.agent }} --tail 50
           exit 1
 
-      - name: Register agent with LiteLLM
-        env:
-          AGENT_NAME: ${{ matrix.agent }}
-          AGENT_PORT: ${{ steps.runtime.outputs.port }}
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
-        run: python .github/scripts/register_litellm_agent.py
-
-      - name: Validate agent card from LiteLLM
-        env:
-          AGENT_NAME: ${{ matrix.agent }}
-          AGENT_PORT: ${{ steps.runtime.outputs.port }}
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
-        run: python .github/scripts/register_litellm_agent.py --validate-only
-
       - name: Cleanup unused managed images
         if: success()
         run: |
@@ -409,16 +385,11 @@ jobs:
         run: docker rm -f progenitor-mcp-${{ matrix.mcp }} 2>/dev/null || true
 
       - name: Run MCP container
-        env:
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
         run: |
           docker run -d \
             --name progenitor-mcp-${{ matrix.mcp }} \
             --restart unless-stopped \
             --network progenitor_network \
-            -e LITELLM_BASE_URL="${LITELLM_BASE_URL}" \
-            -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
             -e TEST_MODE=false \
             ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
 
@@ -436,37 +407,6 @@ jobs:
           echo "MCP ${{ matrix.mcp }} failed health check"
           docker logs progenitor-mcp-${{ matrix.mcp }} --tail 50
           exit 1
-
-      - name: Register MCP with LiteLLM
-        continue-on-error: true
-        env:
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || vars.LITELLM_BASE_URL }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || vars.LITELLM_MASTER_KEY }}
-        run: |
-          MCP_HOST="progenitor-mcp-${{ matrix.mcp }}"
-          MCP_URL="http://${MCP_HOST}:8080/v1"
-          REGISTER_BASE_URL="${LITELLM_BASE_URL:-http://litellm:4000}"
-          if echo "$REGISTER_BASE_URL" | grep -Eq "://(localhost|127\\.0\\.0\\.1)"; then
-            REGISTER_BASE_URL="http://litellm:4000"
-          fi
-          docker run --rm --network progenitor_network curlimages/curl:8.6.0 \
-            -fsS -X POST "${REGISTER_BASE_URL}/model/new" \
-            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"model_name\": \"mcp/${{ matrix.mcp }}\",
-              \"litellm_params\": {
-                \"model\": \"openai/${{ matrix.mcp }}\",
-                \"api_base\": \"${MCP_URL}\",
-                \"api_key\": \"${LITELLM_MASTER_KEY}\"
-              },
-              \"model_info\": {
-                \"description\": \"MCP server: ${{ matrix.mcp }}\",
-                \"id\": \"mcp-${{ matrix.mcp }}\"
-              }
-            }"
-          echo ""
-          echo "Registered mcp/${{ matrix.mcp }} with LiteLLM at ${MCP_URL}"
 
       - name: Cleanup unused managed images
         if: success()

@@ -87,20 +87,20 @@ class TestLLMConfig:
     def test_from_env(self):
         """Test loading LLM config from environment."""
         env = {
-            "LITELLM_BASE_URL": "http://localhost:5000",
-            "LITELLM_API_KEY": "sk-test-key",
+            "PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1",
+            "PROGENITOR_AZURE_API_KEY": "sk-test-key",
             "PROGENITOR_MODEL_DEFAULT": "gpt-4o",
         }
         with patch.dict(os.environ, env, clear=False):
             config = LLMConfig.from_env()
-            assert config.base_url == "http://localhost:5000"
+            assert config.base_url == "https://example.openai.azure.com/openai/v1"
             assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
 
     def test_defaults(self):
         """Test default values."""
         config = LLMConfig()
-        assert config.base_url == "http://localhost:4000"
+        assert config.base_url == ""
         assert config.model_default == "gpt-5.1-codex-max"
 
     def test_get_model_for_role(self):
@@ -216,6 +216,7 @@ class TestProgenitorConfig:
     def test_load_from_env(self):
         """Test loading config from environment variables."""
         env = {
+            "PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "PROGENITOR_TIMEZONE": "Asia/Tokyo",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "15",
             "PROGENITOR_COPILOT_MODEL": "gpt-5",
@@ -264,8 +265,13 @@ class TestGlobalConfig:
         import app.progenitor.config as config_module
         config_module._config = None
 
-        config1 = get_config()
-        config2 = get_config()
+        with patch.dict(
+            os.environ,
+            {"PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1"},
+            clear=False,
+        ):
+            config1 = get_config()
+            config2 = get_config()
 
         assert config1 is config2
 
@@ -274,7 +280,12 @@ class TestGlobalConfig:
         import app.progenitor.config as config_module
         config_module._config = None
 
-        config1 = get_config()
-        config2 = reload_config()
+        with patch.dict(
+            os.environ,
+            {"PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1"},
+            clear=False,
+        ):
+            config1 = get_config()
+            config2 = reload_config()
 
         assert config1 is not config2

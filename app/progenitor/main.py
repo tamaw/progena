@@ -89,19 +89,11 @@ class Progenitor:
         except Exception as exc:
             logger.debug("Startup local agent discovery skipped: %s", exc)
 
-        # Sync from LiteLLM and refresh live agent card metadata (best-effort).
+        # Refresh live agent card metadata (best-effort).
         try:
             from .tools.mcp import A2AClient
 
             a2a_client = A2AClient()
-            litellm_summary = await self.tool_registry.sync_agents_from_litellm(a2a_client)
-            logger.info(
-                "LiteLLM sync: seen=%d added=%d updated=%d",
-                litellm_summary.get("agents_seen", 0),
-                litellm_summary.get("agents_added", 0),
-                litellm_summary.get("agents_updated", 0),
-            )
-
             summary = await self.tool_registry.refresh_agent_cards(a2a_client)
             logger.info(
                 "Agent card refresh: checked=%d updated=%d errors=%d",

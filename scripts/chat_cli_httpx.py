@@ -110,19 +110,6 @@ class ChatClient:
                         sys.stdout.flush()
                         accumulated.append(text)
 
-                # Chat Completions streaming format
-                elif event_type == "chat.completion.chunk":
-                    for choice in event.get("choices", []):
-                        delta = choice.get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            if not printed_header:
-                                sys.stdout.write("\n\033[1;32mProgenitor:\033[0m ")
-                                printed_header = True
-                            sys.stdout.write(content)
-                            sys.stdout.flush()
-                            accumulated.append(content)
-
         if printed_header:
             print()
 
@@ -137,12 +124,6 @@ class ChatClient:
                 for content in item.get("content", []):
                     if isinstance(content, dict) and content.get("type") == "output_text":
                         return content.get("text", "")
-
-        # Chat completions fallback
-        for choice in response.get("choices", []):
-            msg = choice.get("message", {})
-            if msg.get("content"):
-                return msg["content"]
 
         return ""
 

@@ -72,6 +72,7 @@ class StateManager:
         "build_state": "build_state.json",      # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
         "registry": "registry.json",
+        "mcp": "mcp.json",
         "schedule": "schedule.json",
     }
 
@@ -237,7 +238,8 @@ class StateManager:
                 "current_decision": None,
                 "current_build_request": None,     # Reference to active build (id only)
             },
-            "registry": {"agents": [], "tools": []},
+            "registry": {"agents": []},
+            "mcp": {"tools": []},
             "schedule": [],
         }
 

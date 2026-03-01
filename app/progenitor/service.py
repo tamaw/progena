@@ -116,7 +116,7 @@ class ProgenitorService:
             )
             await self.tool_registry.load()
 
-            # Initialize MCP tools (LiteLLM /mcp) and register them so they show up
+            # Initialize MCP tools and register them so they show up
             # in tool discovery and can be invoked via the registry.
             from .tools.mcp import setup_mcp_for_llm_client
 
@@ -146,7 +146,7 @@ class ProgenitorService:
             )
 
     async def _register_mcp_tools(self) -> None:
-        """Register MCP tools discovered via LiteLLM MCP."""
+        """Register MCP tools discovered via configured MCP endpoint."""
         if not self.llm_client or not self.tool_registry:
             return
 
@@ -378,16 +378,6 @@ class ProgenitorService:
                 agents_dir=agents_dir,
                 llm_client=self.llm_client,
                 registry=self.tool_registry,
-            )
-
-            from .tools.mcp import A2AClient
-
-            litellm_summary = await self.tool_registry.sync_agents_from_litellm(A2AClient())
-            logger.info(
-                "LiteLLM sync: seen=%d added=%d updated=%d",
-                litellm_summary.get("agents_seen", 0),
-                litellm_summary.get("agents_added", 0),
-                litellm_summary.get("agents_updated", 0),
             )
 
             if result.get("agents_registered", 0) > 0:

@@ -1,5 +1,5 @@
 """
-MCP Refresh - Refresh MCP tool list from LiteLLM and optionally persist to registry.json.
+MCP Refresh - Refresh MCP tool list and optionally persist to registry.json.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ class MCPRefreshTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Refresh MCP tool list from LiteLLM and optionally persist to registry.json"
+        return "Refresh MCP tool list and optionally persist to registry.json"
 
     @property
     def keywords(self) -> list[str]:
@@ -55,4 +55,3 @@ class MCPRefreshTool(BaseSystemTool):
             "success": True,
             "tool_count": len(getattr(llm_client, "mcp_tools", None) or []),
         })
-

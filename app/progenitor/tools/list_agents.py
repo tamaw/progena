@@ -77,8 +77,6 @@ class ListAgentsTool(BaseSystemTool):
                 from .mcp import A2AClient
 
                 a2a_client = A2AClient()
-                if hasattr(context.tool_registry, "sync_agents_from_litellm"):
-                    await context.tool_registry.sync_agents_from_litellm(a2a_client)
                 await context.tool_registry.refresh_agent_cards(a2a_client)
 
         agents = context.tool_registry.get_agents()

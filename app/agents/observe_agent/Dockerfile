@@ -2,9 +2,9 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    LITELLM_BASE_URL=http://litellm:4000 \
-    LITELLM_MASTER_KEY= \
-    LITELLM_API_KEY= \
+    PROGENITOR_AZURE_BASE_URL= \
+    PROGENITOR_AZURE_API_KEY= \
+    PROGENITOR_MODEL_DEFAULT= \
     GH_TOKEN= \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
     TEST_MODE=false \

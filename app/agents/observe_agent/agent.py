@@ -1,6 +1,6 @@
 """Observe agent (A2A).
 
-Receives a user request, uses the same LiteLLM /responses flow as Progenitor,
+Receives a user request, uses the same /responses flow as Progenitor,
 invokes local tools to read mounted state/logs, and returns plain-text insights.
 """
 
@@ -20,29 +20,6 @@ from langgraph.graph import END, StateGraph
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _extract_openai_last_user_text(body: Any) -> str:
-    if not isinstance(body, dict):
-        return ""
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        return ""
-    for msg in reversed(messages):
-        if not isinstance(msg, dict):
-            continue
-        if str(msg.get("role") or "") != "user":
-            continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            parts = []
-            for part in content:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    parts.append(part["text"])
-            return "".join(parts).strip()
-    return ""
 
 
 def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
@@ -92,7 +69,7 @@ def _read_jsonl_tail(path: Path, limit: int = 50) -> list[dict[str, Any]]:
 class ObserveAgent:
     AGENT_ID = "observe_agent"
     AGENT_NAME = "Observe Agent"
-    DESCRIPTION = "Monitors Progenitor by reading mounted state/logs and using LiteLLM to generate diagnostic insights."
+    DESCRIPTION = "Monitors Progenitor by reading mounted state/logs and generating diagnostic insights."
     CAPABILITIES = [
         "progenitor_health_report",
         "diagnose_last_error",
@@ -266,18 +243,15 @@ class ObserveAgent:
         return {"error": f"Unknown tool: {name}"}
 
     # -------------------------------------------------------------------------
-    # LiteLLM /responses (tool loop)
+    # /responses (tool loop)
     # -------------------------------------------------------------------------
-    def _litellm_endpoint(self) -> str:
-        base = os.getenv("LITELLM_BASE_URL", "http://litellm:4000").rstrip("/")
+    def _responses_endpoint(self) -> str:
+        base = os.getenv("PROGENITOR_AZURE_BASE_URL", "").rstrip("/")
         return f"{base}/responses"
 
-    def _litellm_headers(self) -> dict[str, str]:
-        key = (os.getenv("LITELLM_API_KEY") or os.getenv("LITELLM_MASTER_KEY") or "").strip()
-        headers = {"Content-Type": "application/json", "x-litellm-api-key": key}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-        return headers
+    def _responses_headers(self) -> dict[str, str]:
+        key = (os.getenv("PROGENITOR_AZURE_API_KEY") or "").strip()
+        return {"Content-Type": "application/json", "api-key": key}
 
     def _build_graph(self):
         """LangGraph tool-loop: prepare -> LLM -> tools -> LLM -> finalize.
@@ -389,7 +363,7 @@ class ObserveAgent:
             data = state.get("last_data") or {}
             text = self._extract_text(data)
             if not text:
-                text = "No response text returned from LiteLLM."
+                text = "No response text returned from responses API."
             return {"final_text": text}
 
         def route_after_llm(state: ObserveGraphState) -> str:
@@ -415,8 +389,8 @@ class ObserveAgent:
         return graph.compile()
 
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._litellm_headers()) as client:
-            resp = await client.post(self._litellm_endpoint(), json=payload)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._responses_headers()) as client:
+            resp = await client.post(self._responses_endpoint(), json=payload)
             resp.raise_for_status()
             return cast(dict[str, Any], resp.json())
 
@@ -555,7 +529,7 @@ async def handle(req: Request) -> JSONResponse:
         metadata_raw = params.get("metadata")
         ctx: dict[str, Any] = metadata_raw if isinstance(metadata_raw, dict) else {}
 
-        print("STATUS:executing:Calling LiteLLM with tool access", flush=True)
+        print("STATUS:executing:Calling responses API with tool access", flush=True)
         try:
             text = await agent.process(req_str, ctx)
             response = {
@@ -588,7 +562,7 @@ async def handle(req: Request) -> JSONResponse:
     context_raw = body.get("context") if isinstance(body, dict) else {}
     ctx: dict[str, Any] = context_raw if isinstance(context_raw, dict) else {}
 
-    print("STATUS:executing:Calling LiteLLM with tool access", flush=True)
+    print("STATUS:executing:Calling responses API with tool access", flush=True)
     try:
         text = await agent.process(req_str, ctx)
         response = {
@@ -610,26 +584,34 @@ async def handle(req: Request) -> JSONResponse:
         return JSONResponse(content=err, status_code=500)
 
 
-@app.post("/v1/chat/completions")
-async def openai_chat_completions(req: Request) -> JSONResponse:
-    """OpenAI-compatible endpoint so LiteLLM can proxy agent/* traffic."""
+@app.post("/v1/responses")
+async def responses_api(req: Request) -> JSONResponse:
+    """Responses API endpoint."""
     try:
         body = await req.json()
     except Exception:
         body = {}
 
-    request_text = _extract_openai_last_user_text(body) or str((body or {}).get("input") or "").strip()
+    request_input = (body or {}).get("input")
+    request_text = ""
+    if isinstance(request_input, str):
+        request_text = request_input.strip()
+    elif isinstance(request_input, list):
+        for item in reversed(request_input):
+            if isinstance(item, dict) and str(item.get("role") or "") == "user":
+                request_text = str(item.get("content") or "").strip()
+                if request_text:
+                    break
     content = await agent.process(request_text, {}) if request_text else "Empty request."
     payload = {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-        "object": "chat.completion",
+        "id": f"resp-{uuid.uuid4().hex[:8]}",
+        "object": "response",
         "created": int(time.time()),
         "model": str((body or {}).get("model") or "agent/observe_agent"),
-        "choices": [
+        "output": [
             {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": content}],
             }
         ],
         "usage": {

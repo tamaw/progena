@@ -58,6 +58,7 @@ Agents communicate via HTTP:
 ## Configuration
 Environment variables take precedence over JSON config:
 - `PROGENITOR_LLM_PROVIDER`: azure | openai
-- `LITELLM_BASE_URL`: LiteLLM proxy URL
+- `PROGENITOR_AZURE_BASE_URL`: Azure OpenAI base URL (without `/responses`)
+- `PROGENITOR_AZURE_API_KEY`: Azure OpenAI API key
 - `PROGENITOR_MODEL_DEFAULT`: Default model name
 - `PROGENITOR_MOCK_LLM`: Enable mock mode for testing
