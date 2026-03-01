@@ -45,6 +45,8 @@ MODEL_CONTEXT_WINDOWS = {
 }
 
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
+DECISION_HISTORY_LIMIT = 6
+RESPONSE_HISTORY_LIMIT = 12
 
 
 def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str, Any]:
@@ -966,7 +968,7 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
-        messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
+        messages = conversation_history[-DECISION_HISTORY_LIMIT:] + [{"role": "user", "content": user_input}]
         response_format = _build_json_schema_format(DecisionResponse, "decision_response")
 
         response = await self.chat(messages, system_prompt, temperature=0.3, response_format=response_format)
@@ -1001,7 +1003,7 @@ class LLMClient:
     ) -> str:
         """Generate a response to the user."""
         system_prompt = self.prompts.get_genesis_prompt()
-        messages = conversation_history[-20:]
+        messages = conversation_history[-RESPONSE_HISTORY_LIMIT:]
 
         if action_results:
             results_summary = "\n".join([

@@ -1,6 +1,6 @@
 ---
 name: agent-architecture
-description: Understanding and working with Progenitor's dual-loop architecture, state management, A2A protocol, and system design
+description: Understand Progenitor's dual-loop architecture, state management, A2A protocol, and core system design. Use when debugging agent behavior, extending the core runtime, or explaining how Progenitor works.
 ---
 
 # Agent Architecture Skill

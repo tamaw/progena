@@ -1,12 +1,7 @@
 ---
 name: git-workflow
-description: Git operations including branching, committing, worktree management, PR creation, and merge conflict resolution
-allowed-tools:
-  - git
-  - gh
-  - shell
-  - read_file
-  - write_file
+description: Handle Git operations including branching, committing, worktree management, PR creation, and merge conflict resolution. Use when a task requires branch isolation, commits, pushes, pull requests, or resolving Git conflicts.
+allowed-tools: git gh shell read_file write_file
 ---
 
 # Git Workflow Skill
