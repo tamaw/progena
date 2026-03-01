@@ -51,25 +51,10 @@ class ListAgentsTool(BaseSystemTool):
         ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        # External deploy pipelines can update registry.json; reload best-effort.
+        # External deploy pipelines can update agents.json; reload best-effort.
         if hasattr(context.tool_registry, "load"):
             with suppress(Exception):
                 await context.tool_registry.load()
-
-        # Keep local folder-based discovery available via this single tool path.
-        with suppress(Exception):
-            from pathlib import Path
-
-            from .agent_discovery import discover_agents
-
-            project_root = Path(__file__).parent.parent.parent.parent
-            agents_dir = project_root / "app" / "agents"
-            if agents_dir.exists():
-                await discover_agents(
-                    agents_dir=agents_dir,
-                    llm_client=context.llm_client,
-                    registry=context.tool_registry,
-                )
 
         # Best-effort: keep agent metadata aligned to live agent cards.
         if hasattr(context.tool_registry, "refresh_agent_cards"):
@@ -77,8 +62,6 @@ class ListAgentsTool(BaseSystemTool):
                 from .mcp import A2AClient
 
                 a2a_client = A2AClient()
-                if hasattr(context.tool_registry, "sync_agents_from_litellm"):
-                    await context.tool_registry.sync_agents_from_litellm(a2a_client)
                 await context.tool_registry.refresh_agent_cards(a2a_client)
 
         agents = context.tool_registry.get_agents()

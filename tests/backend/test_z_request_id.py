@@ -192,16 +192,6 @@ class TestRequestIdHandlerIntegration:
         assert 'request.state' in content
         assert 'request_id' in content
 
-    def test_chat_completions_endpoint_uses_request_state(self):
-        """Verify /v1/responses handler accesses request.state.request_id."""
-        import app.backend.main as main_module
-
-        with open(main_module.__file__, encoding='utf-8') as f:
-            content = f.read()
-
-        # Check that the handler gets request_id from state
-        assert 'getattr(request.state, "request_id"' in content
-
     def test_stream_response_unified_accepts_request_id(self):
         """Verify stream_response_unified function accepts request_id parameter."""
         import app.backend.main as main_module

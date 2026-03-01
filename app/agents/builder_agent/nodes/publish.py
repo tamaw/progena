@@ -207,7 +207,7 @@ def _build_pr_body(
 ### Automated Build
 This PR was created automatically by the Progenitor agent after
 the build passed verification. On merge, GitHub Actions will deploy
-the {kind.lower()} to its own Docker container and register it with LiteLLM.
+the {kind.lower()} to its own Docker container.
 
 ### Testing
 - Unit tests: Run in worktree

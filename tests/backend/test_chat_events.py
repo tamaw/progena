@@ -22,13 +22,12 @@ from pydantic import ValidationError
 
 from app.backend.main import app
 from app.backend.models import (
-    ChatCompletionChunk,
-    ChatCompletionRequest,
-    ChatMessage,
+    ResponseOutputMessage,
+    ResponseOutputText,
     ResponseInputMessage,
+    ResponsePayload,
     ResponseRequest,
     SimpleChatRequest,
-    StreamingChatRequest,
     StreamingResponseRequest,
 )
 
@@ -174,35 +173,6 @@ class TestStreamingEvents:
         assert response.status_code in [200, 500, 503]
         if response.status_code == 200:
             assert "text/event-stream" in response.headers.get("content-type", "")
-
-    def test_streaming_chat_request_validation(self):
-        """Test StreamingChatRequest validation."""
-        # Valid request
-        valid_request = ChatCompletionRequest(
-            model="test",
-            messages=[ChatMessage(role="user", content="Hello")],
-            stream=True,
-        )
-        # Should not raise
-        StreamingChatRequest.validate_for_streaming(valid_request)
-
-        # Empty messages
-        empty_request = ChatCompletionRequest(
-            model="test",
-            messages=[],
-            stream=True,
-        )
-        with pytest.raises(ValueError, match="empty"):
-            StreamingChatRequest.validate_for_streaming(empty_request)
-
-        # No user message
-        no_user_request = ChatCompletionRequest(
-            model="test",
-            messages=[ChatMessage(role="system", content="You are helpful")],
-            stream=True,
-        )
-        with pytest.raises(ValueError, match="user message"):
-            StreamingChatRequest.validate_for_streaming(no_user_request)
 
     def test_streaming_response_request_validation(self):
         """Test StreamingResponseRequest validation."""
@@ -538,41 +508,24 @@ class TestSimpleChatRequest:
             SimpleChatRequest(message=too_long)
 
 
-class TestChatCompletionChunk:
-    """Tests for streaming chunk model."""
+class TestResponsePayloadModel:
+    """Tests for Responses payload model."""
 
-    def test_chunk_creation(self):
-        """Test ChatCompletionChunk creation."""
-        chunk = ChatCompletionChunk(
-            id="chunk-123",
+    def test_payload_creation(self):
+        """Test ResponsePayload creation."""
+        payload = ResponsePayload(
+            id="resp-123",
             model="test-model",
-            choices=[
-                {
-                    "index": 0,
-                    "delta": {"content": "Hello"},
-                    "finish_reason": None,
-                }
+            output=[
+                ResponseOutputMessage(
+                    content=[ResponseOutputText(text="Hello")]
+                )
             ],
         )
-        assert chunk.id == "chunk-123"
-        assert chunk.object == "chat.completion.chunk"
-        assert chunk.model == "test-model"
-        assert len(chunk.choices) == 1
-
-    def test_final_chunk_creation(self):
-        """Test final chunk with finish_reason."""
-        chunk = ChatCompletionChunk(
-            id="chunk-final",
-            model="test-model",
-            choices=[
-                {
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }
-            ],
-        )
-        assert chunk.choices[0]["finish_reason"] == "stop"
+        assert payload.id == "resp-123"
+        assert payload.object == "response"
+        assert payload.model == "test-model"
+        assert payload.output[0].content[0].text == "Hello"
 
 
 class TestTypingIndicatorEvents:

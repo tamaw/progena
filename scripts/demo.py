@@ -78,7 +78,7 @@ def demo_http_api():
 
 
 def demo_openai_sdk():
-    """Demo: Using official OpenAI SDK."""
+    """Demo: Using official OpenAI SDK Responses API."""
     print("\n" + "=" * 70)
     print("DEMO 3: OpenAI SDK")
     print("=" * 70)
@@ -93,15 +93,15 @@ def demo_openai_sdk():
             api_key="not-used-locally",
         )
 
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="progenitor-v1",
-            messages=[
+            input=[
                 {"role": "user", "content": "Hello!"},
             ],
             timeout=5,
         )
 
-        print(f"Response: {response.choices[0].message.content}")
+        print(f"Response: {response.output_text}")
         print("\n✓ Demo complete")
 
     except ImportError:

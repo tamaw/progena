@@ -33,11 +33,7 @@ def cleanup_event_loop():
 def mock_progenitor_client():
     """Mock the get_client and get_ipc_client to avoid connection issues in tests."""
     mock_client = AsyncMock()
-    mock_client.chat_completion.return_value = {
-        "choices": [{"message": {"content": "mocked response"}}],
-        "usage": {"total_tokens": 10}
-    }
-    mock_client.respond.return_value = {"response": "mocked"}
+    mock_client.send_message.return_value = "mocked response"
     mock_client.list_models.return_value = {"models": []}
     mock_client.is_running = False
     mock_client.start = AsyncMock()

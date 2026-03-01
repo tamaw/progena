@@ -1,5 +1,5 @@
 """
-MCP Call - Call an MCP tool by name via LiteLLM MCP (tools/call).
+MCP Call - Call an MCP tool by name via MCP JSON-RPC (tools/call).
 
 This is a generic dispatch tool because MCP tool names can change at runtime.
 """
@@ -24,7 +24,7 @@ class MCPCallTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Call an MCP tool by name via LiteLLM MCP (tools/call)"
+        return "Call an MCP tool by name via MCP JSON-RPC (tools/call)"
 
     @property
     def keywords(self) -> list[str]:
@@ -54,4 +54,3 @@ class MCPCallTool(BaseSystemTool):
         call_typed = cast(Callable[[dict[str, Any]], Awaitable[dict[str, Any]]], call)
         result = await call_typed({"name": name, "arguments": arguments})
         return ToolResult.ok(cast(dict[str, Any], result) if isinstance(result, dict) else {"result": result})
-

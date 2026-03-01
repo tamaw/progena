@@ -11,7 +11,7 @@ from app.progenitor.tools.registry import ToolRegistry
 
 async def check_tool_context():
     """Check what tools are in the context."""
-    registry_path = PROJECT_ROOT / "data" / "state" / "registry.json"
+    registry_path = PROJECT_ROOT / "data" / "config" / "agents.json"
     registry = ToolRegistry(registry_path=registry_path)
     await registry.load()
 

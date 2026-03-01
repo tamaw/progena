@@ -115,16 +115,19 @@ which is a self-contained A2A server with its own Dockerfile, requirements.txt, 
 | Frontend         | 5173  | Vite dev server                |
 | Builder Agent    | 8107  | A2A JSON-RPC over HTTP         |
 | Other agents     | 8080+ | Generic A2A agents             |
-| LiteLLM Proxy    | 4000  | Routes to Azure/OpenAI         |
+| Azure OpenAI API | 443   | Direct `/responses` calls      |
 
 ## State Files
 
 ```
 data/state/
 ├── current_state.json     # Progenitor: messages, conversation
-├── registry.json          # Agent/tool registry (progenitor reads, builder writes)
 ├── schedule.json          # Scheduled tasks (progenitor)
 └── build_checkpoints.db   # Builder agent: SQLite LangGraph checkpoints
+
+data/config/
+├── agents.json            # Agent registry (progenitor reads, builder writes)
+└── mcp.json               # MCP tool registry
 ```
 
 ---

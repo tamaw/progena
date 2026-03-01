@@ -72,7 +72,7 @@ class HTTPAgentManager:
     Responsibilities:
     - Start agents as HTTP servers on allocated ports
     - Monitor stdout/stderr for status updates
-    - Update registry.json with runtime state
+    - Update agents.json with runtime state
     - Health check running agents
     - Graceful shutdown
     """
