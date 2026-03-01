@@ -1,4 +1,4 @@
-"""Minimal LiteLLM client for Builder Copilot planning."""
+"""Azure Responses API client for Builder Copilot planning."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any, TypeVar
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, Field
@@ -15,6 +16,19 @@ from .config import LLMConfig
 logger = logging.getLogger(__name__)
 
 TModel = TypeVar("TModel", bound=BaseModel)
+
+
+def _build_responses_endpoint(base_url: str) -> str:
+    """Build a valid /responses endpoint from either base URL or full endpoint URL."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return "/responses"
+
+    parsed = urlsplit(raw)
+    path = (parsed.path or "").rstrip("/")
+    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
+
+    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
 class PlanStep(BaseModel):
@@ -57,27 +71,24 @@ def _build_json_schema_format(response_model: type[BaseModel], schema_name: str)
 
 
 class BuilderCopilotClient:
-    """Small wrapper for the LiteLLM /responses endpoint."""
+    """Small wrapper for the Azure OpenAI /responses endpoint."""
 
     def __init__(self, config: LLMConfig | None = None, role: str | None = None) -> None:
         self.config = config or LLMConfig.from_env()
         self.role = role
         self.model = self.config.get_model_for_role(role)
-        base_url = self.config.base_url.rstrip("/")
-        self.endpoint_url = f"{base_url}/responses"
+        self.endpoint_url = _build_responses_endpoint(self.config.base_url)
         api_key = self.config.api_key or ""
         headers = {
             "Content-Type": "application/json",
-            "x-litellm-api-key": api_key,
+            "api-key": api_key,
         }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(120.0), headers=headers)
 
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def __aenter__(self) -> "BuilderCopilotClient":
+    async def __aenter__(self) -> BuilderCopilotClient:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -92,13 +103,46 @@ class BuilderCopilotClient:
         system_prompt: str | None = None,
     ) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
+        allowed_roles = {"system", "user", "assistant", "tool"}
+
         if system_prompt:
             payload.append({"role": "system", "content": system_prompt})
+
         for message in messages:
+            role = str(message.get("role", "user") or "user")
+            if role not in allowed_roles:
+                role = "user"
+
+            content = message.get("content", "")
+            if isinstance(content, list):
+                if content and isinstance(content[0], dict) and content[0].get("type") in {
+                    "input_text",
+                    "output_text",
+                    "input_image",
+                    "input_file",
+                    "refusal",
+                    "summary_text",
+                    "tether_browsing_display",
+                    "computer_screenshot",
+                    "tool_call",
+                    "tool_result",
+                }:
+                    wrapped_content: Any = content
+                else:
+                    text_parts: list[str] = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            text_parts.append(str(part.get("text", "")))
+                        elif isinstance(part, str):
+                            text_parts.append(part)
+                    wrapped_content = "".join(text_parts)
+            else:
+                wrapped_content = str(content)
+
             payload.append(
                 {
-                    "role": str(message.get("role", "user") or "user"),
-                    "content": str(message.get("content", "")),
+                    "role": role,
+                    "content": wrapped_content,
                 }
             )
         return payload
@@ -117,8 +161,6 @@ class BuilderCopilotClient:
             "input": input_messages,
             "max_output_tokens": max_tokens,
         }
-        if self.config.model_fallbacks:
-            payload["fallbacks"] = self.config.model_fallbacks
         if response_format is not None:
             payload["text"] = {"format": response_format}
         if include_reasoning:

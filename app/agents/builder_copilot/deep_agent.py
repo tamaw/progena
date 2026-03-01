@@ -35,6 +35,7 @@ Rules:
 - Start by normalizing the request, then create a worktree unless one is already provided.
 - Use python_search to inspect the codebase before major edits.
 - Use run_copilot_build for implementation work and run_worktree_command for validation.
+- For progenitor agent work, prefer build_progenitor (or run_copilot_build with target_path=app/progenitor).
 - Run both test and lint steps before opening a PR unless the user explicitly asks to skip them.
 - Commit changes before calling create_pull_request.
 - Return a concise final summary that includes the worktree path, commands run, and PR URL when available.
