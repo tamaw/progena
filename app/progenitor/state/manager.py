@@ -71,7 +71,7 @@ class StateManager:
     CORE_FILES: dict[str, str] = {
         "build_state": "build_state.json",      # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
-        "registry": "registry.json",
+        "registry": "agents.json",
         "mcp": "mcp.json",
         "schedule": "schedule.json",
     }
@@ -86,11 +86,19 @@ class StateManager:
 
     def __init__(self, state_dir: Path, logs_dir: Path, lock_timeout: int = 10) -> None:
         self.state_dir = Path(state_dir)
+        self.config_dir = self.state_dir.parent / "config"
         self.logs_dir = Path(logs_dir)
         self.lock_timeout = lock_timeout
         self._locks: dict[str, asyncio.Lock] = {}
         self._state_cache: dict[str, Any] = {}
         self._initialized = False
+
+    def _core_file_path(self, name: str) -> Path:
+        """Resolve absolute path for a core state/config file."""
+        filename = self.CORE_FILES[name]
+        if name in {"registry", "mcp"}:
+            return self.config_dir / filename
+        return self.state_dir / filename
 
     async def __aenter__(self) -> "StateManager":
         """CQ-010: Async context manager entry - initialize resources."""
@@ -111,7 +119,7 @@ class StateManager:
         try:
             for name in self.CORE_FILES:
                 if name in self._state_cache:
-                    filepath = self.state_dir / self.CORE_FILES[name]
+                    filepath = self._core_file_path(name)
                     await self._atomic_write_json(filepath, self._state_cache[name])
             logger.debug("StateManager: flushed cached state on close")
         except Exception as e:
@@ -129,6 +137,7 @@ class StateManager:
 
         # Create directories
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.config_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize locks
@@ -244,7 +253,7 @@ class StateManager:
         }
 
         for name, filename in self.CORE_FILES.items():
-            filepath = self.state_dir / filename
+            filepath = self._core_file_path(name)
             if not filepath.exists():
                 await self._atomic_write_json(filepath, defaults[name])
             cached = await self._read_json(filepath)
@@ -258,12 +267,15 @@ class StateManager:
     def _cleanup_stale_temp_files(self) -> None:
         """Remove leftover .tmp files from failed atomic writes."""
         try:
-            for tmp_file in self.state_dir.glob(".*.tmp"):
-                try:
-                    tmp_file.unlink()
-                    logger.info("Cleaned up stale temp file: %s", tmp_file.name)
-                except Exception as e:
-                    logger.warning("Failed to clean up %s: %s", tmp_file.name, e)
+            for directory in (self.state_dir, self.config_dir):
+                if not directory.exists():
+                    continue
+                for tmp_file in directory.glob(".*.tmp"):
+                    try:
+                        tmp_file.unlink()
+                        logger.info("Cleaned up stale temp file: %s", tmp_file.name)
+                    except Exception as e:
+                        logger.warning("Failed to clean up %s: %s", tmp_file.name, e)
         except Exception as e:
             logger.warning("Error scanning for stale temp files: %s", e)
 
@@ -479,14 +491,14 @@ class StateManager:
         """Get the agent/tool registry."""
         async with self._file_lock("registry"):
             return await self._read_json(
-                self.state_dir / self.CORE_FILES["registry"]
-            ) or {"agents": [], "tools": []}
+                self._core_file_path("registry")
+            ) or {"agents": []}
 
     async def save_registry(self, registry: dict[str, Any]) -> None:
         """Save the registry."""
         async with self._file_lock("registry"):
             await self._atomic_write_json(
-                self.state_dir / self.CORE_FILES["registry"],
+                self._core_file_path("registry"),
                 registry
             )
             self._state_cache["registry"] = registry
@@ -772,7 +784,7 @@ class StateManager:
 
             async with self._file_lock(name):
                 await self._atomic_write_json(
-                    self.state_dir / self.CORE_FILES[name],
+                    self._core_file_path(name),
                     data
                 )
 

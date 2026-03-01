@@ -18,7 +18,7 @@ class _FakeA2AClient:
 
 @pytest.mark.asyncio
 async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
-    reg_path = tmp_path / "registry.json"
+    reg_path = tmp_path / "agents.json"
     reg_path.write_text(
         json.dumps(
             {
@@ -50,7 +50,7 @@ async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_registry_and_mcp_state_are_split(tmp_path) -> None:
-    reg_path = tmp_path / "registry.json"
+    reg_path = tmp_path / "agents.json"
     mcp_path = tmp_path / "mcp.json"
     reg_path.write_text(json.dumps({"agents": []}), encoding="utf-8")
     mcp_path.write_text(

@@ -3,9 +3,9 @@ Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
 
-Reads real state data from data/state/ directory:
+Reads real state data from data/state/ and data/config/:
 - health.json: Agent health status
-- registry.json: Registered agents and tools
+- agents.json + mcp.json: Registered agents and tools
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
 - schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
@@ -276,7 +276,7 @@ async def get_loops():
 @router.get("/agents", response_model=SubAgentsResponse)
 async def get_sub_agents():
     """
-    Get registered agents from registry.json.
+    Get registered agents from agents.json.
 
     Returns information about all registered A2A agents.
     """

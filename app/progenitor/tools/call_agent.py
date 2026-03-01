@@ -2,7 +2,7 @@
 Call Agent - Invoke an A2A agent by name or capability.
 
 This is intentionally a *generic dispatch* tool because the set of available
-agents can change during process uptime. It uses registry.json for lookup.
+agents can change during process uptime. It uses agents.json for lookup.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class CallAgentTool(BaseSystemTool):
         if not tool_registry:
             return ToolResult.fail("tool_registry unavailable")
 
-        # Refresh best-effort so registry.json edits show up immediately.
+        # Refresh best-effort so agents.json edits show up immediately.
         load = getattr(tool_registry, "load", None)
         if callable(load):
             with contextlib.suppress(Exception):
@@ -73,4 +73,3 @@ class CallAgentTool(BaseSystemTool):
             timeout=timeout_seconds,
         )
         return ToolResult.ok(result if isinstance(result, dict) else {"result": result})
-

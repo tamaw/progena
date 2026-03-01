@@ -94,6 +94,7 @@ class ProgenitorService:
             # Ensure directories exist
             for dir_path in [
                 self.config.storage.state_dir,
+                self.config.storage.state_dir.parent / "config",
                 self.config.storage.log_dir,
                 self.config.storage.worktree_dir,
             ]:
@@ -112,7 +113,7 @@ class ProgenitorService:
 
             # Initialize tool registry
             self.tool_registry = ToolRegistry(
-                self.config.storage.state_dir / "registry.json"
+                self.config.storage.state_dir.parent / "config" / "agents.json"
             )
             await self.tool_registry.load()
 

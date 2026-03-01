@@ -34,7 +34,8 @@ class TestStateManager:
 
         # build_state.json replaces both current_state.json and backlog.json
         assert (state_dir / "build_state.json").exists()
-        assert (state_dir / "registry.json").exists()
+        assert (state_dir.parent / "config" / "agents.json").exists()
+        assert (state_dir.parent / "config" / "mcp.json").exists()
         assert (state_dir / "schedule.json").exists()
 
     @pytest.mark.asyncio

@@ -570,4 +570,4 @@ async def test_invoke():
 
 ## Registration
 
-After building, run the `rediscover_agents` system tool to register the agent in `registry.json`.
+After building, run the `rediscover_agents` system tool to register the agent in `data/config/agents.json`.
