@@ -262,6 +262,7 @@ class ScheduleEntry(BaseModel):
     cron_expression: str
     last_run: datetime | None = None  # When it last executed
     created_at: datetime = Field(default_factory=utcnow)
+    user_request: str | None = None  # The original user request that created this entry
 
 
 class AgentStatus(StrEnum):

@@ -319,9 +319,15 @@ class ProgenitorLoop:
         message = str(entry.get("message") or "").strip()
         if not message:
             return False
+        user_request = (entry.get("user_request") or "").strip()
+
+        if user_request:
+            full_message = f"<original_message>{user_request}</original_message>\n\n{message}"
+        else:
+            full_message = message
 
         queued = await self.enqueue_input(
-            f"{SCHEDULED_INPUT_PREFIX}{message}",
+            f"{SCHEDULED_INPUT_PREFIX}{full_message}",
             timeout=0.5,
         )
         if not queued:

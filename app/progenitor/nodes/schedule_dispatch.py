@@ -81,9 +81,13 @@ def create_schedule_dispatch_node(
         entry = due_items[0]
         schedule_id = str(entry["id"])
         message = entry.get("message") or "Scheduled task"
+        user_request = (entry.get("user_request") or "").strip()
 
         prefix = _prompts.get("progenitor/scheduled_prefix.md").strip()
-        scheduled_input = f"{prefix}\n\n{message}".strip()
+        if user_request:
+            scheduled_input = f"{prefix}\n\n<original_message>{user_request}</original_message>\n\n{message}".strip()
+        else:
+            scheduled_input = f"{prefix}\n\n{message}".strip()
 
         if event_pusher:
             await event_pusher(
