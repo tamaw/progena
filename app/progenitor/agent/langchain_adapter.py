@@ -10,6 +10,7 @@ Supports optional extended thinking/reasoning for models that support it
 """
 
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
@@ -17,6 +18,25 @@ from pydantic import SecretStr
 from ..config import LLMConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_langchain_base_url(base_url: str) -> str:
+    """Normalize env URL to OpenAI-compatible base URL for ChatOpenAI.
+
+    Accepts either:
+    - https://.../openai/v1
+    - https://.../openai/v1/responses
+    - https://.../openai/v1/responses?api-version=preview
+    """
+    raw = (base_url or "").strip()
+    if not raw:
+        return raw
+
+    parsed = urlsplit(raw)
+    path = (parsed.path or "").rstrip("/")
+    if path.endswith("/responses"):
+        path = path[:-len("/responses")]
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 def create_langchain_model(
@@ -38,7 +58,7 @@ def create_langchain_model(
 
     model_name = config.get_model_for_role(role) if role else config.model_default
 
-    base_url = config.base_url.rstrip("/")
+    base_url = _normalize_langchain_base_url(config.base_url)
 
     # Build model kwargs for extended reasoning if enabled.
     reasoning_effort: str | None = None

@@ -5,6 +5,7 @@ import logging
 import re
 from collections.abc import AsyncIterator
 from typing import Any, TypeVar, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel
@@ -49,6 +50,19 @@ MODEL_CONTEXT_WINDOWS = {
 }
 
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
+
+
+def _build_responses_endpoint(base_url: str) -> str:
+    """Build a valid /responses endpoint from either base URL or full endpoint URL."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return "/responses"
+
+    parsed = urlsplit(raw)
+    path = (parsed.path or "").rstrip("/")
+    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
+
+    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
 def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str, Any]:
@@ -98,8 +112,7 @@ class LLMClient:
         self.role = role
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 
-        base_url = self.config.base_url.rstrip('/')
-        self.endpoint_url = f"{base_url}/responses"
+        self.endpoint_url = _build_responses_endpoint(self.config.base_url)
 
         api_key = self.config.api_key or ""
         headers = {
