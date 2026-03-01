@@ -356,10 +356,15 @@ app.add_route("/health", _health, methods=["GET"])
 
 def _register_agent_in_shared_registry(port: int, *, registry_path: Path | None = None) -> None:
     if registry_path is None:
-        config = get_config(Path(__file__).resolve().parents[3], Path(__file__).resolve().parents[3] / "config", validate=False)
+        project_root = Path(__file__).resolve().parents[3]
+        config = get_config(project_root, project_root / "config", validate=False)
         registry_path = config.storage.state_dir.parent / "config" / "agents.json"
 
-    host = os.environ.get("A2A_PUBLIC_HOST", "").strip() or os.environ.get("HOSTNAME", "").strip() or "localhost"
+    host = (
+        os.environ.get("A2A_PUBLIC_HOST", "").strip()
+        or os.environ.get("HOSTNAME", "").strip()
+        or "localhost"
+    )
 
     payload: dict[str, Any] = {"agents": []}
     if registry_path.exists():
@@ -370,8 +375,8 @@ def _register_agent_in_shared_registry(port: int, *, registry_path: Path | None 
                 agents = loaded.get("agents")
                 if isinstance(agents, list):
                     payload["agents"] = agents
-        except (OSError, json.JSONDecodeError):
-            payload = {"agents": []}
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Unable to load existing agent registry at %s: %s", registry_path, exc)
 
     payload["agents"] = [agent for agent in payload["agents"] if agent.get("name") != AGENT_NAME]
     payload["agents"].append(
@@ -403,5 +408,10 @@ async def _startup() -> None:
     logger.info("Builder Copilot starting on port %d", port)
     await service.initialize()
     if service.health_payload().get("status") == "healthy":
-        _register_agent_in_shared_registry(port)
+        try:
+            _register_agent_in_shared_registry(port)
+        except OSError:
+            logger.exception("Builder Copilot failed to write shared agent registry")
+    else:
+        logger.warning("Builder Copilot startup health check failed; skipping agent registration")
     logger.info("Builder Copilot ready on port %d", port)
