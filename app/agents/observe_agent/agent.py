@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import FastAPI, Request
@@ -36,6 +37,19 @@ def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
         return data.decode("utf-8", errors="replace")
     except Exception:
         return ""
+
+
+def _build_responses_endpoint(base_url: str) -> str:
+    """Build a valid /responses endpoint from either base URL or full endpoint URL."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return "/responses"
+
+    parsed = urlsplit(raw)
+    path = (parsed.path or "").rstrip("/")
+    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
+
+    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
 def _safe_read_json(path: Path) -> Any:
@@ -246,8 +260,7 @@ class ObserveAgent:
     # /responses (tool loop)
     # -------------------------------------------------------------------------
     def _responses_endpoint(self) -> str:
-        base = os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/")
-        return f"{base}/responses"
+        return _build_responses_endpoint(os.getenv("AZURE_OPENAI_BASE_URL", ""))
 
     def _responses_headers(self) -> dict[str, str]:
         key = (os.getenv("AZURE_OPENAI_API_KEY") or "").strip()

@@ -66,6 +66,15 @@ class TestLangChainAdapter:
         model = create_langchain_model(config)
         assert not str(model.openai_api_base).endswith("//")
 
+    def test_base_url_with_responses_query_normalized(self):
+        """Full responses endpoint URL is normalized for LangChain base_url."""
+        config = LLMConfig(
+            base_url="https://example.openai.azure.com/openai/v1/responses?api-version=preview",
+            api_key="test-key",
+        )
+        model = create_langchain_model(config)
+        assert str(model.openai_api_base) == "https://example.openai.azure.com/openai/v1"
+
     def test_reasoning_uses_reasoning_effort(self):
         """Reasoning config is sent via reasoning_effort."""
         config = LLMConfig(
