@@ -30,7 +30,7 @@ def _fetch_agent_card(container_name: str, port: int) -> dict | None:
     """Fetch /.well-known/agent.json from the running container."""
     script = (
         "import httpx, sys; "
-        f"r = httpx.get('http://localhost:{port}/.well-known/agent.json', timeout=10); "
+        f"r = httpx.get('http://{container_name}:{port}/.well-known/agent.json', timeout=10); "
         "r.raise_for_status(); "
         "print(r.text)"
     )

@@ -48,6 +48,47 @@ class TestSaveRegistry:
         assert json.loads(path.read_text()) == {"agents": []}
 
 
+class TestFetchAgentCard:
+    def test_uses_container_hostname_in_request(self):
+        """_fetch_agent_card should use the container name (not localhost) as hostname."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = '{"name": "my_agent", "version": "1.0.0"}'
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            _register_agent._fetch_agent_card("progenitor-agent-my_agent", 8100)
+        call_args = mock_run.call_args[0][0]
+        # The python -c script should reference the container hostname, not localhost
+        script_arg = call_args[-1]
+        assert "progenitor-agent-my_agent:8100" in script_arg
+        assert "localhost" not in script_arg
+
+    def test_returns_none_on_nonzero_exit(self):
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "error"
+        mock_result.stdout = ""
+        with patch("subprocess.run", return_value=mock_result):
+            result = _register_agent._fetch_agent_card("progenitor-agent-my_agent", 8100)
+        assert result is None
+
+    def test_returns_none_on_invalid_json(self):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "not-json"
+        with patch("subprocess.run", return_value=mock_result):
+            result = _register_agent._fetch_agent_card("progenitor-agent-my_agent", 8100)
+        assert result is None
+
+    def test_returns_parsed_card(self):
+        card = {"name": "my_agent", "version": "1.0.0", "skills": [{"id": "foo"}]}
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(card)
+        with patch("subprocess.run", return_value=mock_result):
+            result = _register_agent._fetch_agent_card("progenitor-agent-my_agent", 8100)
+        assert result == card
+
+
 class TestBuildEntry:
     def test_uses_defaults_when_card_is_none(self):
         entry = _register_agent._build_entry("my_agent", 8100, None, None)
