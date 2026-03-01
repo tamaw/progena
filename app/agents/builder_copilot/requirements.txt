@@ -1,0 +1,4 @@
+# Builder Copilot dependencies
+
+# A2A protocol server
+a2a-sdk[http-server]>=0.3.24
