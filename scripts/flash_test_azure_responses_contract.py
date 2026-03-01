@@ -13,6 +13,7 @@ import json
 import os
 import sys
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -51,6 +52,14 @@ def _build_payload(model: str, prompt: str, include_reasoning: bool) -> dict[str
     return payload
 
 
+def _build_responses_endpoint(base_url: str) -> str:
+    raw = (base_url or "").strip()
+    parsed = urlsplit(raw)
+    path = (parsed.path or "").rstrip("/")
+    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
+    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Azure Responses API smoke test")
     parser.add_argument("--model", default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"))
@@ -76,7 +85,7 @@ def main() -> int:
         print("Missing AZURE_OPENAI_BASE_URL or AZURE_OPENAI_API_KEY", file=sys.stderr)
         return 2
 
-    endpoint = f"{base_url}/responses"
+    endpoint = _build_responses_endpoint(base_url)
     headers = {
         "Content-Type": "application/json",
         "api-key": api_key,
