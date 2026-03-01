@@ -246,11 +246,11 @@ class ObserveAgent:
     # /responses (tool loop)
     # -------------------------------------------------------------------------
     def _responses_endpoint(self) -> str:
-        base = os.getenv("PROGENITOR_AZURE_BASE_URL", "").rstrip("/")
+        base = os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/")
         return f"{base}/responses"
 
     def _responses_headers(self) -> dict[str, str]:
-        key = (os.getenv("PROGENITOR_AZURE_API_KEY") or "").strip()
+        key = (os.getenv("AZURE_OPENAI_API_KEY") or "").strip()
         return {"Content-Type": "application/json", "api-key": key}
 
     def _build_graph(self):

@@ -70,10 +70,10 @@ def main() -> int:
         print("DRY_RUN_OK")
         return 0
 
-    base_url = os.getenv("PROGENITOR_AZURE_BASE_URL", "").rstrip("/")
-    api_key = os.getenv("PROGENITOR_AZURE_API_KEY", "")
+    base_url = os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
     if not base_url or not api_key:
-        print("Missing PROGENITOR_AZURE_BASE_URL or PROGENITOR_AZURE_API_KEY", file=sys.stderr)
+        print("Missing AZURE_OPENAI_BASE_URL or AZURE_OPENAI_API_KEY", file=sys.stderr)
         return 2
 
     endpoint = f"{base_url}/responses"

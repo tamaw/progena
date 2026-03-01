@@ -56,8 +56,8 @@ class LLMConfig:
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
         return cls(
-            base_url=os.getenv("PROGENITOR_AZURE_BASE_URL", "").rstrip("/"),
-            api_key=os.getenv("PROGENITOR_AZURE_API_KEY"),
+            base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
@@ -369,7 +369,7 @@ class ProgenitorConfig:
 
         # Validate LLM configuration
         if not self.llm.base_url:
-            errors.append("PROGENITOR_AZURE_BASE_URL must be set")
+            errors.append("AZURE_OPENAI_BASE_URL must be set")
 
         # Validate storage paths are sensible
         for name, path in [

@@ -28,8 +28,8 @@ Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A a
 & .\.venv\Scripts\Activate.ps1
 
 # Set Azure Responses endpoint credentials
-export PROGENITOR_AZURE_BASE_URL=https://<resource>.openai.azure.com/openai/v1
-export PROGENITOR_AZURE_API_KEY=your_key_here
+export AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1
+export AZURE_OPENAI_API_KEY=your_key_here
 
 # Install dependencies
 pip install -r requirements.txt

@@ -87,8 +87,8 @@ class TestLLMConfig:
     def test_from_env(self):
         """Test loading LLM config from environment."""
         env = {
-            "PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1",
-            "PROGENITOR_AZURE_API_KEY": "sk-test-key",
+            "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
+            "AZURE_OPENAI_API_KEY": "sk-test-key",
             "PROGENITOR_MODEL_DEFAULT": "gpt-4o",
         }
         with patch.dict(os.environ, env, clear=False):
@@ -216,7 +216,7 @@ class TestProgenitorConfig:
     def test_load_from_env(self):
         """Test loading config from environment variables."""
         env = {
-            "PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1",
+            "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "PROGENITOR_TIMEZONE": "Asia/Tokyo",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "15",
             "PROGENITOR_COPILOT_MODEL": "gpt-5",
@@ -267,7 +267,7 @@ class TestGlobalConfig:
 
         with patch.dict(
             os.environ,
-            {"PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1"},
+            {"AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1"},
             clear=False,
         ):
             config1 = get_config()
@@ -282,7 +282,7 @@ class TestGlobalConfig:
 
         with patch.dict(
             os.environ,
-            {"PROGENITOR_AZURE_BASE_URL": "https://example.openai.azure.com/openai/v1"},
+            {"AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1"},
             clear=False,
         ):
             config1 = get_config()
