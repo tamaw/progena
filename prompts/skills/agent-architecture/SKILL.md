@@ -34,7 +34,7 @@ OBSERVE → THINK → PLAN → BUILD → MERGE → EXECUTE → VERIFY → LEARN
 - `current_state.json`: Conversation state (messages, tool calls)
 - `build_state.json`: Build backlog, work items, verification results
 - `schedule.json`: Scheduled tasks
-- `registry.json`: Agent/tool registry
+- `agents.json`: Agent registry (`data/config/agents.json`)
 
 All state writes are atomic: write to temp file → fsync → rename.
 

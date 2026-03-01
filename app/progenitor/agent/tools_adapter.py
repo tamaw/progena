@@ -24,7 +24,7 @@ def create_deepagent_tools(
     """Create DeepAgent-compatible tools (system tools + DeepAgent-only helpers)."""
     def _wrap_system_tool(system_tool: Any) -> StructuredTool:
         async def _run(request: str = "", tool_args: dict[str, Any] | None = None) -> dict[str, Any]:
-            # External deploy pipelines can update registry.json; reload best-effort so new
+            # External deploy pipelines can update agents.json; reload best-effort so new
             # agents/tools show up without requiring a restart.
             load_registry = getattr(tool_registry, "load", None) if tool_registry is not None else None
             if callable(load_registry):

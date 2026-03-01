@@ -1,7 +1,7 @@
 """
 Tool and Agent Registry for Progenitor.
 
-Maintains registry.json with agent manifests and MCP tools.
+Maintains agents.json with agent manifests and mcp.json with MCP tools.
 Provides capability discovery and lookup for routing decisions.
 Tracks runtime status of HTTP-based A2A agents.
 """
@@ -55,6 +55,7 @@ class ToolRegistry:
 
     def __init__(self, registry_path: Path | str, host: str = "localhost") -> None:
         self.registry_path: Path = Path(registry_path)
+        self.mcp_path: Path = self.registry_path.with_name("mcp.json")
         self.host = host  # Host for agent endpoints
         self._registry: RegistryData = {"agents": [], "tools": []}
 
@@ -63,25 +64,45 @@ class ToolRegistry:
         if self.registry_path.exists():
             try:
                 with open(self.registry_path) as f:
-                    self._registry = json.load(f)
-                logger.info(
-                    "Loaded registry with %d agents and %d tools",
-                    len(self._registry.get('agents', [])),
-                    len(self._registry.get('tools', []))
-                )
+                    loaded = json.load(f)
+                agents = loaded.get("agents", []) if isinstance(loaded, dict) else []
+                self._registry = {
+                    "agents": agents if isinstance(agents, list) else [],
+                    "tools": [],
+                }
             except (OSError, json.JSONDecodeError) as e:
                 logger.error("Failed to load registry: %s. Starting fresh.", e)
                 self._registry = {"agents": [], "tools": []}
         else:
             logger.info("No existing registry found, creating new one")
-            await self.save()
+
+        if self.mcp_path.exists():
+            try:
+                with open(self.mcp_path) as f:
+                    mcp_data = json.load(f)
+                tools = mcp_data.get("tools", []) if isinstance(mcp_data, dict) else []
+                self._registry["tools"] = tools if isinstance(tools, list) else []
+            except (OSError, json.JSONDecodeError) as e:
+                logger.error("Failed to load MCP state: %s. Starting with no MCP tools.", e)
+                self._registry["tools"] = []
+        else:
+            self._registry["tools"] = []
+
+        logger.info(
+            "Loaded registry with %d agents and %d tools",
+            len(self._registry.get('agents', [])),
+            len(self._registry.get('tools', [])),
+        )
+        await self.save()
 
     async def save(self) -> None:
         """Save registry to disk."""
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.registry_path, 'w') as f:
-            json.dump(self._registry, f, indent=2, default=str)
-        logger.info("Saved registry to %s", self.registry_path)
+            json.dump({"agents": self._registry.get("agents", [])}, f, indent=2, default=str)
+        with open(self.mcp_path, 'w') as f:
+            json.dump({"tools": self._registry.get("tools", [])}, f, indent=2, default=str)
+        logger.info("Saved registry to %s and MCP state to %s", self.registry_path, self.mcp_path)
 
     async def clear_agents(self) -> None:
         """Clear all registered agents from the registry."""
@@ -103,7 +124,7 @@ class ToolRegistry:
     def get_local_mcp_tools(self) -> list[dict[str, Any]]:
         """Discover local FastMCP tools under app/mcp/.
 
-        These are HTTP MCP tools that may not be registered in registry.json.
+        These are HTTP MCP tools that may not be registered in agents/mcp state.
         """
         tools_dir = Path(__file__).resolve().parents[3] / "app" / "mcp"
         if not tools_dir.exists():
@@ -447,7 +468,7 @@ class ToolRegistry:
         """Best-effort refresh agent metadata from their agent cards.
 
         Updates registry entries in-place (description/version/capabilities) and persists
-        to registry.json if anything changed.
+        to agents.json if anything changed.
         """
         agents = self._registry.get("agents", [])
         if not agents:
@@ -514,7 +535,7 @@ class RegistryTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Show registry.json summary (agents, tools, capabilities)"
+        return "Show agents.json summary (agents, tools, capabilities)"
 
     @property
     def keywords(self) -> list[str]:

@@ -42,6 +42,7 @@ class Progenitor:
 
         # Use paths from configuration
         self.state_dir = self.config.storage.state_dir
+        self.config_dir = self.state_dir.parent / "config"
         self.logs_dir = self.config.storage.log_dir
 
         self.state_manager = StateManager(
@@ -50,7 +51,7 @@ class Progenitor:
             lock_timeout=self.config.storage.state_lock_timeout_seconds,
         )
         self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
-        self.tool_registry = ToolRegistry(self.state_dir / "registry.json")
+        self.tool_registry = ToolRegistry(self.config_dir / "agents.json")
         self.graph: Any = None
         self.loop_runner: Any = None
         self._background_tasks: list[asyncio.Task] = []
@@ -59,7 +60,7 @@ class Progenitor:
     async def initialize(self) -> None:
         """Initialize all components."""
         # Ensure directories exist
-        for dir_path in [self.state_dir, self.logs_dir]:
+        for dir_path in [self.state_dir, self.config_dir, self.logs_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
         # Log resolved configuration (with secrets redacted) per SPEC

@@ -38,7 +38,9 @@ def client():
 def mock_state_files(tmp_path):
     """Create mock state files that simulate a running progenitor."""
     state_dir = tmp_path / "state"
+    config_dir = tmp_path / "config"
     state_dir.mkdir()
+    config_dir.mkdir()
 
     # Health file - agent is running
     health_data = {
@@ -51,7 +53,7 @@ def mock_state_files(tmp_path):
     (state_dir / "health.json").write_text(json.dumps(health_data))
 
     # Registry with agents
-    registry_data = {
+    agents_data = {
         "agents": [
             {
                 "name": "galactic-translator",
@@ -79,12 +81,15 @@ def mock_state_files(tmp_path):
                 "updated_at": "2024-01-01T00:00:00Z",
                 "status": "busy",
             },
-        ],
+        ]
+    }
+    mcp_data = {
         "tools": [
             {"name": "universal_decoder", "description": "Decodes alien signals", "enabled": True},
-        ],
+        ]
     }
-    (state_dir / "registry.json").write_text(json.dumps(registry_data))
+    (config_dir / "agents.json").write_text(json.dumps(agents_data))
+    (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
 
     # Build state - in progress
     build_state = {
@@ -229,7 +234,7 @@ class TestAgentFeedbackVisibility:
         initial_status = {a.name: a.status for a in agents}
 
         # Update registry to simulate agent status change
-        registry_file = mock_state_files / "registry.json"
+        registry_file = mock_state_files.parent / "config" / "agents.json"
         registry = json.loads(registry_file.read_text())
         registry["agents"][1]["status"] = "ready"  # tech-analyzer becomes ready
         registry_file.write_text(json.dumps(registry))

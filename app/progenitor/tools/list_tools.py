@@ -44,7 +44,7 @@ class ListToolsTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         from ..nodes.node_helpers.registry import get_all_system_tools
 
-        # Best-effort refresh: registry.json, agent cards, and MCP tools can all
+        # Best-effort refresh: agents.json, agent cards, and MCP tools can all
         # change during process uptime.
         if hasattr(context.tool_registry, "load"):
             with suppress(Exception):
@@ -96,7 +96,7 @@ class ListToolsTool(BaseSystemTool):
             local_mcp_tools = context.tool_registry.get_local_mcp_tools()
 
         # Include in-memory discovered MCP tools even if they haven't been
-        # persisted to registry.json yet (e.g. in-process service path).
+        # persisted to agents.json yet (e.g. in-process service path).
         discovered_mcp_tools: list[dict] = []
         if getattr(context, "llm_client", None) is not None and hasattr(context.llm_client, "get_mcp_tool_registry_entries"):
             try:

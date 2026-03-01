@@ -115,10 +115,10 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 ### State Files
 
 - `data/state/current_state.json` - Conversation state (messages, tool calls)
-- `data/state/registry.json` - Agent registry
-- `data/state/mcp.json` - MCP tool registry
 - `data/state/schedule.json` - Scheduled tasks
 - `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
+- `data/config/agents.json` - Agent registry
+- `data/config/mcp.json` - MCP tool registry
 
 ### Log Files
 
@@ -213,7 +213,7 @@ mypy app/
 
 1. Create an agent in `app/agents/<agent_name>/`
 2. Or create an MCP server in `app/mcp/`
-3. Register in `data/state/registry.json`
+3. Register in `data/config/agents.json`
 
 Or ask Progenitor to build it for you — it will delegate to the Builder Agent automatically.
 

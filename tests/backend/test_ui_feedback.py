@@ -445,8 +445,8 @@ class TestStateReaderFileOperations:
         assert health.pid == 9999
 
     def test_read_registry_file(self, temp_state_dir):
-        """Test reading registry.json with agents and tools."""
-        registry_data = {
+        """Test reading agents.json and mcp.json with agents and tools."""
+        agents_data = {
             "agents": [
                 {
                     "name": "agent-1",
@@ -461,16 +461,21 @@ class TestStateReaderFileOperations:
                     "updated_at": "2024-01-01T00:00:00Z",
                     "status": "ready",
                 }
-            ],
+            ]
+        }
+        mcp_data = {
             "tools": [
                 {
                     "name": "tool-1",
                     "description": "A tool",
                     "enabled": True,
                 }
-            ],
+            ]
         }
-        (temp_state_dir / "registry.json").write_text(json.dumps(registry_data))
+        config_dir = temp_state_dir.parent / "config"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "agents.json").write_text(json.dumps(agents_data))
+        (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
 
         reader = StateReader(state_dir=temp_state_dir)
         agents, tools = reader.get_registry()

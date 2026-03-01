@@ -255,7 +255,8 @@ print(response.output_text)
 
 * `data/state/build_state.json` (backlog, messages, ideal_state, verification)
 * `data/state/current_state.json` (user session: messages, tool calls, attachments)
-* `data/state/registry.json` (agents + MCP tools)
+* `data/config/agents.json` (agents)
+* `data/config/mcp.json` (MCP tools)
 * `data/state/schedule.json` (system feature: scheduled tasks, persists beyond sessions)
 * `logs/conversation.jsonl`
 * `logs/decisions.jsonl`
@@ -386,7 +387,7 @@ Progenitor is the **front door**. It can A2A-call any agent it has created.
 
 ### Registry and Discovery
 
-* Maintain `data/state/registry.json` with agent manifests: name, endpoint/entrypoint, version, and **capability tags**.
+* Maintain `data/config/agents.json` with agent manifests: name, endpoint/entrypoint, version, and **capability tags**.
 * On each request, Progenitor tries to **discover** a matching capability first.
 * If a capability is missing, Progenitor creates a backlog item to **build or upgrade** an agent.
 
@@ -404,7 +405,7 @@ MCP servers are first-class tools that Progenitor can **build, register, and cal
 
 ### Registry
 
-* MCP tools live in the same registry as A2A agents (typed by kind)
+* MCP tools are stored in `data/config/mcp.json`
 * Each entry includes: name, transport (stdio/http), command or endpoint, capability tags
 
 ### Build / Upgrade
@@ -503,8 +504,12 @@ Keep it boring. Boring survives.
 * `data/state/` (mounted volume)
 
   * `build_state.json`
-  * `registry.json`
+  * `current_state.json`
   * `schedule.json`
+* `data/config/` (mounted volume)
+
+  * `agents.json`
+  * `mcp.json`
 * `logs/` (mounted volume)
 
   * `conversation.jsonl`
@@ -548,7 +553,7 @@ This is the baseline instruction set Progenitor must load on startup (versioned 
 **Build discipline (Copilot CLI)**
 
 * When building/upgrading agents or MCP servers, keep diffs minimal, update tests if behaviour changes, and log the diff ref.
-* Register new/updated capabilities in `data/state/registry.json` immediately after validation.
+* Register new/updated capabilities in `data/config/agents.json` immediately after validation.
 
 **Persistence and locking**
 
