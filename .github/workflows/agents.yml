@@ -313,6 +313,14 @@ jobs:
           docker logs progenitor-agent-${{ matrix.agent }} --tail 50
           exit 1
 
+      - name: Register agent in progenitor registry
+        if: success()
+        env:
+          AGENT_NAME: ${{ matrix.agent }}
+          PORT: ${{ steps.runtime.outputs.port }}
+          REGISTRY_FILE: /var/lib/progenitor/data/config/agents.json
+        run: python .github/scripts/register_agent.py
+
       - name: Cleanup unused managed images
         if: success()
         run: |
