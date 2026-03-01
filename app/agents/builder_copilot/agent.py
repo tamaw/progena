@@ -11,12 +11,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.apps import A2AFastAPIApplication
-from a2a.server.events import EventQueue
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import (
+from a2a.server.agent_execution import (  # pyright: ignore[reportMissingImports]
+    AgentExecutor,
+    RequestContext,
+)
+from a2a.server.apps import A2AFastAPIApplication  # pyright: ignore[reportMissingImports]
+from a2a.server.events import EventQueue  # pyright: ignore[reportMissingImports]
+from a2a.server.request_handlers import (
+    DefaultRequestHandler,  # pyright: ignore[reportMissingImports]
+)
+from a2a.server.tasks import InMemoryTaskStore  # pyright: ignore[reportMissingImports]
+from a2a.types import (  # pyright: ignore[reportMissingImports]
     AgentCapabilities,
     AgentCard,
     AgentSkill,
