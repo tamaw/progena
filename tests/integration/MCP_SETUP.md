@@ -15,10 +15,9 @@ Azure Responses/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py", l
 
 ## Root Cause
 
-In `docker/docker-compose.Azure Responses.yml`, these environment variables are set to empty strings:
+In `docker/docker-compose.Azure Responses.yml`, `JINA_API_KEY` is set to an empty string:
 
 ```yaml
-PROGENITOR_AZURE_MASTER_KEY: ""
 JINA_API_KEY: ""
 ```
 
@@ -46,19 +45,15 @@ But the `JINA_API_KEY` environment variable is empty.
    ```yaml
    JINA_API_KEY: "your-api-key-here"
    ```
-3. **Set a Azure Responses master key for API authentication:**
-   ```yaml
-   PROGENITOR_AZURE_MASTER_KEY: "sk-your-master-key-here"
+3. **Set Progenitor MCP auth key (reuse Azure OpenAI key):**
+   ```bash
+   $env:PROGENITOR_MCP_API_KEY = $env:AZURE_OPENAI_API_KEY
    ```
 4. **Restart Azure Responses:**
    ```bash
   docker compose -f docker/docker-compose.Azure Responses.yml restart Azure Responses
    ```
-5. **Update Progenitor config:**
-   ```bash
-   $env:PROGENITOR_MCP_API_KEY = "sk-your-master-key-here"
-   ```
-6. **Re-run the integration tests**
+5. **Re-run the integration tests**
 
 ## Testing MCP Manually
 
@@ -67,7 +62,7 @@ Once configured, test the MCP endpoint:
 ```powershell
 $headers = @{
     "Content-Type" = "application/json"
-    "Authorization" = "Bearer sk-your-master-key-here"
+    "Authorization" = "Bearer $env:PROGENITOR_MCP_API_KEY"
 }
 
 $body = @{

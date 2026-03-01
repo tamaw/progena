@@ -46,7 +46,6 @@ Just tell me how you'd like to proceed.
 
 1. **Missing Authentication**
    - Azure Responses's MCP endpoint (`http://localhost:4000/mcp/`) requires authentication
-   - `PROGENITOR_AZURE_MASTER_KEY` is set to empty string in `docker/docker-compose.Azure Responses.yml`
    - `JINA_API_KEY` is set to empty string in `docker/docker-compose.Azure Responses.yml`
 
 2. **Configuration Issue**
@@ -92,15 +91,14 @@ See [`MCP_SETUP.md`](./MCP_SETUP.md) for detailed instructions.
 2. Edit `docker/docker-compose.Azure Responses.yml`:
    ```yaml
    JINA_API_KEY: "your-jina-key-here"
-   PROGENITOR_AZURE_MASTER_KEY: "sk-your-master-key-here"
    ```
-3. Restart Azure Responses:
+3. Set Progenitor MCP auth key (reuse Azure OpenAI key):
+   ```powershell
+   $env:PROGENITOR_MCP_API_KEY = $env:AZURE_OPENAI_API_KEY
+   ```
+4. Restart Azure Responses:
    ```bash
    docker compose -f docker/docker-compose.Azure Responses.yml restart Azure Responses
-   ```
-4. Set Progenitor env var:
-   ```powershell
-   $env:PROGENITOR_MCP_API_KEY = "sk-your-master-key-here"
    ```
 5. Re-run the test
 
