@@ -8,7 +8,7 @@ Progenitor's superior inner build loop, scheduling, and A2A protocol.
 
 Modules:
     deep_agent: Main factory — create_progenitor_agent()
-    langchain_adapter: ChatOpenAI → LiteLLM proxy bridge
+    langchain_adapter: ChatOpenAI adapter for configured endpoint
     tools_adapter: BaseSystemTool → DeepAgent tool wrappers
     backends: CompositeBackend (LocalShell + Store + State)
     middleware: SecretRedaction, AuditLogging, Metrics

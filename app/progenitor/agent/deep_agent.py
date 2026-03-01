@@ -2,7 +2,7 @@
 DeepAgent factory for Progenitor.
 
 Creates a configured DeepAgent instance that serves as the conversational
-layer, using Progenitor's LiteLLM proxy for model calls and wrapping
+layer, using Progenitor's Azure endpoint for model calls and wrapping
 Progenitor's custom tools.
 
 Phase 1: Basic agent with LangChain model adapter.
@@ -93,7 +93,7 @@ def create_progenitor_agent(
     if config is None:
         config = get_config(validate=False)
 
-    # Create LangChain model routed through LiteLLM
+    # Create LangChain model routed through Azure endpoint
     model = create_langchain_model(config.llm)
 
     # Default to SQLite checkpointer for persistence; fall back to MemorySaver

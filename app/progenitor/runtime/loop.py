@@ -24,7 +24,8 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ..state.models import redact_secrets
-from .time_utils import utcnow_isoformat
+from .scheduler import Scheduler
+from .time_utils import utcnow, utcnow_isoformat
 
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
+SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -91,6 +93,7 @@ class ProgenitorLoop:
         # Captures the most recent pending_response emitted by the graph during a cycle.
         # Used for background job cycles where we don't stream to the client.
         self._last_cycle_response: str | None = None
+        self._last_reasoning_trace: str | None = None
 
         # Lock to prevent concurrent graph cycles
         self._graph_lock = asyncio.Lock()
@@ -139,16 +142,38 @@ class ProgenitorLoop:
         # Push startup event
         await self._push_event("loop_started", f"Perpetual loop started (run_id: {run_id})")
 
-        # Core-only: input handler only
+        # Core-only input handling plus scheduler dispatch loop.
         input_task = asyncio.create_task(self._input_handler_loop(run_id))
+        scheduler_task: asyncio.Task | None = None
+        if self._is_scheduler_enabled():
+            scheduler_task = asyncio.create_task(self._scheduler_loop())
+            logger.info("Scheduler loop started")
 
         try:
-            await input_task
+            if scheduler_task:
+                done, pending = await asyncio.wait(
+                    [input_task, scheduler_task],
+                    return_when=asyncio.FIRST_EXCEPTION,
+                )
+                for task in pending:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                for task in done:
+                    exc = task.exception()
+                    if exc:
+                        raise exc
+            else:
+                await input_task
         except asyncio.CancelledError:
             logger.info("Loop cancelled by signal")
             input_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await input_task
+            if scheduler_task:
+                scheduler_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await scheduler_task
 
         # Final checkpoint
         await self._checkpoint_state(self._state)
@@ -178,6 +203,12 @@ class ProgenitorLoop:
                     continue
 
                 logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
+                is_scheduled_input = user_input.startswith(SCHEDULED_INPUT_PREFIX)
+                scheduled_message = (
+                    user_input[len(SCHEDULED_INPUT_PREFIX):].strip()
+                    if is_scheduled_input
+                    else ""
+                )
 
                 # Acquire lock to run graph cycle
                 async with self._graph_lock:
@@ -216,6 +247,28 @@ class ProgenitorLoop:
                         await self._checkpoint_state(self._state)
                         await self._update_health_file(self._state, status="error", error=safe_error)
                     finally:
+                        # Background scheduled work is processed through the same input
+                        # path as user messages, so emit an explicit completion event here.
+                        if is_scheduled_input:
+                            response_text = str(self._state.get("last_cycle_response") or "").strip()
+                            result_status = "completed" if response_text else "completed_no_response"
+                            await self._push_event(
+                                "scheduled_response",
+                                response_text or "(no response)",
+                                {
+                                    "schedule_message": scheduled_message or None,
+                                    "status": result_status,
+                                },
+                            )
+                            await self._push_event(
+                                "work_completed",
+                                f"Completed scheduled work: {scheduled_message or 'Scheduled task'}",
+                                {
+                                    "work_type": "scheduled",
+                                    "status": result_status,
+                                },
+                            )
+
                         # Disable streaming mode
                         self._streaming_enabled = False
                         self._response_was_streamed = False
@@ -233,6 +286,77 @@ class ProgenitorLoop:
                 logger.error("Input handler error: %s", e, exc_info=True)
                 await self._push_event("error", f"Input handler error: {e}")
                 await asyncio.sleep(1.0)
+
+    def _is_scheduler_enabled(self) -> bool:
+        scheduler_cfg = getattr(self.config, "scheduler", None)
+        if scheduler_cfg is not None and hasattr(scheduler_cfg, "enabled"):
+            return bool(scheduler_cfg.enabled)
+        return False
+
+    def _scheduler_poll_seconds(self) -> float:
+        scheduler_cfg = getattr(self.config, "scheduler", None)
+        if scheduler_cfg is not None and hasattr(scheduler_cfg, "poll_seconds"):
+            try:
+                return max(1.0, float(scheduler_cfg.poll_seconds))
+            except (TypeError, ValueError):
+                return 30.0
+        return 30.0
+
+    async def _check_and_enqueue_scheduled_work(self, scheduler: Scheduler) -> bool:
+        schedule_entries = await self.state_manager.get_schedule()
+        schedule_dicts: list[dict[str, Any]] = [
+            entry.model_dump() if hasattr(entry, "model_dump") else entry
+            for entry in schedule_entries
+        ]
+        due_items = scheduler.get_due_items(schedule_dicts, current_time=utcnow())
+        if not due_items:
+            return False
+
+        entry = due_items[0]
+        schedule_id = str(entry.get("id") or "")
+        if not schedule_id:
+            return False
+        message = str(entry.get("message") or "").strip()
+        if not message:
+            return False
+
+        queued = await self.enqueue_input(
+            f"{SCHEDULED_INPUT_PREFIX}{message}",
+            timeout=0.5,
+        )
+        if not queued:
+            return False
+
+        now = utcnow()
+        cron_expression = str(entry.get("cron_expression") or "")
+        is_one_shot = scheduler.is_one_shot_expression(cron_expression)
+        if is_one_shot:
+            await self.state_manager.remove_schedule_entry(schedule_id)
+        else:
+            await self.state_manager.update_schedule_entry(
+                schedule_id,
+                {"last_run": now.isoformat()},
+            )
+
+        await self._push_event(
+            "scheduled_task_triggered",
+            f"Scheduled task triggered: {entry.get('message') or schedule_id}",
+            {"schedule_id": schedule_id, "one_shot": is_one_shot},
+        )
+        return True
+
+    async def _scheduler_loop(self) -> None:
+        scheduler = Scheduler(timezone=getattr(self.config.runtime, "timezone", "UTC"))
+        poll_seconds = self._scheduler_poll_seconds()
+        while self.running:
+            try:
+                await self._check_and_enqueue_scheduled_work(scheduler)
+                await asyncio.sleep(poll_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Scheduler loop error: %s", e, exc_info=True)
+                await asyncio.sleep(poll_seconds)
 
     async def _run_graph_cycle(self, _run_id: str, source: str = "unknown") -> None:
         """Run a single graph cycle.
@@ -300,18 +424,29 @@ class ProgenitorLoop:
 
             # Ensure streaming clients never hang waiting for an is_final marker.
             # Extract the last AI message from messages if nothing was streamed yet.
+            last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
             if self._streaming_enabled and not self._stream_final_sent:
-                messages = self._state.get("messages")
-                if messages and isinstance(messages, list):
-                    last_msg = messages[-1]
-                    content = getattr(last_msg, "content", None)
-                    if content and isinstance(content, str):
-                        logger.info("Extracting AI response from messages (%d chars)", len(content))
-                        await self._stream_response(content)
-                        self._stream_final_sent = True
+                response_text = self._extract_message_text(last_ai_msg)
+                if response_text:
+                    logger.info("Extracting AI response from messages (%d chars)", len(response_text))
+                    await self._stream_response(response_text)
+                    self._last_cycle_response = response_text
+                    self._state["last_cycle_response"] = response_text
+                    self._stream_final_sent = True
                 if not self._stream_final_sent:
                     await self.stream_final()
                     self._stream_final_sent = True
+
+            reasoning_trace = self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+            self._last_reasoning_trace = reasoning_trace
+            self._state["last_reasoning_trace"] = reasoning_trace
+            if reasoning_trace:
+                logger.info("Extracted reasoning trace (%d chars)", len(reasoning_trace))
+            elif last_ai_msg is not None and self.config.llm.reasoning_enabled:
+                logger.info(
+                    "No reasoning trace found in assistant message schema: %s",
+                    json.dumps(self._summarize_message_schema(last_ai_msg), default=str),
+                )
 
             # If the run_id changed during this cycle (e.g. the LLM invoked the
             # new_conversation system tool), treat it as a hard context reset.
@@ -543,6 +678,7 @@ class ProgenitorLoop:
             "attachments": state.get("attachments", []),  # Attachment path links
             "current_input": state.get("current_input"),
             "pending_response": state.get("pending_response"),
+            "last_reasoning_trace": state.get("last_reasoning_trace"),
             "current_decision": self._serialize_decision(state.get("current_decision")),
         }
 
@@ -592,6 +728,131 @@ class ProgenitorLoop:
         elif isinstance(decision, dict):
             return decision
         return None
+
+    def _get_last_ai_message(self, messages: Any) -> Any | None:
+        """Get the last assistant/AI message from a messages collection."""
+        for msg in reversed(self._coerce_messages_list(messages)):
+            msg_type = str(getattr(msg, "type", "")).lower()
+            msg_role = str(getattr(msg, "role", "")).lower()
+            if msg_type == "ai" or msg_role == "assistant":
+                return msg
+            if isinstance(msg, dict):
+                role = str(msg.get("role", "")).lower()
+                mtype = str(msg.get("type", "")).lower()
+                if role == "assistant" or mtype == "ai":
+                    return msg
+        return None
+
+    def _extract_reasoning_trace(self, msg: Any) -> str | None:
+        """Extract provider reasoning/thinking metadata from a message."""
+        if msg is None:
+            return None
+
+        def _coerce(value: Any) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                stripped = value.strip()
+                return stripped or None
+            try:
+                text = json.dumps(value, default=str).strip()
+            except Exception:
+                text = str(value).strip()
+            return text or None
+
+        containers: list[dict[str, Any]] = []
+        if isinstance(msg, dict):
+            containers.append(msg)
+        else:
+            for attr in ("additional_kwargs", "response_metadata"):
+                value = getattr(msg, attr, None)
+                if isinstance(value, dict):
+                    containers.append(value)
+
+        for container in containers:
+            for key in ("reasoning", "thinking"):
+                if key in container and (text := _coerce(container.get(key))):
+                    return text
+            # Some providers surface reasoning summary fields directly.
+            if "summary" in container or "effort" in container:
+                summary_obj = {
+                    "effort": container.get("effort"),
+                    "summary": container.get("summary"),
+                }
+                if text := _coerce(summary_obj):
+                    return text
+
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "")).lower()
+                if part_type in {"reasoning", "reasoning_text", "reasoning_summary", "thinking"}:
+                    candidate = part.get("text") or part.get("summary") or part.get("content")
+                    if text := _coerce(candidate):
+                        parts.append(text)
+            if parts:
+                return "\n".join(parts)
+
+        return None
+
+    def _extract_message_text(self, msg: Any) -> str | None:
+        """Extract assistant-facing text from message content payloads."""
+        if msg is None:
+            return None
+
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, str):
+            text = content.strip()
+            return text or None
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text = part.strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "")).lower()
+                if part_type in {"text", "output_text", "message"}:
+                    candidate = part.get("text") or part.get("content")
+                    if isinstance(candidate, str) and candidate.strip():
+                        parts.append(candidate.strip())
+            if parts:
+                return "\n".join(parts)
+
+        return None
+
+    def _summarize_message_schema(self, msg: Any) -> dict[str, Any]:
+        """Return a compact schema summary for assistant messages."""
+        if isinstance(msg, dict):
+            additional = msg.get("additional_kwargs")
+            metadata = msg.get("response_metadata")
+            content = msg.get("content")
+            return {
+                "type": msg.get("type"),
+                "role": msg.get("role"),
+                "keys": sorted(msg.keys()),
+                "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
+                "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
+                "content_type": type(content).__name__,
+            }
+
+        additional = getattr(msg, "additional_kwargs", None)
+        metadata = getattr(msg, "response_metadata", None)
+        content = getattr(msg, "content", None)
+        return {
+            "type": getattr(msg, "type", None),
+            "role": getattr(msg, "role", None),
+            "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
+            "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
+            "content_type": type(content).__name__,
+        }
 
     async def enqueue_input(self, message: str, timeout: float | None = 30.0) -> bool:
         """Add a message to the input queue.

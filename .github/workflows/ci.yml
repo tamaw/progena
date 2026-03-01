@@ -139,7 +139,7 @@ jobs:
   build-and-push:
     runs-on: self-hosted
     needs: [backend, progenitor, frontend]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -201,7 +201,7 @@ jobs:
     runs-on: self-hosted
     environment: cronix
     needs: [build-and-push]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -210,14 +210,13 @@ jobs:
 
       - name: Deploy progenitor stack
         env:
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
-          PROGENITOR_MODEL_DEFAULT: ${{ secrets.PROGENITOR_MODEL_DEFAULT }}
-          PROGENITOR_TIMEZONE: ${{ secrets.PROGENITOR_TIMEZONE }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
+          PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
+          PROGENITOR_TIMEZONE: ${{ vars.PROGENITOR_TIMEZONE }}
           GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
-          PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_RESPONSES_URL }}
-          PROGENITOR_AZURE_STRUCTURED_API_KEY: ${{ secrets.PROGENITOR_AZURE_STRUCTURED_API_KEY }}
-          PROGENITOR_AZURE_STRUCTURED_MODEL: ${{ vars.PROGENITOR_AZURE_STRUCTURED_MODEL }}
+          PROGENITOR_REASONING_ENABLED: ${{ vars.PROGENITOR_REASONING_ENABLED }}
+          PROGENITOR_REASONING_BUDGET_TOKENS: ${{ vars.PROGENITOR_REASONING_BUDGET_TOKENS }}
           TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
           TELEGRAM_POLLING_ENABLED: ${{ vars.TELEGRAM_POLLING_ENABLED }}
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
@@ -232,16 +231,32 @@ jobs:
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
           docker rm -f progenitor progenitor-backend 2>/dev/null || true
-          mkdir -p \
-            "${PROGENITOR_HOST_DATA_DIR}" \
-            "${PROGENITOR_HOST_LOGS_DIR}" \
-            "${PROGENITOR_HOST_WORKTREES_DIR}" \
-            "${PROGENITOR_HOST_TMP_DIR}" \
-            "${PROGENITOR_HOST_PROMPTS_DIR}"
           if command -v sudo >/dev/null 2>&1; then
+            sudo mkdir -p \
+              "${PROGENITOR_HOST_DATA_DIR}" \
+              "${PROGENITOR_HOST_LOGS_DIR}" \
+              "${PROGENITOR_HOST_WORKTREES_DIR}" \
+              "${PROGENITOR_HOST_TMP_DIR}" \
+              "${PROGENITOR_HOST_PROMPTS_DIR}"
             sudo chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
           else
+            mkdir -p \
+              "${PROGENITOR_HOST_DATA_DIR}" \
+              "${PROGENITOR_HOST_LOGS_DIR}" \
+              "${PROGENITOR_HOST_WORKTREES_DIR}" \
+              "${PROGENITOR_HOST_TMP_DIR}" \
+              "${PROGENITOR_HOST_PROMPTS_DIR}"
             chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
+          fi
+          # Keep prompt bind mount populated; empty host dir masks image prompts at /app/prompts.
+          if command -v sudo >/dev/null 2>&1; then
+            sudo rm -rf "${PROGENITOR_HOST_PROMPTS_DIR:?}/"*
+            sudo cp -a prompts/. "${PROGENITOR_HOST_PROMPTS_DIR}/"
+            sudo chown -R "$(id -u):$(id -g)" "${PROGENITOR_HOST_PROMPTS_DIR}" || true
+          else
+            rm -rf "${PROGENITOR_HOST_PROMPTS_DIR:?}/"*
+            cp -a prompts/. "${PROGENITOR_HOST_PROMPTS_DIR}/"
+            chown -R "$(id -u):$(id -g)" "${PROGENITOR_HOST_PROMPTS_DIR}" || true
           fi
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull

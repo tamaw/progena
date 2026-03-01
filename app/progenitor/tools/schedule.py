@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ..runtime.scheduler import Scheduler
+from ..runtime.time_utils import utcnow
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -37,12 +38,6 @@ class ScheduleRequest(BaseModel):
         default=None,
         description="Human-readable description of the scheduled task"
     )
-    recurring: bool = Field(
-        default=False,
-        description="Whether this is a recurring task"
-    )
-
-
 class ScheduleResult(BaseModel):
     """Result of a schedule operation."""
 
@@ -75,39 +70,48 @@ async def add_scheduled_task(
     # Parse the time expression
     parsed = scheduler.parse_time_expression(time_expression)
 
-    if not parsed or not parsed.get("cron_expression") or not parsed.get("next_run"):
+    if not parsed or not parsed.get("cron_expression"):
         return ScheduleResult(
             success=False,
             message=f"Could not parse time expression: {time_expression}",
         ), None
 
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
-    task_description = description or f"Scheduled: {user_request[:100]}"
+    task_message = instruction.strip()
+    if not task_message:
+        task_message = f"Scheduled: {user_request[:100]}"
+    if description:
+        task_message = f"{description.strip()} — {task_message}"
+    created_at = utcnow().isoformat()
+    next_run = scheduler.next_run_for_entry(
+        {
+            "cron_expression": parsed["cron_expression"],
+            "last_run": None,
+            "created_at": created_at,
+        }
+    )
 
     # Build the simplified schedule entry
     entry_data = {
         "id": schedule_id,
-        "description": task_description,
-        "instruction": instruction,
+        "message": task_message,
         "cron_expression": parsed["cron_expression"],
-        "next_run": parsed["next_run"],
-        "one_off": parsed.get("one_off", False),
-        "enabled": True,
+        "last_run": None,
+        "created_at": created_at,
     }
 
     logger.info(
-        "Created schedule entry %s: %s -> %s (%s)",
+        "Created schedule entry %s: %s (%s)",
         schedule_id,
-        task_description,
-        parsed["next_run"],
+        task_message,
         parsed["cron_expression"],
     )
 
     return ScheduleResult(
         success=True,
         schedule_id=schedule_id,
-        message=f"Scheduled task created: {task_description}",
-        next_run=parsed["next_run"],
+        message=f"Scheduled task created: {task_message}",
+        next_run=next_run.isoformat() if next_run else None,
     ), entry_data
 
 
@@ -136,31 +140,24 @@ async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str,
         List of schedule entries with status info
     """
     result = []
+    scheduler = Scheduler()
 
     for entry in schedule:
         entry_dict = entry if isinstance(entry, dict) else entry.model_dump()
 
-        # Determine status
-        if not entry_dict.get("enabled", True):
-            status = "disabled"
-        elif entry_dict.get("last_run") and entry_dict.get("one_off", False):
-            status = "completed"  # One-off that already ran
-        else:
-            status = "scheduled"
-
-        # Format next run info
-        next_run = entry_dict.get("next_run") or "Unknown"
+        status = "scheduled"
+        next_run_dt = scheduler.next_run_for_entry(entry_dict)
+        next_run = next_run_dt.isoformat() if next_run_dt else "Unknown"
         cron_expression = entry_dict.get("cron_expression")
 
         result.append({
             "id": entry_dict.get("id"),
-            "description": entry_dict.get("description"),
-            "instruction": entry_dict.get("instruction"),
+            "message": entry_dict.get("message"),
             "status": status,
             "next_run": str(next_run),
             "cron_expression": cron_expression,
             "last_run": entry_dict.get("last_run"),
-            "one_off": entry_dict.get("one_off", False),
+            "created_at": entry_dict.get("created_at"),
         })
 
     return result
@@ -233,10 +230,6 @@ Example: If user says "say hello world at 9am", create:
             "description": {
                 "type": "string",
                 "description": "Optional human-readable description",
-            },
-            "recurring": {
-                "type": "boolean",
-                "description": "Whether this is a recurring task (default: false)",
             },
         },
         "required": ["user_request", "time_expression", "instruction"],

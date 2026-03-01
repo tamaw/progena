@@ -153,7 +153,7 @@ class TestListToolsTool:
 
         mock_llm = MagicMock()
         mock_llm.get_mcp_tool_registry_entries.return_value = [
-            {"name": "litellm_tool", "description": "LiteLLM MCP tool"},
+            {"name": "remote_tool", "description": "Remote MCP tool"},
         ]
 
         ctx = ToolContext(
@@ -170,7 +170,7 @@ class TestListToolsTool:
         assert "mcp_tools" in result.data
 
         mcp_names = {t.get("name") for t in result.data["mcp_tools"]}
-        assert {"tool1", "tool2", "local_tool", "litellm_tool"} <= mcp_names
+        assert {"tool1", "tool2", "local_tool", "remote_tool"} <= mcp_names
 
         system_names = {t.get("name") for t in result.data["system_tools"]}
         assert len(system_names) > 0
@@ -321,11 +321,10 @@ class TestListAgentsTool:
         assert tool.name == "list_agents"
 
     @pytest.mark.asyncio
-    async def test_execute_syncs_litellm_before_listing(self, tool):
-        """list_agents should sync LiteLLM agents before returning output."""
+    async def test_execute_refreshes_cards_before_listing(self, tool):
+        """list_agents should refresh metadata before returning output."""
         mock_registry = MagicMock()
         mock_registry.load = AsyncMock()
-        mock_registry.sync_agents_from_litellm = AsyncMock()
         mock_registry.refresh_agent_cards = AsyncMock()
         mock_registry.get_agents.return_value = []
         ctx = ToolContext(tool_registry=mock_registry, llm_client=MagicMock())
@@ -333,7 +332,7 @@ class TestListAgentsTool:
         result = await tool.execute(ctx)
 
         assert result.success is True
-        mock_registry.sync_agents_from_litellm.assert_awaited_once()
+        mock_registry.load.assert_awaited_once()
         mock_registry.refresh_agent_cards.assert_awaited_once()
 
 

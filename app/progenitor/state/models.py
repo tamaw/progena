@@ -254,22 +254,13 @@ class Decision(BaseModel):
 
 
 class ScheduleEntry(BaseModel):
-    """A scheduled task entry.
-
-    Cron-based model:
-    - Recurring tasks: cron_expression defines cadence, next_run tracks due time
-    - One-off tasks: one_off=True, next_run is fixed, removed after execution
-    """
+    """A scheduled task entry."""
     model_config = {"use_enum_values": True}
 
     id: str
-    description: str
-    instruction: str  # What the agent should do at the scheduled time
+    message: str
     cron_expression: str
-    next_run: datetime
-    one_off: bool = False
     last_run: datetime | None = None  # When it last executed
-    enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -302,7 +293,6 @@ class AgentRegistryEntry(BaseModel):
     port: int | None = None  # Assigned HTTP port (e.g., 8100-8199)
     endpoint: str | None = None  # Base URL (e.g., http://localhost:8100)
     agent_card_url: str | None = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)
-    litellm_agent_id: str | None = None  # LiteLLM /v1/agents ID used for proxied A2A invocation
 
     # Runtime status (updated from process stdout/stderr)
     status: AgentStatus = AgentStatus.STOPPED
@@ -348,6 +338,7 @@ class ConversationState(TypedDict, total=False):
     current_input_role: str | None
     current_input_metadata: dict[str, Any] | None
     pending_response: str | None
+    last_reasoning_trace: str | None
     attachments: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
 

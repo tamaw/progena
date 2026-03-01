@@ -2,7 +2,7 @@
 Call Agent - Invoke an A2A agent by name or capability.
 
 This is intentionally a *generic dispatch* tool because the set of available
-agents can change during process uptime. It uses registry.json for lookup.
+agents can change during process uptime. It uses agents.json for lookup.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class CallAgentTool(BaseSystemTool):
         if not tool_registry:
             return ToolResult.fail("tool_registry unavailable")
 
-        # Refresh best-effort so registry.json edits show up immediately.
+        # Refresh best-effort so agents.json edits show up immediately.
         load = getattr(tool_registry, "load", None)
         if callable(load):
             with contextlib.suppress(Exception):
@@ -66,11 +66,23 @@ class CallAgentTool(BaseSystemTool):
         if not isinstance(cfg, dict):
             return ToolResult.fail(f"Unknown agent: {agent}")
 
-        result = await A2AClient().call_agent(
+        a2a_client = A2AClient()
+
+        # Pull latest agent card into memory before invocation.
+        with contextlib.suppress(Exception):
+            card = await a2a_client.get_agent_card(cfg, timeout=min(timeout_seconds, 5.0))
+            if isinstance(card, dict):
+                cfg = dict(cfg)
+                cfg["agent_card"] = card
+                if not cfg.get("endpoint"):
+                    endpoint = str(card.get("url") or "").strip()
+                    if endpoint:
+                        cfg["endpoint"] = endpoint
+
+        result = await a2a_client.call_agent(
             agent_config=cfg,
             request=request,
             context={"caller": "progenitor"},
             timeout=timeout_seconds,
         )
         return ToolResult.ok(result if isinstance(result, dict) else {"result": result})
-

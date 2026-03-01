@@ -16,7 +16,7 @@ NEVER use "unnamed" as the name - always derive from the description.
 - Keep diffs minimal
 - Update tests if behaviour changes
 - Follow Progenitor framework patterns
-- Make it registrable in registry.json
+- Make it registrable in agents.json
 
 ## Directory Structure for Agents (A2A)
 Agents MUST be created in a subdirectory under `app/agents/<agent_name>/`:

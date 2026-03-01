@@ -1,10 +1,7 @@
 ---
 name: self-improvement
-description: Self-reflection, learning from build iterations, extracting patterns, and continuous improvement of agent capabilities
-allowed-tools:
-  - read_file
-  - write_file
-  - shell
+description: Reflect on build iterations, extract reusable patterns, and improve agent behavior over time. Use when reviewing completed work, capturing lessons learned, or updating long-term agent capabilities.
+allowed-tools: read_file write_file shell
 ---
 
 # Self-Improvement Skill

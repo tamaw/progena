@@ -1,6 +1,6 @@
 ---
 name: agent-architecture
-description: Understanding and working with Progenitor's dual-loop architecture, state management, A2A protocol, and system design
+description: Understand Progenitor's dual-loop architecture, state management, A2A protocol, and core system design. Use when debugging agent behavior, extending the core runtime, or explaining how Progenitor works.
 ---
 
 # Agent Architecture Skill
@@ -34,7 +34,7 @@ OBSERVE → THINK → PLAN → BUILD → MERGE → EXECUTE → VERIFY → LEARN
 - `current_state.json`: Conversation state (messages, tool calls)
 - `build_state.json`: Build backlog, work items, verification results
 - `schedule.json`: Scheduled tasks
-- `registry.json`: Agent/tool registry
+- `agents.json`: Agent registry (`data/config/agents.json`)
 
 All state writes are atomic: write to temp file → fsync → rename.
 
@@ -58,6 +58,7 @@ Agents communicate via HTTP:
 ## Configuration
 Environment variables take precedence over JSON config:
 - `PROGENITOR_LLM_PROVIDER`: azure | openai
-- `LITELLM_BASE_URL`: LiteLLM proxy URL
+- `AZURE_OPENAI_BASE_URL`: Azure OpenAI base URL (without `/responses`)
+- `AZURE_OPENAI_API_KEY`: Azure OpenAI API key
 - `PROGENITOR_MODEL_DEFAULT`: Default model name
 - `PROGENITOR_MOCK_LLM`: Enable mock mode for testing

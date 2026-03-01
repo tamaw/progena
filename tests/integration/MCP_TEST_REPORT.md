@@ -45,12 +45,11 @@ Just tell me how you'd like to proceed.
 **MCP tools are not functional** because:
 
 1. **Missing Authentication**
-   - LiteLLM's MCP endpoint (`http://localhost:4000/mcp/`) requires authentication
-   - `LITELLM_MASTER_KEY` is set to empty string in `docker/docker-compose.litellm.yml`
-   - `JINA_API_KEY` is set to empty string in `docker/docker-compose.litellm.yml`
+   - Azure Responses's MCP endpoint (`http://localhost:4000/mcp/`) requires authentication
+   - `JINA_API_KEY` is set to empty string in `docker/docker-compose.Azure Responses.yml`
 
 2. **Configuration Issue**
-   - MCP is configured in `docker/litellm/litellm-config.yaml`:
+   - MCP is configured in `docker/Azure Responses/Azure Responses-config.yaml`:
      ```yaml
      mcp_servers:
        jina_mcp:
@@ -89,18 +88,17 @@ See [`MCP_SETUP.md`](./MCP_SETUP.md) for detailed instructions.
 **Quick summary:**
 
 1. Get a Jina API key from https://jina.ai/
-2. Edit `docker/docker-compose.litellm.yml`:
+2. Edit `docker/docker-compose.Azure Responses.yml`:
    ```yaml
    JINA_API_KEY: "your-jina-key-here"
-   LITELLM_MASTER_KEY: "sk-your-master-key-here"
    ```
-3. Restart LiteLLM:
-   ```bash
-   docker compose -f docker/docker-compose.litellm.yml restart litellm
-   ```
-4. Set Progenitor env var:
+3. Set Progenitor MCP auth key (reuse Azure OpenAI key):
    ```powershell
-   $env:PROGENITOR_MCP_API_KEY = "sk-your-master-key-here"
+   $env:PROGENITOR_MCP_API_KEY = $env:AZURE_OPENAI_API_KEY
+   ```
+4. Restart Azure Responses:
+   ```bash
+   docker compose -f docker/docker-compose.Azure Responses.yml restart Azure Responses
    ```
 5. Re-run the test
 
@@ -131,8 +129,9 @@ message = "Tell me the current BTC price using the BTC Price Agent"
 
 ## Conclusion
 
-The MCP integration test is **working as designed** - it correctly detects that MCP is not available and handles it gracefully. To actually test MCP tool usage, the LiteLLM configuration needs to be completed with valid API keys.
+The MCP integration test is **working as designed** - it correctly detects that MCP is not available and handles it gracefully. To actually test MCP tool usage, the Azure Responses configuration needs to be completed with valid API keys.
 
 **Test Status:** ✅ PASS
 **MCP Status:** ⚠️ NOT CONFIGURED
 **Action Required:** Configure API keys or skip MCP testing
+
