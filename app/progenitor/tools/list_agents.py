@@ -62,11 +62,11 @@ class ListAgentsTool(BaseSystemTool):
                 from .mcp import A2AClient
 
                 a2a_client = A2AClient()
-                await context.tool_registry.refresh_agent_cards(a2a_client, persist=False)
+                await context.tool_registry.refresh_agent_cards(a2a_client)
 
         if hasattr(context.tool_registry, "refresh_agent_health"):
             with suppress(Exception):
-                await context.tool_registry.refresh_agent_health(persist=False)
+                await context.tool_registry.refresh_agent_health()
 
         agents = context.tool_registry.get_agents()
 

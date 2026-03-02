@@ -330,14 +330,12 @@ class AgentDiscovery:
 
                 summary["agent_card_refresh"] = await self.registry.refresh_agent_cards(
                     A2AClient(),
-                    persist=False,
                 )
             except Exception as e:
                 summary["agent_card_refresh"] = {"error": str(e)}
             if hasattr(self.registry, "refresh_agent_health"):
                 try:
                     summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
-                        persist=False,
                     )
                 except Exception as e:
                     summary["agent_health_refresh"] = {"error": str(e)}
@@ -409,7 +407,6 @@ class AgentDiscovery:
 
                 card_refresh = await self.registry.refresh_agent_cards(
                     A2AClient(),
-                    persist=False,
                 )
             except Exception as e:
                 card_refresh = {"error": str(e)}
@@ -419,7 +416,6 @@ class AgentDiscovery:
         if hasattr(self.registry, "refresh_agent_health"):
             try:
                 summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
-                    persist=False,
                 )
             except Exception as e:
                 summary["agent_health_refresh"] = {"error": str(e)}
