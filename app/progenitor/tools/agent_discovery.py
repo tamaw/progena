@@ -295,7 +295,7 @@ class AgentDiscovery:
 
         return AgentDiscoveryResult(agents=agents)
 
-    async def discover_and_register(self, clear_existing: bool = True) -> dict[str, Any]:
+    async def discover_and_register(self, clear_existing: bool = False) -> dict[str, Any]:
         """
         Main entry point: scan, analyze, and register all agents.
 
@@ -397,13 +397,13 @@ class AgentDiscovery:
 
         # Allocate port for HTTP agents
         port = None
-        endpoint = None
+        url = None
         agent_card_url = None
 
         if spec.transport == "http":
             port = self.registry.allocate_port()
-            endpoint = f"http://{self.host}:{port}"
-            agent_card_url = f"{endpoint}/.well-known/agent.json"
+            url = f"http://{self.host}:{port}"
+            agent_card_url = f"{url}/.well-known/agent.json"
 
         entry = AgentRegistryEntry(
             name=spec.name,
@@ -414,7 +414,7 @@ class AgentDiscovery:
             entrypoint=entrypoint,
             transport=spec.transport,
             port=port,
-            endpoint=endpoint,
+            url=url,
             agent_card_url=agent_card_url,
             status=AgentStatus.STOPPED,
         )
@@ -427,6 +427,8 @@ async def discover_agents(
     llm_client: "LLMClient",
     registry: "ToolRegistry",
     host: str = "localhost",
+    *,
+    clear_existing: bool = False,
 ) -> dict[str, Any]:
     """
     Convenience function to run agent discovery.
@@ -446,4 +448,4 @@ async def discover_agents(
         registry=registry,
         host=host,
     )
-    return await discovery.discover_and_register()
+    return await discovery.discover_and_register(clear_existing=clear_existing)

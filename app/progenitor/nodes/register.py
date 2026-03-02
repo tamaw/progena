@@ -95,7 +95,7 @@ def create_node(
             entrypoint=entrypoint,
             transport="http",
             port=port,
-            endpoint=f"http://localhost:{port}",
+            url=f"http://localhost:{port}",
             agent_card_url=f"http://localhost:{port}/.well-known/agent.json",
         )
 

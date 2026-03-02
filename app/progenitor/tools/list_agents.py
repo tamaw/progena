@@ -72,7 +72,7 @@ class ListAgentsTool(BaseSystemTool):
                 "status": agent.get("status", "unknown"),
                 "transport": agent.get("transport"),
                 "port": agent.get("port"),
-                "endpoint": agent.get("endpoint"),
+                "url": agent.get("url"),
             }
             for agent in agents
         ]
