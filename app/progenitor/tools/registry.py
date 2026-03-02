@@ -105,9 +105,8 @@ class ToolRegistry:
         logger.info("Saved registry to %s and MCP state to %s", self.registry_path, self.mcp_path)
 
     async def clear_agents(self) -> None:
-        """Clear all registered agents from the registry."""
-        self._registry["agents"] = []
-        logger.info("Cleared all agents from registry")
+        """No-op: agent registry entries are append/update-only."""
+        logger.warning("clear_agents() is disabled; registry entries are update-only")
 
     def get_all_capabilities(self) -> list[str]:
         """Get all registered capabilities (from agents and tools)."""

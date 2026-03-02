@@ -81,7 +81,6 @@ class Progenitor:
                     agents_dir=agents_dir,
                     llm_client=self.llm_client,
                     registry=self.tool_registry,
-                    clear_existing=False,
                 )
                 logger.info(
                     "Startup discovery: found=%d registered=%d",
