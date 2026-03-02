@@ -245,3 +245,25 @@ class TestToolRegistry:
         agents = registry2.get_agents()
         assert len(agents) == 1
         assert agents[0]["name"] == "persistent_agent"
+
+    @pytest.mark.asyncio
+    async def test_load_merges_legacy_and_map_entries(self, temp_registry):
+        """Map entries should be loaded even when legacy agents list exists."""
+        temp_registry.write_text(
+            json.dumps(
+                {
+                    "agents": [{"name": "from_legacy", "url": "http://legacy:8080"}],
+                    "from_legacy": {"url": "http://map:8081"},
+                    "from_map": {"url": "http://map:8082"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        registry = ToolRegistry(temp_registry)
+        await registry.load()
+
+        agents = sorted(registry.get_agents(), key=lambda a: a["name"])
+        assert agents == [
+            {"name": "from_legacy", "url": "http://map:8081"},
+            {"name": "from_map", "url": "http://map:8082"},
+        ]

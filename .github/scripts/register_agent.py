@@ -61,14 +61,53 @@ def _check_agent_health(container_name: str, docker_hostname: str, port: int) ->
         )
 
 
+def _normalize_entry(raw_entry: dict) -> dict | None:
+    """Normalize a registry entry to config-style fields only."""
+    normalized: dict = {}
+    url = raw_entry.get("url")
+    if isinstance(url, str) and url.strip():
+        normalized["url"] = url.strip()
+    headers = raw_entry.get("headers")
+    if isinstance(headers, dict):
+        cleaned_headers = {
+            str(k): str(v)
+            for k, v in headers.items()
+            if str(k).strip()
+        }
+        if cleaned_headers:
+            normalized["headers"] = cleaned_headers
+    return normalized or None
+
+
 def _load_registry(registry_path: Path) -> dict:
-    """Load agents.json, returning an empty registry on failure."""
+    """Load agents.json and normalize to a name-keyed map."""
     if registry_path.exists():
         try:
             with registry_path.open(encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                return data
+                normalized: dict[str, dict] = {}
+
+                raw_agents = data.get("agents")
+                if isinstance(raw_agents, list):
+                    for item in raw_agents:
+                        if not isinstance(item, dict):
+                            continue
+                        name = str(item.get("name") or "").strip()
+                        if not name:
+                            continue
+                        entry = _normalize_entry(item)
+                        if entry:
+                            normalized[name] = entry
+
+                for name, cfg in data.items():
+                    if name == "agents" or not isinstance(cfg, dict):
+                        continue
+                    entry = _normalize_entry(cfg)
+                    if entry:
+                        normalized[str(name)] = entry
+
+                return normalized
         except (OSError, json.JSONDecodeError) as exc:
             print(f"WARNING: Failed to read registry {registry_path}: {exc}", file=sys.stderr)
     return {}
