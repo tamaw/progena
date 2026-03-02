@@ -297,13 +297,21 @@ jobs:
             "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
 
       - name: Wait for agent to become healthy
+        id: health
         run: |
           PORT=${{ steps.runtime.outputs.port }}
+          CONTAINER_NAME="progenitor-agent-${{ matrix.agent }}"
+          DOCKER_HOSTNAME="$(docker inspect --format '{{.Config.Hostname}}' "${CONTAINER_NAME}")"
+          if [ -z "${DOCKER_HOSTNAME}" ]; then
+            echo "Could not resolve Docker hostname for ${CONTAINER_NAME}"
+            exit 1
+          fi
+          echo "docker_hostname=${DOCKER_HOSTNAME}" >> "$GITHUB_OUTPUT"
 
-          echo "Waiting for agent ${{ matrix.agent }} on port ${PORT}..."
+          echo "Waiting for agent ${{ matrix.agent }} on ${DOCKER_HOSTNAME}:${PORT}..."
           for i in $(seq 1 30); do
-            if docker exec progenitor-agent-${{ matrix.agent }} \
-              python -c "import httpx; r = httpx.get('http://localhost:${PORT}/health'); r.raise_for_status()" 2>/dev/null; then
+            if docker exec "${CONTAINER_NAME}" \
+              python -c "import httpx; r = httpx.get('http://${DOCKER_HOSTNAME}:${PORT}/health'); r.raise_for_status()" 2>/dev/null; then
               echo "Agent ${{ matrix.agent }} is healthy"
               exit 0
             fi
@@ -319,6 +327,8 @@ jobs:
           AGENT_NAME: ${{ matrix.agent }}
           PORT: ${{ steps.runtime.outputs.port }}
           REGISTRY_FILE: /var/lib/progenitor/data/config/agents.json
+          CONTAINER_NAME: progenitor-agent-${{ matrix.agent }}
+          DOCKER_HOSTNAME: ${{ steps.health.outputs.docker_hostname }}
         run: python .github/scripts/register_agent.py
 
       - name: Cleanup unused managed images
