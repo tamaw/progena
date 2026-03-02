@@ -74,10 +74,10 @@ class CallAgentTool(BaseSystemTool):
             if isinstance(card, dict):
                 cfg = dict(cfg)
                 cfg["agent_card"] = card
-                if not cfg.get("endpoint"):
-                    endpoint = str(card.get("url") or "").strip()
-                    if endpoint:
-                        cfg["endpoint"] = endpoint
+                if not cfg.get("url"):
+                    url = str(card.get("url") or "").strip()
+                    if url:
+                        cfg["url"] = url
 
         result = await a2a_client.call_agent(
             agent_config=cfg,

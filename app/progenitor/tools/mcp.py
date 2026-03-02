@@ -299,7 +299,7 @@ class MCPClient:
 
         endpoint = tool_config.get("endpoint")
         if not endpoint:
-            raise ValueError("No endpoint specified for HTTP transport")
+            raise ValueError("No URL specified for HTTP transport")
 
         request = {
             "jsonrpc": "2.0",
@@ -380,19 +380,13 @@ class A2AClient:
         if transport != "http":
             return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
 
-        # Prefer direct endpoint invocation first.
-        endpoint = str(agent_config.get("endpoint") or agent_config.get("url") or "").strip()
-        if not endpoint:
-            card = agent_config.get("agent_card")
-            if isinstance(card, dict):
-                endpoint = str(card.get("url") or "").strip()
+        url = str(agent_config.get("url") or "").strip()
+        if not url:
+            return {"success": False, "error": "No agent URL configured"}
 
-        if endpoint:
-            direct_cfg = dict(agent_config)
-            direct_cfg["endpoint"] = endpoint
-            return await self._call_http_agent(direct_cfg, request, context, timeout)
-
-        return {"success": False, "error": "No HTTP endpoint configured for agent"}
+        direct_cfg = dict(agent_config)
+        direct_cfg["url"] = url
+        return await self._call_http_agent(direct_cfg, request, context, timeout)
 
     async def _call_http_agent(
         self,
@@ -406,9 +400,9 @@ class A2AClient:
         Our A2A agents are implemented with the official a2a-sdk, so they expect
         JSON-RPC 2.0 methods like `message/send` (not `{request: ...}` payloads).
         """
-        endpoint = agent_config.get("endpoint") or agent_config.get("url")
-        if not endpoint:
-            raise ValueError("No endpoint specified for HTTP agent")
+        url = agent_config.get("url")
+        if not url:
+            raise ValueError("No URL specified for HTTP agent")
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as httpx_client:
@@ -431,7 +425,7 @@ class A2AClient:
                 custom_headers = agent_config.get("headers")
                 if isinstance(custom_headers, dict):
                     headers.update({str(k): str(v) for k, v in custom_headers.items()})
-                resp = await httpx_client.post(str(endpoint), json=payload, headers=headers)
+                resp = await httpx_client.post(str(url), json=payload, headers=headers)
         except TimeoutError:
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
@@ -474,11 +468,10 @@ class A2AClient:
 
         agent_card_url = agent_config.get("agent_card_url")
         if not agent_card_url:
-            endpoint = agent_config.get("endpoint") or agent_config.get("url")
-            if endpoint:
-                agent_card_url = f"{endpoint}/.well-known/agent.json"
-            else:
+            url = agent_config.get("url")
+            if not url:
                 return None
+            agent_card_url = f"{url}/.well-known/agent.json"
 
         try:
             async with aiohttp.ClientSession() as session, session.get(

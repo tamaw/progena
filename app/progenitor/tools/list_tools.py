@@ -83,7 +83,7 @@ class ListToolsTool(BaseSystemTool):
                 "capabilities": agent.get("capabilities", []),
                 "status": agent.get("status", "unknown"),
                 "transport": agent.get("transport"),
-                "endpoint": agent.get("endpoint"),
+                "url": agent.get("url"),
             }
             for agent in agents
             if isinstance(agent, dict) and agent.get("name")

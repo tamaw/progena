@@ -22,16 +22,13 @@ async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
     reg_path.write_text(
         json.dumps(
             {
-                "agents": [
-                    {
-                        "name": "observe_agent",
-                        "kind": "a2a_agent",
-                        "description": "Old",
-                        "version": "0.1.0",
-                        "capabilities": [],
-                        "endpoint": "http://example:8080",
-                    }
-                ],
+                "observe_agent": {
+                    "kind": "a2a_agent",
+                    "description": "Old",
+                    "version": "0.1.0",
+                    "capabilities": [],
+                    "url": "http://example:8080",
+                }
             }
         ),
         encoding="utf-8",
@@ -52,7 +49,7 @@ async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
 async def test_registry_and_mcp_state_are_split(tmp_path) -> None:
     reg_path = tmp_path / "agents.json"
     mcp_path = tmp_path / "mcp.json"
-    reg_path.write_text(json.dumps({"agents": []}), encoding="utf-8")
+    reg_path.write_text(json.dumps({}), encoding="utf-8")
     mcp_path.write_text(
         json.dumps({"tools": [{"name": "search_tool", "kind": "mcp_server"}]}),
         encoding="utf-8",

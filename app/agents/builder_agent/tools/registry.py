@@ -65,7 +65,15 @@ class ToolRegistry:
             try:
                 with open(self.registry_path) as f:
                     loaded = json.load(f)
-                agents = loaded.get("agents", []) if isinstance(loaded, dict) else []
+                agents: list[dict[str, Any]] = []
+                if isinstance(loaded, dict):
+                    raw_agents = loaded.get("agents")
+                    if isinstance(raw_agents, list):
+                        agents = [a for a in raw_agents if isinstance(a, dict)]
+                    else:
+                        for name, cfg in loaded.items():
+                            if isinstance(cfg, dict):
+                                agents.append({"name": str(name), **cfg})
                 self._registry = {
                     "agents": agents if isinstance(agents, list) else [],
                     "tools": [],
@@ -98,16 +106,23 @@ class ToolRegistry:
     async def save(self) -> None:
         """Save registry to disk."""
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        agent_map: dict[str, dict[str, Any]] = {}
+        for agent in self._registry.get("agents", []):
+            if not isinstance(agent, dict):
+                continue
+            name = str(agent.get("name") or "").strip()
+            if not name:
+                continue
+            agent_map[name] = {k: v for k, v in agent.items() if k != "name"}
         with open(self.registry_path, 'w') as f:
-            json.dump({"agents": self._registry.get("agents", [])}, f, indent=2, default=str)
+            json.dump(agent_map, f, indent=2, default=str)
         with open(self.mcp_path, 'w') as f:
             json.dump({"tools": self._registry.get("tools", [])}, f, indent=2, default=str)
         logger.info("Saved registry to %s and MCP state to %s", self.registry_path, self.mcp_path)
 
     async def clear_agents(self) -> None:
-        """Clear all registered agents from the registry."""
-        self._registry["agents"] = []
-        logger.info("Cleared all agents from registry")
+        """No-op: agent registry entries are append/update-only."""
+        logger.warning("clear_agents() is disabled; registry entries are update-only")
 
     def get_all_capabilities(self) -> list[str]:
         """Get all registered capabilities (from agents and tools)."""

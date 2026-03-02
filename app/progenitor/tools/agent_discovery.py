@@ -295,23 +295,14 @@ class AgentDiscovery:
 
         return AgentDiscoveryResult(agents=agents)
 
-    async def discover_and_register(self, clear_existing: bool = True) -> dict[str, Any]:
+    async def discover_and_register(self) -> dict[str, Any]:
         """
         Main entry point: scan, analyze, and register all agents.
-
-        Args:
-            clear_existing: If True, clear existing agents before registering new ones.
-                           This makes the operation a full rescan rather than additive.
 
         Returns:
             Summary of the discovery process.
         """
         logger.info("Starting agent discovery from %s", self.agents_dir)
-
-        # Clear existing agents if requested (full rescan mode)
-        if clear_existing:
-            logger.info("Clearing existing agents from registry")
-            await self.registry.clear_agents()
 
         # Scan folders
         folders = self.scan_agents_folder()
@@ -397,13 +388,13 @@ class AgentDiscovery:
 
         # Allocate port for HTTP agents
         port = None
-        endpoint = None
+        url = None
         agent_card_url = None
 
         if spec.transport == "http":
             port = self.registry.allocate_port()
-            endpoint = f"http://{self.host}:{port}"
-            agent_card_url = f"{endpoint}/.well-known/agent.json"
+            url = f"http://{self.host}:{port}"
+            agent_card_url = f"{url}/.well-known/agent.json"
 
         entry = AgentRegistryEntry(
             name=spec.name,
@@ -414,7 +405,7 @@ class AgentDiscovery:
             entrypoint=entrypoint,
             transport=spec.transport,
             port=port,
-            endpoint=endpoint,
+            url=url,
             agent_card_url=agent_card_url,
             status=AgentStatus.STOPPED,
         )

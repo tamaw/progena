@@ -79,7 +79,7 @@ async def test_call_agent_uses_card_url_when_endpoint_missing(monkeypatch) -> No
 
     result = await t.ainvoke({"tool_args": {"agent": "Builder Agent", "request": "hello"}})
     assert result.get("success") is True
-    assert captured_cfg.get("endpoint") == "http://localhost:9100"
+    assert captured_cfg.get("url") == "http://localhost:9100"
 
 
 @pytest.mark.asyncio
