@@ -322,10 +322,11 @@ class TestListAgentsTool:
 
     @pytest.mark.asyncio
     async def test_execute_refreshes_cards_before_listing(self, tool):
-        """list_agents should refresh metadata before returning output."""
+        """list_agents should refresh metadata and health before returning output."""
         mock_registry = MagicMock()
         mock_registry.load = AsyncMock()
         mock_registry.refresh_agent_cards = AsyncMock()
+        mock_registry.refresh_agent_health = AsyncMock()
         mock_registry.get_agents.return_value = []
         ctx = ToolContext(tool_registry=mock_registry, llm_client=MagicMock())
 
@@ -334,6 +335,7 @@ class TestListAgentsTool:
         assert result.success is True
         mock_registry.load.assert_awaited_once()
         mock_registry.refresh_agent_cards.assert_awaited_once()
+        mock_registry.refresh_agent_health.assert_awaited_once()
 
 
 class TestSelfReflectTool:

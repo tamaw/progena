@@ -95,12 +95,22 @@ class Progenitor:
             from .tools.mcp import A2AClient
 
             a2a_client = A2AClient()
-            summary = await self.tool_registry.refresh_agent_cards(a2a_client)
+            summary = await self.tool_registry.refresh_agent_cards(
+                a2a_client,
+                persist=False,
+            )
             logger.info(
                 "Agent card refresh: checked=%d updated=%d errors=%d",
                 summary.get("agents_checked", 0),
                 summary.get("agents_updated", 0),
                 len(summary.get("errors") or []),
+            )
+            health_summary = await self.tool_registry.refresh_agent_health(persist=False)
+            logger.info(
+                "Agent health refresh: checked=%d healthy=%d unhealthy=%d",
+                health_summary.get("agents_checked", 0),
+                health_summary.get("healthy", 0),
+                health_summary.get("unhealthy", 0),
             )
         except Exception as exc:
             logger.debug("Agent card refresh skipped: %s", exc)

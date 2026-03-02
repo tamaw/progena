@@ -36,14 +36,18 @@ async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
 
     registry = ToolRegistry(reg_path)
     await registry.load()
-    summary = await registry.refresh_agent_cards(_FakeA2AClient())
+    summary = await registry.refresh_agent_cards(_FakeA2AClient(), persist=False)
     assert summary["agents_updated"] == 1
 
     agents = registry.get_agents()
-    assert agents[0]["description"] == "Card description"
-    assert agents[0]["version"] == "9.9.9"
-    assert agents[0]["capabilities"] == ["cap_a", "cap_b"]
+    assert agents[0]["description"] == "Old"
+    assert agents[0]["version"] == "0.1.0"
+    assert agents[0]["capabilities"] == []
     assert isinstance(agents[0].get("agent_card"), dict)
+
+    await registry.save()
+    saved = json.loads(reg_path.read_text(encoding="utf-8"))
+    assert "agent_card" not in saved["observe_agent"]
 
 @pytest.mark.asyncio
 async def test_registry_and_mcp_state_are_split(tmp_path) -> None:
@@ -60,3 +64,20 @@ async def test_registry_and_mcp_state_are_split(tmp_path) -> None:
 
     assert registry.get_agents() == []
     assert registry.get_tools() == [{"name": "search_tool", "kind": "mcp_server"}]
+
+
+@pytest.mark.asyncio
+async def test_refresh_agent_health_marks_unhealthy(tmp_path) -> None:
+    reg_path = tmp_path / "agents.json"
+    reg_path.write_text(
+        json.dumps({"test_agent": {"url": "http://127.0.0.1:9"}}),
+        encoding="utf-8",
+    )
+
+    registry = ToolRegistry(reg_path)
+    await registry.load()
+    summary = await registry.refresh_agent_health(timeout=0.2, persist=False)
+
+    assert summary["agents_checked"] == 1
+    assert summary["unhealthy"] == 1
+    assert registry.get_agents()[0]["status"] == "failed"
