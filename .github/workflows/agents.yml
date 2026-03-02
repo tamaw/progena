@@ -331,6 +331,14 @@ jobs:
           DOCKER_HOSTNAME: ${{ steps.health.outputs.docker_hostname }}
         run: python .github/scripts/register_agent.py
 
+      - name: Sync registry into progenitor volume
+        if: success()
+        env:
+          REGISTRY_FILE: /var/lib/progenitor/data/config/agents.json
+        run: |
+          test -f "${REGISTRY_FILE}" || { echo "Registry file not found: ${REGISTRY_FILE}"; exit 1; }
+          docker cp "${REGISTRY_FILE}" progenitor:/app/data/config/agents.json
+
       - name: Cleanup unused managed images
         if: success()
         run: |

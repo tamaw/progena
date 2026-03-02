@@ -70,10 +70,22 @@ class ToolRegistry:
                     raw_agents = loaded.get("agents")
                     if isinstance(raw_agents, list):
                         agents = [a for a in raw_agents if isinstance(a, dict)]
-                    else:
-                        for name, cfg in loaded.items():
-                            if isinstance(cfg, dict):
-                                agents.append({"name": str(name), **cfg})
+                    agent_map = {
+                        str(name): cfg
+                        for name, cfg in loaded.items()
+                        if name != "agents" and isinstance(cfg, dict)
+                    }
+                    if agent_map:
+                        filtered = []
+                        seen_names = set(agent_map)
+                        for agent in agents:
+                            name = str(agent.get("name") or "")
+                            if name and name in seen_names:
+                                continue
+                            filtered.append(agent)
+                        agents = filtered
+                        for name, cfg in agent_map.items():
+                            agents.append({"name": name, **cfg})
                 self._registry = {
                     "agents": agents if isinstance(agents, list) else [],
                     "tools": [],
@@ -101,7 +113,6 @@ class ToolRegistry:
             len(self._registry.get('agents', [])),
             len(self._registry.get('tools', [])),
         )
-        await self.save()
 
     async def save(self) -> None:
         """Save registry to disk."""

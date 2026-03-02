@@ -29,6 +29,26 @@ class TestLoadRegistry:
         result = _register_agent._load_registry(path)
         assert result == {}
 
+    def test_normalizes_legacy_agents_list_and_map_entries(self, tmp_path):
+        path = tmp_path / "agents.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {"name": "legacy_agent", "url": "http://legacy:8100"},
+                        {"name": "drop_me", "description": "missing url"},
+                    ],
+                    "legacy_agent": {"url": "http://override:8100"},
+                    "map_agent": {"url": "http://map:8101", "headers": {"X-Test": "1"}},
+                }
+            )
+        )
+        result = _register_agent._load_registry(path)
+        assert result == {
+            "legacy_agent": {"url": "http://override:8100"},
+            "map_agent": {"url": "http://map:8101", "headers": {"X-Test": "1"}},
+        }
+
 
 class TestSaveRegistry:
     def test_saves_and_creates_parent_dirs(self, tmp_path):
