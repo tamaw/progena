@@ -459,7 +459,21 @@ class LLMClient:
                 except Exception:
                     agent_cfg = None
 
-                if isinstance(agent_cfg, dict) and agent_cfg.get("kind") == "a2a_agent":
+                agent_url = str(agent_cfg.get("url") or "").strip() if isinstance(agent_cfg, dict) else ""
+                agent_type = str(agent_cfg.get("type") or "").strip() if isinstance(agent_cfg, dict) else ""
+                agent_kind = str(agent_cfg.get("kind") or "").strip() if isinstance(agent_cfg, dict) else ""
+                agent_transport = (
+                    str(agent_cfg.get("transport") or "http").strip()
+                    if isinstance(agent_cfg, dict)
+                    else ""
+                )
+                if (
+                    isinstance(agent_cfg, dict)
+                    and agent_url
+                    and agent_transport == "http"
+                    and agent_type != "mcp_tool"
+                    and agent_kind != "mcp_tool"
+                ):
                     from ..tools.mcp import A2AClient
 
                     req = str(tool_args.get("request") or "")
