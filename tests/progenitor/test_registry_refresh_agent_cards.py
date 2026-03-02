@@ -36,7 +36,7 @@ async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
 
     registry = ToolRegistry(reg_path)
     await registry.load()
-    summary = await registry.refresh_agent_cards(_FakeA2AClient(), persist=False)
+    summary = await registry.refresh_agent_cards(_FakeA2AClient())
     assert summary["agents_updated"] == 1
 
     agents = registry.get_agents()
@@ -76,7 +76,7 @@ async def test_refresh_agent_health_marks_unhealthy(tmp_path) -> None:
 
     registry = ToolRegistry(reg_path)
     await registry.load()
-    summary = await registry.refresh_agent_health(timeout=0.2, persist=False)
+    summary = await registry.refresh_agent_health(timeout=0.2)
 
     assert summary["agents_checked"] == 1
     assert summary["unhealthy"] == 1

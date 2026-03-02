@@ -53,7 +53,7 @@ class ListToolsTool(BaseSystemTool):
             with suppress(Exception):
                 from .mcp import A2AClient
 
-                await context.tool_registry.refresh_agent_cards(A2AClient(), persist=False)
+                await context.tool_registry.refresh_agent_cards(A2AClient())
 
         llm_client = getattr(context, "llm_client", None)
         mcp_config = getattr(llm_client, "mcp_config", None) if llm_client is not None else None
