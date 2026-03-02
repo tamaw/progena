@@ -124,7 +124,11 @@ class ToolRegistry:
             name = str(agent.get("name") or "").strip()
             if not name:
                 continue
-            agent_map[name] = {k: v for k, v in agent.items() if k != "name"}
+            agent_map[name] = {
+                k: v
+                for k, v in agent.items()
+                if k not in {"name", "agent_card"}
+            }
         with open(self.registry_path, 'w') as f:
             json.dump(agent_map, f, indent=2, default=str)
         with open(self.mcp_path, 'w') as f:
@@ -490,12 +494,9 @@ class ToolRegistry:
         *,
         timeout: float = 2.0,
         concurrency: int = 8,
+        persist: bool = False,
     ) -> dict[str, Any]:
-        """Best-effort refresh agent metadata from their agent cards.
-
-        Updates registry entries in-place (description/version/capabilities) and persists
-        to agents.json if anything changed.
-        """
+        """Best-effort refresh agent cards in memory."""
         agents = self._registry.get("agents", [])
         if not agents:
             return {"agents_checked": 0, "agents_updated": 0, "errors": []}
@@ -523,47 +524,79 @@ class ToolRegistry:
             if not isinstance(card, dict):
                 return
 
-            changed = False
-            if isinstance(card.get("description"), str) and card["description"] and card["description"] != agent.get("description"):
-                agent["description"] = card["description"]
-                changed = True
-
-            if isinstance(card.get("version"), str) and card["version"] and card["version"] != agent.get("version"):
-                agent["version"] = card["version"]
-                changed = True
-
-            card_capabilities = card.get("capabilities")
-            normalized_capabilities: list[str] | None = None
-            if isinstance(card_capabilities, list):
-                normalized_capabilities = [str(c) for c in card_capabilities if isinstance(c, str) and c]
-            elif isinstance(card.get("skills"), list):
-                normalized_capabilities = []
-                for skill in card.get("skills", []):
-                    if isinstance(skill, dict):
-                        skill_id = str(skill.get("id") or "").strip()
-                        skill_name = str(skill.get("name") or "").strip()
-                        if skill_id:
-                            normalized_capabilities.append(skill_id)
-                        elif skill_name:
-                            normalized_capabilities.append(skill_name)
-            if normalized_capabilities and normalized_capabilities != agent.get("capabilities"):
-                agent["capabilities"] = normalized_capabilities
-                changed = True
-
             # Keep a copy for debugging/UI without depending on it elsewhere.
             agent["agent_card"] = card
-
-            if changed:
-                agent["updated_at"] = utcnow().isoformat()
-                updated += 1
-                changed_any = True
+            updated += 1
+            changed_any = True
 
         await asyncio.gather(*[_refresh_one(a) for a in agents if isinstance(a, dict)])
 
-        if changed_any:
+        if changed_any and persist:
             await self.save()
 
         return {"agents_checked": len(agents), "agents_updated": updated, "errors": errors}
+
+    async def refresh_agent_health(
+        self,
+        *,
+        timeout: float = 2.0,
+        concurrency: int = 8,
+        persist: bool = False,
+    ) -> dict[str, Any]:
+        """Best-effort refresh of /health status for configured agents."""
+        import aiohttp
+
+        agents = self._registry.get("agents", [])
+        if not agents:
+            return {"agents_checked": 0, "healthy": 0, "unhealthy": 0, "errors": []}
+
+        sem = asyncio.Semaphore(max(1, int(concurrency)))
+        healthy = 0
+        unhealthy = 0
+        errors: list[str] = []
+        changed_any = False
+
+        async def _check_one(agent: dict[str, Any]) -> None:
+            nonlocal healthy, unhealthy, changed_any
+            name = str(agent.get("name") or "")
+            url = str(agent.get("url") or "").strip().rstrip("/")
+            if not name or not url:
+                return
+            health_url = f"{url}/health"
+
+            async with sem:
+                try:
+                    async with aiohttp.ClientSession() as session, session.get(
+                        health_url,
+                        timeout=aiohttp.ClientTimeout(total=timeout),
+                    ) as response:
+                        if response.status < 400:
+                            healthy += 1
+                            if agent.get("status") != AgentStatus.RUNNING.value:
+                                changed_any = True
+                            agent["status"] = AgentStatus.RUNNING.value
+                            agent["status_message"] = "Health check passed"
+                            return
+                        raise RuntimeError(f"HTTP {response.status}")
+                except Exception as exc:
+                    unhealthy += 1
+                    errors.append(f"{name}: {exc}")
+                    if agent.get("status") != AgentStatus.FAILED.value:
+                        changed_any = True
+                    agent["status"] = AgentStatus.FAILED.value
+                    agent["status_message"] = f"Health check failed: {exc}"
+
+        await asyncio.gather(*[_check_one(a) for a in agents if isinstance(a, dict)])
+
+        if changed_any and persist:
+            await self.save()
+
+        return {
+            "agents_checked": len(agents),
+            "healthy": healthy,
+            "unhealthy": unhealthy,
+            "errors": errors,
+        }
 
 class RegistryTool(BaseSystemTool):
     """Expose the current agent/tool registry summary."""

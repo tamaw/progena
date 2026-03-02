@@ -102,6 +102,13 @@ class Progenitor:
                 summary.get("agents_updated", 0),
                 len(summary.get("errors") or []),
             )
+            health_summary = await self.tool_registry.refresh_agent_health()
+            logger.info(
+                "Agent health refresh: checked=%d healthy=%d unhealthy=%d",
+                health_summary.get("agents_checked", 0),
+                health_summary.get("healthy", 0),
+                health_summary.get("unhealthy", 0),
+            )
         except Exception as exc:
             logger.debug("Agent card refresh skipped: %s", exc)
 

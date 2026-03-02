@@ -10,6 +10,7 @@ This runs on Progenitor startup and can be invoked as a tool to re-scan agents.
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from inspect import isawaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -304,13 +305,47 @@ class AgentDiscovery:
         """
         logger.info("Starting agent discovery from %s", self.agents_dir)
 
+        if hasattr(self.registry, "load"):
+            await self.registry.load()
+
+        existing_agents = []
+        if hasattr(self.registry, "get_agents"):
+            maybe_agents = self.registry.get_agents()
+            if isawaitable(maybe_agents):
+                maybe_agents = await maybe_agents
+            if isinstance(maybe_agents, list):
+                existing_agents = [a for a in maybe_agents if isinstance(a, dict)]
+        if existing_agents:
+            summary: dict[str, Any] = {
+                "success": True,
+                "agents_found": len(existing_agents),
+                "agents_registered": 0,
+                "agents_skipped": 0,
+                "errors": None,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "source": "registry",
+            }
+            try:
+                from .mcp import A2AClient
+
+                summary["agent_card_refresh"] = await self.registry.refresh_agent_cards(
+                    A2AClient(),
+                )
+            except Exception as e:
+                summary["agent_card_refresh"] = {"error": str(e)}
+            if hasattr(self.registry, "refresh_agent_health"):
+                try:
+                    summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
+                    )
+                except Exception as e:
+                    summary["agent_health_refresh"] = {"error": str(e)}
+            return summary
+
         # Scan folders
         folders = self.scan_agents_folder()
         logger.info("Found %d potential agent folders", len(folders))
 
         if not folders:
-            # Save the empty registry to persist the clear
-            await self.registry.save()
             return {
                 "success": True,
                 "agents_found": 0,
@@ -370,12 +405,20 @@ class AgentDiscovery:
             try:
                 from .mcp import A2AClient
 
-                card_refresh = await self.registry.refresh_agent_cards(A2AClient())
+                card_refresh = await self.registry.refresh_agent_cards(
+                    A2AClient(),
+                )
             except Exception as e:
                 card_refresh = {"error": str(e)}
 
         if card_refresh is not None:
             summary["agent_card_refresh"] = card_refresh
+        if hasattr(self.registry, "refresh_agent_health"):
+            try:
+                summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
+                )
+            except Exception as e:
+                summary["agent_health_refresh"] = {"error": str(e)}
 
         return summary
 
