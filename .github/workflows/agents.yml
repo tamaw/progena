@@ -321,25 +321,12 @@ jobs:
           docker logs progenitor-agent-${{ matrix.agent }} --tail 50
           exit 1
 
-      - name: Resolve progenitor registry file path
-        if: success()
-        id: registry
-        run: |
-          PROGENITOR_DATA_HOST="$(docker inspect progenitor --format '{{ range .Mounts }}{{ if eq .Destination "/app/data" }}{{ .Source }}{{ end }}{{ end }}')"
-          if [ -z "${PROGENITOR_DATA_HOST}" ]; then
-            echo "Could not resolve /app/data host mount for progenitor container"
-            exit 1
-          fi
-          REGISTRY_FILE="${PROGENITOR_DATA_HOST}/config/agents.json"
-          echo "registry_file=${REGISTRY_FILE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved REGISTRY_FILE=${REGISTRY_FILE}"
-
       - name: Register agent in progenitor registry
         if: success()
         env:
           AGENT_NAME: ${{ matrix.agent }}
           PORT: ${{ steps.runtime.outputs.port }}
-          REGISTRY_FILE: ${{ steps.registry.outputs.registry_file }}
+          REGISTRY_FILE: /var/lib/progenitor/data/config/agents.json
           CONTAINER_NAME: progenitor-agent-${{ matrix.agent }}
           DOCKER_HOSTNAME: ${{ steps.health.outputs.docker_hostname }}
         run: python .github/scripts/register_agent.py
