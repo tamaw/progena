@@ -95,6 +95,7 @@ async def add_scheduled_task(
     entry_data = {
         "id": schedule_id,
         "message": task_message,
+        "user_request": user_request,
         "cron_expression": parsed["cron_expression"],
         "last_run": None,
         "created_at": created_at,
