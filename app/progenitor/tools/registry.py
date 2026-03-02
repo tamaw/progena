@@ -372,9 +372,8 @@ class ToolRegistry:
 
                 if port is not None:
                     agent["port"] = port
-                    agent["endpoint"] = f"http://{self.host}:{port}"
-                    agent["url"] = agent["endpoint"]
-                    agent["agent_card_url"] = f"http://{self.host}:{port}/.well-known/agent.json"
+                    agent["url"] = f"http://{self.host}:{port}"
+                    agent["agent_card_url"] = f"{agent['url']}/.well-known/agent.json"
 
                 if last_error is not None:
                     agent["last_error"] = last_error
@@ -453,10 +452,10 @@ class ToolRegistry:
         ]
 
     def get_agent_endpoint(self, name: str) -> str | None:
-        """Get the HTTP endpoint for an agent."""
+        """Get the HTTP URL for an agent."""
         agent = self.find_by_name(name)
         if agent:
-            return agent.get("endpoint") or agent.get("url")
+            return agent.get("url")
         return None
 
     async def refresh_agent_cards(
@@ -485,7 +484,7 @@ class ToolRegistry:
             name = str(agent.get("name") or "")
             if not name:
                 return
-            if not agent.get("endpoint") and not agent.get("url") and not agent.get("agent_card_url"):
+            if not agent.get("url") and not agent.get("agent_card_url"):
                 return
 
             async with sem:

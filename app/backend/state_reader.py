@@ -63,7 +63,7 @@ class AgentInfo:
             capabilities=data.get("capabilities", []),
             entrypoint=data.get("entrypoint", ""),
             url=data.get("url"),
-            endpoint=data.get("endpoint") or data.get("url"),
+            endpoint=data.get("url"),
             headers=data.get("headers"),
             transport=data.get("transport", "http"),
             enabled=data.get("enabled", True),
