@@ -36,7 +36,9 @@ class AgentInfo:
     description: str
     capabilities: list[str]
     entrypoint: str
+    url: str | None
     endpoint: str | None
+    headers: dict[str, str] | None
     transport: str
     enabled: bool
     created_at: str
@@ -60,7 +62,9 @@ class AgentInfo:
             description=data.get("description", ""),
             capabilities=data.get("capabilities", []),
             entrypoint=data.get("entrypoint", ""),
-            endpoint=data.get("endpoint"),
+            url=data.get("url"),
+            endpoint=data.get("endpoint") or data.get("url"),
+            headers=data.get("headers"),
             transport=data.get("transport", "http"),
             enabled=data.get("enabled", True),
             created_at=data.get("created_at", ""),
