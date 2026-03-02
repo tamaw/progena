@@ -71,7 +71,7 @@ def _load_registry(registry_path: Path) -> dict:
                 return data
         except (OSError, json.JSONDecodeError) as exc:
             print(f"WARNING: Failed to read registry {registry_path}: {exc}", file=sys.stderr)
-    return {"agents": []}
+    return {}
 
 
 def _save_registry(registry_path: Path, data: dict) -> None:
@@ -90,7 +90,7 @@ def _build_entry(
     existing: dict | None,
 ) -> dict:
     """Build a config-style registry entry for this agent."""
-    entry: dict = {"name": agent_name, "url": f"http://{docker_hostname}:{port}"}
+    entry: dict = {"url": f"http://{docker_hostname}:{port}"}
     if existing and isinstance(existing.get("headers"), dict):
         headers = {str(k): str(v) for k, v in existing["headers"].items()}
         if headers:
@@ -134,24 +134,16 @@ def main() -> int:
 
     # Load current registry
     registry = _load_registry(registry_path)
-    agents: list[dict] = registry.get("agents", [])
-    if not isinstance(agents, list):
-        agents = []
-
-    # Find existing entry
-    existing = next((a for a in agents if isinstance(a, dict) and a.get("name") == agent_name), None)
+    existing = registry.get(agent_name) if isinstance(registry.get(agent_name), dict) else None
 
     # Build updated entry
     entry = _build_entry(agent_name, port, docker_hostname, existing)
 
-    # Replace or append
-    agents = [a for a in agents if not (isinstance(a, dict) and a.get("name") == agent_name)]
-    agents.append(entry)
-    registry["agents"] = agents
+    registry[agent_name] = entry
 
     # Save registry
     _save_registry(registry_path, registry)
-    print(f"Registered agent '{agent_name}' → {entry['url']} (total agents: {len(agents)})")
+    print(f"Registered agent '{agent_name}' → {entry['url']} (total agents: {len(registry)})")
     return 0
 
 

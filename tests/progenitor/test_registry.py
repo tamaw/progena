@@ -193,8 +193,8 @@ class TestToolRegistry:
         assert not registry.capability_exists("nonexistent_cap")
 
     @pytest.mark.asyncio
-    async def test_get_agent_endpoint_falls_back_to_url(self, temp_registry):
-        """URL-only entries should still resolve endpoint for callers."""
+    async def test_get_agent_endpoint_reads_url(self, temp_registry):
+        """URL-configured entries should resolve for callers."""
         registry = ToolRegistry(temp_registry)
         await registry.load()
         registry._registry["agents"] = [{"name": "url_only_agent", "url": "http://localhost:9310"}]
