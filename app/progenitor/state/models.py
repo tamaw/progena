@@ -284,9 +284,9 @@ class AgentRegistryEntry(BaseModel):
     name: str
     kind: str = "a2a_agent"  # a2a_agent | mcp_server
     version: str = "0.1.0"
-    description: str
+    description: str = ""
     capabilities: list[str] = Field(default_factory=list)
-    entrypoint: str  # File path to agent module
+    entrypoint: str = ""  # Optional for minimal agents.json entries
 
     # HTTP endpoint configuration
     transport: str = "http"  # http only
