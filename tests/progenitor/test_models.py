@@ -118,6 +118,14 @@ class TestAgentRegistryEntry:
         assert entry.transport == "http"  # Default is HTTP (A2A standard)
         assert entry.status.value == "stopped"  # Default status
 
+    def test_create_minimal_agent_entry(self):
+        """Test creating a minimal agent registry entry."""
+        entry = AgentRegistryEntry(name="minimal_agent")
+
+        assert entry.name == "minimal_agent"
+        assert entry.description == ""
+        assert entry.entrypoint == ""
+
 
 class TestConversationMessage:
     """Tests for ConversationMessage model."""
