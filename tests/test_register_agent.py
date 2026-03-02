@@ -15,44 +15,43 @@ _spec.loader.exec_module(_register_agent)  # type: ignore[union-attr]
 class TestLoadRegistry:
     def test_returns_empty_registry_when_file_missing(self, tmp_path):
         result = _register_agent._load_registry(tmp_path / "agents.json")
-        assert result == {"agents": []}
+        assert result == {}
 
     def test_loads_valid_file(self, tmp_path):
         path = tmp_path / "agents.json"
-        path.write_text(json.dumps({"agents": [{"name": "foo"}]}))
+        path.write_text(json.dumps({"foo": {"url": "http://foo"}}))
         result = _register_agent._load_registry(path)
-        assert result["agents"] == [{"name": "foo"}]
+        assert result["foo"]["url"] == "http://foo"
 
     def test_returns_empty_on_invalid_json(self, tmp_path):
         path = tmp_path / "agents.json"
         path.write_text("not-json")
         result = _register_agent._load_registry(path)
-        assert result == {"agents": []}
+        assert result == {}
 
 
 class TestSaveRegistry:
     def test_saves_and_creates_parent_dirs(self, tmp_path):
         path = tmp_path / "sub" / "agents.json"
-        data = {"agents": [{"name": "bar"}]}
+        data = {"bar": {"url": "http://bar"}}
         _register_agent._save_registry(path, data)
         assert path.exists()
         assert json.loads(path.read_text()) == data
 
     def test_overwrites_existing_file(self, tmp_path):
         path = tmp_path / "agents.json"
-        path.write_text(json.dumps({"agents": [{"name": "old"}]}))
-        _register_agent._save_registry(path, {"agents": []})
-        assert json.loads(path.read_text()) == {"agents": []}
+        path.write_text(json.dumps({"old": {"url": "http://old"}}))
+        _register_agent._save_registry(path, {})
+        assert json.loads(path.read_text()) == {}
 
 
 class TestBuildEntry:
     def test_uses_defaults_when_card_is_none(self):
         entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", None)
-        assert entry == {"name": "my_agent", "url": "http://docker-host-123:8100"}
+        assert entry == {"url": "http://docker-host-123:8100"}
 
     def test_preserves_headers_from_existing(self):
         existing = {
-            "name": "my_agent",
             "headers": {
                 "Authorization": "Bearer abc",
                 "X-Env": "dev",
@@ -62,7 +61,7 @@ class TestBuildEntry:
         assert entry["headers"] == {"Authorization": "Bearer abc", "X-Env": "dev"}
 
     def test_does_not_keep_other_existing_fields(self):
-        existing = {"name": "my_agent", "entrypoint": "app/agents/my_agent/http_agent.py", "enabled": False}
+        existing = {"entrypoint": "app/agents/my_agent/http_agent.py", "enabled": False}
         entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", existing)
         assert "entrypoint" not in entry
         assert "enabled" not in entry
@@ -94,35 +93,26 @@ class TestMain:
         code = self._run_main({"AGENT_NAME": "my_agent", "PORT": "8100"}, tmp_path)
         assert code == 0
         registry = json.loads((tmp_path / "agents.json").read_text())
-        agents = registry["agents"]
-        assert len(agents) == 1
-        assert agents[0] == {"name": "my_agent", "url": "http://docker-host-123:8100"}
+        assert registry == {"my_agent": {"url": "http://docker-host-123:8100"}}
 
     def test_replaces_existing_entry(self, tmp_path):
         registry_path = tmp_path / "agents.json"
-        registry_path.write_text(json.dumps({
-            "agents": [{"name": "my_agent", "headers": {"Authorization": "Bearer token"}, "enabled": False}]
-        }))
+        registry_path.write_text(json.dumps({"my_agent": {"headers": {"Authorization": "Bearer token"}, "enabled": False}}))
         code = self._run_main({"AGENT_NAME": "my_agent", "PORT": "8100"}, tmp_path)
         assert code == 0
         registry = json.loads(registry_path.read_text())
-        agents = registry["agents"]
-        assert len(agents) == 1
-        assert agents[0] == {
-            "name": "my_agent",
+        assert registry["my_agent"] == {
             "url": "http://docker-host-123:8100",
             "headers": {"Authorization": "Bearer token"},
         }
 
     def test_preserves_other_agents(self, tmp_path):
         registry_path = tmp_path / "agents.json"
-        registry_path.write_text(json.dumps({
-            "agents": [{"name": "other_agent", "port": 8200}]
-        }))
+        registry_path.write_text(json.dumps({"other_agent": {"url": "http://other"}}))
         code = self._run_main({"AGENT_NAME": "my_agent", "PORT": "8100"}, tmp_path)
         assert code == 0
         registry = json.loads(registry_path.read_text())
-        names = {a["name"] for a in registry["agents"]}
+        names = set(registry.keys())
         assert names == {"my_agent", "other_agent"}
 
     def test_fails_when_health_check_fails(self, tmp_path):

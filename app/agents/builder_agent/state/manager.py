@@ -246,7 +246,7 @@ class StateManager:
                 "current_decision": None,
                 "current_build_request": None,     # Reference to active build (id only)
             },
-            "registry": {"agents": []},
+            "registry": {},
             "mcp": {"tools": []},
             "schedule": [],
         }
@@ -493,7 +493,7 @@ class StateManager:
         async with self._file_lock("registry"):
             return await self._read_json(
                 self._path_for("registry")
-            ) or {"agents": []}
+            ) or {}
 
     async def save_registry(self, registry: dict[str, Any]) -> None:
         """Save the registry."""
