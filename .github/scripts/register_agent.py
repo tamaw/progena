@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Register a deployed agent in the progenitor agents.json registry.
 
-Performs a health check for the running Docker container and writes or
-replaces the agent's entry in the progenitor registry file.
+Performs a health check for the running Docker container and writes a
+minimal agent entry in the progenitor registry file.
 
 Environment variables:
   AGENT_NAME       Name of the deployed agent (required).
@@ -94,45 +94,30 @@ def _build_entry(
     docker_hostname: str,
     existing: dict | None,
 ) -> dict:
-    """Build the registry entry for this agent."""
+    """Build a minimal registry entry for this agent."""
     now = _utc_now_iso()
     endpoint = f"http://{docker_hostname}:{port}"
-    agent_card_url = f"{endpoint}/.well-known/agent.json"
 
     description = f"A2A agent: {agent_name}"
-    version = "0.1.0"
     capabilities: list[str] = []
+    enabled = True
     if existing:
         description = str(existing.get("description", description))
-        version = str(existing.get("version", version))
         existing_capabilities = existing.get("capabilities")
         if isinstance(existing_capabilities, list):
             capabilities = [str(cap) for cap in existing_capabilities]
-
-    # Determine entrypoint: prefer agent.py, keep existing if set
-    entrypoint = f"app/agents/{agent_name}/agent.py"
-    if existing:
-        entrypoint = existing.get("entrypoint", entrypoint)
+        if isinstance(existing.get("enabled"), bool):
+            enabled = existing["enabled"]
 
     entry: dict = {
         "name": agent_name,
         "kind": "a2a_agent",
-        "version": version,
         "description": description,
         "capabilities": capabilities,
-        "entrypoint": entrypoint,
         "transport": "http",
         "port": port,
         "endpoint": endpoint,
-        "agent_card_url": agent_card_url,
-        "status": "running",
-        "status_message": "Deployed and health-checked by CI pipeline",
-        "pid": None,
-        "startup_time": now,
-        "last_heartbeat": now,
-        "last_error": None,
-        "enabled": True,
-        "created_at": existing.get("created_at", now) if existing else now,
+        "enabled": enabled,
         "updated_at": now,
     }
     return entry

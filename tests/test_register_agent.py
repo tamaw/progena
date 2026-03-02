@@ -53,32 +53,28 @@ class TestBuildEntry:
         assert entry["kind"] == "a2a_agent"
         assert entry["transport"] == "http"
         assert entry["endpoint"] == "http://docker-host-123:8100"
-        assert entry["agent_card_url"] == "http://docker-host-123:8100/.well-known/agent.json"
-        assert entry["status"] == "running"
         assert entry["enabled"] is True
         assert entry["capabilities"] == []
+        assert "entrypoint" not in entry
+        assert "agent_card_url" not in entry
+        assert "status_message" not in entry
 
     def test_preserves_metadata_from_existing(self):
         existing = {
             "name": "my_agent",
             "description": "Existing description",
-            "version": "1.2.3",
             "capabilities": ["skill-a", "skill-b"],
+            "enabled": False,
         }
         entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", existing)
         assert entry["description"] == "Existing description"
-        assert entry["version"] == "1.2.3"
         assert set(entry["capabilities"]) == {"skill-a", "skill-b"}
+        assert entry["enabled"] is False
 
-    def test_preserves_created_at_from_existing(self):
-        existing = {"name": "my_agent", "created_at": "2024-01-01T00:00:00", "entrypoint": "app/agents/my_agent/agent.py"}
+    def test_does_not_keep_entrypoint_from_existing(self):
+        existing = {"name": "my_agent", "entrypoint": "app/agents/my_agent/http_agent.py"}
         entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", existing)
-        assert entry["created_at"] == "2024-01-01T00:00:00"
-
-    def test_preserves_entrypoint_from_existing(self):
-        existing = {"name": "my_agent", "created_at": "2024-01-01T00:00:00", "entrypoint": "app/agents/my_agent/http_agent.py"}
-        entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", existing)
-        assert entry["entrypoint"] == "app/agents/my_agent/http_agent.py"
+        assert "entrypoint" not in entry
 
 
 class TestMain:
@@ -112,12 +108,12 @@ class TestMain:
         assert agents[0]["name"] == "my_agent"
         assert agents[0]["port"] == 8100
         assert agents[0]["endpoint"] == "http://docker-host-123:8100"
-        assert agents[0]["status"] == "running"
+        assert "status" not in agents[0]
 
     def test_replaces_existing_entry(self, tmp_path):
         registry_path = tmp_path / "agents.json"
         registry_path.write_text(json.dumps({
-            "agents": [{"name": "my_agent", "port": 9999, "created_at": "2024-01-01T00:00:00"}]
+            "agents": [{"name": "my_agent", "port": 9999, "enabled": False, "entrypoint": "app/agents/my_agent/agent.py"}]
         }))
         code = self._run_main({"AGENT_NAME": "my_agent", "PORT": "8100"}, tmp_path)
         assert code == 0
@@ -125,7 +121,8 @@ class TestMain:
         agents = registry["agents"]
         assert len(agents) == 1
         assert agents[0]["port"] == 8100
-        assert agents[0]["created_at"] == "2024-01-01T00:00:00"
+        assert agents[0]["enabled"] is False
+        assert "entrypoint" not in agents[0]
 
     def test_preserves_other_agents(self, tmp_path):
         registry_path = tmp_path / "agents.json"
