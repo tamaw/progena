@@ -301,12 +301,14 @@ jobs:
         run: |
           PORT=${{ steps.runtime.outputs.port }}
           CONTAINER_NAME="progenitor-agent-${{ matrix.agent }}"
+          REGISTRY_HOST="${CONTAINER_NAME}"
           DOCKER_HOSTNAME="$(docker inspect --format '{{.Config.Hostname}}' "${CONTAINER_NAME}")"
           if [ -z "${DOCKER_HOSTNAME}" ]; then
             echo "Could not resolve Docker hostname for ${CONTAINER_NAME}"
             exit 1
           fi
           echo "docker_hostname=${DOCKER_HOSTNAME}" >> "$GITHUB_OUTPUT"
+          echo "registry_host=${REGISTRY_HOST}" >> "$GITHUB_OUTPUT"
 
           echo "Waiting for agent ${{ matrix.agent }} on ${DOCKER_HOSTNAME}:${PORT}..."
           for i in $(seq 1 30); do
@@ -326,7 +328,7 @@ jobs:
         env:
           AGENT_NAME: ${{ matrix.agent }}
           PORT: ${{ steps.runtime.outputs.port }}
-          DOCKER_HOSTNAME: ${{ steps.health.outputs.docker_hostname }}
+          DOCKER_HOSTNAME: ${{ steps.health.outputs.registry_host }}
           PROGENITOR_CONTAINER: progenitor
         run: python .github/scripts/register_agent.py
 
