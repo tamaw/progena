@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Register a deployed agent in the progenitor agents.json registry.
 
-Reads the agent card from the running Docker container and writes or
+Performs a health check for the running Docker container and writes or
 replaces the agent's entry in the progenitor registry file.
 
 Environment variables:
-  AGENT_NAME      Name of the deployed agent (required).
-  PORT            Port the agent listens on (required).
-  REGISTRY_FILE   Path to agents.json on the host (default: /var/lib/progenitor/data/config/agents.json).
+  AGENT_NAME       Name of the deployed agent (required).
+  PORT             Port the agent listens on (required).
+  REGISTRY_FILE    Path to agents.json on the host (default: /var/lib/progenitor/data/config/agents.json).
+  CONTAINER_NAME   Docker container name (default: progenitor-agent-{AGENT_NAME}).
+  DOCKER_HOSTNAME  Docker hostname for endpoint/health check (optional; auto-detected when unset).
 """
 from __future__ import annotations
 
@@ -18,7 +20,6 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-
 _DEFAULT_REGISTRY = "/var/lib/progenitor/data/config/agents.json"
 
 
@@ -26,13 +27,31 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _fetch_agent_card(container_name: str, port: int) -> dict | None:
-    """Fetch /.well-known/agent.json from the running container."""
+def _resolve_container_hostname(container_name: str) -> str:
+    """Resolve the Docker hostname configured for a container."""
+    result = subprocess.run(
+        ["docker", "inspect", "--format", "{{.Config.Hostname}}", container_name],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Could not inspect Docker hostname for {container_name}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    hostname = result.stdout.strip()
+    if not hostname:
+        raise RuntimeError(f"Container {container_name} did not return a Docker hostname")
+    return hostname
+
+
+def _check_agent_health(container_name: str, docker_hostname: str, port: int) -> None:
+    """Run /health check from inside the container using its Docker hostname."""
     script = (
-        "import httpx, sys; "
-        f"r = httpx.get('http://localhost:{port}/.well-known/agent.json', timeout=10); "
-        "r.raise_for_status(); "
-        "print(r.text)"
+        "import httpx; "
+        f"r = httpx.get('http://{docker_hostname}:{port}/health', timeout=10); "
+        "r.raise_for_status()"
     )
     result = subprocess.run(
         ["docker", "exec", container_name, "python", "-c", script],
@@ -41,17 +60,10 @@ def _fetch_agent_card(container_name: str, port: int) -> dict | None:
         timeout=30,
     )
     if result.returncode != 0:
-        print(
-            f"WARNING: Could not fetch agent card from {container_name}: "
-            f"{result.stderr.strip() or result.stdout.strip()}",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"Health check failed for {container_name} at http://{docker_hostname}:{port}/health: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
         )
-        return None
-    try:
-        return json.loads(result.stdout.strip())
-    except json.JSONDecodeError as exc:
-        print(f"WARNING: Failed to parse agent card JSON: {exc}", file=sys.stderr)
-        return None
 
 
 def _load_registry(registry_path: Path) -> dict:
@@ -79,32 +91,23 @@ def _save_registry(registry_path: Path, data: dict) -> None:
 def _build_entry(
     agent_name: str,
     port: int,
-    card: dict | None,
+    docker_hostname: str,
     existing: dict | None,
 ) -> dict:
     """Build the registry entry for this agent."""
     now = _utc_now_iso()
-    container_hostname = f"progenitor-agent-{agent_name}"
-    endpoint = f"http://{container_hostname}:{port}"
+    endpoint = f"http://{docker_hostname}:{port}"
     agent_card_url = f"{endpoint}/.well-known/agent.json"
 
-    # Extract metadata from agent card when available
-    name = agent_name
     description = f"A2A agent: {agent_name}"
     version = "0.1.0"
     capabilities: list[str] = []
-
-    if card:
-        name = card.get("name", agent_name)
-        description = card.get("description", description)
-        version = card.get("version", version)
-        # A2A agent card skills → capabilities
-        skills = card.get("skills") or []
-        for skill in skills:
-            if isinstance(skill, dict):
-                skill_id = skill.get("id") or skill.get("name") or ""
-                if skill_id:
-                    capabilities.append(skill_id)
+    if existing:
+        description = str(existing.get("description", description))
+        version = str(existing.get("version", version))
+        existing_capabilities = existing.get("capabilities")
+        if isinstance(existing_capabilities, list):
+            capabilities = [str(cap) for cap in existing_capabilities]
 
     # Determine entrypoint: prefer agent.py, keep existing if set
     entrypoint = f"app/agents/{agent_name}/agent.py"
@@ -148,16 +151,26 @@ def main() -> int:
     port = int(port_str)
 
     registry_path = Path(os.environ.get("REGISTRY_FILE", _DEFAULT_REGISTRY))
-    container_name = f"progenitor-agent-{agent_name}"
+    container_name = os.environ.get("CONTAINER_NAME", f"progenitor-agent-{agent_name}")
+    docker_hostname = os.environ.get("DOCKER_HOSTNAME", "").strip()
+    if not docker_hostname:
+        try:
+            docker_hostname = _resolve_container_hostname(container_name)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
 
-    print(f"Registering agent '{agent_name}' (port={port}) in {registry_path}")
+    print(
+        f"Registering agent '{agent_name}' (port={port}, docker_hostname={docker_hostname}) "
+        f"in {registry_path}"
+    )
 
-    # Fetch agent card from running container
-    card = _fetch_agent_card(container_name, port)
-    if card:
-        print(f"Fetched agent card: name={card.get('name')!r} version={card.get('version')!r}")
-    else:
-        print("Proceeding without agent card (using defaults)")
+    try:
+        _check_agent_health(container_name, docker_hostname, port)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print("Health check passed")
 
     # Load current registry
     registry = _load_registry(registry_path)
@@ -169,7 +182,7 @@ def main() -> int:
     existing = next((a for a in agents if isinstance(a, dict) and a.get("name") == agent_name), None)
 
     # Build updated entry
-    entry = _build_entry(agent_name, port, card, existing)
+    entry = _build_entry(agent_name, port, docker_hostname, existing)
 
     # Replace or append
     agents = [a for a in agents if not (isinstance(a, dict) and a.get("name") == agent_name)]

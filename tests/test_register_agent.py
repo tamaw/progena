@@ -1,11 +1,8 @@
 """Tests for .github/scripts/register_agent.py."""
 import importlib.util
 import json
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 # Load the script as a module (it lives outside the package tree)
 _SCRIPT_PATH = Path(__file__).parents[1] / ".github" / "scripts" / "register_agent.py"
@@ -50,37 +47,37 @@ class TestSaveRegistry:
 
 class TestBuildEntry:
     def test_uses_defaults_when_card_is_none(self):
-        entry = _register_agent._build_entry("my_agent", 8100, None, None)
+        entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", None)
         assert entry["name"] == "my_agent"
         assert entry["port"] == 8100
         assert entry["kind"] == "a2a_agent"
         assert entry["transport"] == "http"
-        assert entry["endpoint"] == "http://progenitor-agent-my_agent:8100"
-        assert entry["agent_card_url"] == "http://progenitor-agent-my_agent:8100/.well-known/agent.json"
+        assert entry["endpoint"] == "http://docker-host-123:8100"
+        assert entry["agent_card_url"] == "http://docker-host-123:8100/.well-known/agent.json"
         assert entry["status"] == "running"
         assert entry["enabled"] is True
         assert entry["capabilities"] == []
 
-    def test_extracts_metadata_from_card(self):
-        card = {
-            "name": "My Agent",
-            "description": "Does things",
+    def test_preserves_metadata_from_existing(self):
+        existing = {
+            "name": "my_agent",
+            "description": "Existing description",
             "version": "1.2.3",
-            "skills": [{"id": "skill-a"}, {"id": "skill-b"}],
+            "capabilities": ["skill-a", "skill-b"],
         }
-        entry = _register_agent._build_entry("my_agent", 8100, card, None)
-        assert entry["description"] == "Does things"
+        entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", existing)
+        assert entry["description"] == "Existing description"
         assert entry["version"] == "1.2.3"
         assert set(entry["capabilities"]) == {"skill-a", "skill-b"}
 
     def test_preserves_created_at_from_existing(self):
         existing = {"name": "my_agent", "created_at": "2024-01-01T00:00:00", "entrypoint": "app/agents/my_agent/agent.py"}
-        entry = _register_agent._build_entry("my_agent", 8100, None, existing)
+        entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", existing)
         assert entry["created_at"] == "2024-01-01T00:00:00"
 
     def test_preserves_entrypoint_from_existing(self):
         existing = {"name": "my_agent", "created_at": "2024-01-01T00:00:00", "entrypoint": "app/agents/my_agent/http_agent.py"}
-        entry = _register_agent._build_entry("my_agent", 8100, None, existing)
+        entry = _register_agent._build_entry("my_agent", 8100, "docker-host-123", existing)
         assert entry["entrypoint"] == "app/agents/my_agent/http_agent.py"
 
 
@@ -88,9 +85,13 @@ class TestMain:
     def _run_main(self, env: dict, tmp_path: Path) -> int:
         registry = tmp_path / "agents.json"
         env.setdefault("REGISTRY_FILE", str(registry))
-        with patch.dict("os.environ", env, clear=False):
-            with patch.object(_register_agent, "_fetch_agent_card", return_value=None):
-                return _register_agent.main()
+        env.setdefault("DOCKER_HOSTNAME", "docker-host-123")
+        env.setdefault("CONTAINER_NAME", "progenitor-agent-my_agent")
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(_register_agent, "_check_agent_health", return_value=None),
+        ):
+            return _register_agent.main()
 
     def test_fails_without_agent_name(self, tmp_path):
         with patch.dict("os.environ", {"AGENT_NAME": "", "PORT": "8100"}, clear=False):
@@ -110,6 +111,7 @@ class TestMain:
         assert len(agents) == 1
         assert agents[0]["name"] == "my_agent"
         assert agents[0]["port"] == 8100
+        assert agents[0]["endpoint"] == "http://docker-host-123:8100"
         assert agents[0]["status"] == "running"
 
     def test_replaces_existing_entry(self, tmp_path):
@@ -135,3 +137,11 @@ class TestMain:
         registry = json.loads(registry_path.read_text())
         names = {a["name"] for a in registry["agents"]}
         assert names == {"my_agent", "other_agent"}
+
+    def test_fails_when_health_check_fails(self, tmp_path):
+        with (
+            patch.dict("os.environ", {"AGENT_NAME": "my_agent", "PORT": "8100", "DOCKER_HOSTNAME": "docker-host-123"}, clear=False),
+            patch.object(_register_agent, "_check_agent_health", side_effect=RuntimeError("boom")),
+        ):
+            result = _register_agent.main()
+        assert result == 1
