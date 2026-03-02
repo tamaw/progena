@@ -485,6 +485,31 @@ class TestStateReaderFileOperations:
         assert len(tools) == 1
         assert tools[0].name == "tool-1"
 
+    def test_read_registry_merges_legacy_and_map(self, temp_state_dir):
+        """Map entries should be visible even if legacy list is present."""
+        config_dir = temp_state_dir.parent / "config"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "agents.json").write_text(
+            json.dumps(
+                {
+                    "agents": [{"name": "legacy-agent", "url": "http://legacy:8100"}],
+                    "legacy-agent": {"url": "http://map:8101"},
+                    "map-agent": {"url": "http://map:8102"},
+                }
+            )
+        )
+        (config_dir / "mcp.json").write_text(json.dumps({"tools": []}))
+
+        reader = StateReader(state_dir=temp_state_dir)
+        agents, tools = reader.get_registry()
+
+        by_name = {a.name: a.url for a in agents}
+        assert by_name == {
+            "legacy-agent": "http://map:8101",
+            "map-agent": "http://map:8102",
+        }
+        assert tools == []
+
     def test_state_snapshot(self, temp_state_dir):
         """Test getting complete state snapshot."""
         # Create all required state files
