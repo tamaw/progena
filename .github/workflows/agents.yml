@@ -337,6 +337,54 @@ jobs:
             --filter "label=com.progenitor.managed=true" \
             --filter "until=168h" || true
 
+  # ------------------------------------------------------------------ reconcile agent registry
+  reconcile-agent-registry:
+    needs: [detect-changes, deploy-agent]
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Reconcile registry from running agent containers
+        env:
+          PROGENITOR_CONTAINER: progenitor
+        run: |
+          set -euo pipefail
+
+          mapfile -t containers < <(docker ps --format '{{.Names}}' | grep '^progenitor-agent-' || true)
+          if [ ${#containers[@]} -eq 0 ]; then
+            echo "No running agent containers found. Leaving registry unchanged."
+            exit 0
+          fi
+
+          for container in "${containers[@]}"; do
+            agent="${container#progenitor-agent-}"
+            port="$(docker inspect --format '{{range $p, $_ := .Config.ExposedPorts}}{{$p}}{{end}}' "$container" | head -n1 | cut -d/ -f1)"
+            if [ -z "${port}" ]; then
+              echo "Skipping ${container}: could not resolve exposed port"
+              continue
+            fi
+
+            if ! docker exec "${container}" \
+              python -c "import urllib.request; urllib.request.urlopen('http://${container}:${port}/health', timeout=5).read(1)"; then
+              echo "Skipping ${container}: health check failed"
+              continue
+            fi
+
+            AGENT_NAME="${agent}" \
+            PORT="${port}" \
+            DOCKER_HOSTNAME="${container}" \
+            PROGENITOR_CONTAINER="${PROGENITOR_CONTAINER}" \
+            python .github/scripts/register_agent.py
+          done
+
+          echo "Final registry snapshot:"
+          docker exec "${PROGENITOR_CONTAINER}" cat /app/data/config/agents.json
+
   # ------------------------------------------------------------------ build + push mcps
   build-mcp:
     needs: detect-changes
