@@ -326,9 +326,8 @@ jobs:
         env:
           AGENT_NAME: ${{ matrix.agent }}
           PORT: ${{ steps.runtime.outputs.port }}
-          REGISTRY_FILE: /var/lib/progenitor/data/config/agents.json
-          CONTAINER_NAME: progenitor-agent-${{ matrix.agent }}
           DOCKER_HOSTNAME: ${{ steps.health.outputs.docker_hostname }}
+          PROGENITOR_CONTAINER: progenitor
         run: python .github/scripts/register_agent.py
 
       - name: Cleanup unused managed images

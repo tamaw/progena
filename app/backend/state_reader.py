@@ -299,10 +299,22 @@ class StateReader:
             raw_agents = agents_data.get("agents")
             if isinstance(raw_agents, list):
                 agent_entries = [a for a in raw_agents if isinstance(a, dict)]
-            else:
-                for name, cfg in agents_data.items():
-                    if isinstance(cfg, dict):
-                        agent_entries.append({"name": str(name), **cfg})
+            agent_map = {
+                str(name): cfg
+                for name, cfg in agents_data.items()
+                if name != "agents" and isinstance(cfg, dict)
+            }
+            if agent_map:
+                filtered = []
+                seen_names = set(agent_map)
+                for agent in agent_entries:
+                    name = str(agent.get("name") or "")
+                    if name and name in seen_names:
+                        continue
+                    filtered.append(agent)
+                agent_entries = filtered
+                for name, cfg in agent_map.items():
+                    agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
         tools = [ToolInfo.from_dict(t) for t in mcp_data.get("tools", [])]
