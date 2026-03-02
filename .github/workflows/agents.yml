@@ -327,73 +327,8 @@ jobs:
           AGENT_NAME: ${{ matrix.agent }}
           PORT: ${{ steps.runtime.outputs.port }}
           DOCKER_HOSTNAME: ${{ steps.health.outputs.docker_hostname }}
-        run: |
-          docker exec \
-            -e AGENT_NAME="${AGENT_NAME}" \
-            -e PORT="${PORT}" \
-            -e DOCKER_HOSTNAME="${DOCKER_HOSTNAME}" \
-            progenitor \
-            python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          name = os.environ["AGENT_NAME"].strip()
-          port = int(os.environ["PORT"].strip())
-          docker_hostname = os.environ["DOCKER_HOSTNAME"].strip()
-          registry_path = Path("/app/data/config/agents.json")
-
-          registry = {}
-          if registry_path.exists():
-              try:
-                  loaded = json.loads(registry_path.read_text(encoding="utf-8"))
-              except (OSError, json.JSONDecodeError):
-                  loaded = {}
-              if isinstance(loaded, dict):
-                  raw_agents = loaded.get("agents")
-                  if isinstance(raw_agents, list):
-                      for item in raw_agents:
-                          if not isinstance(item, dict):
-                              continue
-                          legacy_name = str(item.get("name") or "").strip()
-                          legacy_url = item.get("url")
-                          if legacy_name and isinstance(legacy_url, str) and legacy_url.strip():
-                              entry = {"url": legacy_url.strip()}
-                              headers = item.get("headers")
-                              if isinstance(headers, dict):
-                                  clean = {str(k): str(v) for k, v in headers.items() if str(k).strip()}
-                                  if clean:
-                                      entry["headers"] = clean
-                              registry[legacy_name] = entry
-                  for key, value in loaded.items():
-                      if key == "agents" or not isinstance(value, dict):
-                          continue
-                      url = value.get("url")
-                      if not isinstance(url, str) or not url.strip():
-                          continue
-                      entry = {"url": url.strip()}
-                      headers = value.get("headers")
-                      if isinstance(headers, dict):
-                          clean = {str(k): str(v) for k, v in headers.items() if str(k).strip()}
-                          if clean:
-                              entry["headers"] = clean
-                      registry[str(key)] = entry
-
-          existing = registry.get(name) if isinstance(registry.get(name), dict) else None
-          entry = {"url": f"http://{docker_hostname}:{port}"}
-          if existing and isinstance(existing.get("headers"), dict):
-              headers = {str(k): str(v) for k, v in existing["headers"].items() if str(k).strip()}
-              if headers:
-                  entry["headers"] = headers
-          registry[name] = entry
-
-          registry_path.parent.mkdir(parents=True, exist_ok=True)
-          tmp_path = registry_path.with_suffix(".tmp")
-          tmp_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
-          tmp_path.replace(registry_path)
-
-          print(f"Registered {name} -> {entry['url']} (total agents: {len(registry)})")
-          PY
+          PROGENITOR_CONTAINER: progenitor
+        run: python .github/scripts/register_agent.py
 
       - name: Cleanup unused managed images
         if: success()
