@@ -303,6 +303,8 @@ class AgentRegistryEntry(BaseModel):
     # HTTP endpoint configuration
     transport: str = "http"  # http only
     port: int | None = None  # Assigned HTTP port (e.g., 8100-8199)
+    url: str | None = None  # Config-style URL (preferred for static registry entries)
+    headers: dict[str, str] | None = None  # Optional HTTP headers for agent calls
     endpoint: str | None = None  # Base URL (e.g., http://localhost:8100)
     agent_card_url: str | None = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)
 

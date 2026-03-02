@@ -381,7 +381,7 @@ class A2AClient:
             return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
 
         # Prefer direct endpoint invocation first.
-        endpoint = str(agent_config.get("endpoint") or "").strip()
+        endpoint = str(agent_config.get("endpoint") or agent_config.get("url") or "").strip()
         if not endpoint:
             card = agent_config.get("agent_card")
             if isinstance(card, dict):
@@ -406,7 +406,7 @@ class A2AClient:
         Our A2A agents are implemented with the official a2a-sdk, so they expect
         JSON-RPC 2.0 methods like `message/send` (not `{request: ...}` payloads).
         """
-        endpoint = agent_config.get("endpoint")
+        endpoint = agent_config.get("endpoint") or agent_config.get("url")
         if not endpoint:
             raise ValueError("No endpoint specified for HTTP agent")
 
@@ -427,7 +427,11 @@ class A2AClient:
                         "metadata": context or {},
                     },
                 }
-                resp = await httpx_client.post(str(endpoint), json=payload)
+                headers = {"Content-Type": "application/json"}
+                custom_headers = agent_config.get("headers")
+                if isinstance(custom_headers, dict):
+                    headers.update({str(k): str(v) for k, v in custom_headers.items()})
+                resp = await httpx_client.post(str(endpoint), json=payload, headers=headers)
         except TimeoutError:
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
@@ -470,7 +474,7 @@ class A2AClient:
 
         agent_card_url = agent_config.get("agent_card_url")
         if not agent_card_url:
-            endpoint = agent_config.get("endpoint")
+            endpoint = agent_config.get("endpoint") or agent_config.get("url")
             if endpoint:
                 agent_card_url = f"{endpoint}/.well-known/agent.json"
             else:

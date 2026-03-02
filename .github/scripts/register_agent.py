@@ -17,14 +17,9 @@ import json
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
 _DEFAULT_REGISTRY = "/var/lib/progenitor/data/config/agents.json"
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _resolve_container_hostname(container_name: str) -> str:
@@ -94,32 +89,12 @@ def _build_entry(
     docker_hostname: str,
     existing: dict | None,
 ) -> dict:
-    """Build a minimal registry entry for this agent."""
-    now = _utc_now_iso()
-    endpoint = f"http://{docker_hostname}:{port}"
-
-    description = f"A2A agent: {agent_name}"
-    capabilities: list[str] = []
-    enabled = True
-    if existing:
-        description = str(existing.get("description", description))
-        existing_capabilities = existing.get("capabilities")
-        if isinstance(existing_capabilities, list):
-            capabilities = [str(cap) for cap in existing_capabilities]
-        if isinstance(existing.get("enabled"), bool):
-            enabled = existing["enabled"]
-
-    entry: dict = {
-        "name": agent_name,
-        "kind": "a2a_agent",
-        "description": description,
-        "capabilities": capabilities,
-        "transport": "http",
-        "port": port,
-        "endpoint": endpoint,
-        "enabled": enabled,
-        "updated_at": now,
-    }
+    """Build a config-style registry entry for this agent."""
+    entry: dict = {"name": agent_name, "url": f"http://{docker_hostname}:{port}"}
+    if existing and isinstance(existing.get("headers"), dict):
+        headers = {str(k): str(v) for k, v in existing["headers"].items()}
+        if headers:
+            entry["headers"] = headers
     return entry
 
 
@@ -176,7 +151,7 @@ def main() -> int:
 
     # Save registry
     _save_registry(registry_path, registry)
-    print(f"Registered agent '{agent_name}' → {entry['endpoint']} (total agents: {len(agents)})")
+    print(f"Registered agent '{agent_name}' → {entry['url']} (total agents: {len(agents)})")
     return 0
 
 
