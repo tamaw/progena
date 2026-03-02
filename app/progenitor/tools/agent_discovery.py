@@ -295,23 +295,14 @@ class AgentDiscovery:
 
         return AgentDiscoveryResult(agents=agents)
 
-    async def discover_and_register(self, clear_existing: bool = False) -> dict[str, Any]:
+    async def discover_and_register(self) -> dict[str, Any]:
         """
         Main entry point: scan, analyze, and register all agents.
-
-        Args:
-            clear_existing: If True, clear existing agents before registering new ones.
-                           This makes the operation a full rescan rather than additive.
 
         Returns:
             Summary of the discovery process.
         """
         logger.info("Starting agent discovery from %s", self.agents_dir)
-
-        # Clear existing agents if requested (full rescan mode)
-        if clear_existing:
-            logger.info("Clearing existing agents from registry")
-            await self.registry.clear_agents()
 
         # Scan folders
         folders = self.scan_agents_folder()
@@ -427,8 +418,6 @@ async def discover_agents(
     llm_client: "LLMClient",
     registry: "ToolRegistry",
     host: str = "localhost",
-    *,
-    clear_existing: bool = False,
 ) -> dict[str, Any]:
     """
     Convenience function to run agent discovery.
@@ -448,4 +437,4 @@ async def discover_agents(
         registry=registry,
         host=host,
     )
-    return await discovery.discover_and_register(clear_existing=clear_existing)
+    return await discovery.discover_and_register()

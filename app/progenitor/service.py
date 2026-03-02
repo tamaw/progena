@@ -379,7 +379,6 @@ class ProgenitorService:
                 agents_dir=agents_dir,
                 llm_client=self.llm_client,
                 registry=self.tool_registry,
-                clear_existing=False,
             )
 
             if result.get("agents_registered", 0) > 0:
