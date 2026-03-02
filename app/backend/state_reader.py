@@ -294,7 +294,17 @@ class StateReader:
         agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
         mcp_data = self._read_json_from_path(self.config_dir / "mcp.json") or {}
 
-        agents = [AgentInfo.from_dict(a) for a in agents_data.get("agents", [])]
+        agent_entries: list[dict] = []
+        if isinstance(agents_data, dict):
+            raw_agents = agents_data.get("agents")
+            if isinstance(raw_agents, list):
+                agent_entries = [a for a in raw_agents if isinstance(a, dict)]
+            else:
+                for name, cfg in agents_data.items():
+                    if isinstance(cfg, dict):
+                        agent_entries.append({"name": str(name), **cfg})
+
+        agents = [AgentInfo.from_dict(a) for a in agent_entries]
         tools = [ToolInfo.from_dict(t) for t in mcp_data.get("tools", [])]
         return agents, tools
 
