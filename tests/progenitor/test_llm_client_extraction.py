@@ -1,6 +1,7 @@
 """Tests for LLM client helpers and message handling."""
 
 from types import MethodType, SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -235,3 +236,31 @@ async def test_generate_response_trims_history_to_recent_messages():
         *(f"message-{i}" for i in range(20 - RESPONSE_HISTORY_LIMIT, 20)),
         "latest-input",
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
+    client = LLMClient.__new__(LLMClient)
+    client._call_mcp_tool = AsyncMock(return_value={"error": "should-not-call-mcp"})
+    tool_registry = SimpleNamespace(
+        find_by_name=lambda _name: {
+            "name": "builder_copilot",
+            "url": "http://progenitor-agent-builder_copilot:8108",
+        }
+    )
+
+    with patch(
+        "app.progenitor.tools.mcp.A2AClient.call_agent",
+        new=AsyncMock(return_value={"success": True, "result": {"ok": True}}),
+    ) as mock_call_agent:
+        result = await LLMClient._execute_tool_call(
+            client,
+            {"id": "tool_1"},
+            "builder_copilot",
+            {"request": "hello", "context": {"caller": "test"}},
+            {"tool_registry": tool_registry},
+        )
+
+    assert result == {"result": {"success": True, "result": {"ok": True}}}
+    client._call_mcp_tool.assert_not_awaited()
+    mock_call_agent.assert_awaited_once()
