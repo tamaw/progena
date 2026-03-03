@@ -213,6 +213,7 @@ jobs:
         id: runtime
         env:
           AGENT_NAME: ${{ matrix.agent }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
