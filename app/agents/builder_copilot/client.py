@@ -31,6 +31,19 @@ def _build_responses_endpoint(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
+def _close_object_schemas(node: Any) -> None:
+    """Recursively enforce additionalProperties=false on every object schema."""
+    if isinstance(node, dict):
+        if node.get("type") == "object":
+            node["additionalProperties"] = False
+        for value in node.values():
+            _close_object_schemas(value)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _close_object_schemas(item)
+
+
 class PlanStep(BaseModel):
     """A single execution step in the preflight plan."""
 
@@ -57,7 +70,7 @@ class ReasonedPlan:
 
 def _build_json_schema_format(response_model: type[BaseModel], schema_name: str) -> dict[str, Any]:
     schema = response_model.model_json_schema()
-    schema["additionalProperties"] = False
+    _close_object_schemas(schema)
     if "properties" in schema:
         schema["required"] = list(schema["properties"].keys())
     return {
