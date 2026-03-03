@@ -38,6 +38,8 @@ def test_build_payload_includes_reasoning_and_structured_output():
     assert payload["model"] == client.model
     assert payload["reasoning"] == {"summary": "auto"}
     assert payload["text"]["format"]["type"] == "json_schema"
+    assert payload["text"]["format"]["name"] == "plan"
+    assert "json_schema" not in payload["text"]["format"]
 
 
 @pytest.mark.asyncio

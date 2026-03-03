@@ -6,6 +6,7 @@ import json
 import logging
 import logging.handlers
 import os
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -184,7 +185,7 @@ class JsonLogFormatter(logging.Formatter):
 
 
 def setup_logging(config: BuilderCopilotConfig, agent_name: str = "builder_copilot") -> None:
-    """Configure stdout plus a rotating file for this agent."""
+    """Configure split stdout/stderr logging like progenitor runtime."""
     level_map = {
         "debug": logging.DEBUG,
         "info": logging.INFO,
@@ -202,25 +203,56 @@ def setup_logging(config: BuilderCopilotConfig, agent_name: str = "builder_copil
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(level)
-    stream_handler.setFormatter(formatter)
-    logging.root.handlers = [stream_handler]
-    logging.root.setLevel(level)
+    root_logger = logging.getLogger()
+    for existing_handler in root_logger.handlers[:]:
+        existing_handler.close()
+        root_logger.removeHandler(existing_handler)
+    root_logger.setLevel(level)
+
+    stdout_handler = logging.StreamHandler(stream=sys.stdout)
+    stdout_handler.setLevel(level)
+    stdout_handler.addFilter(_BelowErrorFilter())
+    stdout_handler.setFormatter(formatter)
+    root_logger.addHandler(stdout_handler)
+
+    stderr_handler = logging.StreamHandler(stream=sys.stderr)
+    stderr_handler.setLevel(logging.ERROR)
+    stderr_handler.setFormatter(formatter)
+    root_logger.addHandler(stderr_handler)
 
     try:
-        config.storage.log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
-            config.storage.log_dir / f"{agent_name}.log",
+        log_dir = config.storage.log_dir / agent_name
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        stdout_file_handler = logging.handlers.RotatingFileHandler(
+            log_dir / f"{agent_name}.stdout.log",
             maxBytes=10 * 1024 * 1024,
             backupCount=5,
             encoding="utf-8",
         )
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        logging.root.addHandler(file_handler)
+        stdout_file_handler.setLevel(level)
+        stdout_file_handler.addFilter(_BelowErrorFilter())
+        stdout_file_handler.setFormatter(formatter)
+        root_logger.addHandler(stdout_file_handler)
+
+        stderr_file_handler = logging.handlers.RotatingFileHandler(
+            log_dir / f"{agent_name}.stderr.log",
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        stderr_file_handler.setLevel(logging.ERROR)
+        stderr_file_handler.setFormatter(formatter)
+        root_logger.addHandler(stderr_file_handler)
     except OSError as exc:
-        logger.warning("Could not create log file for %s: %s", agent_name, exc)
+        logger.warning("Could not create split log files for %s: %s", agent_name, exc)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
+
+
+class _BelowErrorFilter(logging.Filter):
+    """Allow only records below ERROR."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno < logging.ERROR

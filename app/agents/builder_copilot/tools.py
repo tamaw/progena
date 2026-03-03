@@ -20,6 +20,32 @@ from .config import BuilderCopilotConfig
 logger = logging.getLogger(__name__)
 
 
+async def _configure_git_identity(workspace: Path) -> None:
+    """Set local git identity from environment when provided."""
+    git_user_name = (os.getenv("GIT_AUTHOR_NAME") or "").strip()
+    git_user_email = (os.getenv("GIT_AUTHOR_EMAIL") or "").strip()
+    if not git_user_name or not git_user_email:
+        logger.info("Skipping git identity setup: GIT_AUTHOR_NAME or GIT_AUTHOR_EMAIL not set")
+        return
+
+    async def _run_git(*args: str) -> tuple[int, str, str]:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        rc = proc.returncode
+        assert rc is not None
+        return int(rc), stdout.decode(errors="replace"), stderr.decode(errors="replace")
+
+    for key, value in (("user.name", git_user_name), ("user.email", git_user_email)):
+        rc, _out, err = await _run_git("-C", str(workspace), "config", key, value)
+        if rc != 0:
+            raise RuntimeError(f"Failed to set git {key}: {err[:500]}")
+
+
 async def ensure_workspace() -> None:
     """Ensure the mounted workspace is a git repo before worktree creation."""
     workspace_env = os.getenv("PROGENITOR_PROJECT_ROOT")
@@ -30,6 +56,7 @@ async def ensure_workspace() -> None:
     workspace.mkdir(parents=True, exist_ok=True)
 
     if (workspace / ".git").exists():
+        await _configure_git_identity(workspace)
         return
 
     repo_url = os.getenv("PROGENITOR_REPO_URL")
@@ -61,6 +88,7 @@ async def ensure_workspace() -> None:
         rc, _out, err = await _run_git("clone", repo_url, str(workspace))
         if rc != 0:
             raise RuntimeError(f"Failed to clone repo into workspace: {err[:500]}")
+        await _configure_git_identity(workspace)
         return
 
     rc, _out, err = await _run_git("-C", str(workspace), "init")
@@ -80,6 +108,7 @@ async def ensure_workspace() -> None:
         rc, _out, err = await _run_git("-C", str(workspace), "checkout", "-B", "main", "origin/master")
         if rc != 0:
             raise RuntimeError(f"Failed to checkout default branch: {err[:500]}")
+    await _configure_git_identity(workspace)
 
 
 class BuilderCopilotToolRuntime:
