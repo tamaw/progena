@@ -70,6 +70,23 @@ def _build_json_schema_format(response_model: type[BaseModel], schema_name: str)
     }
 
 
+def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
+    """Normalize json_schema format for Azure Responses compatibility."""
+    if response_format.get("type") != "json_schema":
+        return response_format
+
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return response_format
+
+    return {
+        "type": "json_schema",
+        "name": json_schema.get("name") or "structured_output",
+        "schema": json_schema.get("schema") or {},
+        "strict": bool(json_schema.get("strict", True)),
+    }
+
+
 class BuilderCopilotClient:
     """Small wrapper for the Azure OpenAI /responses endpoint."""
 
@@ -162,7 +179,7 @@ class BuilderCopilotClient:
             "max_output_tokens": max_tokens,
         }
         if response_format is not None:
-            payload["text"] = {"format": response_format}
+            payload["text"] = {"format": _to_azure_text_format(response_format)}
         if include_reasoning:
             payload["reasoning"] = {"summary": "auto"}
         payload["temperature"] = temperature
