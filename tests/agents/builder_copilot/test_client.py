@@ -5,6 +5,7 @@ import pytest
 from app.agents.builder_copilot.client import (
     BuilderCopilotClient,
     PlanResponse,
+    _build_json_schema_format,
     _build_responses_endpoint,
 )
 from app.agents.builder_copilot.config import LLMConfig
@@ -40,6 +41,13 @@ def test_build_payload_includes_reasoning_and_structured_output():
     assert payload["text"]["format"]["type"] == "json_schema"
     assert payload["text"]["format"]["name"] == "plan"
     assert "json_schema" not in payload["text"]["format"]
+
+
+def test_schema_format_closes_nested_object_defs():
+    response_format = _build_json_schema_format(PlanResponse, "builder_copilot_plan")
+    schema = response_format["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["$defs"]["PlanStep"]["additionalProperties"] is False
 
 
 @pytest.mark.asyncio
