@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     AZURE_OPENAI_BASE_URL= \
     AZURE_OPENAI_API_KEY= \
+    COPILOT_GITHUB_TOKEN= \
     GH_TOKEN= \
     GITHUB_TOKEN= \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
