@@ -32,10 +32,13 @@ def _build_responses_endpoint(base_url: str) -> str:
 
 
 def _close_object_schemas(node: Any) -> None:
-    """Recursively enforce additionalProperties=false on every object schema."""
+    """Recursively enforce strict object schemas Azure Responses accepts."""
     if isinstance(node, dict):
         if node.get("type") == "object":
             node["additionalProperties"] = False
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["required"] = list(properties.keys())
         for value in node.values():
             _close_object_schemas(value)
         return
@@ -183,7 +186,7 @@ class BuilderCopilotClient:
         *,
         response_format: dict[str, Any] | None = None,
         include_reasoning: bool = False,
-        temperature: float = 0.3,
+        temperature: float | None = None,
         max_tokens: int = 1200,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -195,7 +198,8 @@ class BuilderCopilotClient:
             payload["text"] = {"format": _to_azure_text_format(response_format)}
         if include_reasoning:
             payload["reasoning"] = {"summary": "auto"}
-        payload["temperature"] = temperature
+        if temperature is not None:
+            payload["temperature"] = temperature
         return payload
 
     async def _post_response(
@@ -205,7 +209,7 @@ class BuilderCopilotClient:
         system_prompt: str | None = None,
         response_format: dict[str, Any] | None = None,
         include_reasoning: bool = False,
-        temperature: float = 0.3,
+        temperature: float | None = None,
         max_tokens: int = 1200,
     ) -> dict[str, Any]:
         input_messages = self._build_input_messages(messages, system_prompt)
@@ -268,7 +272,7 @@ class BuilderCopilotClient:
         response_model: type[TModel],
         schema_name: str,
         system_prompt: str,
-        temperature: float = 0.3,
+        temperature: float | None = None,
         max_tokens: int = 1200,
     ) -> tuple[TModel, str]:
         response_format = _build_json_schema_format(response_model, schema_name)

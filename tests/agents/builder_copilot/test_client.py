@@ -41,13 +41,16 @@ def test_build_payload_includes_reasoning_and_structured_output():
     assert payload["text"]["format"]["type"] == "json_schema"
     assert payload["text"]["format"]["name"] == "plan"
     assert "json_schema" not in payload["text"]["format"]
+    assert "temperature" not in payload
 
 
 def test_schema_format_closes_nested_object_defs():
     response_format = _build_json_schema_format(PlanResponse, "builder_copilot_plan")
     schema = response_format["json_schema"]["schema"]
     assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"summary", "steps", "risks"}
     assert schema["$defs"]["PlanStep"]["additionalProperties"] is False
+    assert set(schema["$defs"]["PlanStep"]["required"]) == {"step", "objective", "commands"}
 
 
 @pytest.mark.asyncio
