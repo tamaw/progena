@@ -665,6 +665,28 @@ class CopilotACPManager:
                 "error": str(e),
             }
 
+    async def preflight(
+        self,
+        cwd: Path,
+        work_item_id: str = "acp-startup",
+        allowed_dirs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Run a lightweight startup check that validates ACP session creation.
+
+        This intentionally does not send a prompt. It verifies that:
+        1) Copilot ACP can start and initialize
+        2) A session can be created for the target working directory
+        """
+        start_time = time.perf_counter()
+        try:
+            async with self.connect(work_item_id, cwd, allowed_dirs=allowed_dirs) as (_client, conn):
+                await conn.new_session(cwd=str(cwd), mcp_servers=[])
+            elapsed = time.perf_counter() - start_time
+            return {"ready": True, "error": None, "elapsed_seconds": elapsed}
+        except Exception as exc:
+            elapsed = time.perf_counter() - start_time
+            return {"ready": False, "error": str(exc), "elapsed_seconds": elapsed}
+
 
 class ACPLogCapture:
     """Captures ACP streaming output to log files.
