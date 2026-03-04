@@ -682,17 +682,17 @@ class ACPLogCapture:
         self.logs_dir = logs_dir / "copilot_acp"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
-    def _generate_log_path(self, work_item_id: str) -> Path:
-        """Generate a unique log file path for a session.
+    def _generate_log_base_path(self, work_item_id: str) -> Path:
+        """Generate a unique log path prefix for a session.
 
         Args:
             work_item_id: Work item ID for the build.
 
         Returns:
-            Path to the log file.
+            Path prefix without extension.
         """
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp}_{work_item_id}.log"
+        filename = f"{timestamp}_{work_item_id}"
         return self.logs_dir / filename
 
     def write_log(
@@ -709,7 +709,10 @@ class ACPLogCapture:
         Returns:
             Path to the created log file.
         """
-        log_path = self._generate_log_path(work_item_id)
+        base_path = self._generate_log_base_path(work_item_id)
+        log_path = base_path.with_suffix(".log")
+        stdout_path = base_path.with_suffix(".stdout.log")
+        stderr_path = base_path.with_suffix(".stderr.log")
 
         logger.info(
             "COPILOT_ACP_LOG: Writing session log to %s",
@@ -749,6 +752,14 @@ class ACPLogCapture:
                 f.write(f"- Total chunks: {len(result.get('chunks', []))}\n")
                 f.write(f"- Tool calls: {len(result.get('tool_calls', []))}\n")
                 f.write(f"- Output length: {len(result.get('stdout', ''))} chars\n")
+                f.write(f"- stdout log: {stdout_path.name}\n")
+                f.write(f"- stderr log: {stderr_path.name}\n")
+
+            with open(stdout_path, "w", encoding="utf-8") as f:
+                f.write(result.get("stdout", ""))
+
+            with open(stderr_path, "w", encoding="utf-8") as f:
+                f.write(result.get("stderr", ""))
 
         except Exception as e:
             logger.exception("COPILOT_ACP_LOG: Failed to write log: %s", e)
