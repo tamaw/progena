@@ -121,3 +121,24 @@ async def test_call_agent_unknown_agent_returns_error() -> None:
     result = await t.ainvoke({"tool_args": {"agent": "does-not-exist", "request": "hello"}})
     assert result.get("success") is False
     assert "Unknown agent" in str(result.get("error"))
+
+
+@pytest.mark.asyncio
+async def test_call_agent_accepts_agent_name_alias(monkeypatch) -> None:
+    registry = MagicMock()
+    registry.find_by_name.return_value = {
+        "transport": "http",
+        "url": "http://localhost:9200",
+    }
+
+    mock_a2a = MagicMock()
+    mock_a2a.get_agent_card = AsyncMock(return_value=None)
+    mock_a2a.call_agent = AsyncMock(return_value={"success": True, "response": "ok"})
+    monkeypatch.setattr("app.progenitor.tools.call_agent.A2AClient", lambda: mock_a2a)
+
+    tools = create_deepagent_tools(tool_registry=registry)
+    t = _tool_by_name(tools, "call_agent")
+
+    result = await t.ainvoke({"agent_name": "Builder Agent", "request": "hello"})
+    assert result.get("success") is True
+    mock_a2a.call_agent.assert_awaited_once()
