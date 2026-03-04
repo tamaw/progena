@@ -66,6 +66,7 @@ venv.bak/
 # Project specific
 data/state/*.json
 !data/state/.gitkeep
+data/config/
 data/memory/
 data/sessions/
 data/attachments/
