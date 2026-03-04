@@ -1,126 +1,96 @@
 """
-Test the invoke_builder_copilot system tool integration.
+Tests for InvokeAgentTool - generic async A2A dispatcher.
 
-This test verifies that:
-1. The tool is auto-discovered by Progenitor's registry
-2. The tool can be invoked with proper context
-3. The tool returns expected results
+Verifies:
+1. Tool metadata and auto-discovery
+2. Fire-and-forget dispatch returns task_id immediately
+3. Unknown agent fails hard (no fallbacks)
+4. Missing user_input fails validation
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from app.progenitor.tools.invoke_builder_copilot import InvokeBuilderCopilotTool
-from app.progenitor.tools.protocol import ToolContext, ToolResult
+from app.progenitor.tools.invoke_agent import InvokeAgentTool
+from app.progenitor.tools.protocol import ToolContext
 
 
-class TestInvokeBuilderCopilotTool:
-    """Tests for InvokeBuilderCopilotTool."""
+class TestInvokeAgentTool:
+    """Tests for InvokeAgentTool."""
 
     def test_tool_properties(self):
-        """Test tool metadata."""
-        tool = InvokeBuilderCopilotTool()
-        
-        assert tool.name == "invoke_builder_copilot"
-        assert "Builder Copilot" in tool.description
-        assert "code generation" in tool.description.lower()
+        """Tool metadata is correct."""
+        tool = InvokeAgentTool()
+        assert tool.name == "invoke_agent"
+        assert "A2A" in tool.description or "agent" in tool.description.lower()
         assert isinstance(tool.keywords, list)
         assert len(tool.keywords) > 0
 
     @pytest.mark.asyncio
-    async def test_execute_missing_request(self):
-        """Test that execute fails with empty request."""
-        tool = InvokeBuilderCopilotTool()
+    async def test_execute_missing_user_input(self):
+        """Fails when user_input is empty."""
+        tool = InvokeAgentTool()
+        mock_registry = MagicMock()
+        mock_registry.find_by_name.return_value = {
+            "url": "http://localhost:8108",
+            "transport": "http",
+            "status": "running",
+        }
         context = ToolContext(
-            user_input="",  # Empty request
-            tool_args=None,
-            tool_registry=MagicMock(),
+            user_input="",
+            tool_args={"agent": "builder_copilot"},
+            tool_registry=mock_registry,
             llm_client=MagicMock(),
         )
-        
         result = await tool.execute(context)
-        
         assert not result.success
-        assert "Missing" in result.error or "request" in result.error.lower()
 
     @pytest.mark.asyncio
-    async def test_execute_builder_copilot_not_running(self):
-        """Test handling when Builder Copilot is not running."""
-        tool = InvokeBuilderCopilotTool()
+    async def test_execute_unknown_agent_fails(self):
+        """Fails hard when agent is not in registry (no fallbacks)."""
+        tool = InvokeAgentTool()
+        mock_registry = MagicMock()
+        mock_registry.find_by_name.return_value = None
+        mock_registry.find_agent_by_capability.return_value = None
         context = ToolContext(
-            user_input="Create a README",
-            tool_args={"url": "http://localhost:9999"},  # Port that won't respond
-            tool_registry=MagicMock(),
+            user_input="Do something",
+            tool_args={"agent": "nonexistent_agent"},
+            tool_registry=mock_registry,
             llm_client=MagicMock(),
         )
-        
         result = await tool.execute(context)
-        
         assert not result.success
-        assert "Builder Copilot" in result.error or "cannot" in result.error.lower()
+        assert "nonexistent_agent" in (result.error or "")
 
     @pytest.mark.asyncio
-    async def test_execute_timeout_is_ok(self):
-        """Test that timeout is acceptable for async tasks."""
-        tool = InvokeBuilderCopilotTool()
-        
-        # Mock a timeout response
-        mock_llm = MagicMock()
-        
+    async def test_execute_dispatches_and_returns_task_id(self):
+        """Returns task_id immediately without waiting for agent response."""
+        tool = InvokeAgentTool()
+        mock_registry = MagicMock()
+        mock_registry.find_by_name.return_value = {
+            "url": "http://localhost:8108",
+            "transport": "http",
+            "status": "running",
+        }
         context = ToolContext(
-            user_input="Create a README for Builder Copilot",
-            tool_args=None,  # Use defaults
-            tool_registry=MagicMock(),
-            llm_client=mock_llm,
+            user_input="Fix typo in README",
+            tool_args={"agent": "builder_copilot", "timeout": 1},
+            tool_registry=mock_registry,
+            llm_client=MagicMock(),
         )
-        
-        # Note: This test will timeout if Builder Copilot is not running,
-        # but that's OK - we're testing the error handling path
         result = await tool.execute(context)
-        
-        # Timeout should result in success with task_id
-        # (since async execution is expected)
-        if result.success:
-            assert "task_id" in result.output
-            assert "accepted" in result.output.get("status", "").lower()
-        else:
-            # Or failure if Builder Copilot really isn't running
-            assert "Builder Copilot" in result.error or "cannot" in result.error.lower()
+        assert result.success
+        assert result.data is not None
+        assert "task_id" in result.data
+        assert result.data["agent"] == "builder_copilot"
+        assert result.data["status"] == "dispatched"
 
 
 def test_tool_auto_discovery():
-    """Test that invoke_builder_copilot is auto-discovered by registry."""
+    """invoke_agent is auto-discovered by the tool registry."""
     from app.progenitor.nodes.node_helpers.registry import get_system_tool
-    
-    # The tool should be discovered automatically
-    tool = get_system_tool("invoke_builder_copilot")
-    
-    # May be None if not yet initialized, but class should exist
-    assert tool is None or isinstance(tool, InvokeBuilderCopilotTool)
 
-
-@pytest.mark.asyncio
-async def test_a2a_request_format():
-    """Test that the A2A request format is correct for Builder Copilot."""
-    tool = InvokeBuilderCopilotTool()
-    
-    # This is a smoke test - just verify the tool can handle requests
-    # without actually hitting the network
-    context = ToolContext(
-        user_input="Test request",
-        tool_args={"url": "http://localhost:9999"},  # Non-existent server
-        tool_registry=MagicMock(),
-        llm_client=MagicMock(),
-    )
-    
-    # Should fail gracefully when Builder Copilot not reachable
-    result = await tool.execute(context)
-    assert not result.success
-    # Should indicate connection issue, not JSON parsing error
-    assert "Builder Copilot" in result.error or "cannot" in result.error.lower()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    tool = get_system_tool("invoke_agent")
+    assert tool is not None
+    assert tool.name == "invoke_agent"
