@@ -426,7 +426,7 @@ class A2AClient:
                 if isinstance(custom_headers, dict):
                     headers.update({str(k): str(v) for k, v in custom_headers.items()})
                 resp = await httpx_client.post(str(url), json=payload, headers=headers)
-        except TimeoutError:
+        except (TimeoutError, httpx.TimeoutException):
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
             return {"success": False, "error": str(e)}
