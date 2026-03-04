@@ -1,231 +1,195 @@
-# Progenitor Agent
+# Builder Copilot
 
-A perpetual, conversational personal assistant and bootstrap builder for the TARDIS system.
+## 1) Title and Overview
 
-## Overview
+Builder Copilot is the repository mutation agent in the Progenitor system.  
+It receives scoped implementation requests, executes them in an isolated git worktree, validates quality gates, and prepares pull requests.  
+Its purpose is to turn high-level build intent into auditable code changes without mutating the primary working branch directly.
 
-Progenitor is an always-on agent that:
-- Accepts user messages conversationally (DeepAgent)
-- Delegates specialized work to external A2A agents
-- Maintains persistent conversation state and logs
-- Runs as a perpetual loop in Docker
+## 2) Core Capabilities
 
-Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A agent: **Builder Agent** (`app/agents/builder_agent/`).
+- **Plan repository changes** from natural language goals into concrete edit/test steps.
+- **Create isolated worktrees** per task to prevent cross-task contamination.
+- **Run code search and inspection** before editing to minimize incorrect assumptions.
+- **Implement changes via Copilot (ACP mode)** for structured, tool-driven code edits.
+- **Run tests and lint** to validate behavior and quality before PR creation.
+- **Create pull requests** with a clear summary of modifications and validation status.
 
-## Quick Start
+## 3) Available Skills
 
-### Prerequisites
+### `plan`
+- **When to use**: Before implementation, or when requirements need to be translated into actionable tasks.
+- **Tools**: Repository search tools, file inspection tools, planning/output formatting.
+- **Typical workflow**:
+  1. Parse request constraints and expected output.
+  2. Inspect relevant code paths.
+  3. Produce a step-by-step change plan with validation gates.
 
-- Python 3.12+
-- Docker (optional, recommended)
-- Azure OpenAI Responses deployment
-- Copilot CLI (for build operations — required by Builder Agent only)
+### `build` (`run_copilot_build` / `build_progenitor`)
+- **When to use**: To implement code changes after planning is complete.
+- **Tools**: Copilot CLI in ACP mode, git worktree operations, edit/apply patch tooling.
+- **Typical workflow**:
+  1. Create or select isolated worktree/branch.
+  2. Apply planned edits using Copilot-driven implementation.
+  3. Collect a deterministic diff for review.
 
-### Environment Setup
+### `test`
+- **When to use**: After build changes and before PR creation.
+- **Tools**: Project test runner(s), targeted and/or full-suite execution.
+- **Typical workflow**:
+  1. Run impacted tests first.
+  2. Run broader regression tests as configured.
+  3. Report pass/fail with failing cases and next actions.
 
-```bash
-# Activate venv (Windows)
-& .\.venv\Scripts\Activate.ps1
+### `lint`
+- **When to use**: After build/test, prior to PR creation.
+- **Tools**: Repository lint/type-check commands (language-specific).
+- **Typical workflow**:
+  1. Run lint/type checks in worktree.
+  2. Fix violations introduced by the change.
+  3. Re-run to confirm clean status.
 
-# Set Azure Responses endpoint credentials
-export AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1
-export AZURE_OPENAI_API_KEY=your_key_here
+### `pr`
+- **When to use**: Once build, test, and lint are complete and green (or exceptions are documented).
+- **Tools**: git metadata commands, GitHub CLI/API for PR creation.
+- **Typical workflow**:
+  1. Stage final branch state.
+  2. Generate title/body from change summary and validation output.
+  3. Open PR and return URL plus checklist status.
 
-# Install dependencies
-pip install -r requirements.txt
+### `python-search`
+- **When to use**: For fast symbol- and usage-level discovery in Python-heavy changes.
+- **Tools**: `rg`/glob-based code search, file viewers, structural inspection patterns.
+- **Typical workflow**:
+  1. Locate target modules, call sites, and tests.
+  2. Confirm contracts and side effects.
+  3. Feed findings back into `plan` and `build`.
+
+## 4) Configuration
+
+### Worktree behavior
+- One task maps to one isolated worktree.
+- Worktree is treated as ephemeral implementation context.
+- Primary branch is not directly edited during build execution.
+
+### Branch naming
+- Branches should be deterministic and task-scoped.
+- Recommended pattern: `<scope>/<short-task-slug>-<id>`.
+- Names should encode intent (feature/fix/refactor) and traceability.
+
+### Test/lint requirements
+- Tests and lint checks are required quality gates before PR.
+- If any gate fails, Builder Copilot reports failure details and blocks PR until resolved or explicitly waived.
+- Gate output is summarized in machine-readable and human-readable form.
+
+### Environment expectations
+- Git, test/lint toolchain, and Copilot CLI must be available in execution context.
+- Repository must be in a state where a worktree/branch can be created.
+- Credentials for PR creation must be configured in the runtime environment.
+
+## 5) A2A Protocol Invocation
+
+Builder Copilot is invoked through an Agent-to-Agent request where the caller supplies task intent, constraints, and expected lifecycle behavior.
+
+### Example A2A request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-42",
+  "method": "tasks.send",
+  "params": {
+    "agent": "builder-copilot",
+    "skill": "build_progenitor",
+    "input": {
+      "goal": "Add health endpoint with test coverage",
+      "constraints": [
+        "no breaking API changes",
+        "run tests and lint before PR"
+      ],
+      "lifecycle": ["plan", "build", "test", "lint", "pr"]
+    }
+  }
+}
 ```
 
-### Running Locally
+### Expected lifecycle
 
-```bash
-# Option 1: Use VS Code Tasks (recommended)
-# Run "Start All (dev)" task from VS Code
+1. **plan**: Analyze request and produce execution plan.
+2. **build**: Implement in isolated worktree.
+3. **test**: Run required tests and collect results.
+4. **lint**: Run lint/type checks and resolve violations.
+5. **pr**: Open pull request with summary and gate status.
 
-# Option 2: Start each component manually
-# Terminal 1: Progenitor agent
-python -m app.progenitor.main
+## 6) Usage Examples
 
-# Terminal 2: Backend API
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+### Example: Add new endpoint
 
-# Terminal 3: Frontend (from app/frontend directory)
-cd app/frontend
-npm install
-npm run dev
+**Prompt**
+```text
+Add a new GET /status endpoint that returns service version and uptime.
+Include tests and open a PR.
 ```
 
-Open `http://localhost:5173` for the UI (proxies to backend automatically).
+**Expected actions**
+1. Plan endpoint contract and test cases.
+2. Implement handler + routing in worktree.
+3. Run targeted and regression tests.
+4. Run lint/type checks.
+5. Create PR with endpoint behavior summary.
 
-### Running with Docker
+### Example: Fix failing test
 
-```bash
-# Build and run
-docker compose -f docker/docker-compose.progenitor.yml up --build -d
-
-# View logs
-docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
-
-# Stop
-docker compose -f docker/docker-compose.progenitor.yml down
+**Prompt**
+```text
+Investigate and fix the failing auth token expiration test, then open a PR.
 ```
 
-## Architecture
+**Expected actions**
+1. Reproduce failure in isolated worktree.
+2. Locate defect using code/test inspection.
+3. Implement minimal fix and update/add tests if needed.
+4. Re-run test/lint gates.
+5. Create PR with root cause and fix notes.
 
-### LangGraph Topology (Outer Loop)
+### Example: Refactor module
 
-```
-User messages:
-Intake → Chat (DeepAgent) → Respond → Idle → (repeat)
-
-Delegation path (build/upgrade requests):
-Decide → PickNext → A2A call to Builder Agent → Respond
-
-Scheduled jobs:
-ScheduleDispatch → Intake → Chat → Respond
-```
-
-### Directory Structure
-
-```
-app/
-  progenitor/           # Core perpetual agent (chat + delegation)
-    main.py             # Service entrypoint
-    routing.py          # Graph routing
-    agent/              # DeepAgent integration layer
-    llm/                # LLM client + prompts
-    tools/              # Schedule, MCP, registry, shell, discovery tools
-    runtime/            # Loop, scheduler, HTTP agent manager, DeepAgent adapter
-    state/              # State models + persistence
-    nodes/              # LangGraph nodes: intake, decide, chat, respond, idle, etc.
-  agents/
-    builder_agent/      # Build loop A2A agent (port 8107) — see agents/builder_agent/README.md
-    observe_agent/      # Monitoring A2A agent
-  mcp/                  # MCP servers
-.env                    # Local environment configuration
-data/
-  state/                # Persisted state (JSON)
-  sessions/             # Session persistence
-  attachments/          # Uploaded file cache/data
-logs/                   # Append-only logs (JSONL)
-prompts/                # Prompt templates
-  skills/               # DeepAgent SKILL.md files
-worktrees/              # Git worktrees for builds (used by Builder Agent)
+**Prompt**
+```text
+Refactor the scheduling module to reduce duplication without changing behavior.
+Run full tests and lint before PR.
 ```
 
-### State Files
+**Expected actions**
+1. Plan safe refactor boundaries and invariants.
+2. Apply behavior-preserving edits in worktree.
+3. Run full validation suite.
+4. Create PR documenting non-functional refactor scope.
 
-- `data/state/current_state.json` - Conversation state (messages, tool calls)
-- `data/state/schedule.json` - Scheduled tasks
-- `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
-- `data/config/agents.json` - Agent registry
-- `data/config/mcp.json` - MCP tool registry
+## 7) Architecture
 
-### Log Files
+### High-level architecture
+- **Caller agent/system** sends structured task to Builder Copilot via A2A.
+- **Builder Copilot** executes lifecycle steps and reports state transitions.
+- **Git provider layer** receives branch/PR operations after validation passes.
 
-- `logs/conversation.jsonl` - All user/assistant messages
-- `logs/decisions.jsonl` - Routing decisions
-- `logs/schedule.jsonl` - Schedule events
+### Tool orchestration
+- Search/inspection tools run first to establish context.
+- Editing tools run only after a plan is accepted.
+- Validation tools (test/lint) gate PR creation.
+- Output includes task summary, diff metadata, and gate results.
 
-## Configuration
+### Skills system
+- Skills are explicit execution modes (`plan`, `build`, `test`, `lint`, `pr`, `python-search`).
+- Each skill has defined entry criteria, toolset, and completion criteria.
+- Skills compose into the standard lifecycle for predictable automation.
 
-Configuration is sourced from environment variables. See `.env.example` for defaults.
+### Subagent usage (`task` tool)
+- Builder Copilot can delegate bounded subtasks to specialized subagents via the `task` tool.
+- Typical uses: large test runs, focused repository exploration, or review checks.
+- Delegation remains traceable to the parent task and lifecycle stage.
 
-```dotenv
-# Runtime
-PROGENITOR_TIMEZONE=Australia/Melbourne
-PROGENITOR_IDLE_BACKOFF_SECONDS=30
-PROGENITOR_MAX_BACKOFF_SECONDS=300
-PROGENITOR_MAX_ACTIONS_PER_CYCLE=10
-
-# LLM
-PROGENITOR_LLM_PROVIDER=azure
-AZURE_OPENAI_ENDPOINT=https://...
-AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
-```
-
-## Usage
-
-Progenitor accepts natural language input and decides how to handle it:
-
-1. **Direct answers**: Simple questions answered immediately
-2. **A2A delegation**: Calls existing agents for specialized tasks  
-3. **MCP tools**: Uses registered MCP servers for tool access
-4. **Build/Upgrade**: Delegates to Builder Agent (creates new agents/tools)
-5. **Scheduling**: Creates time-based recurring or one-off tasks
-
-### Examples
-
-```
-User: What time is it?
-→ Direct answer
-
-User: Send an email to John about the meeting
-→ A2A delegation (if email agent exists)
-
-User: Remind me every day at 9am to check my tasks
-→ Schedule creation
-
-User: reset the conversation
-→ Progenitor invokes the new_conversation system tool (clears older context)
-
-User: Build a weather MCP tool
-→ A2A call to Builder Agent → OBSERVE→THINK→PLAN→BUILD→VERIFY→LEARN loop
-```
-
-## Builder Agent
-
-The Builder Agent (`app/agents/builder_agent/`) is a fully self-contained A2A server
-that owns all code-generation and repo-mutation capabilities:
-
-- **Port**: 8107
-- **Protocol**: A2A JSON-RPC (Google a2a-sdk)
-- **Skills**: `build_agent`, `build_mcp`, `build_progenitor`, `upgrade_repo`
-- **Loop**: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
-- **Checkpointing**: SQLite per-build (resumable)
-- **Tools**: GitHub Copilot CLI, git worktrees, gh CLI
-
-See [`app/agents/builder_agent/README.md`](app/agents/builder_agent/README.md) for full documentation.
-
-## Development
-
-### Running Tests
-
-```bash
-# All tests
-pytest tests/ -v
-
-# Builder agent tests
-pytest tests/agents/builder_agent/ -v
-
-# Progenitor tests
-pytest tests/progenitor/ -v
-```
-
-### Lint + Type Check
-
-```bash
-ruff check app/
-mypy app/
-```
-
-### Adding New Capabilities
-
-1. Create an agent in `app/agents/<agent_name>/`
-2. Or create an MCP server in `app/mcp/`
-3. Register in `data/config/agents.json`
-
-Or ask Progenitor to build it for you — it will delegate to the Builder Agent automatically.
-
-## Docs
-
-- [SPEC.md](docs/SPEC.md) — System specification
-- [loop.spec.md](docs/loop.spec.md) — Inner loop (Last Algorithm) spec
-- [ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) — Visual architecture
-- [BACKEND.md](docs/BACKEND.md) — Backend API
-- [DOCKER.md](docs/DOCKER.md) — Docker deployment
-- [CONTAINER_RUNNERS.md](docs/CONTAINER_RUNNERS.md) — Isolated A2A/MCP runner containers
-
-## License
-
-MIT
+### Worktree isolation model
+- Every build task executes in an isolated git worktree and branch.
+- Isolation enables concurrent tasks and simplifies rollback/cleanup.
+- PRs originate from isolated branches, preserving mainline stability.
