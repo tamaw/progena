@@ -135,6 +135,26 @@ class BuilderCopilotToolRuntime:
             logs_dir=Path(log_dir) if log_dir else None,
         )
 
+    async def preflight_copilot(self) -> dict[str, Any]:
+        """Warm Copilot ACP at container startup and verify session auth."""
+        result = await self.copilot.acp_manager.preflight(
+            cwd=self.repo_path,
+            work_item_id="builder-copilot-startup",
+            allowed_dirs=self.copilot.allowed_dirs,
+        )
+        if result.get("ready"):
+            logger.info(
+                "Builder Copilot ACP preflight succeeded in %.2fs",
+                float(result.get("elapsed_seconds") or 0.0),
+            )
+        else:
+            logger.error(
+                "Builder Copilot ACP preflight failed in %.2fs: %s",
+                float(result.get("elapsed_seconds") or 0.0),
+                result.get("error") or "unknown error",
+            )
+        return result
+
     async def run_command(
         self,
         worktree_path: str,
@@ -325,3 +345,14 @@ def create_builder_copilot_tools(
             description="Generate a stable work item id and normalized request text before planning.",
         ),
     ]
+
+
+async def preflight_copilot_startup(
+    *,
+    config: BuilderCopilotConfig,
+    project_root: str | Path,
+    log_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Run Copilot ACP startup preflight outside request-scoped DeepAgent execution."""
+    runtime = BuilderCopilotToolRuntime(config=config, project_root=project_root, log_dir=log_dir)
+    return await runtime.preflight_copilot()

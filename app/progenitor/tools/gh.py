@@ -9,9 +9,13 @@ publish node after verification passes.
 import asyncio
 import json
 import logging
+import os
 import re
+import shlex
 from pathlib import Path
 from typing import cast
+
+from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -261,3 +265,66 @@ async def gh_create_pr_from_worktree(
         cwd=worktree_path,
         draft=draft,
     )
+
+
+class GhCliTool(BaseSystemTool):
+    """Run gh CLI commands from container/project-root scope."""
+
+    @property
+    def name(self) -> str:
+        return "gh_cli"
+
+    @property
+    def description(self) -> str:
+        return "Run GitHub CLI commands (gh) at container scope, outside per-worktree execution."
+
+    @property
+    def keywords(self) -> list[str]:
+        return ["gh", "gh cli", "github cli", "gh auth", "gh api"]
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        timeout_raw = args.get("timeout", 60)
+        cwd_raw = args.get("cwd")
+        cmd_args: list[str] = []
+
+        if isinstance(args.get("args"), list):
+            cmd_args = [str(item).strip() for item in args.get("args", []) if str(item).strip()]
+        elif isinstance(args.get("args"), str):
+            cmd_args = [part for part in shlex.split(str(args.get("args") or "").strip()) if part]
+        else:
+            request = str(context.user_input or "").strip()
+            if request:
+                parsed = shlex.split(request)
+                if parsed and parsed[0] == "gh":
+                    parsed = parsed[1:]
+                cmd_args = parsed
+
+        if not cmd_args:
+            return ToolResult.fail(
+                "Missing gh arguments. Pass tool_args={'args': ['auth','status']} or provide a gh command."
+            )
+
+        try:
+            timeout = float(timeout_raw)
+        except Exception:
+            timeout = 60.0
+        if timeout <= 0:
+            timeout = 60.0
+
+        default_cwd = Path(os.getenv("PROGENITOR_PROJECT_ROOT", str(Path(__file__).resolve().parents[3])))
+        cwd = Path(str(cwd_raw)).expanduser() if isinstance(cwd_raw, str) and cwd_raw.strip() else default_cwd
+        if not cwd.exists() or not cwd.is_dir():
+            return ToolResult.fail(f"Invalid cwd for gh_cli: {cwd}")
+
+        result = await _run_gh(cmd_args, cwd=cwd, timeout=timeout)
+        return ToolResult.ok(
+            {
+                "command": ["gh", *cmd_args],
+                "cwd": str(cwd),
+                "returncode": result.get("returncode"),
+                "stdout": result.get("stdout"),
+                "stderr": result.get("stderr"),
+                "ok": result.get("returncode") == 0,
+            }
+        )
