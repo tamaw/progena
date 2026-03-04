@@ -46,7 +46,13 @@ class CallAgentTool(BaseSystemTool):
                     await cast(Awaitable[Any], out)
 
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
-        agent = str(args.get("agent") or "").strip()
+        nested_args = args.get("tool_args")
+        if isinstance(nested_args, dict):
+            merged_args = dict(nested_args)
+            merged_args.update({k: v for k, v in args.items() if k != "tool_args"})
+            args = merged_args
+
+        agent = str(args.get("agent") or args.get("agent_name") or args.get("name") or "").strip()
         request = str(args.get("request") or context.user_input or "").strip()
         timeout_seconds = float(args.get("timeout_seconds") or 60.0)
 

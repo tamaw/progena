@@ -23,7 +23,10 @@ def create_deepagent_tools(
  ) -> list:
     """Create DeepAgent-compatible tools (system tools + DeepAgent-only helpers)."""
     def _wrap_system_tool(system_tool: Any) -> StructuredTool:
-        async def _run(request: str = "", tool_args: dict[str, Any] | None = None) -> dict[str, Any]:
+        async def _execute_wrapped_tool(
+            request: str = "",
+            tool_args: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
             # External deploy pipelines can update agents.json; reload best-effort so new
             # agents/tools show up without requiring a restart.
             load_registry = getattr(tool_registry, "load", None) if tool_registry is not None else None
@@ -71,8 +74,32 @@ def create_deepagent_tools(
                 "should_retry_slow_path": bool(getattr(result, "should_retry_slow_path", False)),
             }
 
+        async def _run(request: str = "", tool_args: dict[str, Any] | None = None) -> dict[str, Any]:
+            return await _execute_wrapped_tool(request=request, tool_args=tool_args)
+
+        async def _run_call_agent(
+            request: str = "",
+            agent: str = "",
+            agent_name: str = "",
+            name: str = "",
+            timeout_seconds: float = 60.0,
+            context: dict[str, Any] | None = None,
+            tool_args: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            merged_args: dict[str, Any] = dict(tool_args or {})
+            merged_args.setdefault("agent", agent)
+            merged_args.setdefault("agent_name", agent_name)
+            merged_args.setdefault("name", name)
+            merged_args.setdefault("request", request)
+            merged_args.setdefault("timeout_seconds", timeout_seconds)
+            if isinstance(context, dict) and context:
+                merged_args.setdefault("context", context)
+            return await _execute_wrapped_tool(request=request, tool_args=merged_args)
+
+        coroutine_fn = _run_call_agent if str(getattr(system_tool, "name", "")) == "call_agent" else _run
+
         return StructuredTool.from_function(
-            coroutine=_run,
+            coroutine=coroutine_fn,
             name=str(getattr(system_tool, "name", "system_tool")),
             description=str(getattr(system_tool, "description", "Progenitor system tool")),
         )
