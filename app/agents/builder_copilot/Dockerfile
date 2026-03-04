@@ -62,11 +62,16 @@ RUN mkdir -p /app/data/state /app/logs/builder_copilot /app/worktrees /home/runn
 
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
+COPY app/agents/builder_copilot/docker-entrypoint.sh /usr/local/bin/builder-copilot-entrypoint.sh
+RUN chmod +x /usr/local/bin/builder-copilot-entrypoint.sh
+
 USER runner
 
 EXPOSE 8108
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8108/health')" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/builder-copilot-entrypoint.sh"]
 
 CMD ["python", "-m", "uvicorn", "app.agents.builder_copilot.agent:app", "--host", "0.0.0.0", "--port", "8108"]

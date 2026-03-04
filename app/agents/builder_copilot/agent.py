@@ -35,7 +35,7 @@ from fastapi.responses import JSONResponse
 from .client import BuilderCopilotClient, ReasonedPlan
 from .config import BuilderCopilotConfig, get_config, setup_logging
 from .deep_agent import create_builder_copilot_agent
-from .tools import ensure_workspace, preflight_copilot_startup
+from .tools import ensure_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +73,6 @@ class BuilderCopilotService:
 
         for path in [config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir]:
             path.mkdir(parents=True, exist_ok=True)
-
-        preflight = await preflight_copilot_startup(
-            config=config,
-            project_root=repo_root,
-            log_dir=config.storage.log_dir / "builder_copilot",
-        )
-        if not preflight.get("ready"):
-            logger.warning(
-                "Builder Copilot ACP preflight failed at startup: %s",
-                preflight.get("error") or "unknown error",
-            )
 
         self._graph = create_builder_copilot_agent(
             config=config,
