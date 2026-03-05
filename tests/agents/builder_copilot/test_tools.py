@@ -9,6 +9,6 @@ def test_derive_work_item_suffix_prefers_a2a_task_id() -> None:
     assert suffix.startswith("9e286e2302644dad")
 
 
-def test_derive_work_item_suffix_fallback_is_short_uuid() -> None:
+def test_derive_work_item_suffix_without_context_is_manual() -> None:
     suffix = _derive_work_item_suffix(None)
-    assert len(suffix) == 8
+    assert suffix == "manual"
