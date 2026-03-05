@@ -148,7 +148,7 @@ class BuilderCopilotToolRuntime:
             model=config.copilot.model,
             default_flags=config.copilot.default_flags,
             allowed_dirs=config.copilot.acp_allowed_dirs,
-            timeout=config.copilot.timeout_seconds,
+            timeout=config.timeouts.copilot_acp,  # Use centralized timeout
             logs_dir=Path(log_dir) if log_dir else None,
         )
 
@@ -156,7 +156,7 @@ class BuilderCopilotToolRuntime:
         self,
         worktree_path: str,
         command: str,
-        timeout_seconds: int = 600,
+        timeout_seconds: int = 300,  # Use default from TimeoutConfig.tool_default
     ) -> dict[str, Any]:
         """Run a shell command inside the target worktree."""
         cwd = Path(worktree_path)
@@ -219,19 +219,31 @@ def create_builder_copilot_tools(
         target_path: str | None = None,
     ) -> dict[str, Any]:
         """Run GitHub Copilot against the worktree with the supplied prompt."""
-        result = await runtime.copilot.build(
-            work_item_id=work_item_id,
-            worktree_path=Path(worktree_path),
-            prompt=prompt,
-            target_path=target_path,
-        )
-        return {
-            "success": bool(result.get("success")),
-            "summary": result.get("summary") or "",
-            "stdout": str(result.get("stdout") or "")[-12000:],
-            "stderr": str(result.get("stderr") or "")[-12000:],
-            "diff": str(result.get("diff") or "")[-12000:],
-        }
+        try:
+            result = await runtime.copilot.build(
+                work_item_id=work_item_id,
+                worktree_path=Path(worktree_path),
+                prompt=prompt,
+                target_path=target_path,
+            )
+            return {
+                "success": bool(result.get("success")),
+                "summary": result.get("summary") or "",
+                "stdout": str(result.get("stdout") or "")[-12000:],
+                "stderr": str(result.get("stderr") or "")[-12000:],
+                "diff": str(result.get("diff") or "")[-12000:],
+            }
+        except Exception as e:
+            # Don't cleanup worktree here - let the overall workflow handle it
+            # This tool might be called multiple times on the same worktree
+            logger.error("Copilot build failed for %s: %s", worktree_path, e)
+            return {
+                "success": False,
+                "summary": f"Build failed: {e}",
+                "stdout": "",
+                "stderr": str(e),
+                "diff": "",
+            }
 
     async def build_progenitor_tool(
         work_item_id: str,
@@ -305,6 +317,41 @@ def create_builder_copilot_tools(
             "normalized_request": normalized,
         }
 
+    async def cleanup_worktree_tool(
+        worktree_path: str,
+    ) -> dict[str, Any]:
+        """Clean up a worktree after failure or completion."""
+        try:
+            await runtime.worktree_manager.cleanup_worktree_on_error(worktree_path)
+            return {"success": True, "message": f"Cleaned up worktree: {worktree_path}"}
+        except Exception as e:
+            logger.warning("Failed to cleanup worktree %s: %s", worktree_path, e)
+            return {"success": False, "error": str(e)}
+
+    async def check_acp_health_tool() -> dict[str, Any]:
+        """Check if ACP background process is healthy and responsive."""
+        try:
+            # Quick health check - use centralized timeout
+            timeout_config = runtime.config.timeouts if hasattr(runtime, 'config') else None
+            health_timeout = timeout_config.acp_health_check if timeout_config else 5.0
+            responsive_timeout = timeout_config.acp_responsiveness if timeout_config else 3.0
+            
+            is_healthy = await runtime.copilot.acp_manager.health_check(timeout=health_timeout)
+            if not is_healthy:
+                return {"healthy": False, "error": "ACP health check failed"}
+                
+            # Verify responsiveness  
+            is_responsive = await runtime.copilot.acp_manager.verify_process_responsive(timeout=responsive_timeout)
+            
+            return {
+                "healthy": is_healthy,
+                "responsive": is_responsive,
+                "status": "healthy" if (is_healthy and is_responsive) else "degraded"
+            }
+        except Exception as e:
+            logger.warning("Failed to check ACP health: %s", e)
+            return {"healthy": False, "responsive": False, "status": "failed", "error": str(e)}
+
     return [
         StructuredTool.from_function(
             coroutine=create_worktree_tool,
@@ -345,5 +392,15 @@ def create_builder_copilot_tools(
             coroutine=summarize_request_tool,
             name="summarize_request",
             description="Generate a stable work item id and normalized request text before planning.",
+        ),
+        StructuredTool.from_function(
+            coroutine=cleanup_worktree_tool,
+            name="cleanup_worktree",
+            description="Clean up a worktree directory and git worktree entry after failure or completion.",
+        ),
+        StructuredTool.from_function(
+            coroutine=check_acp_health_tool,
+            name="check_acp_health",
+            description="Check if the ACP background process is healthy and responsive.",
         ),
     ]

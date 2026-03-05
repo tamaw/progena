@@ -58,7 +58,7 @@ def create_builder_copilot_agent(
         root_dir=root,
         virtual_mode=False,
         inherit_env=True,
-        timeout=min(config.copilot.timeout_seconds, 1200),
+        timeout=config.timeouts.tool_default,  # Use centralized timeout
     )
     skills_root = (Path(__file__).resolve().parent / "skills").relative_to(root).as_posix()
     tools = create_builder_copilot_tools(

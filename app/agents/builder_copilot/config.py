@@ -110,11 +110,34 @@ class StorageConfig:
 
 
 @dataclass
+class TimeoutConfig:
+    """Centralized timeout configuration for all operations."""
+    
+    total_execution: int = 1200      # Overall request timeout (20 minutes)
+    copilot_acp: int = 900           # Copilot ACP communication timeout (15 minutes)
+    git_operations: int = 60         # Git command timeout (1 minute)
+    tool_default: int = 300          # Default tool execution timeout (5 minutes)  
+    acp_health_check: int = 5        # ACP health check timeout (5 seconds)
+    acp_responsiveness: int = 3      # ACP responsiveness check timeout (3 seconds)
+    
+    @classmethod
+    def from_env(cls) -> TimeoutConfig:
+        return cls(
+            total_execution=_env_int("PROGENITOR_TIMEOUT_TOTAL", 1200),
+            copilot_acp=_env_int("PROGENITOR_TIMEOUT_COPILOT_ACP", 900),
+            git_operations=_env_int("PROGENITOR_TIMEOUT_GIT", 60),
+            tool_default=_env_int("PROGENITOR_TIMEOUT_TOOL_DEFAULT", 300),
+            acp_health_check=_env_int("PROGENITOR_TIMEOUT_ACP_HEALTH", 5),
+            acp_responsiveness=_env_int("PROGENITOR_TIMEOUT_ACP_RESPONSIVE", 3),
+        )
+
+
+@dataclass
 class CopilotConfig:
     """GitHub Copilot CLI settings."""
 
     bin_path: str = "copilot"
-    timeout_seconds: int = 1200
+    timeout_seconds: int = 1200  # Deprecated - use TimeoutConfig.copilot_acp instead
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
     model: str = "gpt-5.3-codex"
     acp_allowed_dirs: list[str] = field(default_factory=list)
@@ -123,7 +146,7 @@ class CopilotConfig:
     def from_env(cls) -> CopilotConfig:
         return cls(
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
-            timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
+            timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),  # Keep for backwards compatibility
             default_flags=_env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
             model=os.getenv("PROGENITOR_COPILOT_MODEL", "gpt-5.3-codex"),
             acp_allowed_dirs=_env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", []),
@@ -138,6 +161,7 @@ class BuilderCopilotConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     copilot: CopilotConfig = field(default_factory=CopilotConfig)
+    timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
 
     @classmethod
     def load(
@@ -150,6 +174,7 @@ class BuilderCopilotConfig:
             runtime=RuntimeConfig.from_env(),
             storage=StorageConfig.from_env(project_root),
             copilot=CopilotConfig.from_env(),
+            timeouts=TimeoutConfig.from_env(),
         )
 
 

@@ -100,29 +100,35 @@ class GitWorktreeManager:
         worktree_name = f"{work_item_id}_{timestamp}"
         worktree_path = self.worktrees_dir / worktree_name
 
-        selected_branch = branch_name or f"progenitor/{work_item_id}"
-        branch_ref_result = await self._run_git(
-            ["show-ref", "--verify", f"refs/heads/{selected_branch}"],
-            cwd=self.repo_path,
-        )
-        if branch_ref_result["returncode"] == 0:
-            command = ["worktree", "add", str(worktree_path), selected_branch]
-        elif branch_ref_result["returncode"] in (1, 128):
-            command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
-        else:
-            logger.error("Failed to check branch '%s': %s", selected_branch, branch_ref_result["stderr"])
-            raise RuntimeError(f"Failed to check branch '{selected_branch}': {branch_ref_result['stderr']}")
+        try:
+            selected_branch = branch_name or f"progenitor/{work_item_id}"
+            branch_ref_result = await self._run_git(
+                ["show-ref", "--verify", f"refs/heads/{selected_branch}"],
+                cwd=self.repo_path,
+            )
+            if branch_ref_result["returncode"] == 0:
+                command = ["worktree", "add", str(worktree_path), selected_branch]
+            elif branch_ref_result["returncode"] in (1, 128):
+                command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
+            else:
+                logger.error("Failed to check branch '%s': %s", selected_branch, branch_ref_result["stderr"])
+                raise RuntimeError(f"Failed to check branch '{selected_branch}': {branch_ref_result['stderr']}")
 
-        result = await self._run_git(command, cwd=self.repo_path)
-        if result["returncode"] != 0:
-            logger.error("Failed to create worktree: %s", result["stderr"])
-            raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
+            result = await self._run_git(command, cwd=self.repo_path)
+            if result["returncode"] != 0:
+                logger.error("Failed to create worktree: %s", result["stderr"])
+                raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
 
-        # Write metadata file for tracking
-        await self._write_worktree_metadata(worktree_path, work_item_id, selected_branch)
+            # Write metadata file for tracking
+            await self._write_worktree_metadata(worktree_path, work_item_id, selected_branch)
 
-        logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
-        return worktree_path
+            logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
+            return worktree_path
+
+        except Exception as exc:
+            # Clean up partial worktree on failure
+            await self._cleanup_failed_worktree(worktree_path)
+            raise exc
 
     async def _write_worktree_metadata(
         self, worktree_path: Path, work_item_id: str, branch_name: str
@@ -171,6 +177,45 @@ class GitWorktreeManager:
         except (OSError, RuntimeError) as e:
             logger.warning("Failed to remove worktree %s: %s", worktree_path, e)
             return False
+
+    async def _cleanup_failed_worktree(self, worktree_path: Path) -> None:
+        """Clean up a worktree after creation failure.
+        
+        Attempts to remove both the git worktree entry and filesystem directory.
+        Does not raise exceptions to avoid masking the original failure.
+        """
+        if not worktree_path.exists():
+            return
+            
+        logger.info("Cleaning up failed worktree at %s", worktree_path)
+        
+        try:
+            # Try to remove from git worktree list first
+            result = await self._run_git(
+                ["worktree", "remove", "--force", str(worktree_path)],
+                cwd=self.repo_path,
+                timeout=10.0,  # Short timeout for cleanup
+            )
+            if result["returncode"] != 0:
+                logger.warning("Failed to remove worktree from git: %s", result["stderr"])
+        except Exception as e:
+            logger.warning("Exception during worktree git cleanup: %s", e)
+        
+        try:
+            # Remove filesystem directory if it still exists
+            if worktree_path.exists():
+                import shutil
+                shutil.rmtree(worktree_path, ignore_errors=True)
+                logger.debug("Removed worktree directory: %s", worktree_path)
+        except Exception as e:
+            logger.warning("Failed to remove worktree directory %s: %s", worktree_path, e)
+
+    async def cleanup_worktree_on_error(self, worktree_path: Path | str) -> None:
+        """Public method to clean up worktree after tool execution failure.
+        
+        This should be called by tools when they encounter errors after worktree creation.
+        """
+        await self._cleanup_failed_worktree(Path(worktree_path))
 
     async def commit_changes(
         self,

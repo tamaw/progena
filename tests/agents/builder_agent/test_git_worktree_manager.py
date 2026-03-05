@@ -44,11 +44,21 @@ async def test_create_worktree_creates_named_branch_when_missing(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_create_worktree_raises_for_non_branch_error(tmp_path: Path) -> None:
     manager = GitWorktreeManager(worktrees_dir=tmp_path / "worktrees", repo_path=tmp_path, cleanup_on_init=False)
-    manager._run_git = AsyncMock(return_value={  # type: ignore[method-assign]
-        "returncode": 128,
-        "stdout": "",
-        "stderr": "fatal: permissions error while checking ref",
-    })
+    
+    # Mock git commands to return different errors based on command
+    async def mock_run_git(args, cwd):
+        if "show-ref" in args:
+            # Return a real git error (not just missing branch)  
+            return {
+                "returncode": 2,  # Actual fatal error, not missing ref
+                "stdout": "",
+                "stderr": "fatal: permissions error while checking ref",
+            }
+        else:
+            # For worktree add, return success (shouldn't be reached)
+            return {"returncode": 0, "stdout": "", "stderr": ""}
+    
+    manager._run_git = mock_run_git  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="Failed to check branch"):
         await manager.create_worktree("item-2", branch_name="docs/update-readme")

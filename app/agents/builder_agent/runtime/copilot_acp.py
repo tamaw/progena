@@ -665,6 +665,74 @@ class CopilotACPManager:
                 "error": str(e),
             }
 
+    async def health_check(self, timeout: float = 5.0) -> bool:
+        """Perform a simple health check by attempting to spawn copilot process.
+        
+        Args:
+            timeout: Maximum time to wait for health check
+            
+        Returns:
+            True if copilot process can be spawned and responds, False otherwise
+        """
+        import tempfile
+        
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                health_check_id = "health_check"
+                
+                # Try to connect with minimal configuration
+                async with asyncio.timeout(timeout):
+                    async with self.connect(
+                        work_item_id=health_check_id,
+                        cwd=Path(temp_dir),
+                        allowed_dirs=[temp_dir],
+                    ) as (client, conn):
+                        # Try to create a session - this verifies ACP is responding
+                        session_response = await conn.new_session(
+                            cwd=temp_dir,
+                            mcp_servers=[],
+                        )
+                        # If we get here, ACP is healthy
+                        logger.debug("ACP health check passed: session_id=%s", session_response.session_id)
+                        return True
+                        
+        except asyncio.TimeoutError:
+            logger.warning("ACP health check timed out after %.1fs", timeout)
+            return False
+        except Exception as e:
+            logger.warning("ACP health check failed: %s", e)
+            return False
+
+    async def verify_process_responsive(self, timeout: float = 3.0) -> bool:
+        """Verify ACP process is responsive by sending a minimal prompt.
+        
+        Args:
+            timeout: Maximum time to wait for response
+            
+        Returns:
+            True if process responds to prompt, False otherwise
+        """
+        import tempfile
+        
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                async with asyncio.timeout(timeout):
+                    result = await self.prompt(
+                        prompt_text="echo 'health check'",
+                        cwd=Path(temp_dir),
+                        work_item_id="health_verify",
+                        allowed_dirs=[temp_dir],
+                    )
+                    return result.get("success", False)
+                    
+        except asyncio.TimeoutError:
+            logger.warning("ACP responsiveness check timed out after %.1fs", timeout)
+            return False
+        except Exception as e:
+            logger.warning("ACP responsiveness check failed: %s", e)
+            return False
+
+
 class ACPLogCapture:
     """Captures ACP streaming output to log files.
 
