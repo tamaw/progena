@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -18,6 +19,23 @@ from app.agents.builder_agent.tools.git import GitWorktreeManager
 from .config import BuilderCopilotConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _derive_work_item_suffix(context_json: str | None) -> str:
+    """Prefer stable A2A identifiers when available, else fall back to UUID."""
+    if context_json:
+        try:
+            context = json.loads(context_json)
+        except json.JSONDecodeError:
+            context = None
+        if isinstance(context, dict):
+            for key in ("a2a_task_id", "task_id", "run_id", "a2a_context_id", "context_id"):
+                value = context.get(key)
+                if isinstance(value, str) and value.strip():
+                    sanitized = "".join(ch for ch in value.lower() if ch.isalnum())
+                    if sanitized:
+                        return sanitized[:16]
+    return uuid.uuid4().hex[:8]
 
 
 async def _configure_git_identity(workspace: Path) -> None:
@@ -276,7 +294,7 @@ def create_builder_copilot_tools(
         context_json: str | None = None,
     ) -> dict[str, Any]:
         """Create a stable work item id and normalized request text for a new build."""
-        suffix = uuid.uuid4().hex[:8]
+        suffix = _derive_work_item_suffix(context_json)
         slug = "".join(ch if ch.isalnum() else "-" for ch in request.lower())[:24].strip("-") or "builder-copilot"
         normalized = request.strip()
         if context_json:
