@@ -101,35 +101,61 @@ class GitWorktreeManager:
         worktree_name = f"{work_item_id}_{timestamp}"
         worktree_path = self.worktrees_dir / worktree_name
 
-        # Generate branch name if not provided
-        requested_branch = branch_name or f"progenitor/{work_item_id}/{uuid.uuid4().hex[:8]}"
-        selected_branch = requested_branch
-        result: dict[str, Any] = {"returncode": -1, "stdout": "", "stderr": ""}
-
-        # Retry with a unique suffix when the requested branch already exists.
-        for attempt in range(3):
+        selected_branch: str
+        if branch_name:
+            selected_branch = branch_name
+            # Reuse an existing branch when present (preferred for stable branch names).
             result = await self._run_git(
-                ["worktree", "add", "-b", selected_branch, str(worktree_path)],
-                cwd=self.repo_path
+                ["worktree", "add", str(worktree_path), selected_branch],
+                cwd=self.repo_path,
             )
-            if result["returncode"] == 0:
-                break
+            if result["returncode"] != 0:
+                stderr = str(result.get("stderr") or "").lower()
+                missing_branch = any(
+                    marker in stderr
+                    for marker in ("invalid reference", "not a valid object name", "unknown revision")
+                )
+                if not missing_branch:
+                    logger.error("Failed to create worktree: %s", result["stderr"])
+                    raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
+                # Branch does not exist yet; create it.
+                result = await self._run_git(
+                    ["worktree", "add", "-b", selected_branch, str(worktree_path)],
+                    cwd=self.repo_path,
+                )
+                if result["returncode"] != 0:
+                    logger.error("Failed to create worktree: %s", result["stderr"])
+                    raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
+        else:
+            # Generate branch name when not provided.
+            requested_branch = f"progenitor/{work_item_id}/{uuid.uuid4().hex[:8]}"
+            selected_branch = requested_branch
+            result: dict[str, Any] = {"returncode": -1, "stdout": "", "stderr": ""}
 
-            stderr = str(result.get("stderr") or "")
-            branch_exists = (
-                "already exists" in stderr.lower()
-                or "branch named" in stderr.lower()
-            )
-            if not branch_exists or attempt == 2:
-                logger.error("Failed to create worktree: %s", result["stderr"])
-                raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
+            # Retry with a unique suffix when the generated branch already exists.
+            for attempt in range(3):
+                result = await self._run_git(
+                    ["worktree", "add", "-b", selected_branch, str(worktree_path)],
+                    cwd=self.repo_path
+                )
+                if result["returncode"] == 0:
+                    break
 
-            selected_branch = f"{requested_branch}-{uuid.uuid4().hex[:6]}"
-            logger.warning(
-                "Requested branch '%s' already exists, retrying with '%s'",
-                requested_branch,
-                selected_branch,
-            )
+                stderr = str(result.get("stderr") or "")
+                branch_exists = (
+                    "already exists" in stderr.lower()
+                    or "branch named" in stderr.lower()
+                )
+                if not branch_exists or attempt == 2:
+                    logger.error("Failed to create worktree: %s", result["stderr"])
+                    raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
+
+                selected_branch = f"{requested_branch}-{uuid.uuid4().hex[:6]}"
+                logger.warning(
+                    "Requested branch '%s' already exists, retrying with '%s'",
+                    requested_branch,
+                    selected_branch,
+                )
 
         # Write metadata file for tracking
         await self._write_worktree_metadata(worktree_path, work_item_id, selected_branch)

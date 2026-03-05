@@ -222,6 +222,8 @@ class BuilderCopilotExecutor(AgentExecutor):
         ctx_id = context.context_id or str(uuid.uuid4())
         request_text = _extract_request_text(context.message)
         request_context = _extract_request_context(context.message)
+        request_context.setdefault("a2a_task_id", task_id)
+        request_context.setdefault("a2a_context_id", ctx_id)
 
         if not request_text:
             await event_queue.enqueue_event(
