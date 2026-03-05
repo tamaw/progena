@@ -665,7 +665,6 @@ class CopilotACPManager:
                 "error": str(e),
             }
 
-
 class ACPLogCapture:
     """Captures ACP streaming output to log files.
 
