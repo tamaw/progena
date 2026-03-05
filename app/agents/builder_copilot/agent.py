@@ -67,13 +67,17 @@ class BuilderCopilotService:
             return
 
         repo_root = Path(__file__).resolve().parents[3]
+        logger.info("Builder Copilot init: loading config (repo_root=%s)", repo_root)
         config = get_config(repo_root, repo_root / "config", validate=False)
         setup_logging(config, "builder_copilot")
+        logger.info("Builder Copilot init: ensuring workspace")
         await ensure_workspace()
 
         for path in [config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir]:
             path.mkdir(parents=True, exist_ok=True)
+        logger.info("Builder Copilot init: storage directories ensured")
 
+        logger.info("Builder Copilot init: creating DeepAgent graph")
         self._graph = create_builder_copilot_agent(
             config=config,
             project_root=repo_root,
@@ -90,12 +94,21 @@ class BuilderCopilotService:
         assert self._graph is not None
         assert self._planner_client is not None
 
+        logger.info(
+            "Builder Copilot process: start (request_len=%d, context_keys=%s)",
+            len(request_text),
+            sorted(context.keys()),
+        )
+        logger.info("Builder Copilot process: planning")
         planning_result = await _build_preflight_plan(self._planner_client, request_text, context)
         prompt = _build_execution_prompt(request_text, context, planning_result)
+        thread_id = f"builder_copilot_{uuid.uuid4().hex[:12]}"
+        logger.info("Builder Copilot process: invoking graph (thread_id=%s)", thread_id)
         result = await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
-            {"configurable": {"thread_id": f"builder_copilot_{uuid.uuid4().hex[:12]}"}},
+            {"configurable": {"thread_id": thread_id}},
         )
+        logger.info("Builder Copilot process: graph invocation complete (thread_id=%s)", thread_id)
         return _extract_result_text(result)
 
     def health_payload(self) -> dict[str, Any]:
@@ -224,6 +237,12 @@ class BuilderCopilotExecutor(AgentExecutor):
         request_context = _extract_request_context(context.message)
         request_context.setdefault("a2a_task_id", task_id)
         request_context.setdefault("a2a_context_id", ctx_id)
+        logger.info(
+            "Builder Copilot execute: task start (task_id=%s, context_id=%s, request_len=%d)",
+            task_id,
+            ctx_id,
+            len(request_text),
+        )
 
         if not request_text:
             await event_queue.enqueue_event(
@@ -254,7 +273,9 @@ class BuilderCopilotExecutor(AgentExecutor):
         )
 
         try:
+            logger.info("Builder Copilot execute: running process() (task_id=%s)", task_id)
             response_text = await service.process(request_text, request_context)
+            logger.info("Builder Copilot execute: process() complete (task_id=%s)", task_id)
         except Exception as exc:
             logger.exception("Builder Copilot execution failed")
             await event_queue.enqueue_event(
@@ -296,6 +317,7 @@ class BuilderCopilotExecutor(AgentExecutor):
                 final=True,
             )
         )
+        logger.info("Builder Copilot execute: task complete (task_id=%s)", task_id)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or ""
