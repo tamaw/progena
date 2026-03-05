@@ -105,13 +105,17 @@ class GitWorktreeManager:
             ["show-ref", "--verify", f"refs/heads/{selected_branch}"],
             cwd=self.repo_path,
         )
-        if branch_ref_result["returncode"] == 0:
-            command = ["worktree", "add", str(worktree_path), selected_branch]
-        elif branch_ref_result["returncode"] == 1:
-            command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
-        else:
+        # Code 0: branch exists, Code 1: no match, Code 128: fatal error (e.g., "not a valid ref")
+        # Treat Code 128 with "not a valid ref" as "branch doesn't exist"
+        branch_exists = branch_ref_result["returncode"] == 0
+        if not branch_exists and branch_ref_result["returncode"] not in (1, 128):
             logger.error("Failed to check branch '%s': %s", selected_branch, branch_ref_result["stderr"])
             raise RuntimeError(f"Failed to check branch '{selected_branch}': {branch_ref_result['stderr']}")
+        
+        if branch_exists:
+            command = ["worktree", "add", str(worktree_path), selected_branch]
+        else:
+            command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
 
         result = await self._run_git(command, cwd=self.repo_path)
         if result["returncode"] != 0:

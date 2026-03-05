@@ -44,8 +44,10 @@ async def test_create_worktree_creates_named_branch_when_missing(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_create_worktree_raises_for_non_branch_error(tmp_path: Path) -> None:
     manager = GitWorktreeManager(worktrees_dir=tmp_path / "worktrees", repo_path=tmp_path, cleanup_on_init=False)
+    
+    # Mock git to return a different error code (not 0, 1, or 128) to trigger error
     manager._run_git = AsyncMock(return_value={  # type: ignore[method-assign]
-        "returncode": 128,
+        "returncode": 2,  # Different fatal error, not "not a valid ref"
         "stdout": "",
         "stderr": "fatal: permissions error while checking ref",
     })
