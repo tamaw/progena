@@ -15,8 +15,8 @@ if [ "${PROGENITOR_COPILOT_ACP_BACKGROUND:-true}" = "true" ]; then
   COPILOT_MODEL="${PROGENITOR_COPILOT_MODEL:-gpt-5.3-codex}"
   AGENT_NAME="builder_copilot"
   BASE_LOG_DIR="${PROGENITOR_LOG_DIR:?PROGENITOR_LOG_DIR must be set}"
-  ACP_STDOUT_LOG_FILE="${BASE_LOG_DIR}/${AGENT_NAME}/${AGENT_NAME}.stdout.log"
-  ACP_STDERR_LOG_FILE="${BASE_LOG_DIR}/${AGENT_NAME}/${AGENT_NAME}.stderr.log"
+  ACP_STDOUT_LOG_FILE="${BASE_LOG_DIR}/${AGENT_NAME}/copilot-acp.stdout.log"
+  ACP_STDERR_LOG_FILE="${BASE_LOG_DIR}/${AGENT_NAME}/copilot-acp.stderr.log"
   ACP_PID_FILE="${PROGENITOR_COPILOT_ACP_PID_FILE:-${BASE_LOG_DIR}/copilot-acp.background.pid}"
 
   ensure_dir "$(dirname "$ACP_STDOUT_LOG_FILE")"

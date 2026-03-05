@@ -107,7 +107,7 @@ class GitWorktreeManager:
         )
         if branch_ref_result["returncode"] == 0:
             command = ["worktree", "add", str(worktree_path), selected_branch]
-        elif branch_ref_result["returncode"] == 1:
+        elif branch_ref_result["returncode"] in (1, 128):
             command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
         else:
             logger.error("Failed to check branch '%s': %s", selected_branch, branch_ref_result["stderr"])
