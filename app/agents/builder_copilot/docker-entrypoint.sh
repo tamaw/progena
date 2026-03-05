@@ -22,6 +22,9 @@ if [ "${PROGENITOR_COPILOT_ACP_BACKGROUND:-true}" = "true" ]; then
   ensure_dir "$(dirname "$ACP_STDOUT_LOG_FILE")"
   ensure_dir "$(dirname "$ACP_STDERR_LOG_FILE")"
   ensure_dir "$(dirname "$ACP_PID_FILE")"
+  echo "ACP stdout log: $ACP_STDOUT_LOG_FILE"
+  echo "ACP stderr log: $ACP_STDERR_LOG_FILE"
+  echo "ACP pid file: $ACP_PID_FILE"
 
   # Keep stdin open so ACP stays alive as a background process for the container lifetime.
   (tail -f /dev/null | "$COPILOT_BIN" --acp --yolo --model "$COPILOT_MODEL" >>"$ACP_STDOUT_LOG_FILE" 2>>"$ACP_STDERR_LOG_FILE") &
