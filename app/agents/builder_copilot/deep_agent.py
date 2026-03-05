@@ -33,6 +33,7 @@ Work in this order unless the user explicitly tells you otherwise:
 
 Rules:
 - Start by normalizing the request, then create a worktree unless one is already provided.
+- After summarize_request, use its branch_name when calling create_worktree.
 - Use python_search to inspect the codebase before major edits.
 - Use run_copilot_build for implementation work and run_worktree_command for validation.
 - For progenitor agent work, prefer build_progenitor (or run_copilot_build with target_path=app/progenitor).

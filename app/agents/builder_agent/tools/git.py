@@ -8,7 +8,6 @@ Includes automatic cleanup of orphaned worktrees on startup and failure.
 import asyncio
 import logging
 import shutil
-import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -101,22 +100,26 @@ class GitWorktreeManager:
         worktree_name = f"{work_item_id}_{timestamp}"
         worktree_path = self.worktrees_dir / worktree_name
 
-        # Generate branch name if not provided
-        if not branch_name:
-            branch_name = f"progenitor/{work_item_id}/{uuid.uuid4().hex[:8]}"
-
-        # Create the worktree with a new branch
-        result = await self._run_git(
-            ["worktree", "add", "-b", branch_name, str(worktree_path)],
-            cwd=self.repo_path
+        selected_branch = branch_name or f"progenitor/{work_item_id}"
+        branch_ref_result = await self._run_git(
+            ["show-ref", "--verify", f"refs/heads/{selected_branch}"],
+            cwd=self.repo_path,
         )
+        if branch_ref_result["returncode"] == 0:
+            command = ["worktree", "add", str(worktree_path), selected_branch]
+        elif branch_ref_result["returncode"] == 1:
+            command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
+        else:
+            logger.error("Failed to check branch '%s': %s", selected_branch, branch_ref_result["stderr"])
+            raise RuntimeError(f"Failed to check branch '{selected_branch}': {branch_ref_result['stderr']}")
 
+        result = await self._run_git(command, cwd=self.repo_path)
         if result["returncode"] != 0:
-            logger.error("Failed to create worktree: %s", result['stderr'])
+            logger.error("Failed to create worktree: %s", result["stderr"])
             raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
 
         # Write metadata file for tracking
-        await self._write_worktree_metadata(worktree_path, work_item_id, branch_name)
+        await self._write_worktree_metadata(worktree_path, work_item_id, selected_branch)
 
         logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
         return worktree_path
