@@ -13,8 +13,8 @@ ensure_dir /app/logs/builder_copilot
 if [ "${PROGENITOR_COPILOT_ACP_BACKGROUND:-true}" = "true" ]; then
   COPILOT_BIN="${PROGENITOR_COPILOT_BIN:-copilot}"
   COPILOT_MODEL="${PROGENITOR_COPILOT_MODEL:-gpt-5.3-codex}"
-  ACP_STDOUT_LOG_FILE="${PROGENITOR_COPILOT_ACP_STDOUT_LOG_FILE:-/app/logs/builder_copilot/builder_copilot.stdout.log}"
-  ACP_STDERR_LOG_FILE="${PROGENITOR_COPILOT_ACP_STDERR_LOG_FILE:-/app/logs/builder_copilot/builder_copilot.stderr.log}"
+  ACP_STDOUT_LOG_FILE="${PROGENITOR_COPILOT_ACP_STDOUT_LOG_FILE:-/app/logs/builder_copilot/builder_copilot/builder_copilot.stdout.log}"
+  ACP_STDERR_LOG_FILE="${PROGENITOR_COPILOT_ACP_STDERR_LOG_FILE:-/app/logs/builder_copilot/builder_copilot/builder_copilot.stderr.log}"
   ACP_PID_FILE="${PROGENITOR_COPILOT_ACP_PID_FILE:-/app/logs/builder_copilot/copilot-acp.background.pid}"
 
   ensure_dir "$(dirname "$ACP_STDOUT_LOG_FILE")"

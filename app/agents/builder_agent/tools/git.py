@@ -102,21 +102,37 @@ class GitWorktreeManager:
         worktree_path = self.worktrees_dir / worktree_name
 
         # Generate branch name if not provided
-        if not branch_name:
-            branch_name = f"progenitor/{work_item_id}/{uuid.uuid4().hex[:8]}"
+        requested_branch = branch_name or f"progenitor/{work_item_id}/{uuid.uuid4().hex[:8]}"
+        selected_branch = requested_branch
+        result: dict[str, Any] = {"returncode": -1, "stdout": "", "stderr": ""}
 
-        # Create the worktree with a new branch
-        result = await self._run_git(
-            ["worktree", "add", "-b", branch_name, str(worktree_path)],
-            cwd=self.repo_path
-        )
+        # Retry with a unique suffix when the requested branch already exists.
+        for attempt in range(3):
+            result = await self._run_git(
+                ["worktree", "add", "-b", selected_branch, str(worktree_path)],
+                cwd=self.repo_path
+            )
+            if result["returncode"] == 0:
+                break
 
-        if result["returncode"] != 0:
-            logger.error("Failed to create worktree: %s", result['stderr'])
-            raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
+            stderr = str(result.get("stderr") or "")
+            branch_exists = (
+                "already exists" in stderr.lower()
+                or "branch named" in stderr.lower()
+            )
+            if not branch_exists or attempt == 2:
+                logger.error("Failed to create worktree: %s", result["stderr"])
+                raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
+
+            selected_branch = f"{requested_branch}-{uuid.uuid4().hex[:6]}"
+            logger.warning(
+                "Requested branch '%s' already exists, retrying with '%s'",
+                requested_branch,
+                selected_branch,
+            )
 
         # Write metadata file for tracking
-        await self._write_worktree_metadata(worktree_path, work_item_id, branch_name)
+        await self._write_worktree_metadata(worktree_path, work_item_id, selected_branch)
 
         logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
         return worktree_path
