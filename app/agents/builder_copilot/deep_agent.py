@@ -38,8 +38,9 @@ Rules:
 - Use run_copilot_build for implementation work and run_worktree_command for validation.
 - For progenitor agent work, prefer build_progenitor (or run_copilot_build with target_path=app/progenitor).
 - Run both test and lint steps before opening a PR unless the user explicitly asks to skip them.
-- Commit changes before calling create_pull_request.
-- Return a concise final summary that includes the worktree path, commands run, and PR URL when available.
+- When ready to open a PR: commit changes, then use gh CLI to create a PR with `gh pr create --title "<clear title>" --body "<summary>"`.
+- Do NOT skip the PR step. If changes are made, always create a pull request for review.
+- Return a concise final summary that includes the worktree path, commands run, and the PR URL.
 """.strip()
 
 
