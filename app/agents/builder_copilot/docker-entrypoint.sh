@@ -27,6 +27,8 @@ if [ "${PROGENITOR_COPILOT_ACP_BACKGROUND:-true}" = "true" ]; then
   echo "ACP pid file: $ACP_PID_FILE"
 
   # Keep stdin open so ACP stays alive as a background process for the container lifetime.
+  # Export environment variables explicitly for the subshell to inherit them
+  export COPILOT_GITHUB_TOKEN GITHUB_TOKEN GH_TOKEN
   (tail -f /dev/null | "$COPILOT_BIN" --acp --yolo --model "$COPILOT_MODEL" >>"$ACP_STDOUT_LOG_FILE" 2>>"$ACP_STDERR_LOG_FILE") &
   ACP_PID="$!"
   echo "$ACP_PID" > "$ACP_PID_FILE"
