@@ -40,6 +40,7 @@ Rules:
 - Run both test and lint steps before opening a PR unless the user explicitly asks to skip them.
 - When ready to open a PR: commit changes, then use gh CLI to create a PR with `gh pr create --title "<clear title>" --body "<summary>"`.
 - Do NOT skip the PR step. If changes are made, always create a pull request for review.
+- Periodically call cleanup_old_worktrees to prevent disk space issues (e.g., after every 3-5 builds).
 - Return a concise final summary that includes the worktree path, commands run, and the PR URL.
 """.strip()
 
