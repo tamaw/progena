@@ -120,6 +120,14 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         if verification_summary:
             response_text_out = f"{response_text_out}\n\n{verification_summary}"
 
+        # Append reasoning trace if present (user triggered "think"/"reason"/etc.)
+        reasoning_trace = state.get("last_reasoning_trace")
+        if reasoning_trace:
+            response_text_out = (
+                f"{response_text_out}\n\n"
+                f"---\n**Reasoning**\n{reasoning_trace}"
+            )
+
         # Log assistant response
         message = ConversationMessage(
             id=str(uuid.uuid4()),
@@ -162,6 +170,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             "pending_response": response_text_out,
             "messages": messages,
             "current_input": None,  # Clear input after responding
+            "last_reasoning_trace": None,  # Clear so it doesn't leak to next turn
             **build_clear_updates,
         })
 
