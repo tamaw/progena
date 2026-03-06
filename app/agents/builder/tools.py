@@ -1,4 +1,4 @@
-"""Minimal toolset for the Builder Copilot DeepAgent."""
+"""Minimal toolset for the Builder DeepAgent."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from app.agents.builder_agent.tools.copilot import CopilotCLI
 from app.agents.builder_agent.tools.gh import gh_create_pr_from_worktree
 from app.agents.builder_agent.tools.git import GitWorktreeManager
 
-from .config import BuilderCopilotConfig
+from .config import BuilderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +128,12 @@ async def ensure_workspace() -> None:
     await _configure_git_identity(workspace)
 
 
-class BuilderCopilotToolRuntime:
+class BuilderToolRuntime:
     """Thin wrapper over the existing builder-agent utilities."""
 
     def __init__(
         self,
-        config: BuilderCopilotConfig,
+        config: BuilderConfig,
         project_root: str | Path,
         log_dir: str | Path | None = None,
     ):
@@ -194,14 +194,14 @@ class BuilderCopilotToolRuntime:
         return branch
 
 
-def create_builder_copilot_tools(
+def create_builder_tools(
     *,
-    config: BuilderCopilotConfig,
+    config: BuilderConfig,
     project_root: str | Path,
     log_dir: str | Path | None = None,
 ) -> list[StructuredTool]:
-    """Create the minimal custom tools for Builder Copilot."""
-    runtime = BuilderCopilotToolRuntime(config=config, project_root=project_root, log_dir=log_dir)
+    """Create the minimal custom tools for Builder."""
+    runtime = BuilderToolRuntime(config=config, project_root=project_root, log_dir=log_dir)
 
     async def create_worktree_tool(
         work_item_id: str,
@@ -327,7 +327,7 @@ def create_builder_copilot_tools(
     ) -> dict[str, Any]:
         """Create a stable work item id and normalized request text for a new build."""
         suffix = _derive_work_item_suffix(context_json)
-        slug = "".join(ch if ch.isalnum() else "-" for ch in request.lower())[:24].strip("-") or "builder-copilot"
+        slug = "".join(ch if ch.isalnum() else "-" for ch in request.lower())[:24].strip("-") or "builder"
         branch_name = f"progenitor/{slug}-{suffix}"
         normalized = request.strip()
         if context_json:

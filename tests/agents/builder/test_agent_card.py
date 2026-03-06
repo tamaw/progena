@@ -1,6 +1,6 @@
-"""Tests for the Builder Copilot agent card."""
+"""Tests for the Builder agent card."""
 
-from app.agents.builder_copilot.agent import AGENT_CARD, AGENT_NAME, STEP_SKILLS
+from app.agents.builder.agent import AGENT_CARD, AGENT_NAME, STEP_SKILLS
 
 
 def test_agent_card_includes_expected_metadata():

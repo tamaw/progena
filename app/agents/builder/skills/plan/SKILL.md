@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Plan the requested change before editing. Use when starting a new builder-copilot task so the worktree, scope, and validation steps are explicit.
+description: Plan the requested change before editing. Use when starting a new builder task so the worktree, scope, and validation steps are explicit.
 allowed-tools: summarize_request create_worktree python_search run_worktree_command
 ---
 

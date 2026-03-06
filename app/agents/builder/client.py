@@ -1,4 +1,4 @@
-"""Azure Responses API client for Builder Copilot planning."""
+"""Azure Responses API client for Builder planning."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class BuilderCopilotClient:
+class BuilderClient:
     """Small wrapper for the Azure OpenAI /responses endpoint."""
 
     def __init__(self, config: LLMConfig | None = None, role: str | None = None) -> None:
@@ -121,7 +121,7 @@ class BuilderCopilotClient:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def __aenter__(self) -> BuilderCopilotClient:
+    async def __aenter__(self) -> BuilderClient:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -286,7 +286,7 @@ class BuilderCopilotClient:
         )
         response_text, reasoning = self._extract_text_and_reasoning(data)
         if not response_text:
-            raise RuntimeError("Builder Copilot planning returned no structured content")
+            raise RuntimeError("Builder planning returned no structured content")
         parsed = response_model.model_validate(json.loads(response_text))
         return parsed, reasoning
 
@@ -294,7 +294,7 @@ class BuilderCopilotClient:
         """Run the dedicated reasoning-backed planning call."""
         context_json = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
         system_prompt = (
-            "You are Builder Copilot's planning pass. Produce a compact execution plan before any edits. "
+            "You are Builder's planning pass. Produce a compact execution plan before any edits. "
             "Return only JSON matching the schema. Keep the plan focused on: plan, build, test, lint, pr."
         )
         user_message = (
@@ -305,7 +305,7 @@ class BuilderCopilotClient:
         plan, reasoning = await self.chat_structured_with_reasoning(
             [{"role": "user", "content": user_message}],
             response_model=PlanResponse,
-            schema_name="builder_copilot_plan",
+            schema_name="builder_plan",
             system_prompt=system_prompt,
         )
         logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))

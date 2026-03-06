@@ -39,7 +39,7 @@ class TestInvokeAgentTool:
         }
         context = ToolContext(
             user_input="",
-            tool_args={"agent": "builder_copilot"},
+            tool_args={"agent": "builder"},
             tool_registry=mock_registry,
             llm_client=MagicMock(),
         )
@@ -75,7 +75,7 @@ class TestInvokeAgentTool:
         }
         context = ToolContext(
             user_input="Fix typo in README",
-            tool_args={"agent": "builder_copilot", "timeout": 1},
+            tool_args={"agent": "builder", "timeout": 1},
             tool_registry=mock_registry,
             llm_client=MagicMock(),
         )
@@ -83,7 +83,7 @@ class TestInvokeAgentTool:
         assert result.success
         assert result.data is not None
         assert "task_id" in result.data
-        assert result.data["agent"] == "builder_copilot"
+        assert result.data["agent"] == "builder"
         assert result.data["status"] == "dispatched"
 
 
