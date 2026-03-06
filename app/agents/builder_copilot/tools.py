@@ -288,6 +288,39 @@ def create_builder_copilot_tools(
         )
         return {"success": success, "url": result if success else "", "error": "" if success else result}
 
+    async def cleanup_old_worktrees_tool(
+        max_age_hours: int = 24,
+    ) -> dict[str, Any]:
+        """Clean up worktrees older than max_age_hours. Defaults to 24 hours."""
+        from datetime import UTC, datetime, timedelta
+
+        worktrees_dir = config.storage.worktree_dir
+        if not worktrees_dir.exists():
+            return {"cleaned": 0, "error": ""}
+
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(hours=max_age_hours)
+        cleaned = 0
+        errors = []
+
+        for item in worktrees_dir.iterdir():
+            if not item.is_dir():
+                continue
+            try:
+                mtime = datetime.fromtimestamp(item.stat().st_mtime, tz=UTC)
+                if mtime < cutoff:
+                    import shutil
+                    shutil.rmtree(item, ignore_errors=True)
+                    cleaned += 1
+                    logger.info("Cleaned up old worktree: %s", item.name)
+            except Exception as e:
+                errors.append(f"{item.name}: {str(e)[:100]}")
+
+        return {
+            "cleaned": cleaned,
+            "error": "; ".join(errors) if errors else "",
+        }
+
     async def summarize_request_tool(
         request: str,
         context_json: str | None = None,
@@ -340,6 +373,11 @@ def create_builder_copilot_tools(
             coroutine=create_pull_request_tool,
             name="create_pull_request",
             description="Push the current worktree branch and create a GitHub pull request.",
+        ),
+        StructuredTool.from_function(
+            coroutine=cleanup_old_worktrees_tool,
+            name="cleanup_old_worktrees",
+            description="Clean up git worktrees older than max_age_hours (default 24 hours) to free up disk space.",
         ),
         StructuredTool.from_function(
             coroutine=summarize_request_tool,
