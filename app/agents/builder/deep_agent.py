@@ -1,4 +1,4 @@
-"""DeepAgent factory for the Builder Copilot agent."""
+"""DeepAgent factory for the Builder agent."""
 
 from __future__ import annotations
 
@@ -10,19 +10,19 @@ from deepagents.backends import LocalShellBackend
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
-from .config import BuilderCopilotConfig, get_config
+from .config import BuilderConfig, get_config
 from .langchain_adapter import create_langchain_model
 from .middleware import (
     AuditLoggingMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
-from .tools import create_builder_copilot_tools
+from .tools import create_builder_tools
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """
-You are Builder Copilot, a minimal build agent for repository changes.
+You are Builder, a minimal build agent for repository changes.
 
 Work in this order unless the user explicitly tells you otherwise:
 1. plan
@@ -45,13 +45,13 @@ Rules:
 """.strip()
 
 
-def create_builder_copilot_agent(
+def create_builder_agent(
     *,
-    config: BuilderCopilotConfig | None = None,
+    config: BuilderConfig | None = None,
     project_root: str | Path | None = None,
     log_dir: str | Path | None = None,
 ) -> CompiledStateGraph:
-    """Create a minimal DeepAgent for builder-copilot."""
+    """Create a minimal DeepAgent for builder."""
     config = config or get_config(validate=False)
     root = Path(project_root) if project_root else Path(__file__).resolve().parents[3]
 
@@ -63,7 +63,7 @@ def create_builder_copilot_agent(
         timeout=min(config.copilot.timeout_seconds, 1200),
     )
     skills_root = (Path(__file__).resolve().parent / "skills").relative_to(root).as_posix()
-    tools = create_builder_copilot_tools(
+    tools = create_builder_tools(
         config=config,
         project_root=root,
         log_dir=log_dir,
@@ -75,7 +75,7 @@ def create_builder_copilot_agent(
     ]
 
     agent = create_deep_agent(
-        name="builder-copilot",
+        name="builder",
         model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=tools,
@@ -84,5 +84,5 @@ def create_builder_copilot_agent(
         middleware=middleware,
         checkpointer=MemorySaver(),
     )
-    logger.info("Created Builder Copilot DeepAgent with skills root %s", skills_root)
+    logger.info("Created Builder DeepAgent with skills root %s", skills_root)
     return agent

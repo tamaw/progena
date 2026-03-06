@@ -1,4 +1,4 @@
-"""Local configuration for the Builder Copilot agent."""
+"""Local configuration for the Builder agent."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _env_list(key: str, default: list[str] | None = None) -> list[str]:
 
 @dataclass
 class LLMConfig:
-    """LLM provider settings shared by the Builder Copilot runtime."""
+    """LLM provider settings shared by the Builder runtime."""
 
     base_url: str = ""
     api_key: str | None = None
@@ -66,7 +66,7 @@ class LLMConfig:
 
 @dataclass
 class RuntimeConfig:
-    """Runtime settings used by Builder Copilot."""
+    """Runtime settings used by Builder."""
 
     log_level: str = "info"
     log_format: str = "text"
@@ -81,7 +81,7 @@ class RuntimeConfig:
 
 @dataclass
 class StorageConfig:
-    """Filesystem paths used by Builder Copilot."""
+    """Filesystem paths used by Builder."""
 
     state_dir: Path = field(default_factory=lambda: Path("/data/state"))
     log_dir: Path = field(default_factory=lambda: Path("/logs"))
@@ -118,6 +118,7 @@ class CopilotConfig:
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
     model: str = "gpt-5.3-codex"
     acp_allowed_dirs: list[str] = field(default_factory=list)
+    acp_url: str | None = None  # TCP URL for remote ACP proxy (e.g. tcp://copilot-acp:3000)
 
     @classmethod
     def from_env(cls) -> CopilotConfig:
@@ -127,12 +128,13 @@ class CopilotConfig:
             default_flags=_env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
             model=os.getenv("PROGENITOR_COPILOT_MODEL", "gpt-5.3-codex"),
             acp_allowed_dirs=_env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", []),
+            acp_url=os.getenv("COPILOT_ACP_URL"),
         )
 
 
 @dataclass
-class BuilderCopilotConfig:
-    """Complete local config for Builder Copilot."""
+class BuilderConfig:
+    """Complete local config for Builder."""
 
     llm: LLMConfig = field(default_factory=LLMConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -144,7 +146,7 @@ class BuilderCopilotConfig:
         cls,
         project_root: Path | None = None,
         _config_dir: Path | None = None,
-    ) -> BuilderCopilotConfig:
+    ) -> BuilderConfig:
         return cls(
             llm=LLMConfig.from_env(),
             runtime=RuntimeConfig.from_env(),
@@ -153,19 +155,19 @@ class BuilderCopilotConfig:
         )
 
 
-_config: BuilderCopilotConfig | None = None
+_config: BuilderConfig | None = None
 
 
 def get_config(
     project_root: Path | None = None,
     config_dir: Path | None = None,
     validate: bool = True,
-) -> BuilderCopilotConfig:
+) -> BuilderConfig:
     del config_dir
     del validate
     global _config
     if _config is None:
-        _config = BuilderCopilotConfig.load(project_root)
+        _config = BuilderConfig.load(project_root)
     return _config
 
 
@@ -184,7 +186,7 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload)
 
 
-def setup_logging(config: BuilderCopilotConfig, agent_name: str = "builder_copilot") -> None:
+def setup_logging(config: BuilderConfig, agent_name: str = "builder") -> None:
     """Configure split stdout/stderr logging like progenitor runtime."""
     level_map = {
         "debug": logging.DEBUG,

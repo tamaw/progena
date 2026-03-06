@@ -1,4 +1,4 @@
-"""Builder Copilot agent entry point."""
+"""Builder agent entry point."""
 
 from __future__ import annotations
 
@@ -32,14 +32,14 @@ from a2a.types import (
 )
 from fastapi.responses import JSONResponse
 
-from .client import BuilderCopilotClient, ReasonedPlan
-from .config import BuilderCopilotConfig, get_config, setup_logging
-from .deep_agent import create_builder_copilot_agent
+from .client import BuilderClient, ReasonedPlan
+from .config import BuilderConfig, get_config, setup_logging
+from .deep_agent import create_builder_agent
 from .tools import ensure_workspace
 
 logger = logging.getLogger(__name__)
 
-AGENT_NAME = "Builder Copilot"
+AGENT_NAME = "Builder"
 AGENT_VERSION = "0.1.0"
 DEFAULT_PORT = 8108
 STEP_SKILLS = [
@@ -51,13 +51,13 @@ STEP_SKILLS = [
     ("python-search", "Search Python sources quickly before editing."),
 ]
 
-class BuilderCopilotService:
+class BuilderService:
     """Lazy-initialized wrapper around the DeepAgent graph."""
 
     def __init__(self) -> None:
         self._graph = None
-        self._config: BuilderCopilotConfig | None = None
-        self._planner_client: BuilderCopilotClient | None = None
+        self._config: BuilderConfig | None = None
+        self._planner_client: BuilderClient | None = None
         self._initialized = False
         self._start_time = time.time()
 
@@ -67,26 +67,26 @@ class BuilderCopilotService:
             return
 
         repo_root = Path(__file__).resolve().parents[3]
-        logger.info("Builder Copilot init: loading config (repo_root=%s)", repo_root)
+        logger.info("Builder init: loading config (repo_root=%s)", repo_root)
         config = get_config(repo_root, repo_root / "config", validate=False)
-        setup_logging(config, "builder_copilot")
-        logger.info("Builder Copilot init: ensuring workspace")
+        setup_logging(config, "builder")
+        logger.info("Builder init: ensuring workspace")
         await ensure_workspace()
 
         for path in [config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir]:
             path.mkdir(parents=True, exist_ok=True)
-        logger.info("Builder Copilot init: storage directories ensured")
+        logger.info("Builder init: storage directories ensured")
 
-        logger.info("Builder Copilot init: creating DeepAgent graph")
-        self._graph = create_builder_copilot_agent(
+        logger.info("Builder init: creating DeepAgent graph")
+        self._graph = create_builder_agent(
             config=config,
             project_root=repo_root,
-            log_dir=config.storage.log_dir / "builder_copilot",
+            log_dir=config.storage.log_dir / "builder",
         )
         self._config = config
-        self._planner_client = BuilderCopilotClient(config.llm, role="planner")
+        self._planner_client = BuilderClient(config.llm, role="planner")
         self._initialized = True
-        logger.info("Builder Copilot initialized")
+        logger.info("Builder initialized")
 
     async def process(self, request_text: str, context: dict[str, Any]) -> str:
         """Run the DeepAgent for a single request."""
@@ -95,20 +95,20 @@ class BuilderCopilotService:
         assert self._planner_client is not None
 
         logger.info(
-            "Builder Copilot process: start (request_len=%d, context_keys=%s)",
+            "Builder process: start (request_len=%d, context_keys=%s)",
             len(request_text),
             sorted(context.keys()),
         )
-        logger.info("Builder Copilot process: planning")
+        logger.info("Builder process: planning")
         planning_result = await _build_preflight_plan(self._planner_client, request_text, context)
         prompt = _build_execution_prompt(request_text, context, planning_result)
-        thread_id = f"builder_copilot_{uuid.uuid4().hex[:12]}"
-        logger.info("Builder Copilot process: invoking graph (thread_id=%s)", thread_id)
+        thread_id = f"builder_{uuid.uuid4().hex[:12]}"
+        logger.info("Builder process: invoking graph (thread_id=%s)", thread_id)
         result = await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
             {"configurable": {"thread_id": thread_id}},
         )
-        logger.info("Builder Copilot process: graph invocation complete (thread_id=%s)", thread_id)
+        logger.info("Builder process: graph invocation complete (thread_id=%s)", thread_id)
         return _extract_result_text(result)
 
     def health_payload(self) -> dict[str, Any]:
@@ -149,18 +149,18 @@ def _extract_result_text(result: dict[str, Any]) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
 
-    return "Builder Copilot completed, but no text response was returned."
+    return "Builder completed, but no text response was returned."
 
 
 async def _build_preflight_plan(
-    planner_client: BuilderCopilotClient,
+    planner_client: BuilderClient,
     request_text: str,
     context: dict[str, Any],
 ) -> ReasonedPlan | None:
     try:
         return await planner_client.plan_step(request_text, context)
     except Exception:
-        logger.warning("Builder Copilot preflight planning failed; continuing without it", exc_info=True)
+        logger.warning("Builder preflight planning failed; continuing without it", exc_info=True)
         return None
 
 
@@ -227,8 +227,8 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-class BuilderCopilotExecutor(AgentExecutor):
-    """SDK-backed A2A executor for Builder Copilot."""
+class BuilderExecutor(AgentExecutor):
+    """SDK-backed A2A executor for Builder."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or str(uuid.uuid4())
@@ -238,7 +238,7 @@ class BuilderCopilotExecutor(AgentExecutor):
         request_context.setdefault("a2a_task_id", task_id)
         request_context.setdefault("a2a_context_id", ctx_id)
         logger.info(
-            "Builder Copilot execute: task start (task_id=%s, context_id=%s, request_len=%d)",
+            "Builder execute: task start (task_id=%s, context_id=%s, request_len=%d)",
             task_id,
             ctx_id,
             len(request_text),
@@ -265,7 +265,7 @@ class BuilderCopilotExecutor(AgentExecutor):
                 context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.working,
-                    message=_text_message(f"Starting Builder Copilot run: {request_text[:120]}"),
+                    message=_text_message(f"Starting Builder run: {request_text[:120]}"),
                     timestamp=_utc_now_iso(),
                 ),
                 final=False,
@@ -273,18 +273,18 @@ class BuilderCopilotExecutor(AgentExecutor):
         )
 
         try:
-            logger.info("Builder Copilot execute: running process() (task_id=%s)", task_id)
+            logger.info("Builder execute: running process() (task_id=%s)", task_id)
             response_text = await service.process(request_text, request_context)
-            logger.info("Builder Copilot execute: process() complete (task_id=%s)", task_id)
+            logger.info("Builder execute: process() complete (task_id=%s)", task_id)
         except Exception as exc:
-            logger.exception("Builder Copilot execution failed")
+            logger.exception("Builder execution failed")
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
                     task_id=task_id,
                     context_id=ctx_id,
                     status=TaskStatus(
                         state=TaskState.failed,
-                        message=_text_message(f"Builder Copilot failed: {exc}"),
+                        message=_text_message(f"Builder failed: {exc}"),
                         timestamp=_utc_now_iso(),
                     ),
                     final=True,
@@ -298,8 +298,8 @@ class BuilderCopilotExecutor(AgentExecutor):
                 context_id=ctx_id,
                 artifact=Artifact(
                     artifact_id=str(uuid.uuid4()),
-                    name="builder-copilot-result",
-                    description="Final Builder Copilot response",
+                    name="builder-result",
+                    description="Final Builder response",
                     parts=[Part(root=TextPart(text=response_text))],
                 ),
                 append=False,
@@ -311,13 +311,13 @@ class BuilderCopilotExecutor(AgentExecutor):
                 context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.completed,
-                    message=_text_message("Builder Copilot completed successfully."),
+                    message=_text_message("Builder completed successfully."),
                     timestamp=_utc_now_iso(),
                 ),
                 final=True,
             )
         )
-        logger.info("Builder Copilot execute: task complete (task_id=%s)", task_id)
+        logger.info("Builder execute: task complete (task_id=%s)", task_id)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or ""
@@ -328,7 +328,7 @@ class BuilderCopilotExecutor(AgentExecutor):
                 context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.canceled,
-                    message=_text_message("Builder Copilot task cancelled."),
+                    message=_text_message("Builder task cancelled."),
                     timestamp=_utc_now_iso(),
                 ),
                 final=True,
@@ -336,7 +336,7 @@ class BuilderCopilotExecutor(AgentExecutor):
         )
 
 
-service = BuilderCopilotService()
+service = BuilderService()
 _PORT = int(os.environ.get("PORT", str(DEFAULT_PORT)))
 _PUBLIC_HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
 
@@ -356,14 +356,14 @@ AGENT_CARD = AgentCard(
             id=skill_id,
             name=skill_id.replace("-", " ").title(),
             description=description,
-            tags=["builder", "copilot", skill_id],
+            tags=["builder", skill_id],
             examples=[description],
         )
         for skill_id, description in STEP_SKILLS
     ],
 )
 
-_executor = BuilderCopilotExecutor()
+_executor = BuilderExecutor()
 _task_store = InMemoryTaskStore()
 _request_handler = DefaultRequestHandler(agent_executor=_executor, task_store=_task_store)
 _a2a_app = A2AFastAPIApplication(agent_card=AGENT_CARD, http_handler=_request_handler)
@@ -381,6 +381,6 @@ app.add_route("/health", _health, methods=["GET"])
 @app.on_event("startup")
 async def _startup() -> None:
     port = int(os.environ.get("PORT", str(DEFAULT_PORT)))
-    logger.info("Builder Copilot starting on port %d", port)
+    logger.info("Builder starting on port %d", port)
     await service.initialize()
-    logger.info("Builder Copilot ready on port %d", port)
+    logger.info("Builder ready on port %d", port)
