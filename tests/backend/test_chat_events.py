@@ -22,9 +22,9 @@ from pydantic import ValidationError
 
 from app.backend.main import app
 from app.backend.models import (
+    ResponseInputMessage,
     ResponseOutputMessage,
     ResponseOutputText,
-    ResponseInputMessage,
     ResponsePayload,
     ResponseRequest,
     SimpleChatRequest,

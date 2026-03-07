@@ -11,11 +11,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
 import sys
-from pathlib import Path
 
 logger = logging.getLogger("copilot_acp.proxy")
 
@@ -171,10 +171,8 @@ async def main() -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
+        with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
-        except NotImplementedError:
-            pass  # Windows
 
     async with acp_server, health_server:
         await stop.wait()

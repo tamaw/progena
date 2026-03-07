@@ -15,7 +15,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -585,10 +585,8 @@ class CopilotACPManager:
         finally:
             await conn.close()
             tcp_writer.close()
-            try:
+            with suppress(Exception):
                 await tcp_writer.wait_closed()
-            except Exception:
-                pass
             logger.info(
                 "COPILOT_ACP [%s]: TCP connection closed",
                 work_item_id,
