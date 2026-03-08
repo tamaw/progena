@@ -133,6 +133,7 @@ class ACPManager:
         self._spawn_cm: Any = None
         self._init_lock = asyncio.Lock()
         self._prompt_lock = asyncio.Lock()
+        self._closed = False
 
     def _build_args(self) -> list[str]:
         args = ["--acp", "--yolo"]
@@ -145,6 +146,8 @@ class ACPManager:
         return args
 
     async def _ensure_ready(self, cwd: Path, work_item_id: str) -> None:
+        if self._closed:
+            raise RuntimeError("ACP manager is closed")
         if self._conn is not None:
             return
         async with self._init_lock:
@@ -158,6 +161,40 @@ class ACPManager:
             await conn.initialize(protocol_version=PROTOCOL_VERSION)
             self._client = client
             self._conn = conn
+
+    async def close(self) -> None:
+        """Close ACP process and transport safely.
+
+        On shutdown, Uvicorn cancellation can overlap with ACP stream handling.
+        Guard close with locks and swallow benign double-close race errors.
+        """
+        if self._closed and self._spawn_cm is None:
+            return
+
+        async with self._init_lock:
+            self._closed = True
+            acquired_prompt_lock = False
+            try:
+                try:
+                    await asyncio.wait_for(self._prompt_lock.acquire(), timeout=10)
+                    acquired_prompt_lock = True
+                except TimeoutError:
+                    logger.warning("ACP shutdown timed out waiting for active prompt lock")
+
+                if self._spawn_cm is not None:
+                    try:
+                        await self._spawn_cm.__aexit__(None, None, None)
+                    except RuntimeError as exc:
+                        if "asynchronous generator is already running" in str(exc):
+                            logger.warning("ACP shutdown race ignored: %s", exc)
+                        else:
+                            raise
+            finally:
+                if acquired_prompt_lock:
+                    self._prompt_lock.release()
+                self._conn = None
+                self._client = None
+                self._spawn_cm = None
 
     async def prompt(self, text: str, cwd: Path, work_item_id: str = "") -> dict[str, Any]:
         t0 = time.perf_counter()
@@ -276,6 +313,10 @@ class CopilotCLI:
             "tool_calls": result.get("tool_calls", []),
             "elapsed": result.get("elapsed", 0),
         }
+
+    async def close(self) -> None:
+        """Close underlying ACP resources."""
+        await self._manager.close()
 
     @staticmethod
     def _extract_summary(output: str) -> str:

@@ -21,6 +21,8 @@ from .copilot_acp import CopilotCLI
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE_TOOL_RUNTIMES: list[ToolRuntime] = []
+
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -74,6 +76,10 @@ class ToolRuntime:
             log_dir=log_dir,
         )
 
+    async def close(self) -> None:
+        """Release long-lived tool resources."""
+        await self.copilot.close()
+
     async def run_command(self, cwd: str, command: str, timeout: int = 600) -> dict[str, Any]:
         """Run a shell command and return result dict."""
         proc = await asyncio.create_subprocess_shell(
@@ -123,6 +129,16 @@ class ToolRuntime:
         }
 
 
+async def shutdown_builder_tool_runtimes() -> None:
+    """Close any active tool runtimes created by create_builder_tools()."""
+    while _ACTIVE_TOOL_RUNTIMES:
+        runtime = _ACTIVE_TOOL_RUNTIMES.pop()
+        try:
+            await runtime.close()
+        except Exception:
+            logger.exception("Failed to close builder tool runtime")
+
+
 # ---------------------------------------------------------------------------
 # Tool factory
 # ---------------------------------------------------------------------------
@@ -136,6 +152,7 @@ def create_builder_tools(
 ) -> list[StructuredTool]:
     """Create the full set of builder development tools."""
     rt = ToolRuntime(config, project_root, log_dir)
+    _ACTIVE_TOOL_RUNTIMES.append(rt)
 
     # --- Worktree ---
 
