@@ -1,6 +1,6 @@
-# Progenitor × Builder Copilot Integration
+# Progenitor × Builder Integration
 
-This document explains how Progenitor delegates code generation tasks to Builder Copilot asynchronously using the A2A protocol.
+This document explains how Progenitor delegates code generation tasks to Builder asynchronously using the A2A protocol.
 
 ## Architecture Overview
 
@@ -8,18 +8,18 @@ This document explains how Progenitor delegates code generation tasks to Builder
 User Request
     ↓
 Progenitor (Main Agent Loop)
-    ├─ Receives: "Create a README for Builder Copilot"
+    ├─ Receives: "Create a README for Builder"
     ├─ Decides: This is a code generation task
-    ├─ Invokes: invoke_builder_copilot system tool
+    ├─ Invokes: invoke_builder system tool
     │    ↓
-    │ invoke_builder_copilot Tool
+    │ invoke_builder Tool
     │    ├─ Prepares A2A message/send request
-    │    ├─ Posts to Builder Copilot at http://localhost:8108
+    │    ├─ Posts to Builder at http://localhost:8108
     │    └─ Returns immediately with task_id
     │
     └─ Returns: task_id + "Task queued for execution"
 
-Builder Copilot (Background Task)
+Builder (Background Task)
     ├─ Receives: A2A message/send POST request
     ├─ Accepts: Returns 200 OK immediately
     ├─ Queues: Creates git worktree, plans work
@@ -33,11 +33,11 @@ Builder Copilot (Background Task)
 
 ### 1. Agent Configuration (`data/config/agents.json`)
 
-Registers all agents including Builder Copilot:
+Registers all agents including Builder:
 
 ```json
 {
-  "builder_copilot": {
+  "builder": {
     "kind": "a2a_agent",
     "version": "0.1.0",
     "description": "Minimal DeepAgent builder using GitHub Copilot...",
@@ -52,21 +52,21 @@ Registers all agents including Builder Copilot:
 
 **Capabilities** tell Progenitor's LLM when to invoke this agent.
 
-### 2. System Tool: `invoke_builder_copilot` 
+### 2. System Tool: `invoke_builder`
 
-Located in `app/progenitor/tools/invoke_builder_copilot.py`
+Located in `app/progenitor/tools/invoke_builder.py`
 
-**Purpose**: Invoke Builder Copilot via A2A protocol
+**Purpose**: Invoke Builder via A2A protocol
 
-**When used**: 
-- User asks to build something: "Create a README for Builder Copilot"
+**When used**:
+- User asks to build something: "Create a README for Builder"
 - LLM decides this matches "build" capability
 - System tool is invoked automatically
 
 **Flow**:
 ```python
 # 1. Tool receives request from LLM
-request_text = "Create a comprehensive README for Builder Copilot..."
+request_text = "Create a comprehensive README for Builder..."
 
 # 2. Prepare A2A request
 payload = {
@@ -84,7 +84,7 @@ payload = {
     }
 }
 
-# 3. POST to Builder Copilot
+# 3. POST to Builder
 POST http://localhost:8108/  # A2A server
     ↓ (blocks until response, but agent processes asynchronously)
     ↓ (expected timeout = OK, work continues in background)
@@ -128,8 +128,8 @@ POST http://localhost:8108/  # A2A server
 
 **Response**: Returns immediately (200 OK) even if task takes hours.
 
-**Async Handling**: 
-- Builder Copilot spawns background task
+**Async Handling**:
+- Builder spawns background task
 - Creates git worktree (isolated)
 - Plans work with LLM
 - Executes: plan → build → test → lint → pr
@@ -140,18 +140,18 @@ POST http://localhost:8108/  # A2A server
 
 ### Example 1: Direct Invocation via Progenitor
 
-**User**: "Can you create a comprehensive README for Builder Copilot?"
+**User**: "Can you create a comprehensive README for Builder?"
 
 **Progenitor's Decision**:
 1. Recognizes capability: "build" / "documentation"
-2. Selects: invoke_builder_copilot tool
+2. Selects: invoke_builder tool
 3. Delegates: Sends A2A request
 4. Returns: task_id to user
 
 **Progenitor's Response**:
 ```
 Task accepted! ID: copilot_a1b2c3d4e5f6g7h8
-Builder Copilot is processing in the background...
+Builder is processing in the background...
 Status updates: Check logs or use list_tasks
 ```
 
@@ -173,7 +173,7 @@ payload = {
             "role": "user",
             "parts": [{
                 "kind": "text",
-                "text": "Create comprehensive README for Builder Copilot"
+                "text": "Create comprehensive README for Builder"
             }]
         },
         "metadata": {}
@@ -193,7 +193,7 @@ async with httpx.AsyncClient(timeout=30) as client:
 
 ## Configuration & Setup
 
-### 1. Ensure Builder Copilot is Registered
+### 1. Ensure Builder is Registered
 
 File: `data/config/agents.json`
 
@@ -203,14 +203,14 @@ File: `data/config/agents.json`
 $ python -m app.progenitor.service discover_agents
 ```
 
-### 2. Start Builder Copilot  
+### 2. Start Builder
 
 ```bash
-# Terminal 1: Start Builder Copilot agent
-$ python -m uvicorn app.agents.builder_copilot.agent:app --port 8108
+# Terminal 1: Start Builder agent
+$ python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 
 # Terminal 2: (Optional) Test invocation
-$ python scripts/demo_builder_copilot.py
+$ python scripts/demo_builder.py
 
 # Terminal 3: Start Progenitor (main loop)
 $ python -m app.progenitor.main
@@ -223,7 +223,7 @@ $ python -m app.progenitor.main
 $ curl http://localhost:8108/health
 {
   "status": "healthy",
-  "name": "Builder Copilot",
+  "name": "Builder",
   "version": "0.1.0",
   "uptime_seconds": 42.5
 }
@@ -233,24 +233,24 @@ $ curl http://localhost:8108/health
 ```bash
 # In Progenitor, ask the LLM:
 User: "What agents are available?"
-System: Lists all registered agents including Builder Copilot
+System: Lists all registered agents including Builder
 ```
 
 ## Advanced Topics
 
 ### Async Timeout Handling
 
-Builder Copilot tasks can take minutes (cloning repo, Copilot generation, testing, PR creation). 
+Builder tasks can take minutes (cloning repo, Copilot generation, testing, PR creation).
 
 **Default timeout**: 30 seconds (configurable)
 
-**On timeout**: 
+**On timeout**:
 - HTTP request times out ✓ (expected, not an error)
 - Task continues in background ✓
 - Returns `task_id` for monitoring ✓
 
 ```python
-# In invoke_builder_copilot tool:
+# In invoke_builder tool:
 try:
     resp = await client.post(url, json=payload, timeout=30)
 except httpx.TimeoutException:
@@ -264,17 +264,17 @@ except httpx.TimeoutException:
 
 ### Status Updates (Event Queue)
 
-Builder Copilot streams status updates via A2A TaskStatusUpdateEvent:
+Builder streams status updates via A2A TaskStatusUpdateEvent:
 
 ```python
-# In BuilderCopilotExecutor.execute():
+# In BuilderExecutor.execute():
 
 # Status: Working
 await event_queue.enqueue_event(TaskStatusUpdateEvent(
     task_id=task_id,
     status=TaskStatus(
         state=TaskState.working,  # "working" | "success" | "failed"
-        message=_text_message("Starting Builder Copilot run..."),
+        message=_text_message("Starting Builder run..."),
         timestamp=_utc_now_iso(),
     ),
     final=False  # More updates coming
@@ -314,26 +314,26 @@ User: "Rediscover agents"
 ### Quick Integration Test
 
 ```bash
-# 1. Start Builder Copilot
-python -m uvicorn app.agents.builder_copilot.agent:app --port 8108 &
+# 1. Start Builder
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108 &
 
 # 2. Run demo script
-python scripts/demo_builder_copilot.py
+python scripts/demo_builder.py
 
 # 3. Monitor logs
-tail -f logs/builder_copilot/builder_copilot.stdout.log
+tail -f logs/builder/builder.stdout.log
 ```
 
 ### Progenitor Invocation Test
 
 ```python
 # In Progenitor node test:
-from app.progenitor.tools.invoke_builder_copilot import InvokeBuilderCopilotTool
+from app.progenitor.tools.invoke_builder import InvokeBuilderTool
 from app.progenitor.tools.protocol import ToolContext
 
-tool = InvokeBuilderCopilotTool()
+tool = InvokeBuilderTool()
 context = ToolContext(
-    user_input="Create README for Builder Copilot",
+    user_input="Create README for Builder",
     tool_args=None,
     tool_registry=mock_registry,
     llm_client=mock_llm
@@ -345,21 +345,21 @@ assert "task_id" in result.output
 
 ## Troubleshooting
 
-### Builder Copilot Not Running
+### Builder Not Running
 
 ```
-Error: Builder Copilot not running at http://localhost:8108
+Error: Builder not running at http://localhost:8108
 ```
 
 **Fix**:
 ```bash
-python -m uvicorn app.agents.builder_copilot.agent:app --port 8108
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 ```
 
 ### Agent Not Registered
 
 ```
-Error: invoke_builder_copilot tool not found
+Error: invoke_builder tool not found
 ```
 
 **Fix**:
@@ -374,16 +374,16 @@ python -m app.progenitor.main
 httpx.ReadTimeout: Request timeout after 120s
 ```
 
-**This is OK!** Builder Copilot is still working. Check logs:
+**This is OK!** Builder is still working. Check logs:
 ```bash
-tail -f logs/builder_copilot/builder_copilot.stdout.log
+tail -f logs/builder/builder.stdout.log
 ```
 
 ### PR Not Created
 
-Check Builder Copilot logs:
+Check Builder logs:
 ```bash
-cat logs/builder_copilot/builder_copilot.stdout.log | grep -A 5 "error\|fail"
+cat logs/builder/builder.stdout.log | grep -A 5 "error\|fail"
 ```
 
 Common issues:
@@ -398,10 +398,10 @@ Common issues:
 | **Protocol** | A2A JSON-RPC 2.0 (message/send) |
 | **Endpoint** | POST http://localhost:8108/ |
 | **Async Model** | Fire-and-forget with task_id tracking |
-| **Tool Name** | `invoke_builder_copilot` (auto-discovered) |
+| **Tool Name** | `invoke_builder` (auto-discovered) |
 | **Capabilities** | build, plan, test, lint, pr, async_tasks |
 | **Response Time** | Immediate (200 OK) even for long tasks |
 | **Status Updates** | TaskStatusUpdateEvent via event queue |
 | **Config File** | data/config/agents.json |
-| **Demo Script** | scripts/demo_builder_copilot.py |
+| **Demo Script** | scripts/demo_builder.py |
 

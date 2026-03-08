@@ -1,14 +1,14 @@
-"""Tests for the Builder Copilot planning client."""
+"""Tests for the Builder planning client."""
 
 import pytest
 
-from app.agents.builder_copilot.client import (
-    BuilderCopilotClient,
+from app.agents.builder_progenitor.client import (
+    BuilderClient,
     PlanResponse,
     _build_json_schema_format,
     _build_responses_endpoint,
 )
-from app.agents.builder_copilot.config import LLMConfig
+from app.agents.builder_progenitor.config import LLMConfig
 
 
 def test_build_responses_endpoint_keeps_existing_query_and_path():
@@ -19,7 +19,7 @@ def test_build_responses_endpoint_keeps_existing_query_and_path():
 
 
 def test_build_input_messages_normalizes_role_and_content():
-    client = BuilderCopilotClient(LLMConfig(base_url="https://example.openai.azure.com/openai/v1"))
+    client = BuilderClient(LLMConfig(base_url="https://example.openai.azure.com/openai/v1"))
     payload = client._build_input_messages(
         [{"role": "scheduler", "content": [{"text": "hello"}, {"text": " world"}]}],
         system_prompt="system",
@@ -29,7 +29,7 @@ def test_build_input_messages_normalizes_role_and_content():
 
 
 def test_build_payload_includes_reasoning_and_structured_output():
-    client = BuilderCopilotClient(LLMConfig(base_url="http://localhost:4000", api_key="test-key"), role="planner")
+    client = BuilderClient(LLMConfig(base_url="http://localhost:4000", api_key="test-key"), role="planner")
     payload = client._build_payload(
         [{"role": "user", "content": "plan this"}],
         response_format={"type": "json_schema", "json_schema": {"name": "plan", "schema": {}}},
@@ -45,7 +45,7 @@ def test_build_payload_includes_reasoning_and_structured_output():
 
 
 def test_schema_format_closes_nested_object_defs():
-    response_format = _build_json_schema_format(PlanResponse, "builder_copilot_plan")
+    response_format = _build_json_schema_format(PlanResponse, "builder_plan")
     schema = response_format["json_schema"]["schema"]
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == {"summary", "steps", "risks"}
@@ -55,7 +55,7 @@ def test_schema_format_closes_nested_object_defs():
 
 @pytest.mark.asyncio
 async def test_plan_step_parses_structured_response_and_reasoning():
-    client = BuilderCopilotClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
+    client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
 
     async def fake_post_response(*args, **kwargs):
         del args
@@ -76,3 +76,39 @@ async def test_plan_step_parses_structured_response_and_reasoning():
     assert isinstance(result.plan, PlanResponse)
     assert result.plan.steps[0].step == "plan"
     assert "smallest safe change" in result.reasoning
+
+
+@pytest.mark.asyncio
+async def test_plan_step_parses_multipart_output_text_without_retry():
+    client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
+
+    async def fake_post_response(*args, **kwargs):
+        del args
+        del kwargs
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '{"summary":"s","steps":[{"step":"plan",',
+                        },
+                        {
+                            "type": "output_text",
+                            "text": '"objective":"o","commands":["echo ok"]}],"risks":[]}',
+                        },
+                    ],
+                }
+            ]
+        }
+
+    client._post_response = fake_post_response  # type: ignore[method-assign]
+
+    result = await client.plan_step("fix the bug", {"branch": "main"})
+
+    assert isinstance(result.plan, PlanResponse)
+    assert result.plan.summary == "s"
+    assert result.plan.steps[0].commands == ["echo ok"]
+
+

@@ -1,4 +1,4 @@
-"""Azure Responses API client for Builder Copilot planning."""
+"""Azure Responses API client for Builder planning."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class BuilderCopilotClient:
+class BuilderClient:
     """Small wrapper for the Azure OpenAI /responses endpoint."""
 
     def __init__(self, config: LLMConfig | None = None, role: str | None = None) -> None:
@@ -121,7 +121,7 @@ class BuilderCopilotClient:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def __aenter__(self) -> BuilderCopilotClient:
+    async def __aenter__(self) -> BuilderClient:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -220,19 +220,29 @@ class BuilderCopilotClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        response = await self.client.post(self.endpoint_url, json=payload)
-        response.raise_for_status()
-        return response.json()
+        try:
+            logger.debug("Posting to Azure OpenAI: %s (model=%s)", self.endpoint_url, self.model)
+            response = await self.client.post(self.endpoint_url, json=payload)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(
+                "Azure OpenAI API error: %s. Endpoint: %s. API key configured: %s",
+                str(e)[:200],
+                self.endpoint_url,
+                bool(self.config and self.config.api_key),
+            )
+            raise
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
         text = ""
         reasoning = ""
+        text_parts: list[str] = []
 
         for key in ("output_text", "final_text"):
             value = data.get(key)
             if isinstance(value, str) and value.strip():
-                text = value.strip()
-                break
+                text_parts.append(value.strip())
 
         for item in data.get("output", []):
             if not isinstance(item, dict):
@@ -242,8 +252,8 @@ class BuilderCopilotClient:
                     if not isinstance(part, dict):
                         continue
                     part_type = part.get("type")
-                    if not text and part_type in {"output_text", "text"} and isinstance(part.get("text"), str):
-                        text = part["text"].strip()
+                    if part_type in {"output_text", "text"} and isinstance(part.get("text"), str):
+                        text_parts.append(part["text"].strip())
                     if part_type in {"reasoning", "summary_text"} and isinstance(part.get("text"), str):
                         reasoning = part["text"].strip()
             elif item.get("type") == "reasoning":
@@ -263,6 +273,9 @@ class BuilderCopilotClient:
                 summary_parts = [str(entry.get("text", "")) for entry in summary if isinstance(entry, dict)]
                 reasoning = "".join(summary_parts).strip()
 
+        if text_parts:
+            text = "".join(text_parts).strip()
+
         return text, reasoning
 
     async def chat_structured_with_reasoning(
@@ -273,20 +286,61 @@ class BuilderCopilotClient:
         schema_name: str,
         system_prompt: str,
         temperature: float | None = None,
-        max_tokens: int = 1200,
+        max_tokens: int = 8192,
     ) -> tuple[TModel, str]:
+        async def _request_raw() -> tuple[str, str]:
+            data = await self._post_response(
+                messages,
+                system_prompt=system_prompt,
+                response_format=response_format,
+                include_reasoning=False,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            response_text, reasoning = self._extract_text_and_reasoning(data)
+            if not response_text:
+                status = str(data.get("status") or "")
+                details = data.get("incomplete_details")
+                incomplete_reason = ""
+                if isinstance(details, dict) and details.get("reason"):
+                    incomplete_reason = str(details.get("reason"))
+
+                filter_flags: list[str] = []
+                for entry in data.get("content_filters", []):
+                    if not isinstance(entry, dict):
+                        continue
+                    source = str(entry.get("source_type") or "unknown")
+                    if entry.get("blocked") is True:
+                        filter_flags.append(f"{source}:blocked")
+                    results = entry.get("content_filter_results")
+                    if isinstance(results, dict):
+                        for name, result in results.items():
+                            if isinstance(result, dict) and (
+                                result.get("filtered") is True or result.get("detected") is True
+                            ):
+                                filter_flags.append(f"{source}:{name}")
+
+                if incomplete_reason or filter_flags:
+                    parts: list[str] = []
+                    if status:
+                        parts.append(f"status={status}")
+                    if incomplete_reason:
+                        parts.append(f"incomplete={incomplete_reason}")
+                    if filter_flags:
+                        parts.append(f"content_filters={','.join(filter_flags)}")
+                    raise RuntimeError(
+                        "Builder planning returned no structured content (" + "; ".join(parts) + ")."
+                    )
+
+                logger.error(
+                    "No text extracted from API response. Full response: %s",
+                    json.dumps(data, indent=2)[:1000],
+                )
+                raise RuntimeError("Builder planning returned no structured content")
+            return response_text, reasoning
+
         response_format = _build_json_schema_format(response_model, schema_name)
-        data = await self._post_response(
-            messages,
-            system_prompt=system_prompt,
-            response_format=response_format,
-            include_reasoning=True,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        response_text, reasoning = self._extract_text_and_reasoning(data)
-        if not response_text:
-            raise RuntimeError("Builder Copilot planning returned no structured content")
+        response_text, reasoning = await _request_raw()
         parsed = response_model.model_validate(json.loads(response_text))
         return parsed, reasoning
 
@@ -294,8 +348,10 @@ class BuilderCopilotClient:
         """Run the dedicated reasoning-backed planning call."""
         context_json = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
         system_prompt = (
-            "You are Builder Copilot's planning pass. Produce a compact execution plan before any edits. "
-            "Return only JSON matching the schema. Keep the plan focused on: plan, build, test, lint, pr."
+            "You are Builder's planning pass. Produce a compact execution plan before any edits. "
+            "Return only JSON matching the schema. Keep the plan focused on: plan, build, test, lint, pr. "
+            "Keep each command concise and avoid large inline file bodies (for example, use placeholders or "
+            "short commands instead of full heredoc contents)."
         )
         user_message = (
             f"User request:\n{request_text.strip()}\n\n"
@@ -305,8 +361,9 @@ class BuilderCopilotClient:
         plan, reasoning = await self.chat_structured_with_reasoning(
             [{"role": "user", "content": user_message}],
             response_model=PlanResponse,
-            schema_name="builder_copilot_plan",
+            schema_name="builder_plan",
             system_prompt=system_prompt,
+            max_tokens=8192,
         )
         logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))
         return ReasonedPlan(plan=plan, reasoning=reasoning)

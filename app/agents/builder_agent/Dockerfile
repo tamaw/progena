@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 
 # Builder Agent - self-contained A2A agent for inner-loop build operations.
-# Requires git, GitHub CLI (gh), and GitHub Copilot CLI for build execution.
+# Requires git and GitHub CLI (gh) for PR management.
+# Copilot ACP is accessed via the copilot_acp container over TCP.
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -9,6 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AZURE_OPENAI_BASE_URL= \
     AZURE_OPENAI_API_KEY= \
     GH_TOKEN= \
+    COPILOT_ACP_URL= \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
     PROGENITOR_MODEL_DEFAULT= \
     TEST_MODE=false \
@@ -37,9 +39,6 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y gh; \
     rm -rf /var/lib/apt/lists/*
-
-# Install GitHub Copilot CLI (provides `gh copilot` / `copilot --acp`)
-RUN curl -fsSL --retry 8 --retry-delay 2 --retry-all-errors https://gh.io/copilot-install | bash
 
 WORKDIR /app
 
