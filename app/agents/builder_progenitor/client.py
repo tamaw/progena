@@ -237,12 +237,12 @@ class BuilderClient:
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
         text = ""
         reasoning = ""
+        text_parts: list[str] = []
 
         for key in ("output_text", "final_text"):
             value = data.get(key)
             if isinstance(value, str) and value.strip():
-                text = value.strip()
-                break
+                text_parts.append(value.strip())
 
         for item in data.get("output", []):
             if not isinstance(item, dict):
@@ -252,8 +252,8 @@ class BuilderClient:
                     if not isinstance(part, dict):
                         continue
                     part_type = part.get("type")
-                    if not text and part_type in {"output_text", "text"} and isinstance(part.get("text"), str):
-                        text = part["text"].strip()
+                    if part_type in {"output_text", "text"} and isinstance(part.get("text"), str):
+                        text_parts.append(part["text"].strip())
                     if part_type in {"reasoning", "summary_text"} and isinstance(part.get("text"), str):
                         reasoning = part["text"].strip()
             elif item.get("type") == "reasoning":
@@ -273,6 +273,9 @@ class BuilderClient:
                 summary_parts = [str(entry.get("text", "")) for entry in summary if isinstance(entry, dict)]
                 reasoning = "".join(summary_parts).strip()
 
+        if text_parts:
+            text = "".join(text_parts).strip()
+
         return text, reasoning
 
     async def chat_structured_with_reasoning(
@@ -283,81 +286,62 @@ class BuilderClient:
         schema_name: str,
         system_prompt: str,
         temperature: float | None = None,
-        max_tokens: int = 1200,
+        max_tokens: int = 8192,
     ) -> tuple[TModel, str]:
-        def _is_max_tokens_incomplete(payload: dict[str, Any]) -> bool:
-            details = payload.get("incomplete_details")
-            if not isinstance(details, dict):
-                return False
-            return details.get("reason") == "max_output_tokens"
-
-        async def _request_raw(
-            request_max_tokens: int,
-            request_include_reasoning: bool,
-        ) -> tuple[dict[str, Any], str, str]:
+        async def _request_raw() -> tuple[str, str]:
             data = await self._post_response(
                 messages,
                 system_prompt=system_prompt,
                 response_format=response_format,
-                include_reasoning=request_include_reasoning,
+                include_reasoning=False,
                 temperature=temperature,
-                max_tokens=request_max_tokens,
+                max_tokens=max_tokens,
             )
             response_text, reasoning = self._extract_text_and_reasoning(data)
             if not response_text:
+                status = str(data.get("status") or "")
+                details = data.get("incomplete_details")
+                incomplete_reason = ""
+                if isinstance(details, dict) and details.get("reason"):
+                    incomplete_reason = str(details.get("reason"))
+
+                filter_flags: list[str] = []
+                for entry in data.get("content_filters", []):
+                    if not isinstance(entry, dict):
+                        continue
+                    source = str(entry.get("source_type") or "unknown")
+                    if entry.get("blocked") is True:
+                        filter_flags.append(f"{source}:blocked")
+                    results = entry.get("content_filter_results")
+                    if isinstance(results, dict):
+                        for name, result in results.items():
+                            if isinstance(result, dict) and (
+                                result.get("filtered") is True or result.get("detected") is True
+                            ):
+                                filter_flags.append(f"{source}:{name}")
+
+                if incomplete_reason or filter_flags:
+                    parts: list[str] = []
+                    if status:
+                        parts.append(f"status={status}")
+                    if incomplete_reason:
+                        parts.append(f"incomplete={incomplete_reason}")
+                    if filter_flags:
+                        parts.append(f"content_filters={','.join(filter_flags)}")
+                    raise RuntimeError(
+                        "Builder planning returned no structured content (" + "; ".join(parts) + ")."
+                    )
+
                 logger.error(
                     "No text extracted from API response. Full response: %s",
                     json.dumps(data, indent=2)[:1000],
                 )
                 raise RuntimeError("Builder planning returned no structured content")
-            return data, response_text, reasoning
+            return response_text, reasoning
 
         response_format = _build_json_schema_format(response_model, schema_name)
-        retry_data: dict[str, Any] | None = None
-        retry_text = ""
-        try:
-            _, response_text, reasoning = await _request_raw(
-                request_max_tokens=max_tokens,
-                request_include_reasoning=True,
-            )
-            parsed = response_model.model_validate(json.loads(response_text))
-        except json.JSONDecodeError as e:
-            # A common failure mode is truncation when output hits max_output_tokens.
-            # Retry once with a larger budget and no reasoning summary to preserve tokens for JSON.
-            try:
-                retry_max_tokens = min(max(max_tokens * 2, 2400), 4096)
-                logger.warning(
-                    "Structured response JSON parse failed at char %d. Retrying with max_output_tokens=%d",
-                    e.pos,
-                    retry_max_tokens,
-                )
-                retry_data, retry_text, reasoning = await _request_raw(
-                    request_max_tokens=retry_max_tokens,
-                    request_include_reasoning=False,
-                )
-                parsed = response_model.model_validate(json.loads(retry_text))
-                if _is_max_tokens_incomplete(retry_data):
-                    logger.warning("Retry response still marked incomplete due to max_output_tokens")
-                return parsed, reasoning
-            except json.JSONDecodeError as retry_error:
-                data = retry_data or {}
-                response_text = retry_text
-                logger.error(
-                    "Failed to parse response as JSON (char %d). Response text (first 1000 chars):\n%s",
-                    retry_error.pos,
-                    response_text[:1000],
-                )
-                logger.error("Full API response: %s", json.dumps(data, indent=2)[:2000])
-
-                incomplete_reason = ""
-                details = data.get("incomplete_details")
-                if isinstance(details, dict) and details.get("reason"):
-                    incomplete_reason = f" API marked response incomplete: {details.get('reason')}."
-
-                raise RuntimeError(
-                    f"Invalid JSON in structured response at char {retry_error.pos}: {retry_error.msg}."
-                    f"{incomplete_reason}"
-                ) from retry_error
+        response_text, reasoning = await _request_raw()
+        parsed = response_model.model_validate(json.loads(response_text))
         return parsed, reasoning
 
     async def plan_step(self, request_text: str, context: dict[str, Any]) -> ReasonedPlan:
@@ -379,6 +363,7 @@ class BuilderClient:
             response_model=PlanResponse,
             schema_name="builder_plan",
             system_prompt=system_prompt,
+            max_tokens=8192,
         )
         logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))
         return ReasonedPlan(plan=plan, reasoning=reasoning)

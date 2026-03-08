@@ -41,7 +41,7 @@ from pydantic import SecretStr
 
 from .client import BuilderClient, ReasonedPlan
 from .config import BuilderConfig, get_config, setup_logging
-from .tools import create_builder_tools
+from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,7 @@ class BuilderService:
         self._config: BuilderConfig | None = None
         self._planner: BuilderClient | None = None
         self._initialized = False
+        self._shutting_down = False
         self._start_time = time.time()
 
     async def initialize(self) -> None:
@@ -178,6 +179,8 @@ class BuilderService:
         logger.info("Builder initialized (root=%s)", repo_root)
 
     async def process(self, request_text: str, context: dict[str, Any]) -> str:
+        if self._shutting_down:
+            raise RuntimeError("Builder is shutting down")
         await self.initialize()
         assert self._graph is not None
         assert self._planner is not None
@@ -201,6 +204,23 @@ class BuilderService:
             "version": AGENT_VERSION,
             "uptime_seconds": time.time() - self._start_time,
         }
+
+    async def shutdown(self) -> None:
+        """Gracefully close shared clients/resources."""
+        if not self._initialized:
+            return
+        self._shutting_down = True
+
+        try:
+            if self._planner is not None:
+                await self._planner.close()
+        except Exception:
+            logger.exception("Failed closing builder planner client")
+        finally:
+            self._planner = None
+
+        await shutdown_builder_tool_runtimes()
+        self._initialized = False
 
 
 # ---------------------------------------------------------------------------
@@ -432,3 +452,9 @@ async def _startup() -> None:
     logger.info("Builder starting on port %d", _PORT)
     await service.initialize()
     logger.info("Builder ready")
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    logger.info("Builder shutting down")
+    await service.shutdown()
