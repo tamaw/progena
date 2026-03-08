@@ -220,9 +220,19 @@ class BuilderClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        response = await self.client.post(self.endpoint_url, json=payload)
-        response.raise_for_status()
-        return response.json()
+        try:
+            logger.debug("Posting to Azure OpenAI: %s (model=%s)", self.endpoint_url, self.model)
+            response = await self.client.post(self.endpoint_url, json=payload)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(
+                "Azure OpenAI API error: %s. Endpoint: %s. API key configured: %s",
+                str(e)[:200],
+                self.endpoint_url,
+                bool(self.config and self.config.api_key),
+            )
+            raise
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
         text = ""
@@ -286,8 +296,21 @@ class BuilderClient:
         )
         response_text, reasoning = self._extract_text_and_reasoning(data)
         if not response_text:
+            logger.error("No text extracted from API response. Full response: %s", json.dumps(data, indent=2)[:1000])
             raise RuntimeError("Builder planning returned no structured content")
-        parsed = response_model.model_validate(json.loads(response_text))
+        try:
+            parsed = response_model.model_validate(json.loads(response_text))
+        except json.JSONDecodeError as e:
+            logger.error(
+                "Failed to parse response as JSON (char %d). Response text (first 1000 chars):\n%s",
+                e.pos,
+                response_text[:1000],
+            )
+            logger.error("Full API response: %s", json.dumps(data, indent=2)[:2000])
+            raise RuntimeError(
+                f"Invalid JSON in structured response at char {e.pos}: {e.msg}. "
+                "Check Azure OpenAI API credentials and endpoint configuration."
+            ) from e
         return parsed, reasoning
 
     async def plan_step(self, request_text: str, context: dict[str, Any]) -> ReasonedPlan:

@@ -52,13 +52,13 @@ Registers all agents including Builder:
 
 **Capabilities** tell Progenitor's LLM when to invoke this agent.
 
-### 2. System Tool: `invoke_builder` 
+### 2. System Tool: `invoke_builder`
 
 Located in `app/progenitor/tools/invoke_builder.py`
 
 **Purpose**: Invoke Builder via A2A protocol
 
-**When used**: 
+**When used**:
 - User asks to build something: "Create a README for Builder"
 - LLM decides this matches "build" capability
 - System tool is invoked automatically
@@ -128,7 +128,7 @@ POST http://localhost:8108/  # A2A server
 
 **Response**: Returns immediately (200 OK) even if task takes hours.
 
-**Async Handling**: 
+**Async Handling**:
 - Builder spawns background task
 - Creates git worktree (isolated)
 - Plans work with LLM
@@ -203,11 +203,11 @@ File: `data/config/agents.json`
 $ python -m app.progenitor.service discover_agents
 ```
 
-### 2. Start Builder  
+### 2. Start Builder
 
 ```bash
 # Terminal 1: Start Builder agent
-$ python -m uvicorn app.agents.builder.agent:app --port 8108
+$ python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 
 # Terminal 2: (Optional) Test invocation
 $ python scripts/demo_builder.py
@@ -240,11 +240,11 @@ System: Lists all registered agents including Builder
 
 ### Async Timeout Handling
 
-Builder tasks can take minutes (cloning repo, Copilot generation, testing, PR creation). 
+Builder tasks can take minutes (cloning repo, Copilot generation, testing, PR creation).
 
 **Default timeout**: 30 seconds (configurable)
 
-**On timeout**: 
+**On timeout**:
 - HTTP request times out ✓ (expected, not an error)
 - Task continues in background ✓
 - Returns `task_id` for monitoring ✓
@@ -315,7 +315,7 @@ User: "Rediscover agents"
 
 ```bash
 # 1. Start Builder
-python -m uvicorn app.agents.builder.agent:app --port 8108 &
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108 &
 
 # 2. Run demo script
 python scripts/demo_builder.py
@@ -353,7 +353,7 @@ Error: Builder not running at http://localhost:8108
 
 **Fix**:
 ```bash
-python -m uvicorn app.agents.builder.agent:app --port 8108
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 ```
 
 ### Agent Not Registered
