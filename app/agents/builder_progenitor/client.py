@@ -285,32 +285,79 @@ class BuilderClient:
         temperature: float | None = None,
         max_tokens: int = 1200,
     ) -> tuple[TModel, str]:
+        def _is_max_tokens_incomplete(payload: dict[str, Any]) -> bool:
+            details = payload.get("incomplete_details")
+            if not isinstance(details, dict):
+                return False
+            return details.get("reason") == "max_output_tokens"
+
+        async def _request_raw(
+            request_max_tokens: int,
+            request_include_reasoning: bool,
+        ) -> tuple[dict[str, Any], str, str]:
+            data = await self._post_response(
+                messages,
+                system_prompt=system_prompt,
+                response_format=response_format,
+                include_reasoning=request_include_reasoning,
+                temperature=temperature,
+                max_tokens=request_max_tokens,
+            )
+            response_text, reasoning = self._extract_text_and_reasoning(data)
+            if not response_text:
+                logger.error(
+                    "No text extracted from API response. Full response: %s",
+                    json.dumps(data, indent=2)[:1000],
+                )
+                raise RuntimeError("Builder planning returned no structured content")
+            return data, response_text, reasoning
+
         response_format = _build_json_schema_format(response_model, schema_name)
-        data = await self._post_response(
-            messages,
-            system_prompt=system_prompt,
-            response_format=response_format,
-            include_reasoning=True,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        response_text, reasoning = self._extract_text_and_reasoning(data)
-        if not response_text:
-            logger.error("No text extracted from API response. Full response: %s", json.dumps(data, indent=2)[:1000])
-            raise RuntimeError("Builder planning returned no structured content")
+        retry_data: dict[str, Any] | None = None
+        retry_text = ""
         try:
+            _, response_text, reasoning = await _request_raw(
+                request_max_tokens=max_tokens,
+                request_include_reasoning=True,
+            )
             parsed = response_model.model_validate(json.loads(response_text))
         except json.JSONDecodeError as e:
-            logger.error(
-                "Failed to parse response as JSON (char %d). Response text (first 1000 chars):\n%s",
-                e.pos,
-                response_text[:1000],
-            )
-            logger.error("Full API response: %s", json.dumps(data, indent=2)[:2000])
-            raise RuntimeError(
-                f"Invalid JSON in structured response at char {e.pos}: {e.msg}. "
-                "Check Azure OpenAI API credentials and endpoint configuration."
-            ) from e
+            # A common failure mode is truncation when output hits max_output_tokens.
+            # Retry once with a larger budget and no reasoning summary to preserve tokens for JSON.
+            try:
+                retry_max_tokens = min(max(max_tokens * 2, 2400), 4096)
+                logger.warning(
+                    "Structured response JSON parse failed at char %d. Retrying with max_output_tokens=%d",
+                    e.pos,
+                    retry_max_tokens,
+                )
+                retry_data, retry_text, reasoning = await _request_raw(
+                    request_max_tokens=retry_max_tokens,
+                    request_include_reasoning=False,
+                )
+                parsed = response_model.model_validate(json.loads(retry_text))
+                if _is_max_tokens_incomplete(retry_data):
+                    logger.warning("Retry response still marked incomplete due to max_output_tokens")
+                return parsed, reasoning
+            except json.JSONDecodeError as retry_error:
+                data = retry_data or {}
+                response_text = retry_text
+                logger.error(
+                    "Failed to parse response as JSON (char %d). Response text (first 1000 chars):\n%s",
+                    retry_error.pos,
+                    response_text[:1000],
+                )
+                logger.error("Full API response: %s", json.dumps(data, indent=2)[:2000])
+
+                incomplete_reason = ""
+                details = data.get("incomplete_details")
+                if isinstance(details, dict) and details.get("reason"):
+                    incomplete_reason = f" API marked response incomplete: {details.get('reason')}."
+
+                raise RuntimeError(
+                    f"Invalid JSON in structured response at char {retry_error.pos}: {retry_error.msg}."
+                    f"{incomplete_reason}"
+                ) from retry_error
         return parsed, reasoning
 
     async def plan_step(self, request_text: str, context: dict[str, Any]) -> ReasonedPlan:
@@ -318,7 +365,9 @@ class BuilderClient:
         context_json = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
         system_prompt = (
             "You are Builder's planning pass. Produce a compact execution plan before any edits. "
-            "Return only JSON matching the schema. Keep the plan focused on: plan, build, test, lint, pr."
+            "Return only JSON matching the schema. Keep the plan focused on: plan, build, test, lint, pr. "
+            "Keep each command concise and avoid large inline file bodies (for example, use placeholders or "
+            "short commands instead of full heredoc contents)."
         )
         user_message = (
             f"User request:\n{request_text.strip()}\n\n"
