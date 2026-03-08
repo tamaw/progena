@@ -1,36 +1,36 @@
-# Progenitor ↔ Builder Copilot A2A Integration - Implementation Summary
+# Progenitor ↔ Builder A2A Integration - Implementation Summary
 
 ## ✅ What Was Implemented
 
-### 1. **Agent Configuration** 
+### 1. **Agent Configuration**
    - **File**: `data/config/agents.json` (NEW)
-   - **Purpose**: Registers Builder Copilot and other agents with Progenitor
+   - **Purpose**: Registers Builder and other agents with Progenitor
    - **Key Info**:
-     - Builder Copilot URL: `http://localhost:8108`
+     - Builder URL: `http://localhost:8108`
      - Capabilities: build, plan, test, lint, pr, async_tasks
      - Status tracking: Can be "stopped" or assigned a port
 
-### 2. **System Tool: `invoke_builder_copilot`**
-   - **File**: `app/progenitor/tools/invoke_builder_copilot.py` (NEW)
+### 2. **System Tool: `invoke_builder`**
+   - **File**: `app/progenitor/tools/invoke_builder.py` (NEW)
    - **Auto-Discovered**: Yes ✅ (registry auto-discovers in `app.progenitor.tools`)
-   - **Purpose**: Invoke Builder Copilot asynchronously via A2A protocol
+   - **Purpose**: Invoke Builder asynchronously via A2A protocol
    - **Key Features**:
-     - Sends A2A `message/send` JSON-RPC request to Builder Copilot
+     - Sends A2A `message/send` JSON-RPC request to Builder
      - Returns immediately with `task_id` for async tracking
      - Handles timeout gracefully (expected for long tasks)
      - Provides clear feedback to LLM about task status
 
 ### 3. **Demo Script**
-   - **File**: `scripts/demo_builder_copilot.py` (NEW)
+   - **File**: `scripts/demo_builder.py` (NEW)
    - **Purpose**: Demonstrate end-to-end invocation
    - **Flow**:
-     1. Check if Builder Copilot is running (health check)
+     1. Check if Builder is running (health check)
      2. Send A2A `message/send` request
      3. Show returned task_id
      4. Demonstrate async processing
 
 ### 4. **Integration Documentation**
-   - **File**: `docs/BUILDER_COPILOT_INTEGRATION.md` (NEW)
+   - **File**: `docs/builder_INTEGRATION.md` (NEW)
    - **Content**:
      - Architecture diagrams
      - Configuration guide
@@ -39,7 +39,7 @@
      - Advanced topics (async timeout, status updates)
 
 ### 5. **Unit Tests**
-   - **File**: `tests/progenitor/tools/test_invoke_builder_copilot.py` (NEW)
+   - **File**: `tests/progenitor/tools/test_invoke_builder.py` (NEW)
    - **Covers**:
      - Tool properties and metadata
      - Error handling (missing request, builder not running)
@@ -54,22 +54,22 @@
 ### User Request Flow
 
 ```
-User: "Create a comprehensive README for Builder Copilot"
+User: "Create a comprehensive README for Builder"
   ↓
 Progenitor LLM
   ├─ Analyzes: "This is a code generation task"
-  ├─ Matches: "build" capability → Builder Copilot
-  └─ Selects: invoke_builder_copilot system tool
+  ├─ Matches: "build" capability → Builder
+  └─ Selects: invoke_builder system tool
     ↓
-invoke_builder_copilot Tool
+invoke_builder Tool
   ├─ Creates: A2A message/send request
   ├─ Posts: POST http://localhost:8108/
   └─ Gets: {"timeout": "expected", "task_id": "copilot_abc123..."}
     ↓
 Returns to User
   └─ "Task accepted (ID: copilot_abc123). Processing asynchronously..."
-    
-Meanwhile, Builder Copilot (Background)
+
+Meanwhile, Builder (Background)
   ├─ Receives: A2A request (HTTP POST)
   ├─ Accepts: Returns 200 OK immediately
   ├─ Executes: plan → build → test → lint → pr workflow
@@ -99,7 +99,7 @@ Meanwhile, Builder Copilot (Background)
 
 **Response:**
 - **Immediate**: 200 OK (even if task takes hours)
-- **Async**: Builder Copilot processes in background
+- **Async**: Builder processes in background
 - **Streams**: Status updates via TaskStatusUpdateEvent
 - **Returns**: Result via TaskArtifactUpdateEvent
 
@@ -112,43 +112,43 @@ Meanwhile, Builder Copilot (Background)
 ✅ data/config/agents.json
    └─ Agent registry configuration
 
-✅ app/progenitor/tools/invoke_builder_copilot.py
-   └─ System tool for invoking Builder Copilot
+✅ app/progenitor/tools/invoke_builder.py
+   └─ System tool for invoking Builder
 
-✅ scripts/demo_builder_copilot.py
+✅ scripts/demo_builder.py
    └─ Demo/test script
 
-✅ docs/BUILDER_COPILOT_INTEGRATION.md
+✅ docs/builder_INTEGRATION.md
    └─ Integration documentation
 
-✅ tests/progenitor/tools/test_invoke_builder_copilot.py
+✅ tests/progenitor/tools/test_invoke_builder.py
    └─ Unit tests
 ```
 
 ### No Changes Needed:
 - ✅ `app/progenitor/tools/mcp.py` - Already has correct `message/send` format
 - ✅ `app/progenitor/nodes/node_helpers/registry.py` - Auto-discovers tools
-- ✅ `app/agents/builder_copilot/agent.py` - Already implements A2A correctly
-- ✅ `app/agents/builder_copilot/agent.py` - Executor already streams TaskStatusUpdateEvent
+- ✅ `app/agents/builder_progenitor/agent.py` - Already implements A2A correctly
+- ✅ `app/agents/builder_progenitor/agent.py` - Executor already streams TaskStatusUpdateEvent
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Start Builder Copilot
+### 1. Start Builder
 ```bash
-python -m uvicorn app.agents.builder_copilot.agent:app --port 8108
+python -m uvicorn apps.agents.builder_progenitor.agent:app --port 8108
 ```
 
 ### 2. Test Integration
 ```bash
-python scripts/demo_builder_copilot.py
+python scripts/demo_builder.py
 ```
 
 Expected output:
 ```
-[OK] Builder Copilot is running
-[*] Sending A2A message/send to Builder Copilot...
+[OK] Builder is running
+[*] Sending A2A message/send to Builder...
 [OK] Task accepted!
     Task ID: copilot_db363d980bca
 ```
@@ -160,7 +160,7 @@ python -m app.progenitor.main
 
 Then ask:
 ```
-User: "Create a comprehensive README for Builder Copilot"
+User: "Create a comprehensive README for Builder"
 Progenitor: "Task accepted (ID: copilot_abc123). Processing asynchronously..."
 ```
 
@@ -169,7 +169,7 @@ Progenitor: "Task accepted (ID: copilot_abc123). Processing asynchronously..."
 ## 🔑 Key Design Decisions
 
 ### 1. **Async-First**
-- Builder Copilot accepts requests immediately
+- Builder accepts requests immediately
 - Returns `task_id` for monitoring
 - No blocking on HTTP request (timeout expected after 30s)
 - ✅ Matches real-world agent behavior
@@ -201,15 +201,15 @@ Progenitor (Main Loop)
 ├── State: Current messages, pending work
 ├── Decide: Route to agent or tool
 ├── LLM: "Which tool?"
-├── Response: "invoke_builder_copilot"
+├── Response: "invoke_builder"
 └── System Tools
     ├── list_agents
     ├── list_tasks
     ├── new_conversation
-    ├── invoke_builder_copilot ← NEW
+    ├── invoke_builder ← NEW
     └── ...
 
-invoke_builder_copilot Tool
+invoke_builder Tool
 ├── Receives: user_input + tool_args
 ├── Validates: Non-empty request text
 ├── Prepares: A2A message/send JSON-RPC request
@@ -217,7 +217,7 @@ invoke_builder_copilot Tool
 ├── Handles: Timeout/error gracefully
 └── Returns: task_id + status
 
-Builder Copilot Agent (HTTP Server)
+Builder Agent (HTTP Server)
 ├── Port: 8108 (configurable)
 ├── Protocol: A2A JSON-RPC 2.0
 ├── Endpoint: POST /
@@ -244,18 +244,18 @@ Builder Copilot Agent (HTTP Server)
 
 ### Run Demo
 ```bash
-python scripts/demo_builder_copilot.py
+python scripts/demo_builder.py
 ```
 
 ### Run Unit Tests
 ```bash
-pytest tests/progenitor/tools/test_invoke_builder_copilot.py -v
+pytest tests/progenitor/tools/test_invoke_builder.py -v
 ```
 
 ### Manual Integration Test
 ```python
 # In Progenitor shell or as user request:
-User: "Create a comprehensive README for Builder Copilot"
+User: "Create a comprehensive README for Builder"
 # Should invoke tool automatically
 ```
 
@@ -268,7 +268,7 @@ Registers agents for Progenitor to discover:
 
 ```json
 {
-  "builder_copilot": {
+  "builder": {
     "kind": "a2a_agent",
     "version": "0.1.0",
     "url": "http://localhost:8108",
@@ -281,17 +281,17 @@ Registers agents for Progenitor to discover:
 
 ## 🔗 Related Documents
 
-- **Integration Guide**: `docs/BUILDER_COPILOT_INTEGRATION.md`
-- **Demo Script**: `scripts/demo_builder_copilot.py`
-- **Tests**: `tests/progenitor/tools/test_invoke_builder_copilot.py`
-- **Agent Code**: `app/agents/builder_copilot/agent.py`
-- **Tool Code**: `app/progenitor/tools/invoke_builder_copilot.py`
+- **Integration Guide**: `docs/builder_INTEGRATION.md`
+- **Demo Script**: `scripts/demo_builder.py`
+- **Tests**: `tests/progenitor/tools/test_invoke_builder.py`
+- **Agent Code**: `app/agents/builder_progenitor/agent.py`
+- **Tool Code**: `app/progenitor/tools/invoke_builder.py`
 
 ---
 
 ## ✅ Verification Checklist
 
-- [x] Builder Copilot runs successfully on port 8108
+- [x] Builder runs successfully on port 8108
 - [x] A2A `message/send` requests are accepted
 - [x] Responses return immediately with 200 OK
 - [x] Tasks execute asynchronously in background
@@ -308,20 +308,20 @@ Registers agents for Progenitor to discover:
 
 ## 🎉 Result
 
-**Progenitor can now invoke Builder Copilot asynchronously for code generation tasks.**
+**Progenitor can now invoke Builder asynchronously for code generation tasks.**
 
 The integration uses the A2A protocol (JSON-RPC 2.0), ensuring:
 1. **Immediate response** (no blocking on long tasks)
-2. **Async execution** (Builder Copilot works in background)
+2. **Async execution** (Builder works in background)
 3. **Standard protocol** (works with any A2A-compatible agent)
 4. **Scalability** (easy to add more agents)
 
 Example:
 ```
-User: "Create a README for Builder Copilot"
+User: "Create a README for Builder"
 → Progenitor (LLM decides to delegate)
-→ invoke_builder_copilot tool (sends A2A request)
-→ Builder Copilot (accepts, processes asynchronously)
+→ invoke_builder tool (sends A2A request)
+→ Builder (accepts, processes asynchronously)
 → Result: Pull request created on GitHub
 ```
 

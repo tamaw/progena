@@ -41,7 +41,7 @@ class AgentSelection(BaseModel):
     """LLM-structured response: which agent to call and what message to send."""
 
     agent_name: str = Field(
-        description="Exact key from agents.json (e.g. 'builder_copilot', 'builder_agent', 'observe_agent'). "
+        description="Exact key from agents.json (e.g. 'builder', 'builder_agent', 'observe_agent'). "
         "Use 'none' if no agent is suitable.",
     )
     message: str = Field(
@@ -79,9 +79,9 @@ class InvokeAgentTool(BaseSystemTool):
         return (
             "Dispatch a task to a registered A2A agent asynchronously (fire-and-forget). "
             "Returns task_id immediately; the agent works in the background and creates a PR when done. "
-            "Pass tool_args={'agent': 'builder_copilot'} to target a specific agent, or omit to auto-route. "
+            "Pass tool_args={'agent': 'builder'} to target a specific agent, or omit to auto-route. "
             "Use for: code tasks, PRs, builds, documentation, monitoring, or any delegatable work. "
-            "Available agents: builder_copilot (small code tasks/PRs), builder_agent (full build loop), "
+            "Available agents: builder (small code tasks/PRs), builder_agent (full build loop), "
             "observe_agent (state/log analysis)."
         )
 
@@ -108,7 +108,7 @@ class InvokeAgentTool(BaseSystemTool):
         context.user_input: task description
         context.tool_args (optional):
           {
-            "agent":   "builder_copilot",  # exact key from agents.json; omit to auto-route
+            "agent":   "builder",  # exact key from agents.json; omit to auto-route
             "message": "...",              # override the message; defaults to user_input
             "timeout": 30,                 # A2A request timeout in seconds (default 30)
           }

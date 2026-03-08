@@ -2,7 +2,8 @@
 Copilot ACP (Agent Client Protocol) Integration for Progenitor.
 
 Uses the agent-client-protocol SDK to spawn and communicate with
-Copilot CLI in ACP mode via stdio.
+Copilot CLI in ACP mode via stdio, or connect to a remote ACP proxy
+over TCP when COPILOT_ACP_URL is configured.
 
 Components:
 - CopilotACPManager: Manages the copilot ACP subprocess connection
@@ -14,14 +15,16 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from acp import (
     PROTOCOL_VERSION,
     Client,
+    connect_to_agent,
     spawn_agent_process,
     text_block,
 )
@@ -393,6 +396,7 @@ class CopilotACPManager:
         yolo: bool = True,
         allowed_dirs: list[str] | None = None,
         timeout: int = 1200,
+        acp_url: str | None = None,
     ):
         """Initialize the ACP manager.
 
@@ -402,19 +406,22 @@ class CopilotACPManager:
             yolo: Whether to auto-approve all tool calls.
             allowed_dirs: Directories copilot is allowed to access.
             timeout: Timeout in seconds for prompts.
+            acp_url: Optional TCP URL for remote ACP proxy (e.g. tcp://copilot-acp:3000).
         """
         self.copilot_cmd = copilot_cmd
         self.model = model
         self.yolo = yolo
         self.allowed_dirs = allowed_dirs or []
         self.timeout = timeout
+        self.acp_url = acp_url
 
         logger.info(
-            "COPILOT_ACP: Initialized manager with cmd=%s, model=%s, yolo=%s, dirs=%s",
+            "COPILOT_ACP: Initialized manager with cmd=%s, model=%s, yolo=%s, dirs=%s, acp_url=%s",
             copilot_cmd,
             model,
             yolo,
             allowed_dirs,
+            acp_url,
         )
 
     @staticmethod
@@ -529,6 +536,62 @@ class CopilotACPManager:
             )
             raise
 
+    @asynccontextmanager
+    async def connect_tcp(
+        self,
+        work_item_id: str,
+        cwd: Path,
+    ) -> AsyncIterator[tuple["ProgenitorACPClient", Any]]:
+        """Connect to a remote Copilot ACP proxy over TCP.
+
+        Args:
+            work_item_id: ID for logging.
+            cwd: Working directory for the session.
+
+        Yields:
+            Tuple of (ProgenitorACPClient, ClientSideConnection).
+        """
+        assert self.acp_url, "acp_url must be set for TCP connections"
+        parsed = urlparse(self.acp_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 3000
+
+        client = ProgenitorACPClient(work_item_id=work_item_id)
+
+        logger.info(
+            "COPILOT_ACP [%s]: Connecting to remote ACP at %s:%d",
+            work_item_id,
+            host,
+            port,
+        )
+
+        tcp_reader, tcp_writer = await asyncio.open_connection(host, port)
+        logger.info(
+            "COPILOT_ACP [%s]: TCP connection established to %s:%d",
+            work_item_id,
+            host,
+            port,
+        )
+
+        conn = connect_to_agent(client, tcp_writer, tcp_reader)
+        try:
+            init_response = await conn.initialize(protocol_version=PROTOCOL_VERSION)
+            logger.info(
+                "COPILOT_ACP [%s]: Initialized via TCP: %s",
+                work_item_id,
+                init_response,
+            )
+            yield client, conn
+        finally:
+            await conn.close()
+            tcp_writer.close()
+            with suppress(Exception):
+                await tcp_writer.wait_closed()
+            logger.info(
+                "COPILOT_ACP [%s]: TCP connection closed",
+                work_item_id,
+            )
+
     async def prompt(
         self,
         prompt_text: str,
@@ -560,7 +623,12 @@ class CopilotACPManager:
         start_time = time.perf_counter()
 
         try:
-            async with self.connect(work_item_id, cwd, allowed_dirs=allowed_dirs) as (client, conn):
+            # Use TCP transport if acp_url is configured, otherwise spawn locally
+            if self.acp_url:
+                connect_cm = self.connect_tcp(work_item_id, cwd)
+            else:
+                connect_cm = self.connect(work_item_id, cwd, allowed_dirs=allowed_dirs)
+            async with connect_cm as (client, conn):
                 # Create a new session
                 logger.info(
                     "COPILOT_ACP [%s]: Creating new session (cwd=%s)",

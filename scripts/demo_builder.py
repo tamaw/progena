@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Demo script: Invoke Builder Copilot from Progenitor.
+Demo script: Invoke Builder from Progenitor.
 
 Shows how to use the A2A protocol to:
-1. Invoke Builder Copilot asynchronously
+1. Invoke Builder asynchronously
 2. Get immediate task_id back
 3. Monitor task progress
 
 Run this AFTER starting both:
-  - Builder Copilot:  python -m uvicorn app.agents.builder_copilot.agent:app --port 8108
+  - Builder:  python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
   - (Progenitor will be the caller)
 """
 
@@ -31,12 +31,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def invoke_builder_copilot_via_tool() -> tuple[str, dict]:
+async def invoke_builder_via_tool() -> tuple[str, dict]:
     """
-    Use the generic InvokeAgentTool, forcing selection of builder_copilot.
+    Use the generic InvokeAgentTool, forcing selection of builder.
     
     In production Progenitor uses the LLM routing path automatically.
-    The demo forces agent='builder_copilot' to skip the LLM call.
+    The demo forces agent='builder' to skip the LLM call.
     """
     from app.progenitor.tools.invoke_agent import InvokeAgentTool
     from app.progenitor.tools.protocol import ToolContext
@@ -44,15 +44,15 @@ async def invoke_builder_copilot_via_tool() -> tuple[str, dict]:
     tool = InvokeAgentTool()
     
     context = ToolContext(
-        user_input="Create a comprehensive README.md for Builder Copilot that documents: purpose, capabilities, available skills (plan, build, test, lint, pr, python-search), configuration, how to invoke via A2A protocol, usage examples, and architecture details.",
-        # Force builder_copilot so the demo works without a live LLM routing call.
+        user_input="Create a comprehensive README.md for Builder that documents: purpose, capabilities, available skills (plan, build, test, lint, pr, python-search), configuration, how to invoke via A2A protocol, usage examples, and architecture details.",
+        # Force builder so the demo works without a live LLM routing call.
         # In normal Progenitor usage, omit 'agent' and let LLM routing pick.
-        tool_args={"agent": "builder_copilot", "timeout": 30},
+        tool_args={"agent": "builder", "timeout": 30},
         tool_registry=MagicMock(),
         llm_client=MagicMock(),
     )
     
-    logger.info("[*] Using InvokeAgentTool (agent=builder_copilot, forced)...")
+    logger.info("[*] Using InvokeAgentTool (agent=builder, forced)...")
     logger.info("    User input: %s...", context.user_input[:60])
     print()
     
@@ -70,44 +70,44 @@ async def invoke_builder_copilot_via_tool() -> tuple[str, dict]:
 
 
 async def check_agent_health() -> bool:
-    """Check if Builder Copilot is running."""
+    """Check if Builder is running."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get("http://localhost:8108/health")
             if resp.status_code == 200:
                 health = resp.json()
-                logger.info("[OK] Builder Copilot is running")
+                logger.info("[OK] Builder is running")
                 logger.info("     Status: %s", health.get("status"))
                 logger.info("     Version: %s", health.get("version"))
                 logger.info("     Uptime: %.1fs", health.get("uptime_seconds", 0))
                 return True
     except Exception as e:
-        logger.error("[ERROR] Cannot reach Builder Copilot: %s", e)
+        logger.error("[ERROR] Cannot reach Builder: %s", e)
     return False
 
 
 async def main():
     """Main demo flow."""
     print("\n" + "=" * 70)
-    print("  DEMO: Invoke Builder Copilot from Progenitor (A2A Protocol)")
+    print("  DEMO: Invoke Builder from Progenitor (A2A Protocol)")
     print("=" * 70)
     print()
     
     # 1. Check health
-    print("[STEP 1] Checking if Builder Copilot is running...")
+    print("[STEP 1] Checking if Builder is running...")
     print("-" * 70)
     if not await check_agent_health():
-        print("\nERROR: Builder Copilot is not running.")
+        print("\nERROR: Builder is not running.")
         print("Start it first, then run this script again:")
-        print("  $ python -m uvicorn app.agents.builder_copilot.agent:app --port 8108")
+        print("  $ python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108")
         return 1
     print()
     
-    # 2. Invoke Builder Copilot using the actual system tool
-    print("[STEP 2] Invoking Builder Copilot asynchronously...")
-    print("(Using the actual InvokeBuilderCopilotTool from Progenitor)")
+    # 2. Invoke Builder using the actual system tool
+    print("[STEP 2] Invoking Builder asynchronously...")
+    print("(Using the actual InvokeAgentTool from Progenitor)")
     print("-" * 70)
-    task_id, result = await invoke_builder_copilot_via_tool()
+    task_id, result = await invoke_builder_via_tool()
     
     if not task_id:
         logger.error("Invocation failed: %s", result)
@@ -131,9 +131,9 @@ async def main():
     print(f"Expected output : Pull request on GitHub")
     print()
     print("Next steps:")
-    print("  1. Check Builder Copilot logs for progress")
+    print("  1. Check Builder logs for progress")
     print("  2. Monitor at: https://github.com/tamaw/progenitor/pulls")
-    print("  3. This is how Progenitor invokes Builder Copilot internally")
+    print("  3. This is how Progenitor invokes Builder internally")
     print()
     print("=" * 70)
     print()

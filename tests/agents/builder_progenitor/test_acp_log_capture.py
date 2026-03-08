@@ -1,6 +1,6 @@
-"""Tests for ACP log file capture behavior."""
+"""Tests for ACP log file capture."""
 
-from app.agents.builder_agent.runtime.copilot_acp import ACPLogCapture
+from app.agents.builder_progenitor.copilot_acp import ACPLogCapture
 
 
 def test_acp_log_capture_writes_split_stdout_stderr_logs(tmp_path):
@@ -8,10 +8,9 @@ def test_acp_log_capture_writes_split_stdout_stderr_logs(tmp_path):
     result = {
         "success": False,
         "stop_reason": "error",
-        "elapsed_seconds": 1.23,
+        "elapsed": 1.23,
         "stdout": "acp stdout line",
         "stderr": "acp stderr line",
-        "chunks": [],
         "tool_calls": [],
     }
 

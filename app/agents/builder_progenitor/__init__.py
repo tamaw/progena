@@ -1,4 +1,4 @@
-"""Builder Copilot agent package."""
+"""Builder agent package."""
 
 from .agent import app
 
