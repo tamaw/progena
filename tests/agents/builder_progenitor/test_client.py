@@ -76,3 +76,39 @@ async def test_plan_step_parses_structured_response_and_reasoning():
     assert isinstance(result.plan, PlanResponse)
     assert result.plan.steps[0].step == "plan"
     assert "smallest safe change" in result.reasoning
+
+
+@pytest.mark.asyncio
+async def test_plan_step_parses_multipart_output_text_without_retry():
+    client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
+
+    async def fake_post_response(*args, **kwargs):
+        del args
+        del kwargs
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '{"summary":"s","steps":[{"step":"plan",',
+                        },
+                        {
+                            "type": "output_text",
+                            "text": '"objective":"o","commands":["echo ok"]}],"risks":[]}',
+                        },
+                    ],
+                }
+            ]
+        }
+
+    client._post_response = fake_post_response  # type: ignore[method-assign]
+
+    result = await client.plan_step("fix the bug", {"branch": "main"})
+
+    assert isinstance(result.plan, PlanResponse)
+    assert result.plan.summary == "s"
+    assert result.plan.steps[0].commands == ["echo ok"]
+
+

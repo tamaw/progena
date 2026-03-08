@@ -8,7 +8,7 @@ Shows how to use the A2A protocol to:
 3. Monitor task progress
 
 Run this AFTER starting both:
-  - Builder:  python -m uvicorn app.agents.builder.agent:app --port 8108
+  - Builder:  python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
   - (Progenitor will be the caller)
 """
 
@@ -99,7 +99,7 @@ async def main():
     if not await check_agent_health():
         print("\nERROR: Builder is not running.")
         print("Start it first, then run this script again:")
-        print("  $ python -m uvicorn app.agents.builder.agent:app --port 8108")
+        print("  $ python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108")
         return 1
     print()
     
