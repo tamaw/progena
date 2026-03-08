@@ -1,6 +1,6 @@
 import json
 
-from app.agents.builder.tools import _derive_work_item_suffix
+from app.agents.builder_progenitor.tools import _derive_work_item_suffix
 
 
 def test_derive_work_item_suffix_prefers_a2a_task_id() -> None:

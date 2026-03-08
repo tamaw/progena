@@ -2,13 +2,13 @@
 
 import pytest
 
-from app.agents.builder.client import (
+from app.agents.builder_progenitor.client import (
     BuilderClient,
     PlanResponse,
     _build_json_schema_format,
     _build_responses_endpoint,
 )
-from app.agents.builder.config import LLMConfig
+from app.agents.builder_progenitor.config import LLMConfig
 
 
 def test_build_responses_endpoint_keeps_existing_query_and_path():

@@ -148,7 +148,7 @@ docs/SETUP_VERIFICATION.md
 
 ### ✅ Unchanged:
 - No changes to existing Progenitor code needed
-- `app/agents/builder/agent.py` - Already correct
+- `app/agents/builder_progenitor/agent.py` - Already correct
 - `app/progenitor/tools/mcp.py` - Already has correct A2A format
 - `app/progenitor/nodes/node_helpers/registry.py` - Auto-discovers tools
 
@@ -158,7 +158,7 @@ docs/SETUP_VERIFICATION.md
 
 ### 1️⃣ Start Builder
 ```bash
-python -m uvicorn app.agents.builder.agent:app --port 8108
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 ```
 
 ### 2️⃣ Test Integration
@@ -235,7 +235,7 @@ Progenitor: "Task accepted! ID: copilot_abc123... Processing asynchronously..."
 
 ### For Development:
 1. ✅ Integration complete
-2. ✅ Demo tested and working  
+2. ✅ Demo tested and working
 3. ✅ Unit tests ready
 4. ⏭️ Start Progenitor and test with real requests
 

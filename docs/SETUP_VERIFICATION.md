@@ -19,7 +19,7 @@ Check that all new files exist:
 # Agent configuration
 ls -la data/config/agents.json  # Should exist
 
-# Tool implementation  
+# Tool implementation
 ls -la app/progenitor/tools/invoke_builder.py  # Should exist
 
 # Demo script
@@ -40,7 +40,7 @@ All should show **file exists**.
 In Terminal 1:
 ```bash
 cd d:\progenitor
-python -m uvicorn app.agents.builder.agent:app --port 8108 --reload
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108 --reload
 ```
 
 Check for output:
@@ -136,7 +136,7 @@ config_path = Path("data/config/agents.json")
 if config_path.exists():
     with open(config_path) as f:
         config = json.load(f)
-    
+
     if "builder" in config:
         print("✓ Builder registered in agents.json")
         print(f"  - URL: {config['builder'].get('url')}")
@@ -213,7 +213,7 @@ Run these in order:
 ✓ tests/progenitor/tools/test_invoke_builder.py
 
 # 2. Start Builder (Terminal 1)
-python -m uvicorn app.agents.builder.agent:app --port 8108
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 # Wait for: "Uvicorn running on http://0.0.0.0:8108"
 
 # 3. Test health (Terminal 2)
@@ -253,7 +253,7 @@ lsof -i :8108
 kill -9 <PID>
 ```
 
-**Error**: `ModuleNotFoundError: No module named 'app.agents.builder'`
+**Error**: `ModuleNotFoundError: No module named 'app.agents.builder_progenitor'`
 ```bash
 # Ensure venv is activated and working directory is correct
 . .venv/Scripts/activate  # or: & .\.venv\Scripts\Activate.ps1
@@ -265,7 +265,7 @@ cd d:\progenitor
 **Error**: `httpx.ConnectError: Cannot connect to Builder`
 ```bash
 # Make sure Builder is running in another terminal
-python -m uvicorn app.agents.builder.agent:app --port 8108
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 ```
 
 ### Tool not auto-discovered
@@ -282,7 +282,7 @@ python
 
 ```bash
 # Make sure Builder is running
-python -m uvicorn app.agents.builder.agent:app --port 8108
+python -m uvicorn app.agents.builder_progenitor.agent:app --port 8108
 
 # Then run tests
 pytest tests/progenitor/tools/test_invoke_builder.py -v -s

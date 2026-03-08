@@ -2,7 +2,7 @@
 
 ## ✅ What Was Implemented
 
-### 1. **Agent Configuration** 
+### 1. **Agent Configuration**
    - **File**: `data/config/agents.json` (NEW)
    - **Purpose**: Registers Builder and other agents with Progenitor
    - **Key Info**:
@@ -68,7 +68,7 @@ invoke_builder Tool
     ↓
 Returns to User
   └─ "Task accepted (ID: copilot_abc123). Processing asynchronously..."
-    
+
 Meanwhile, Builder (Background)
   ├─ Receives: A2A request (HTTP POST)
   ├─ Accepts: Returns 200 OK immediately
@@ -128,8 +128,8 @@ Meanwhile, Builder (Background)
 ### No Changes Needed:
 - ✅ `app/progenitor/tools/mcp.py` - Already has correct `message/send` format
 - ✅ `app/progenitor/nodes/node_helpers/registry.py` - Auto-discovers tools
-- ✅ `app/agents/builder/agent.py` - Already implements A2A correctly
-- ✅ `app/agents/builder/agent.py` - Executor already streams TaskStatusUpdateEvent
+- ✅ `app/agents/builder_progenitor/agent.py` - Already implements A2A correctly
+- ✅ `app/agents/builder_progenitor/agent.py` - Executor already streams TaskStatusUpdateEvent
 
 ---
 
@@ -137,7 +137,7 @@ Meanwhile, Builder (Background)
 
 ### 1. Start Builder
 ```bash
-python -m uvicorn app.agents.builder.agent:app --port 8108
+python -m uvicorn apps.agents.builder_progenitor.agent:app --port 8108
 ```
 
 ### 2. Test Integration
@@ -284,7 +284,7 @@ Registers agents for Progenitor to discover:
 - **Integration Guide**: `docs/builder_INTEGRATION.md`
 - **Demo Script**: `scripts/demo_builder.py`
 - **Tests**: `tests/progenitor/tools/test_invoke_builder.py`
-- **Agent Code**: `app/agents/builder/agent.py`
+- **Agent Code**: `app/agents/builder_progenitor/agent.py`
 - **Tool Code**: `app/progenitor/tools/invoke_builder.py`
 
 ---
