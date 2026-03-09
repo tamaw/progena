@@ -272,6 +272,10 @@ def create_builder_tools(
         base: str = "main",
     ) -> dict[str, Any]:
         """Push branch and create a pull request via GitHub CLI."""
+        # Ensure git user is configured for this worktree
+        await rt.run_command(worktree_path, "git config user.email 'builder@progenitor.local'", timeout=30)
+        await rt.run_command(worktree_path, "git config user.name 'Progenitor Builder'", timeout=30)
+
         branch = await rt.current_branch(worktree_path)
         push = await rt.run_command(
             worktree_path,
