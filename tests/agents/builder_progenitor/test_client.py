@@ -63,7 +63,10 @@ async def test_plan_step_parses_structured_response_and_reasoning():
         return {
             "output_text": (
                 '{"summary":"Implement and validate the change.",'
-                '"steps":[{"step":"plan","objective":"Inspect the request","commands":["rg -n"]}],'
+                '"steps":['
+                '{"step":"plan","objective":"Inspect the request","commands":["rg -n"]},'
+                '{"step":"pr","objective":"Open PR","commands":["gh pr create"]}'
+                '],'
                 '"risks":["Unknown test coverage"]}'
             ),
             "reasoning": {"summary": "Inspect first, then make the smallest safe change."},
@@ -96,7 +99,7 @@ async def test_plan_step_parses_multipart_output_text_without_retry():
                         },
                         {
                             "type": "output_text",
-                            "text": '"objective":"o","commands":["echo ok"]}],"risks":[]}',
+                            "text": '"objective":"o","commands":["echo ok"]},{"step":"pr","objective":"Open PR","commands":["gh pr create"]}],"risks":[]}',
                         },
                     ],
                 }
@@ -111,4 +114,22 @@ async def test_plan_step_parses_multipart_output_text_without_retry():
     assert result.plan.summary == "s"
     assert result.plan.steps[0].commands == ["echo ok"]
 
+
+@pytest.mark.asyncio
+async def test_plan_step_requires_pr_step():
+    client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
+
+    async def fake_post_response(*args, **kwargs):
+        del args
+        del kwargs
+        return {
+            "output_text": (
+                '{"summary":"Implement only","steps":[{"step":"plan","objective":"Inspect","commands":[]}],"risks":[]}'
+            )
+        }
+
+    client._post_response = fake_post_response  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="Plan must include a 'pr' step"):
+        await client.plan_step("fix the bug", {"branch": "main"})
 
