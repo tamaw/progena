@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .config import LLMConfig
+from .logging_utils import log_llm_request_response
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +53,7 @@ def _close_object_schemas(node: Any) -> None:
 class PlanStep(BaseModel):
     """A single execution step in the preflight plan."""
 
-    step: str = Field(description="Short step name")
+    step: str = Field(description="Short step name (for example: plan, build, test, lint, pr)")
     objective: str = Field(description="What this step accomplishes")
     commands: list[str] = Field(default_factory=list, description="Suggested commands")
 
@@ -61,6 +64,12 @@ class PlanResponse(BaseModel):
     summary: str = Field(default="", description="High-level plan summary")
     steps: list[PlanStep] = Field(default_factory=list, description="Ordered execution steps")
     risks: list[str] = Field(default_factory=list, description="Known risks or open questions")
+
+    @model_validator(mode="after")
+    def _require_pr_step(self) -> PlanResponse:
+        if not any(step.step.strip().lower() == "pr" for step in self.steps):
+            raise ValueError("Plan must include a 'pr' step.")
+        return self
 
 
 @dataclass
@@ -106,11 +115,12 @@ def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
 class BuilderClient:
     """Small wrapper for the Azure OpenAI /responses endpoint."""
 
-    def __init__(self, config: LLMConfig | None = None, role: str | None = None) -> None:
+    def __init__(self, config: LLMConfig | None = None, role: str | None = None, log_dir: Path | None = None) -> None:
         self.config = config or LLMConfig.from_env()
         self.role = role
         self.model = self.config.get_model_for_role(role)
         self.endpoint_url = _build_responses_endpoint(self.config.base_url)
+        self.log_dir = Path(log_dir) if log_dir else None
         api_key = self.config.api_key or ""
         headers = {
             "Content-Type": "application/json",
@@ -350,6 +360,7 @@ class BuilderClient:
         system_prompt = (
             "You are Builder's planning pass. Produce a compact execution plan before any edits. "
             "Return only JSON matching the schema. Keep the plan focused on: plan, build, test, lint, pr. "
+            "The 'pr' step is mandatory and must explicitly include commit/push/PR creation intent. "
             "Keep each command concise and avoid large inline file bodies (for example, use placeholders or "
             "short commands instead of full heredoc contents)."
         )
@@ -358,12 +369,29 @@ class BuilderClient:
             f"Execution context (JSON):\n{context_json}\n\n"
             "Create a practical plan with the minimum useful steps."
         )
-        plan, reasoning = await self.chat_structured_with_reasoning(
-            [{"role": "user", "content": user_message}],
-            response_model=PlanResponse,
-            schema_name="builder_plan",
-            system_prompt=system_prompt,
-            max_tokens=8192,
-        )
-        logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))
-        return ReasonedPlan(plan=plan, reasoning=reasoning)
+        start_time = time.monotonic()
+        error = None
+        try:
+            plan, reasoning = await self.chat_structured_with_reasoning(
+                [{"role": "user", "content": user_message}],
+                response_model=PlanResponse,
+                schema_name="builder_plan",
+                system_prompt=system_prompt,
+                max_tokens=8192,
+            )
+            logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))
+            return ReasonedPlan(plan=plan, reasoning=reasoning)
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start_time) * 1000
+            log_llm_request_response(
+                self.log_dir,
+                "plan_step",
+                self.model,
+                duration_ms,
+                error is None,
+                error,
+                {"role": self.role},
+            )

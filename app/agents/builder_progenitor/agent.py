@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import UTC, datetime
@@ -41,6 +42,7 @@ from pydantic import SecretStr
 
 from .client import BuilderClient, ReasonedPlan
 from .config import BuilderConfig, get_config, setup_logging
+from .logging_utils import log_llm_request_response
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,9 @@ logger = logging.getLogger(__name__)
 AGENT_NAME = "Builder"
 AGENT_VERSION = "0.2.0"
 DEFAULT_PORT = 8108
+PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
+COMMITTED_TRUE_RE = re.compile(r'committed\\?":\s*true')
+SUCCESS_FALSE_RE = re.compile(r'success\\?":\s*false')
 
 STEP_SKILLS = [
     ("plan", "Plan a repository change before editing."),
@@ -71,7 +76,9 @@ Rules:
 - Use copilot_build for implementation, run_command for manual steps.
 - Always run validate_code after changes. It runs pytest, pyright, and ruff.
 - If validation fails, fix issues and re-validate before proceeding.
-- Always create a pull request when changes are made.
+- If commit_changes returns committed=true, you must call create_pull_request before finishing.
+- create_pull_request must include title and body arguments and must return a GitHub PR URL.
+- Never end the task after commit_changes unless create_pull_request succeeded or no commit was created.
 - Periodically clean up old worktrees with cleanup_worktrees.
 - Return a concise summary: worktree path, validation results, PR URL.\
 """
@@ -82,7 +89,59 @@ Rules:
 # ---------------------------------------------------------------------------
 
 
-def _create_model(config: BuilderConfig) -> ChatOpenAI:
+class LoggingChatOpenAI(ChatOpenAI):
+    """ChatOpenAI wrapper that logs request/response to JSONL files."""
+
+    def __init__(self, log_dir: Path | None = None, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.log_dir = log_dir
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        """Invoke with logging."""
+        start_time = time.monotonic()
+        error = None
+        try:
+            result = super().invoke(*args, **kwargs)
+            return result
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start_time) * 1000
+            log_llm_request_response(
+                self.log_dir,
+                "model_invoke",
+                self.model,
+                duration_ms,
+                error is None,
+                error,
+                {"streaming": self.streaming},
+            )
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        """Async invoke with logging."""
+        start_time = time.monotonic()
+        error = None
+        try:
+            result = await super().ainvoke(*args, **kwargs)
+            return result
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start_time) * 1000
+            log_llm_request_response(
+                self.log_dir,
+                "model_ainvoke",
+                self.model,
+                duration_ms,
+                error is None,
+                error,
+                {"streaming": self.streaming},
+            )
+
+
+def _create_model(config: BuilderConfig, log_dir: Path | None = None) -> ChatOpenAI:
     """Create a ChatOpenAI pointed at Azure Responses API."""
     llm = config.llm
     model_name = llm.get_model_for_role("builder")
@@ -96,7 +155,8 @@ def _create_model(config: BuilderConfig) -> ChatOpenAI:
             path = path[: -len("/responses")]
         base_url = urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
-    return ChatOpenAI(
+    return LoggingChatOpenAI(
+        log_dir=log_dir,
         model=model_name,
         base_url=base_url,
         api_key=SecretStr(llm.api_key or "not-needed"),
@@ -104,6 +164,8 @@ def _create_model(config: BuilderConfig) -> ChatOpenAI:
         use_responses_api=True,
         output_version="responses/v1",
         streaming=True,
+        timeout=300.0,  # 5 minutes: allow time for complex reasoning
+        max_retries=3,  # Retry up to 3 times on transient failures
     )
 
 
@@ -118,7 +180,7 @@ def _create_graph(
     log_dir: Path,
 ) -> CompiledStateGraph:
     """Create the DeepAgent graph with tools and shell backend."""
-    model = _create_model(config)
+    model = _create_model(config, log_dir=log_dir)
     backend = LocalShellBackend(
         root_dir=project_root,
         virtual_mode=False,
@@ -174,7 +236,7 @@ class BuilderService:
         log_dir = config.storage.log_dir / "builder"
         self._graph = _create_graph(config, repo_root, log_dir)
         self._config = config
-        self._planner = BuilderClient(config.llm, role="planner")
+        self._planner = BuilderClient(config.llm, role="planner", log_dir=log_dir)
         self._initialized = True
         logger.info("Builder initialized (root=%s)", repo_root)
 
@@ -186,6 +248,7 @@ class BuilderService:
         assert self._planner is not None
 
         plan = await self._planner.plan_step(request_text, context)
+        _assert_plan_contains_pr_step(plan)
         prompt = _build_prompt(request_text, context, plan)
         thread_id = f"builder_{uuid.uuid4().hex[:12]}"
         logger.info("Builder: invoking graph (thread=%s)", thread_id)
@@ -194,6 +257,7 @@ class BuilderService:
             {"messages": [{"role": "user", "content": prompt}]},
             {"configurable": {"thread_id": thread_id}},
         )
+        _assert_result_has_pr_when_committed(result)
         logger.info("Builder: graph complete (thread=%s)", thread_id)
         return _extract_result(result)
 
@@ -279,8 +343,34 @@ def _build_prompt(
         f"Steps:\n{steps}\n"
         f"Risks:\n{risks}\n"
         f"Reasoning: {plan.reasoning or 'N/A'}\n\n"
+        "Execution requirements:\n"
+        "- Follow the workflow order: plan -> build -> validate -> pr.\n"
+        "- If commit_changes returns committed=true, you must call create_pull_request(title, body, base).\n"
+        "- Do not finish until create_pull_request succeeds and yields a PR URL.\n"
+        "- The final report must include the PR URL when changes were committed.\n\n"
         "Execute the plan using the available tools and return a concise final report."
     )
+
+
+def _assert_plan_contains_pr_step(plan: ReasonedPlan) -> None:
+    has_pr = any(step.step.strip().lower() == "pr" for step in plan.plan.steps)
+    if not has_pr:
+        raise RuntimeError("Builder planning output is invalid: missing required 'pr' step.")
+
+
+def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
+    payload = json.dumps(result, default=str)
+    payload_lower = payload.lower()
+
+    commit_recorded = "commit_changes" in payload_lower and bool(COMMITTED_TRUE_RE.search(payload_lower))
+    pr_call_recorded = "create_pull_request" in payload_lower
+    pr_failed = pr_call_recorded and bool(SUCCESS_FALSE_RE.search(payload_lower))
+    has_pr_url = bool(PR_URL_RE.search(payload))
+
+    if pr_failed:
+        raise RuntimeError("Builder execution failed: create_pull_request returned success=false.")
+    if commit_recorded and not has_pr_url:
+        raise RuntimeError("Builder committed changes but did not produce a pull request URL.")
 
 
 def _text_msg(text: str) -> Message:
