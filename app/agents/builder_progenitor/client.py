@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -14,7 +13,6 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from .config import LLMConfig
-from .logging_utils import log_llm_request_response
 
 logger = logging.getLogger(__name__)
 
@@ -369,29 +367,12 @@ class BuilderClient:
             f"Execution context (JSON):\n{context_json}\n\n"
             "Create a practical plan with the minimum useful steps."
         )
-        start_time = time.monotonic()
-        error = None
-        try:
-            plan, reasoning = await self.chat_structured_with_reasoning(
-                [{"role": "user", "content": user_message}],
-                response_model=PlanResponse,
-                schema_name="builder_plan",
-                system_prompt=system_prompt,
-                max_tokens=8192,
-            )
-            logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))
-            return ReasonedPlan(plan=plan, reasoning=reasoning)
-        except Exception as exc:
-            error = str(exc)
-            raise
-        finally:
-            duration_ms = (time.monotonic() - start_time) * 1000
-            log_llm_request_response(
-                self.log_dir,
-                "plan_step",
-                self.model,
-                duration_ms,
-                error is None,
-                error,
-                {"role": self.role},
-            )
+        plan, reasoning = await self.chat_structured_with_reasoning(
+            [{"role": "user", "content": user_message}],
+            response_model=PlanResponse,
+            schema_name="builder_plan",
+            system_prompt=system_prompt,
+            max_tokens=8192,
+        )
+        logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))
+        return ReasonedPlan(plan=plan, reasoning=reasoning)
