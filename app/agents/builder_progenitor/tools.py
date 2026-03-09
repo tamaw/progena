@@ -272,9 +272,15 @@ def create_builder_tools(
         base: str = "main",
     ) -> dict[str, Any]:
         """Push branch and create a pull request via GitHub CLI."""
-        # Ensure git user is configured for this worktree
-        await rt.run_command(worktree_path, "git config user.email 'builder@progenitor.local'", timeout=30)
-        await rt.run_command(worktree_path, "git config user.name 'Progenitor Builder'", timeout=30)
+        # Git user should be configured globally by entrypoint script from GIT_AUTHOR_NAME
+        # and GIT_AUTHOR_EMAIL env vars. If not set, fallback to a default.
+        import os
+        git_name = os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder")
+        git_email = os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local")
+
+        # Ensure git user is configured (idempotent - safe to run multiple times)
+        await rt.run_command(worktree_path, f"git config user.email '{git_email}'", timeout=30)
+        await rt.run_command(worktree_path, f"git config user.name '{git_name}'", timeout=30)
 
         branch = await rt.current_branch(worktree_path)
         push = await rt.run_command(
