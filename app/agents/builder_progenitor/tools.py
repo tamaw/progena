@@ -319,6 +319,14 @@ def create_builder_tools(
             if line.startswith("https://github.com/") and "/pull/" in line:
                 url = line
                 break
+
+        if not url:
+            return {
+                "success": False,
+                "url": "",
+                "error": f"gh pr create succeeded but no PR URL found in output: {pr_output[:500]}",
+            }
+
         return {"success": True, "url": url, "error": "", "output": pr_output[-4000:]}
 
     async def gh_cli(
