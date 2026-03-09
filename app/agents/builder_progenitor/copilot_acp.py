@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -156,7 +157,10 @@ class ACPManager:
             client = ACPClient(work_item_id)
             args = self._build_args()
             logger.info("ACP: spawning %s %s (cwd=%s)", self.copilot_cmd, " ".join(args), cwd)
-            self._spawn_cm = spawn_agent_process(client, self.copilot_cmd, *args, cwd=str(cwd))
+            # Pass current environment to ensure subprocess inherits GitHub tokens
+            self._spawn_cm = spawn_agent_process(
+                client, self.copilot_cmd, *args, cwd=str(cwd), env=dict(os.environ)
+            )
             conn, _ = await self._spawn_cm.__aenter__()
             await conn.initialize(protocol_version=PROTOCOL_VERSION)
             self._client = client
