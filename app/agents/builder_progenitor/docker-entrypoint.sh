@@ -14,9 +14,10 @@ fi
 
 # Configure git to use gh CLI for authentication (if GH_TOKEN is available)
 if [ -n "${GH_TOKEN:-}" ]; then
-  if ! gh auth setup-git --hostname github.com 2>/dev/null; then
-    echo "WARN: gh auth setup-git failed, git will fall back to direct token auth" >&2
-  fi
+  # Remove any empty or conflicting credential helper entries that may have been set
+  # by other processes, then set the correct gh auth credential helper
+  git config --global --replace-all credential.https://github.com.helper '!gh auth git-credential' || true
+  git config --global --replace-all credential.https://gist.github.com.helper '!gh auth git-credential' || true
 fi
 
 ensure_workspace() {
