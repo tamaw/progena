@@ -227,27 +227,31 @@ def create_builder_tools(
     ) -> dict[str, Any]:
         """Setup git credential helper to use gh CLI authentication.
 
-        Calls 'gh auth setup-git' to configure git to use gh's credential helper.
-        This allows git push/pull operations to automatically use GH_TOKEN for
-        authentication. Call this when git operations fail with auth errors.
+        Configures git to use gh's credential helper for GitHub operations.
+        This removes any conflicting or empty credential helper entries and
+        ensures git push/pull operations can authenticate using GH_TOKEN.
 
-        This is particularly useful when subprocess environment doesn't properly
-        inherit GH_TOKEN or when git needs to push to GitHub.
+        Call this if git operations fail with authentication errors like:
+        - 'Invalid username or token'
+        - 'Authentication failed'
         """
-        result = await rt.run_command(
-            worktree_path,
-            "gh auth setup-git --hostname github.com",
-            timeout=30,
-        )
-        if not result.get("success"):
-            return {
-                "success": False,
-                "error": f"gh auth setup-git failed: {result.get('stderr', result.get('stdout', 'Unknown error'))}",
-            }
+        # Use --replace-all to remove conflicting entries and set the correct one
+        cmds = [
+            'git config --global --replace-all credential.https://github.com.helper "!gh auth git-credential"',
+            'git config --global --replace-all credential.https://gist.github.com.helper "!gh auth git-credential"',
+        ]
+        
+        for cmd in cmds:
+            result = await rt.run_command(worktree_path, cmd, timeout=30)
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "error": f"Failed to configure credential helper: {result.get('stderr', result.get('stdout', 'Unknown error'))}",
+                }
 
         return {
             "success": True,
-            "message": "Git credential helper configured to use gh CLI authentication",
+            "message": "Git credential helper properly configured to use gh CLI authentication",
         }
 
     # --- Build ---
