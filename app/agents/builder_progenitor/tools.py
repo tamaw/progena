@@ -236,22 +236,21 @@ def create_builder_tools(
         - 'Authentication failed'
         """
         # Use --replace-all to remove conflicting entries and set the correct one
-        cmds = [
-            'git config --global --replace-all credential.https://github.com.helper "!gh auth git-credential"',
-            'git config --global --replace-all credential.https://gist.github.com.helper "!gh auth git-credential"',
-        ]
-
-        for cmd in cmds:
-            result = await rt.run_command(worktree_path, cmd, timeout=30)
-            if not result.get("success"):
-                return {
-                    "success": False,
-                    "error": f"Failed to configure credential helper: {result.get('stderr', result.get('stdout', 'Unknown error'))}",
-                }
+        # Single global credential helper applies to all HTTPS URLs
+        result = await rt.run_command(
+            worktree_path,
+            'git config --global --replace-all credential.helper "!gh auth git-credential"',
+            timeout=30,
+        )
+        if not result.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to configure credential helper: {result.get('stderr', result.get('stdout', 'Unknown error'))}",
+            }
 
         return {
             "success": True,
-            "message": "Git credential helper properly configured to use gh CLI authentication",
+            "message": "Git credential helper configured to use gh CLI for all HTTPS operations",
         }
 
     # --- Build ---
