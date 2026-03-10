@@ -85,6 +85,7 @@ class ToolRuntime:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=cwd,
+            env=os.environ.copy(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -113,6 +114,7 @@ class ToolRuntime:
             "gh",
             *args,
             cwd=cwd,
+            env=os.environ.copy(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
