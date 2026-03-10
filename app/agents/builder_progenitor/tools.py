@@ -273,10 +273,18 @@ def create_builder_tools(
     ) -> dict[str, Any]:
         """Push branch and create a pull request via GitHub CLI.
 
-        Git user config (user.name, user.email) is configured globally
-        by the entrypoint script from GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL
-        environment variables set by deployment pipelines.
+        Ensures git user config is set at repo level before push, as subprocess
+        environment may not inherit HOME needed for global ~/.gitconfig access.
         """
+        # Ensure git user config is set at repo level before pushing.
+        # Required because subprocess may not inherit HOME, preventing git from
+        # reading ~/.gitconfig. Setting repo-level config ensures push works.
+        import os
+        git_name = os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder")
+        git_email = os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local")
+        await rt.run_command(worktree_path, f"git config user.name '{git_name}'", timeout=30)
+        await rt.run_command(worktree_path, f"git config user.email '{git_email}'", timeout=30)
+
         branch = await rt.current_branch(worktree_path)
         push = await rt.run_command(
             worktree_path,
