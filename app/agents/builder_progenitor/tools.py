@@ -182,6 +182,46 @@ def create_builder_tools(
                 pass
         return {"cleaned": cleaned}
 
+    # --- Git Configuration ---
+
+    async def configure_git(
+        worktree_path: str,
+        user_name: str | None = None,
+        user_email: str | None = None,
+    ) -> dict[str, Any]:
+        """Configure git user identity in a worktree.
+
+        Sets git user.name and user.email at the repo level. This ensures
+        commits work even if subprocess environment doesn't inherit HOME
+        (preventing access to ~/.gitconfig).
+
+        If user_name or user_email are not provided, reads from environment
+        variables GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL.
+        """
+        import os
+        git_name = user_name or os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder")
+        git_email = user_email or os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local")
+
+        name_result = await rt.run_command(worktree_path, f"git config user.name '{git_name}'", timeout=30)
+        if not name_result.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to set user.name: {name_result.get('stderr', '')}",
+            }
+
+        email_result = await rt.run_command(worktree_path, f"git config user.email '{git_email}'", timeout=30)
+        if not email_result.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to set user.email: {email_result.get('stderr', '')}",
+            }
+
+        return {
+            "success": True,
+            "user_name": git_name,
+            "user_email": git_email,
+        }
+
     # --- Build ---
 
     async def copilot_build(
@@ -273,18 +313,8 @@ def create_builder_tools(
     ) -> dict[str, Any]:
         """Push branch and create a pull request via GitHub CLI.
 
-        Ensures git user config is set at repo level before push, as subprocess
-        environment may not inherit HOME needed for global ~/.gitconfig access.
+        Assumes git user config is already configured via configure_git tool.
         """
-        # Ensure git user config is set at repo level before pushing.
-        # Required because subprocess may not inherit HOME, preventing git from
-        # reading ~/.gitconfig. Setting repo-level config ensures push works.
-        import os
-        git_name = os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder")
-        git_email = os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local")
-        await rt.run_command(worktree_path, f"git config user.name '{git_name}'", timeout=30)
-        await rt.run_command(worktree_path, f"git config user.email '{git_email}'", timeout=30)
-
         branch = await rt.current_branch(worktree_path)
         push = await rt.run_command(
             worktree_path,
@@ -371,6 +401,10 @@ def create_builder_tools(
         StructuredTool.from_function(
             coroutine=cleanup_worktrees, name="cleanup_worktrees",
             description="Remove worktrees older than max_age_hours.",
+        ),
+        StructuredTool.from_function(
+            coroutine=configure_git, name="configure_git",
+            description="Configure git user identity in a worktree. Must be called before commit or push operations.",
         ),
         StructuredTool.from_function(
             coroutine=copilot_build, name="copilot_build",
