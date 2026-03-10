@@ -14,10 +14,8 @@ fi
 
 # Configure git to use gh CLI for authentication (if GH_TOKEN is available)
 if [ -n "${GH_TOKEN:-}" ]; then
-  # Remove any empty or conflicting credential helper entries that may have been set
-  # by other processes, then set the correct gh auth credential helper
-  git config --global --replace-all credential.https://github.com.helper '!gh auth git-credential' || true
-  git config --global --replace-all credential.https://gist.github.com.helper '!gh auth git-credential' || true
+  # Use --replace-all to set a single global credential helper for all HTTPS URLs
+  git config --global --replace-all credential.helper "!gh auth git-credential" 2>/dev/null || true
 fi
 
 ensure_workspace() {
