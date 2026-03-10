@@ -240,7 +240,7 @@ def create_builder_tools(
             'git config --global --replace-all credential.https://github.com.helper "!gh auth git-credential"',
             'git config --global --replace-all credential.https://gist.github.com.helper "!gh auth git-credential"',
         ]
-        
+
         for cmd in cmds:
             result = await rt.run_command(worktree_path, cmd, timeout=30)
             if not result.get("success"):
