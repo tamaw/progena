@@ -222,6 +222,34 @@ def create_builder_tools(
             "user_email": git_email,
         }
 
+    async def setup_git_auth(
+        worktree_path: str,
+    ) -> dict[str, Any]:
+        """Setup git credential helper to use gh CLI authentication.
+
+        Calls 'gh auth setup-git' to configure git to use gh's credential helper.
+        This allows git push/pull operations to automatically use GH_TOKEN for
+        authentication. Call this when git operations fail with auth errors.
+
+        This is particularly useful when subprocess environment doesn't properly
+        inherit GH_TOKEN or when git needs to push to GitHub.
+        """
+        result = await rt.run_command(
+            worktree_path,
+            "gh auth setup-git --hostname github.com",
+            timeout=30,
+        )
+        if not result.get("success"):
+            return {
+                "success": False,
+                "error": f"gh auth setup-git failed: {result.get('stderr', result.get('stdout', 'Unknown error'))}",
+            }
+
+        return {
+            "success": True,
+            "message": "Git credential helper configured to use gh CLI authentication",
+        }
+
     # --- Build ---
 
     async def copilot_build(
@@ -405,6 +433,10 @@ def create_builder_tools(
         StructuredTool.from_function(
             coroutine=configure_git, name="configure_git",
             description="Configure git user identity in a worktree. Must be called before commit or push operations.",
+        ),
+        StructuredTool.from_function(
+            coroutine=setup_git_auth, name="setup_git_auth",
+            description="Setup gh CLI authentication for git operations. Call this if git push fails with authentication errors.",
         ),
         StructuredTool.from_function(
             coroutine=copilot_build, name="copilot_build",
