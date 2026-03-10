@@ -307,6 +307,8 @@ jobs:
             --restart unless-stopped \
             --network progenitor_network \
             -e A2A_PUBLIC_HOST=progenitor-agent-${{ matrix.agent }} \
+            -e GH_TOKEN="${GH_TOKEN}" \
+            -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
             ${VOLUME_ARGS} \
             ${ENV_ARGS} \
             "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
