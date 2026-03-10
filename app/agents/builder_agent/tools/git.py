@@ -75,6 +75,34 @@ class GitWorktreeManager:
                 # CR-003: Signal that cleanup is complete
                 self._cleanup_complete.set()
 
+    async def _branch_exists(self, branch_name: str) -> bool:
+        """Check if a branch exists in the repository."""
+        result = await self._run_git(
+            ["show-ref", "--verify", f"refs/heads/{branch_name}"],
+            cwd=self.repo_path,
+        )
+        # 0: exists, 1: no match, 128: fatal error (treat as doesn't exist)
+        if result["returncode"] == 0:
+            return True
+        if result["returncode"] not in (1, 128):
+            raise RuntimeError(
+                f"Failed to check branch '{branch_name}': {result['stderr']}"
+            )
+        return False
+
+    async def _add_worktree(
+        self, worktree_path: Path, branch_name: str
+    ) -> dict[str, Any]:
+        """Add a worktree for the given branch.
+
+        Returns git command result dict.
+        """
+        if await self._branch_exists(branch_name):
+            command = ["worktree", "add", str(worktree_path), branch_name]
+        else:
+            command = ["worktree", "add", "-b", branch_name, str(worktree_path)]
+        return await self._run_git(command, cwd=self.repo_path)
+
     async def create_worktree(
         self,
         work_item_id: str,
@@ -83,14 +111,14 @@ class GitWorktreeManager:
         """Create a new worktree for a work item.
 
         CR-003: Waits for startup cleanup to complete before creating.
+        Handles branch conflicts by appending a numeric suffix if needed.
         """
-        # CR-003: Wait for any pending startup cleanup to complete
-        # This prevents race condition where cleanup could delete a new worktree
+        # CR-003: Wait for startup cleanup to complete
         if self._cleanup_task and not self._cleanup_complete.is_set():
             try:
                 await asyncio.wait_for(self._cleanup_complete.wait(), timeout=30.0)
             except TimeoutError:
-                logger.warning("Startup cleanup timed out, proceeding with worktree creation")
+                logger.warning("Startup cleanup timed out, proceeding")
 
         async with self._init_lock:
             self.worktrees_dir.mkdir(parents=True, exist_ok=True)
@@ -100,33 +128,42 @@ class GitWorktreeManager:
         worktree_name = f"{work_item_id}_{timestamp}"
         worktree_path = self.worktrees_dir / worktree_name
 
-        selected_branch = branch_name or f"progenitor/{work_item_id}"
-        branch_ref_result = await self._run_git(
-            ["show-ref", "--verify", f"refs/heads/{selected_branch}"],
-            cwd=self.repo_path,
-        )
-        # Code 0: branch exists, Code 1: no match, Code 128: fatal error (e.g., "not a valid ref")
-        # Treat Code 128 with "not a valid ref" as "branch doesn't exist"
-        branch_exists = branch_ref_result["returncode"] == 0
-        if not branch_exists and branch_ref_result["returncode"] not in (1, 128):
-            logger.error("Failed to check branch '%s': %s", selected_branch, branch_ref_result["stderr"])
-            raise RuntimeError(f"Failed to check branch '{selected_branch}': {branch_ref_result['stderr']}")
+        base_branch = branch_name or f"progenitor/{work_item_id}"
 
-        if branch_exists:
-            command = ["worktree", "add", str(worktree_path), selected_branch]
-        else:
-            command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
+        # Try to create worktree with fallback to numbered variants (up to 5 attempts)
+        for attempt in range(5):
+            branch_to_use = base_branch if attempt == 0 else f"{base_branch}-{attempt}"
 
-        result = await self._run_git(command, cwd=self.repo_path)
-        if result["returncode"] != 0:
+            result = await self._add_worktree(worktree_path, branch_to_use)
+
+            if result["returncode"] == 0:
+                logger.info(
+                    "Created worktree at %s for work item %s on branch %s",
+                    worktree_path,
+                    work_item_id,
+                    branch_to_use,
+                )
+                await self._write_worktree_metadata(
+                    worktree_path, work_item_id, branch_to_use
+                )
+                return worktree_path
+
+            error_msg = result["stderr"].lower()
+            if "already used by worktree" in error_msg and attempt < 4:
+                logger.warning(
+                    "Branch '%s' in use by another worktree, trying suffix %d",
+                    branch_to_use,
+                    attempt + 1,
+                )
+                continue
+
             logger.error("Failed to create worktree: %s", result["stderr"])
             raise RuntimeError(f"Failed to create worktree: {result['stderr']}")
 
-        # Write metadata file for tracking
-        await self._write_worktree_metadata(worktree_path, work_item_id, selected_branch)
-
-        logger.info("Created worktree at %s for work item %s", worktree_path, work_item_id)
-        return worktree_path
+        raise RuntimeError(
+            f"Failed to create worktree after 5 attempts. "
+            f"Branch '{base_branch}' and variants all in use."
+        )
 
     async def _write_worktree_metadata(
         self, worktree_path: Path, work_item_id: str, branch_name: str
