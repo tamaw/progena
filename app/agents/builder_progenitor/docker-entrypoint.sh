@@ -12,6 +12,13 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
+# Configure git to use gh CLI for authentication (if GH_TOKEN is available)
+if [ -n "${GH_TOKEN:-}" ]; then
+  if ! gh auth setup-git --hostname github.com 2>/dev/null; then
+    echo "WARN: gh auth setup-git failed, git will fall back to direct token auth" >&2
+  fi
+fi
+
 ensure_workspace() {
   base_dir="${PROGENITOR_WORKTREES_ROOT:-/app/worktrees}"
   repo_url="${PROGENITOR_REPO_URL:-}"
