@@ -427,6 +427,10 @@ def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
     has_pr_url = bool(PR_URL_RE.search(payload))
 
     if pr_failed:
+        logger.error("PR creation failed. Result summary: commit_recorded=%s, pr_call_recorded=%s, has_pr_url=%s",
+                     commit_recorded, pr_call_recorded, has_pr_url)
+        # Log the entire result to understand what went wrong
+        logger.error("Full result JSON:\n%s", payload)
         raise RuntimeError("Builder execution failed: create_pull_request returned success=false.")
     if commit_recorded and not has_pr_url:
         raise RuntimeError("Builder committed changes but did not produce a pull request URL.")
