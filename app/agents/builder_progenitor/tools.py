@@ -85,6 +85,7 @@ class ToolRuntime:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=cwd,
+            env=os.environ.copy(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -113,6 +114,7 @@ class ToolRuntime:
             "gh",
             *args,
             cwd=cwd,
+            env=os.environ.copy(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -227,27 +229,30 @@ def create_builder_tools(
     ) -> dict[str, Any]:
         """Setup git credential helper to use gh CLI authentication.
 
-        Calls 'gh auth setup-git' to configure git to use gh's credential helper.
-        This allows git push/pull operations to automatically use GH_TOKEN for
-        authentication. Call this when git operations fail with auth errors.
+        Configures git to use gh's credential helper for GitHub operations.
+        This removes any conflicting or empty credential helper entries and
+        ensures git push/pull operations can authenticate using GH_TOKEN.
 
-        This is particularly useful when subprocess environment doesn't properly
-        inherit GH_TOKEN or when git needs to push to GitHub.
+        Call this if git operations fail with authentication errors like:
+        - 'Invalid username or token'
+        - 'Authentication failed'
         """
+        # Use --replace-all to remove conflicting entries and set the correct one
+        # Single global credential helper applies to all HTTPS URLs
         result = await rt.run_command(
             worktree_path,
-            "gh auth setup-git --hostname github.com",
+            'git config --global --replace-all credential.helper "!gh auth git-credential"',
             timeout=30,
         )
         if not result.get("success"):
             return {
                 "success": False,
-                "error": f"gh auth setup-git failed: {result.get('stderr', result.get('stdout', 'Unknown error'))}",
+                "error": f"Failed to configure credential helper: {result.get('stderr', result.get('stdout', 'Unknown error'))}",
             }
 
         return {
             "success": True,
-            "message": "Git credential helper configured to use gh CLI authentication",
+            "message": "Git credential helper configured to use gh CLI for all HTTPS operations",
         }
 
     # --- Build ---
