@@ -184,15 +184,6 @@ class GitWorktreeManager:
         """Commit all changes in a worktree."""
         worktree_path = Path(worktree_path)
 
-        # Ensure git user config is set at repo level before committing.
-        # This is necessary because subprocess may not inherit HOME, preventing
-        # git from reading ~/.gitconfig. Setting repo-level config ensures commits work.
-        import os
-        git_name = os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder")
-        git_email = os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local")
-        await self._run_git(["config", "user.name", git_name], cwd=worktree_path)
-        await self._run_git(["config", "user.email", git_email], cwd=worktree_path)
-
         # Stage all changes
         await self._run_git(["add", "-A"], cwd=worktree_path)
 
