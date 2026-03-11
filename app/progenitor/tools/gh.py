@@ -46,6 +46,7 @@ async def _run_gh(
         process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,
+            env=os.environ.copy(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -54,9 +55,14 @@ async def _run_gh(
                 process.communicate(),
                 timeout=timeout,
             )
+        except asyncio.CancelledError:
+            process.kill()
+            await process.communicate()
+            raise
         except TimeoutError:
             logger.error("GH: Command timed out after %ss", timeout)
             process.kill()
+            await process.communicate()
             return {"returncode": -1, "stdout": "", "stderr": f"Timed out after {timeout}s"}
 
         result = {
@@ -94,10 +100,20 @@ async def gh_push_branch(branch: str, cwd: Path, remote: str = "origin") -> tupl
     process = await asyncio.create_subprocess_exec(
         "git", "push", "--set-upstream", remote, branch,
         cwd=cwd,
+        env=os.environ.copy(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120.0)
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120.0)
+    except asyncio.CancelledError:
+        process.kill()
+        await process.communicate()
+        raise
+    except TimeoutError:
+        process.kill()
+        await process.communicate()
+        return False, "push timed out"
     if process.returncode == 0:
         return True, f"Pushed {branch} to {remote}"
     return False, (stderr.decode() if stderr else "push failed")
@@ -136,7 +152,11 @@ async def gh_pr_create(
 
     result = await _run_gh(args, cwd=cwd)
     if result["returncode"] == 0:
-        pr_url = str(result["stdout"]).strip()
+        pr_output = str(result["stdout"]).strip()
+        pr_url = _extract_pr_url(pr_output)
+        if not pr_url:
+            logger.error("GH: PR create output missing PR URL: %s", pr_output[:500])
+            return False, f"gh pr create succeeded but no PR URL found in output: {pr_output[:500]}"
         logger.info("GH: PR created: %s", pr_url)
         return True, pr_url
     return False, str(result["stderr"])
