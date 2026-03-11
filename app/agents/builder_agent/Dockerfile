@@ -6,10 +6,14 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HOME=/home/runner \
     PYTHONPATH=/app \
     AZURE_OPENAI_BASE_URL= \
     AZURE_OPENAI_API_KEY= \
     GH_TOKEN= \
+    COPILOT_GITHUB_TOKEN= \
+    GIT_AUTHOR_NAME= \
+    GIT_AUTHOR_EMAIL= \
     COPILOT_ACP_URL= \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
     PROGENITOR_MODEL_DEFAULT= \
