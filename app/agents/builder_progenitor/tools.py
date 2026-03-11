@@ -417,8 +417,8 @@ def create_builder_tools(
         variables GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL.
         """
         import os
-        git_name = user_name or os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder")
-        git_email = user_email or os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local")
+        git_name = str(user_name or os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder"))
+        git_email = str(user_email or os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local"))
 
         name_result = await rt.run_command_args(
             worktree_path, ["git", "config", "user.name", git_name], timeout=30
