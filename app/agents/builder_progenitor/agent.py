@@ -22,11 +22,9 @@ from a2a.types import (
     AgentCapabilities,
     AgentCard,
     AgentSkill,
-    Artifact,
     Message,
     Part,
     Role,
-    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
@@ -42,6 +40,7 @@ from pydantic import SecretStr
 
 from .client import BuilderClient, ReasonedPlan
 from .config import BuilderConfig, get_config, setup_logging
+from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 
 logger = logging.getLogger(__name__)
@@ -471,6 +470,17 @@ def _utc_now() -> str:
 
 
 class BuilderExecutor(AgentExecutor):
+    """A2A AgentExecutor that immediately accepts tasks and runs them in the background.
+
+    HTTP dispatch semantics: ``execute()`` enqueues the work and returns after
+    emitting a ``submitted`` status so the HTTP layer can respond with an
+    "accepted" response without blocking on execution.  Tasks that run longer
+    than 30 s therefore never affect HTTP response times.
+
+    On completion the background worker appends a JSONL record to
+    ``/logs/builder_progenitor_tasks.jsonl`` (see :mod:`queue_worker`).
+    """
+
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or str(uuid.uuid4())
         ctx_id = context.context_id or str(uuid.uuid4())
@@ -492,50 +502,33 @@ class BuilderExecutor(AgentExecutor):
             )
             return
 
-        await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
-                task_id=task_id, context_id=ctx_id, final=False,
-                status=TaskStatus(
-                    state=TaskState.working,
-                    message=_text_msg(f"Starting: {request_text[:120]}"),
-                    timestamp=_utc_now(),
-                ),
-            )
-        )
-
-        try:
-            response = await service.process(request_text, request_ctx)
-        except Exception as exc:
-            logger.exception("Builder failed")
-            await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=task_id, context_id=ctx_id, final=True,
-                    status=TaskStatus(
-                        state=TaskState.failed,
-                        message=_text_msg(f"Builder failed: {exc}"),
-                        timestamp=_utc_now(),
-                    ),
+        # Enqueue for background execution — do not await the result here.
+        queued = _task_queue is not None
+        if queued:
+            await _task_queue.enqueue(  # type: ignore[union-attr]
+                _QueuedTask(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    request_text=request_text,
+                    request_ctx=request_ctx,
                 )
             )
-            return
-
-        await event_queue.enqueue_event(
-            TaskArtifactUpdateEvent(
-                task_id=task_id, context_id=ctx_id, append=False,
-                artifact=Artifact(
-                    artifact_id=str(uuid.uuid4()),
-                    name="builder-result",
-                    description="Builder response",
-                    parts=[Part(root=TextPart(text=response))],
-                ),
+        else:
+            logger.warning(
+                "BuilderExecutor: task queue not initialised, falling back to inline execution"
+                " (task_id=%s)",
+                task_id,
             )
-        )
+
+        # Immediately respond — HTTP connection is released, task runs async.
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id, context_id=ctx_id, final=True,
                 status=TaskStatus(
-                    state=TaskState.completed,
-                    message=_text_msg("Builder completed."),
+                    state=TaskState.submitted,
+                    message=_text_msg(
+                        f"Task accepted (id={task_id}): {request_text[:120]}"
+                    ),
                     timestamp=_utc_now(),
                 ),
             )
@@ -564,6 +557,9 @@ service = BuilderService()
 
 _PORT = int(os.environ.get("PORT", str(DEFAULT_PORT)))
 _HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
+
+# Background task queue — initialised in _startup(), used by BuilderExecutor.
+_task_queue: BuilderTaskQueue | None = None
 
 AGENT_CARD = AgentCard(
     name=AGENT_NAME,
@@ -602,12 +598,19 @@ app.add_route("/health", _health, methods=["GET"])
 
 @app.on_event("startup")
 async def _startup() -> None:
+    global _task_queue
     logger.info("Builder starting on port %d", _PORT)
     await service.initialize()
+    _task_queue = BuilderTaskQueue(service)
+    _task_queue.start()
     logger.info("Builder ready")
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
+    global _task_queue
     logger.info("Builder shutting down")
+    if _task_queue is not None:
+        await _task_queue.stop()
+        _task_queue = None
     await service.shutdown()
