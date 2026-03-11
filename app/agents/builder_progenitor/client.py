@@ -301,7 +301,7 @@ class BuilderClient:
                 messages,
                 system_prompt=system_prompt,
                 response_format=response_format,
-                include_reasoning=False,
+                include_reasoning=True,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )

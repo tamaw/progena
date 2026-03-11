@@ -7,7 +7,9 @@ import logging
 import os
 import re
 import time
+import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -279,6 +281,8 @@ class BuilderService:
         self._initialized = False
         self._shutting_down = False
         self._start_time = time.time()
+        self._active_tasks: dict[str, asyncio.Task[str]] = {}
+        self._task_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -319,6 +323,24 @@ class BuilderService:
         logger.info("Builder: graph complete (thread=%s)", thread_id)
         return _extract_result(result)
 
+    async def run_task(self, task_id: str, request_text: str, context: dict[str, Any]) -> str:
+        task = asyncio.create_task(self.process(request_text, context))
+        async with self._task_lock:
+            self._active_tasks[task_id] = task
+        try:
+            return await task
+        finally:
+            async with self._task_lock:
+                self._active_tasks.pop(task_id, None)
+
+    async def cancel_task(self, task_id: str) -> bool:
+        async with self._task_lock:
+            task = self._active_tasks.get(task_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
     def health(self) -> dict[str, Any]:
         return {
             "status": "healthy",
@@ -332,6 +354,18 @@ class BuilderService:
         if not self._initialized:
             return
         self._shutting_down = True
+
+        async with self._task_lock:
+            tasks = list(self._active_tasks.values())
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Active builder task failed during shutdown")
 
         try:
             if self._planner is not None:
@@ -535,14 +569,18 @@ class BuilderExecutor(AgentExecutor):
         )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        task_id = context.task_id or ""
+        cancelled = False
+        if _task_queue is not None and task_id:
+            cancelled = await _task_queue.cancel(task_id)
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                task_id=context.task_id or "",
+                task_id=task_id,
                 context_id=context.context_id or "",
                 final=True,
                 status=TaskStatus(
                     state=TaskState.canceled,
-                    message=_text_msg("Cancelled."),
+                    message=_text_msg("Cancelled." if cancelled else "No active task to cancel."),
                     timestamp=_utc_now(),
                 ),
             )
@@ -596,21 +634,22 @@ async def _health(request: Any) -> JSONResponse:
 app.add_route("/health", _health, methods=["GET"])
 
 
-@app.on_event("startup")
-async def _startup() -> None:
+@asynccontextmanager
+async def _lifespan(_app: Any):
     global _task_queue
     logger.info("Builder starting on port %d", _PORT)
     await service.initialize()
     _task_queue = BuilderTaskQueue(service)
     _task_queue.start()
     logger.info("Builder ready")
+    try:
+        yield
+    finally:
+        logger.info("Builder shutting down")
+        if _task_queue is not None:
+            await _task_queue.stop()
+            _task_queue = None
+        await service.shutdown()
 
 
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    global _task_queue
-    logger.info("Builder shutting down")
-    if _task_queue is not None:
-        await _task_queue.stop()
-        _task_queue = None
-    await service.shutdown()
+app.router.lifespan_context = _lifespan
