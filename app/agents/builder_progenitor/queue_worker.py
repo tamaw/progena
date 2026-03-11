@@ -27,7 +27,7 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .agent import BuilderService
@@ -110,12 +110,12 @@ def append_task_record(record: TaskRecord, log_path: Path = TASK_LOG_PATH) -> No
             import fcntl  # POSIX only
 
             with open(lock_path, "a", encoding="utf-8") as lock_fh:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
                 try:
                     with open(log_path, "a", encoding="utf-8") as log_fh:
                         log_fh.write(line)
                 finally:
-                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
         except ImportError:
             # Non-POSIX fallback: threading.Lock already held above
             with open(log_path, "a", encoding="utf-8") as log_fh:
@@ -175,7 +175,7 @@ def _find_record(task_id: str, log_path: Path) -> dict[str, Any] | None:
                 try:
                     entry = json.loads(raw)
                     if entry.get("task_id") == task_id:
-                        return entry
+                        return cast(dict[str, Any], entry)
                 except json.JSONDecodeError:
                     continue
     except OSError:
