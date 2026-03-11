@@ -169,12 +169,17 @@ class InvokeAgentTool(BaseSystemTool):
                 cfg = tool_registry.find_agent_by_capability(agent_name)
         # Fall back to agents.json entry when registry lookup is unavailable
         if not isinstance(cfg, dict):
+            fallback_cfg = agents.get(agent_name)
+            if isinstance(fallback_cfg, dict):
+                cfg = dict(fallback_cfg)
+        if not isinstance(cfg, dict):
             return ToolResult.fail(f"Unknown agent '{agent_name}'.")
 
         # ------------------------------------------------------------------
         # 3. Fire-and-forget: dispatch A2A call as background asyncio task
         # ------------------------------------------------------------------
         task_id = f"{agent_name}_{uuid.uuid4().hex[:12]}"
+        context_id = uuid.uuid4().hex
 
         logger.info(
             "Dispatching task %s → %s at %s (async, timeout=%ds): %s",
@@ -188,6 +193,7 @@ class InvokeAgentTool(BaseSystemTool):
         task = asyncio.create_task(
             _fire_and_forget(
                 task_id=task_id,
+                context_id=context_id,
                 agent_name=agent_name,
                 agent_config=cfg,
                 message=dispatch_message,
@@ -221,6 +227,7 @@ class InvokeAgentTool(BaseSystemTool):
 
 async def _fire_and_forget(
     task_id: str,
+    context_id: str,
     agent_name: str,
     agent_config: dict[str, Any],
     message: str,
@@ -243,7 +250,12 @@ async def _fire_and_forget(
     response = await a2a_client.call_agent(
         agent_config=cfg,
         request=message,
-        context={"caller": "progenitor"},
+        context={
+            "caller": "progenitor",
+            "dispatch_mode": "async",
+            "a2a_task_id": task_id,
+            "a2a_context_id": context_id,
+        },
         timeout=timeout,
     )
     error = response.get("error", "") if not response.get("success") else ""
