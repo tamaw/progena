@@ -271,6 +271,22 @@ class TestIPCCommunication:
 
         assert len(responses) == 3
 
+    @pytest.mark.asyncio
+    async def test_non_streaming_request_drains_stale_stream_chunks(
+        self, ipc_client, ipc_server, mock_loop_runner
+    ):
+        """A timed-out prior request must not leak stream chunks into the next response."""
+        await mock_loop_runner._stream_queue.put({
+            "type": "stream_chunk",
+            "content": "stale response",
+            "is_final": True,
+        })
+        mock_loop_runner.set_response("fresh response")
+
+        response = await ipc_client.send_message("Hello after timeout", request_id="fresh_req")
+
+        assert response == "fresh response"
+
 
 class TestIPCStreaming:
     """Tests for streaming responses."""
