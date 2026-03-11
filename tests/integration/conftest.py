@@ -34,15 +34,16 @@ def pytest_collection_modifyitems(config, items):
     run_integration = config.getoption("--run-integration", default=False)
     skip_integration = config.getoption("--skip-integration", default=False)
 
-    if run_integration and not skip_integration:
+    skip_reason = None
+    if skip_integration:
+        skip_reason = "Integration tests skipped (--skip-integration)"
+    elif not run_integration:
+        skip_reason = "Integration tests skipped by default (use --run-integration)"
+
+    if skip_reason is None:
         return
 
-    reason = (
-        "Integration tests skipped by default; pass --run-integration to enable them"
-        if not skip_integration
-        else "Integration tests skipped (--skip-integration)"
-    )
-    skip_marker = pytest.mark.skip(reason=reason)
+    skip_marker = pytest.mark.skip(reason=skip_reason)
     for item in items:
         if "integration" in item.keywords:
             item.add_marker(skip_marker)
