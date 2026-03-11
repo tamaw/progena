@@ -48,6 +48,8 @@ def _make_task(task_id: str | None = None) -> _QueuedTask:
 def _make_mock_service(response: str = "Done. PR: https://github.com/org/repo/pull/42") -> Any:
     svc = AsyncMock()
     svc.process = AsyncMock(return_value=response)
+    svc.run_task = AsyncMock(return_value=response)
+    svc.cancel_task = AsyncMock(return_value=False)
     return svc
 
 
@@ -266,6 +268,8 @@ async def test_task_queue_logs_failure_on_exception(tmp_path: Path) -> None:
 
     service = AsyncMock()
     service.process = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+    service.run_task = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+    service.cancel_task = AsyncMock(return_value=False)
 
     queue = BuilderTaskQueue(service, log_path=log_path)
     queue.start()
