@@ -1,231 +1,126 @@
-# Progenitor Agent
+# Progenitor
 
-A perpetual, conversational personal assistant and bootstrap builder for the TARDIS system.
+A perpetual, conversational personal assistant and bootstrap builder implementing the **Last Algorithm** dual-loop pattern.
 
 ## Overview
 
-Progenitor is an always-on agent that:
-- Accepts user messages conversationally (DeepAgent)
-- Delegates specialized work to external A2A agents
-- Maintains persistent conversation state and logs
-- Runs as a perpetual loop in Docker
+Progenitor is an always-on agent that accepts user input conversationally, routes requests to chat or delegates to specialised A2A agents, maintains a persistent task backlog and scheduler, and runs indefinitely — recovering from idle via exponential backoff.
 
-Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A agent: **Builder Agent** (`app/agents/builder_agent/`).
+Stack: Python 3.12 · LangGraph · FastAPI · React/Vite · asyncio
 
-## Quick Start
-
-### Prerequisites
-
-- Python 3.12+
-- Docker (optional, recommended)
-- Azure OpenAI Responses deployment
-- Copilot CLI (for build operations — required by Builder Agent only)
-
-### Environment Setup
-
-```bash
-# Activate venv (Windows)
-& .\.venv\Scripts\Activate.ps1
-
-# Set Azure Responses endpoint credentials
-export AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1
-export AZURE_OPENAI_API_KEY=your_key_here
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Running Locally
-
-```bash
-# Option 1: Use VS Code Tasks (recommended)
-# Run "Start All (dev)" task from VS Code
-
-# Option 2: Start each component manually
-# Terminal 1: Progenitor agent
-python -m app.progenitor.main
-
-# Terminal 2: Backend API
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
-
-# Terminal 3: Frontend (from app/frontend directory)
-cd app/frontend
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173` for the UI (proxies to backend automatically).
-
-### Running with Docker
-
-```bash
-# Build and run
-docker compose -f docker/docker-compose.progenitor.yml up --build -d
-
-# View logs
-docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
-
-# Stop
-docker compose -f docker/docker-compose.progenitor.yml down
-```
+---
 
 ## Architecture
 
-### LangGraph Topology (Outer Loop)
+### Outer Loop
+
+Runs forever, processing one unit of work per cycle: a user message, a scheduled trigger, or a backlog item.
 
 ```
-User messages:
-Intake → Chat (DeepAgent) → Respond → Idle → (repeat)
-
-Delegation path (build/upgrade requests):
-Decide → PickNext → A2A call to Builder Agent → Respond
-
-Scheduled jobs:
-ScheduleDispatch → Intake → Chat → Respond
+Intake → TimeCheck → EnqueueDue → Decide → [respond / delegate] → Idle → repeat
 ```
 
-### Directory Structure
+Direct answers go straight to `Respond`. Delegated work is pushed to the backlog and processed via `PickNext`. When empty, the loop enters `Idle` with exponential backoff (30 s → 300 s, ×1.5).
+
+### Inner Loop
+
+Runs inside the **Builder Agent** per delegated work item. Bounded (≤ 5 iterations) and exits when a verification score meets the threshold.
 
 ```
-app/
-  progenitor/           # Core perpetual agent (chat + delegation)
-    main.py             # Service entrypoint
-    routing.py          # Graph routing
-    agent/              # DeepAgent integration layer
-    llm/                # LLM client + prompts
-    tools/              # Schedule, MCP, registry, shell, discovery tools
-    runtime/            # Loop, scheduler, HTTP agent manager, DeepAgent adapter
-    state/              # State models + persistence
-    nodes/              # LangGraph nodes: intake, decide, chat, respond, idle, etc.
-  agents/
-    builder_agent/      # Build loop A2A agent (port 8107) — see agents/builder_agent/README.md
-    observe_agent/      # Monitoring A2A agent
-  mcp/                  # MCP servers
-.env                    # Local environment configuration
-data/
-  state/                # Persisted state (JSON)
-  sessions/             # Session persistence
-  attachments/          # Uploaded file cache/data
-logs/                   # Append-only logs (JSONL)
-prompts/                # Prompt templates
-  skills/               # DeepAgent SKILL.md files
-worktrees/              # Git worktrees for builds (used by Builder Agent)
+Observe → Think → Plan → Build → Execute → Verify → Learn → (repeat or end)
 ```
 
-### State Files
+`Observe` refines the ideal state; `Think` generates approaches; `Plan` picks an experiment; `Build` produces output; `Execute` runs tools; `Verify` scores the result; `Learn` updates strategy.
 
-- `data/state/current_state.json` - Conversation state (messages, tool calls)
-- `data/state/schedule.json` - Scheduled tasks
-- `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
-- `data/config/agents.json` - Agent registry
-- `data/config/mcp.json` - MCP tool registry
+---
 
-### Log Files
+## Agents
 
-- `logs/conversation.jsonl` - All user/assistant messages
-- `logs/decisions.jsonl` - Routing decisions
-- `logs/schedule.jsonl` - Schedule events
+| Agent | Port | Responsibility |
+|---|---|---|
+| **Progenitor** | — | Conversational orchestrator, task router, outer-loop host |
+| **Builder Agent** | 8107 | Code generation and repo mutation; hosts the inner loop |
+| **Observe Agent** | — | Lightweight monitoring/observation A2A responder |
 
-## Configuration
+---
 
-Configuration is sourced from environment variables. See `.env.example` for defaults.
+## How to Run
 
-```dotenv
-# Runtime
-PROGENITOR_TIMEZONE=Australia/Melbourne
-PROGENITOR_IDLE_BACKOFF_SECONDS=30
-PROGENITOR_MAX_BACKOFF_SECONDS=300
-PROGENITOR_MAX_ACTIONS_PER_CYCLE=10
+### Install
 
-# LLM
-PROGENITOR_LLM_PROVIDER=azure
-AZURE_OPENAI_ENDPOINT=https://...
-AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cd app/frontend && npm install && cd ../..
 ```
 
-## Usage
+### Dev mode
 
-Progenitor accepts natural language input and decides how to handle it:
+```bash
+# Terminal 1 – agent
+python -m app.progenitor.main
 
-1. **Direct answers**: Simple questions answered immediately
-2. **A2A delegation**: Calls existing agents for specialized tasks  
-3. **MCP tools**: Uses registered MCP servers for tool access
-4. **Build/Upgrade**: Delegates to Builder Agent (creates new agents/tools)
-5. **Scheduling**: Creates time-based recurring or one-off tasks
+# Terminal 2 – backend API (port 8000)
+uvicorn app.backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-### Examples
-
-```
-User: What time is it?
-→ Direct answer
-
-User: Send an email to John about the meeting
-→ A2A delegation (if email agent exists)
-
-User: Remind me every day at 9am to check my tasks
-→ Schedule creation
-
-User: reset the conversation
-→ Progenitor invokes the new_conversation system tool (clears older context)
-
-User: Build a weather MCP tool
-→ A2A call to Builder Agent → OBSERVE→THINK→PLAN→BUILD→VERIFY→LEARN loop
+# Terminal 3 – frontend (port 5173)
+cd app/frontend && npm run dev
 ```
 
-## Builder Agent
+Or use the VS Code task **"Start All (dev)"**. For Docker: `docker compose -f docker/docker-compose.progenitor.yml up --build -d`
 
-The Builder Agent (`app/agents/builder_agent/`) is a fully self-contained A2A server
-that owns all code-generation and repo-mutation capabilities:
+### Tests
 
-- **Port**: 8107
-- **Protocol**: A2A JSON-RPC (Google a2a-sdk)
-- **Skills**: `build_agent`, `build_mcp`, `build_progenitor`, `upgrade_repo`
-- **Loop**: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
-- **Checkpointing**: SQLite per-build (resumable)
-- **Tools**: GitHub Copilot CLI, git worktrees, gh CLI
+```bash
+pytest                       # all
+pytest tests/progenitor/ -v  # progenitor unit tests
+```
 
-See [`app/agents/builder_agent/README.md`](app/agents/builder_agent/README.md) for full documentation.
+---
+
+## Async Model
+
+The runtime (`app/progenitor/runtime/loop.py`) runs two concurrent `asyncio` tasks:
+
+1. **Input handler** — awaits messages from `_input_queue` (cap 100), acquires `_graph_lock`, runs one graph cycle.
+2. **Scheduler** — polls `schedule.json` every `poll_seconds`, enqueues due items.
+
+Both race via `asyncio.wait(return_when=FIRST_EXCEPTION)`. Graph cycles are serialised by a single lock. State checkpoints to `data/state/*.json` after every cycle.
+
+Key queues (all `asyncio.Queue`): `_input_queue` (100), `_output_queue` (100), `_stream_queue` (1 000 tokens).
+
+Mock mode (no real API calls): `export PROGENITOR_MOCK_LLM=true`
+
+---
+
+## Logs
+
+| Path | Content |
+|---|---|
+| `/logs/<agent>/<agent>.stdout.log` | INFO and below (rotating, 10 MB × 5) |
+| `/logs/<agent>/<agent>.stderr.log` | ERROR and above |
+| `logs/conversation.jsonl` | Full message history |
+| `logs/decisions.jsonl` | Routing decisions |
+| `data/state/health.json` | Health checkpoint (every 30 s) |
+
+```bash
+PROGENITOR_LOG_LEVEL=info   # debug | info | warn | error
+PROGENITOR_LOG_FORMAT=text  # text | json (use json for aggregators)
+PROGENITOR_LOG_DIR=/logs    # override log root
+```
+
+Rotation is handled by Python's `RotatingFileHandler`.
+
+---
 
 ## Development
 
-### Running Tests
-
 ```bash
-# All tests
-pytest tests/ -v
-
-# Builder agent tests
-pytest tests/agents/builder_agent/ -v
-
-# Progenitor tests
-pytest tests/progenitor/ -v
+ruff check app/   # lint
+mypy app/         # type check
+pytest            # test
 ```
 
-### Lint + Type Check
+All three must pass before opening a PR. Tests use `pytest-asyncio` (`asyncio_mode = auto`); mock the LLM client and state manager with `AsyncMock`.
 
-```bash
-ruff check app/
-mypy app/
-```
-
-### Adding New Capabilities
-
-1. Create an agent in `app/agents/<agent_name>/`
-2. Or create an MCP server in `app/mcp/`
-3. Register in `data/config/agents.json`
-
-Or ask Progenitor to build it for you — it will delegate to the Builder Agent automatically.
-
-## Docs
-
-- [SPEC.md](docs/SPEC.md) — System specification
-- [loop.spec.md](docs/loop.spec.md) — Inner loop (Last Algorithm) spec
-- [ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) — Visual architecture
-- [BACKEND.md](docs/BACKEND.md) — Backend API
-- [DOCKER.md](docs/DOCKER.md) — Docker deployment
-- [CONTAINER_RUNNERS.md](docs/CONTAINER_RUNNERS.md) — Isolated A2A/MCP runner containers
-
-## License
-
-MIT
+**Contributing:** branch from `main`, make focused changes, add tests for new behaviour, open a PR with a clear description. PRs are merged by human maintainers — do not trigger deployments without explicit approval.
