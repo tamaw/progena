@@ -363,3 +363,61 @@ async def test_executor_returns_submitted_immediately(tmp_path: Path) -> None:
         }, f"Missing keys in record: {record}"
     finally:
         await real_queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_executor_prefers_caller_supplied_async_ids(tmp_path: Path) -> None:
+    """Caller-provided async IDs should become the queued and logged task IDs."""
+    import time
+
+    from app.agents.builder_progenitor.agent import BuilderExecutor
+
+    log_path = tmp_path / "tasks.jsonl"
+    external_task_id = "builder_progenitor_external_123"
+    external_ctx_id = "ctx_external_456"
+
+    events: list[Any] = []
+    mock_event_queue = AsyncMock()
+    mock_event_queue.enqueue_event = AsyncMock(side_effect=events.append)
+
+    mock_message = MagicMock()
+    mock_message.parts = [MagicMock(root=MagicMock(text="Add fire-and-forget support"))]
+    mock_message.metadata = {
+        "a2a_task_id": external_task_id,
+        "a2a_context_id": external_ctx_id,
+    }
+    mock_context = MagicMock()
+    mock_context.task_id = "sdk-task-id"
+    mock_context.context_id = "sdk-context-id"
+    mock_context.message = mock_message
+
+    service = _make_mock_service("Done. PR: https://github.com/org/repo/pull/8")
+    real_queue = BuilderTaskQueue(service, log_path=log_path)
+    real_queue.start()
+
+    executor = BuilderExecutor()
+
+    try:
+        with patch("app.agents.builder_progenitor.agent._task_queue", real_queue):
+            t0 = time.monotonic()
+            await executor.execute(mock_context, mock_event_queue)
+            elapsed = time.monotonic() - t0
+
+        assert elapsed < 2.0
+        assert len(events) == 1
+        event = events[0]
+        assert event.task_id == external_task_id
+        assert event.context_id == external_ctx_id
+
+        record = None
+        for _ in range(100):
+            await asyncio.sleep(0.1)
+            record = sync_wait_for_completion(external_task_id, timeout_seconds=0.0, log_path=log_path)
+            if record is not None:
+                break
+
+        assert record is not None
+        assert record["task_id"] == external_task_id
+        assert record["status"] == "success"
+    finally:
+        await real_queue.stop()
