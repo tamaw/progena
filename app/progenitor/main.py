@@ -1,3 +1,4 @@
+# Marker: Progenitor self-test comment
 """
 Progenitor Service Entrypoint
 
