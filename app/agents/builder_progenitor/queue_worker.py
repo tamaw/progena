@@ -206,6 +206,8 @@ class BuilderTaskQueue:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._worker_task: asyncio.Task[None] | None = None
         self._log_path = log_path
+        self._queued_task_ids: set[str] = set()
+        self._cancelled_task_ids: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -232,8 +234,16 @@ class BuilderTaskQueue:
 
     async def enqueue(self, task: _QueuedTask) -> None:
         """Enqueue a task for background execution."""
+        self._queued_task_ids.add(task.task_id)
         await self._queue.put(task)
         logger.debug("BuilderTaskQueue: enqueued task_id=%s", task.task_id)
+
+    async def cancel(self, task_id: str) -> bool:
+        """Cancel a queued or active task by ID."""
+        if task_id in self._queued_task_ids:
+            self._cancelled_task_ids.add(task_id)
+            return True
+        return await self._service.cancel_task(task_id)
 
     # ------------------------------------------------------------------
     # Internal
@@ -244,6 +254,12 @@ class BuilderTaskQueue:
         while True:
             try:
                 task = await self._queue.get()
+                self._queued_task_ids.discard(task.task_id)
+                if task.task_id in self._cancelled_task_ids:
+                    self._cancelled_task_ids.discard(task.task_id)
+                    self._queue.task_done()
+                    logger.info("BuilderTaskQueue: skipped cancelled queued task_id=%s", task.task_id)
+                    continue
                 asyncio.ensure_future(self._run_task(task))
                 self._queue.task_done()
             except asyncio.CancelledError:
@@ -267,7 +283,7 @@ class BuilderTaskQueue:
             )
 
             try:
-                response = await self._service.process(task.request_text, task.request_ctx)
+                response = await self._service.run_task(task.task_id, task.request_text, task.request_ctx)
                 status = "success"
                 phase_completed = "pr"
 
@@ -285,6 +301,10 @@ class BuilderTaskQueue:
                     pr_url,
                 )
 
+            except asyncio.CancelledError:
+                status = "cancelled"
+                phase_completed = "cancelled"
+                logger.info("BuilderTaskQueue: task cancelled task_id=%s", task.task_id)
             except Exception as exc:
                 status = "failure"
                 phase_completed = "failed"

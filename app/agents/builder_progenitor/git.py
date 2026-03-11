@@ -56,8 +56,13 @@ class GitWorktreeManager:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=timeout
                 )
+            except asyncio.CancelledError:
+                process.kill()
+                await process.communicate()
+                raise
             except TimeoutError:
                 process.kill()
+                await process.communicate()
                 return {
                     "returncode": -1,
                     "stdout": "",
@@ -198,10 +203,22 @@ class GitWorktreeManager:
         if not result["stdout"].strip():
             return None  # Nothing to commit
 
-        await self._run_git(["commit", "-m", message], cwd=worktree_path)
+        before = await self._run_git(["rev-parse", "HEAD"], cwd=worktree_path)
+        commit_result = await self._run_git(["commit", "-m", message], cwd=worktree_path)
+        if commit_result["returncode"] != 0:
+            detail = (commit_result["stderr"] or commit_result["stdout"]).strip()
+            raise RuntimeError(f"Failed to commit changes: {detail or 'git commit failed'}")
 
         result = await self._run_git(["rev-parse", "HEAD"], cwd=worktree_path)
-        return result["stdout"].strip() if result["returncode"] == 0 else None
+        if result["returncode"] != 0:
+            return None
+
+        before_sha = before["stdout"].strip() if before["returncode"] == 0 else ""
+        after_sha = result["stdout"].strip()
+        if before_sha and before_sha == after_sha:
+            raise RuntimeError("git commit completed without advancing HEAD")
+
+        return after_sha or None
 
     async def _write_metadata(
         self, worktree_path: Path, work_item_id: str, branch_name: str

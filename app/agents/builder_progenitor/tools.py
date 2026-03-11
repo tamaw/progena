@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import shlex
-import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -79,6 +78,37 @@ class ToolRuntime:
         """Release long-lived tool resources."""
         await self.copilot.close()
 
+    async def run_command_args(
+        self,
+        cwd: str,
+        args: list[str],
+        timeout: int = 600,
+    ) -> dict[str, Any]:
+        """Run a subprocess without shell interpolation."""
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            env=os.environ.copy(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.communicate()
+            raise
+        except TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return {"success": False, "returncode": -1, "stdout": "", "stderr": f"Timeout ({timeout}s)"}
+        return {
+            "success": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": (out or b"").decode(errors="replace")[-12000:],
+            "stderr": (err or b"").decode(errors="replace")[-12000:],
+        }
+
     async def run_command(self, cwd: str, command: str, timeout: int = 600) -> dict[str, Any]:
         """Run a shell command and return result dict."""
         proc = await asyncio.create_subprocess_shell(
@@ -90,8 +120,13 @@ class ToolRuntime:
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.communicate()
+            raise
         except TimeoutError:
             proc.kill()
+            await proc.communicate()
             return {"success": False, "returncode": -1, "stdout": "", "stderr": f"Timeout ({timeout}s)"}
         return {
             "success": proc.returncode == 0,
@@ -119,8 +154,13 @@ class ToolRuntime:
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.communicate()
+            raise
         except TimeoutError:
             proc.kill()
+            await proc.communicate()
             return {"success": False, "returncode": -1, "stdout": "", "stderr": f"Timeout ({timeout}s)"}
         return {
             "success": proc.returncode == 0,
@@ -176,9 +216,10 @@ def create_builder_tools(
             try:
                 mtime = datetime.fromtimestamp(item.stat().st_mtime, tz=UTC)
                 if mtime < cutoff:
-                    shutil.rmtree(item, ignore_errors=True)
-                    cleaned += 1
-                    logger.info("Cleaned up worktree: %s", item.name)
+                    removed = await rt.worktrees.remove_worktree(item)
+                    if removed.get("success"):
+                        cleaned += 1
+                        logger.info("Cleaned up worktree: %s", item.name)
             except OSError:
                 pass
         return {"cleaned": cleaned}
@@ -247,18 +288,18 @@ def create_builder_tools(
         - delete='name': delete a branch
         """
         if create:
-            return await rt.run_command(
-                worktree_path, f"git checkout -b {create}", timeout=30
+            return await rt.run_command_args(
+                worktree_path, ["git", "checkout", "-b", create], timeout=30
             )
         if delete:
-            return await rt.run_command(
-                worktree_path, f"git branch -D {delete}", timeout=30
+            return await rt.run_command_args(
+                worktree_path, ["git", "branch", "-D", delete], timeout=30
             )
         return await rt.run_command(worktree_path, "git branch -a", timeout=30)
 
     async def git_checkout(worktree_path: str, ref: str) -> dict[str, Any]:
         """Checkout a branch or commit in a worktree."""
-        return await rt.run_command(worktree_path, f"git checkout {ref}", timeout=60)
+        return await rt.run_command_args(worktree_path, ["git", "checkout", ref], timeout=60)
 
     async def git_fetch(worktree_path: str, prune: bool = False) -> dict[str, Any]:
         """Fetch from remote."""
@@ -311,8 +352,8 @@ def create_builder_tools(
         worktree_path: str, url: str, remote: str = "origin"
     ) -> dict[str, Any]:
         """Set the URL for a git remote."""
-        return await rt.run_command(
-            worktree_path, f"git remote set-url {remote} {url}", timeout=30
+        return await rt.run_command_args(
+            worktree_path, ["git", "remote", "set-url", remote, url], timeout=30
         )
 
     # --- GitHub CLI ---
@@ -379,14 +420,18 @@ def create_builder_tools(
         git_name = user_name or os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder")
         git_email = user_email or os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local")
 
-        name_result = await rt.run_command(worktree_path, f"git config user.name '{git_name}'", timeout=30)
+        name_result = await rt.run_command_args(
+            worktree_path, ["git", "config", "user.name", git_name], timeout=30
+        )
         if not name_result.get("success"):
             return {
                 "success": False,
                 "error": f"Failed to set user.name: {name_result.get('stderr', '')}",
             }
 
-        email_result = await rt.run_command(worktree_path, f"git config user.email '{git_email}'", timeout=30)
+        email_result = await rt.run_command_args(
+            worktree_path, ["git", "config", "user.email", git_email], timeout=30
+        )
         if not email_result.get("success"):
             return {
                 "success": False,
@@ -500,9 +545,9 @@ def create_builder_tools(
         glob_pattern: str = "*.py",
     ) -> dict[str, Any]:
         """Search files in the worktree using ripgrep."""
-        return await rt.run_command(
+        return await rt.run_command_args(
             worktree_path,
-            f'rg -n --glob "{glob_pattern}" -- "{query}"',
+            ["rg", "-n", "--glob", glob_pattern, "--", query],
             timeout=120,
         )
 
