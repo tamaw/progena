@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 SKIP_NAMES = {"__pycache__", ".git", "base", ".venv", "node_modules"}
 
 
@@ -78,12 +77,10 @@ def main() -> int:
         mcps_set = set()
         for path in changed_files:
             parts = path.split("/")
-            if len(parts) >= 3 and parts[0] == "app" and parts[1] == "agents":
-                if Path("app", "agents", parts[2]).is_dir():
-                    agents_set.add(parts[2])
-            if len(parts) >= 3 and parts[0] == "app" and parts[1] == "mcp":
-                if Path("app", "mcp", parts[2]).is_dir():
-                    mcps_set.add(parts[2])
+            if len(parts) >= 3 and parts[0] == "app" and parts[1] == "agents" and Path("app", "agents", parts[2]).is_dir():
+                agents_set.add(parts[2])
+            if len(parts) >= 3 and parts[0] == "app" and parts[1] == "mcp" and Path("app", "mcp", parts[2]).is_dir():
+                mcps_set.add(parts[2])
         agents = sorted(agents_set)
         mcps = sorted(mcps_set)
 
