@@ -1,5 +1,6 @@
 """Tests for state manager."""
 
+import asyncio
 import json
 import tempfile
 from pathlib import Path
@@ -231,6 +232,29 @@ class TestStateManager:
         # Verify state persisted
         state = await manager.get_build_state()
         assert state.get("cycle_count") == 5
+
+    @pytest.mark.asyncio
+    async def test_file_lock_blocks_across_manager_instances(self, temp_dirs):
+        """Separate manager instances should coordinate through the OS lock file."""
+        state_dir, logs_dir = temp_dirs
+        manager1 = StateManager(state_dir, logs_dir)
+        manager2 = StateManager(state_dir, logs_dir)
+        await manager1.initialize()
+        await manager2.initialize()
+
+        entered_second_lock = asyncio.Event()
+
+        async def acquire_second_lock() -> None:
+            async with manager2._file_lock("current_state"):
+                entered_second_lock.set()
+
+        async with manager1._file_lock("current_state"):
+            waiter = asyncio.create_task(acquire_second_lock())
+            await asyncio.sleep(0.1)
+            assert not entered_second_lock.is_set()
+
+        await asyncio.wait_for(waiter, timeout=1.0)
+        assert entered_second_lock.is_set()
 
 
 class TestStateManagerCacheReads:

@@ -52,14 +52,14 @@ def pytest_collection_modifyitems(config, items):
 def pytest_addoption(parser):
     """Add custom command line options."""
     parser.addoption(
-        "--skip-integration",
-        action="store_true",
-        default=False,
-        help="Skip integration tests that require Progenitor to be running"
-    )
-    parser.addoption(
         "--run-integration",
         action="store_true",
         default=False,
         help="Run integration tests that require a live Progenitor instance"
+    )
+    parser.addoption(
+        "--skip-integration",
+        action="store_true",
+        default=False,
+        help="Skip integration tests that require Progenitor to be running"
     )
