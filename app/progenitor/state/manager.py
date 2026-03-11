@@ -10,13 +10,14 @@ Rules:
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
 import sys
 import tempfile
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -286,7 +287,32 @@ class StateManager:
             self._locks[name] = asyncio.Lock()
 
         async with self._locks[name]:
-            yield
+            lock_path = self._core_file_path(name).with_suffix(
+                f"{self._core_file_path(name).suffix}.lock"
+            )
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(lock_path, "a+b") as lock_handle:
+                if lock_handle.tell() == 0 and lock_handle.seek(0, os.SEEK_END) == 0:
+                    lock_handle.write(b"0")
+                    lock_handle.flush()
+                lock_handle.seek(0)
+
+                deadline = time.monotonic() + self.lock_timeout
+                while True:
+                    try:
+                        await asyncio.to_thread(lock_file, lock_handle)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(f"Timed out acquiring file lock for {name}")
+                        await asyncio.sleep(0.05)
+
+                try:
+                    yield
+                finally:
+                    with suppress(OSError):
+                        await asyncio.to_thread(unlock_file, lock_handle)
 
     async def _atomic_write_json(self, filepath: Path, data: Any) -> None:
         """Write JSON atomically: temp file → fsync → rename.
@@ -324,7 +350,7 @@ class StateManager:
                             "Retry %d/%d: os.replace failed for %s: %s",
                             attempt + 1, max_retries, filepath.name, pe
                         )
-                        time.sleep(retry_delay)
+                        await asyncio.sleep(retry_delay)
                         retry_delay *= 2  # Exponential backoff
                     else:
                         raise
@@ -605,28 +631,38 @@ class StateManager:
         to disk when the cache is empty (e.g. first access before init).
         """
         if "current_state" in self._state_cache:
-            return cast(dict[str, Any], self._state_cache["current_state"])
+            return copy.deepcopy(cast(dict[str, Any], self._state_cache["current_state"]))
         async with self._file_lock("current_state"):
             data = await self._read_json(
                 self.state_dir / self.CORE_FILES["current_state"]
             ) or {}
             self._state_cache["current_state"] = data
-            return data
+            return copy.deepcopy(data)
 
     async def save_current_state(self, state: dict[str, Any]) -> None:
         """Save current progenitor agent state."""
+        state_copy = copy.deepcopy(state)
         async with self._file_lock("current_state"):
+            await self._atomic_write_json(
+                self.state_dir / self.CORE_FILES["current_state"],
+                state_copy
+            )
+            self._state_cache["current_state"] = state_copy
+
+    async def update_current_state(self, updates: dict[str, Any]) -> None:
+        """Partially update current state with given fields."""
+        async with self._file_lock("current_state"):
+            state = copy.deepcopy(cast(dict[str, Any], self._state_cache.get("current_state", {})))
+            if not state:
+                state = await self._read_json(
+                    self.state_dir / self.CORE_FILES["current_state"]
+                ) or {}
+            state.update(updates)
             await self._atomic_write_json(
                 self.state_dir / self.CORE_FILES["current_state"],
                 state
             )
             self._state_cache["current_state"] = state
-
-    async def update_current_state(self, updates: dict[str, Any]) -> None:
-        """Partially update current state with given fields."""
-        state = await self.get_current_state()
-        state.update(updates)
-        await self.save_current_state(state)
 
     # ==========================================================================
     # Messages Management (stored in current_state.json)

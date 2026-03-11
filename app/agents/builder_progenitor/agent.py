@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,11 +24,9 @@ from a2a.types import (
     AgentCapabilities,
     AgentCard,
     AgentSkill,
-    Artifact,
     Message,
     Part,
     Role,
-    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
@@ -42,6 +42,7 @@ from pydantic import SecretStr
 
 from .client import BuilderClient, ReasonedPlan
 from .config import BuilderConfig, get_config, setup_logging
+from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 
 logger = logging.getLogger(__name__)
@@ -280,6 +281,8 @@ class BuilderService:
         self._initialized = False
         self._shutting_down = False
         self._start_time = time.time()
+        self._active_tasks: dict[str, asyncio.Task[str]] = {}
+        self._task_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -320,6 +323,24 @@ class BuilderService:
         logger.info("Builder: graph complete (thread=%s)", thread_id)
         return _extract_result(result)
 
+    async def run_task(self, task_id: str, request_text: str, context: dict[str, Any]) -> str:
+        task = asyncio.create_task(self.process(request_text, context))
+        async with self._task_lock:
+            self._active_tasks[task_id] = task
+        try:
+            return await task
+        finally:
+            async with self._task_lock:
+                self._active_tasks.pop(task_id, None)
+
+    async def cancel_task(self, task_id: str) -> bool:
+        async with self._task_lock:
+            task = self._active_tasks.get(task_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
     def health(self) -> dict[str, Any]:
         return {
             "status": "healthy",
@@ -333,6 +354,18 @@ class BuilderService:
         if not self._initialized:
             return
         self._shutting_down = True
+
+        async with self._task_lock:
+            tasks = list(self._active_tasks.values())
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Active builder task failed during shutdown")
 
         try:
             if self._planner is not None:
@@ -471,6 +504,17 @@ def _utc_now() -> str:
 
 
 class BuilderExecutor(AgentExecutor):
+    """A2A AgentExecutor that immediately accepts tasks and runs them in the background.
+
+    HTTP dispatch semantics: ``execute()`` enqueues the work and returns after
+    emitting a ``submitted`` status so the HTTP layer can respond with an
+    "accepted" response without blocking on execution.  Tasks that run longer
+    than 30 s therefore never affect HTTP response times.
+
+    On completion the background worker appends a JSONL record to
+    ``/logs/builder_progenitor_tasks.jsonl`` (see :mod:`queue_worker`).
+    """
+
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or str(uuid.uuid4())
         ctx_id = context.context_id or str(uuid.uuid4())
@@ -492,64 +536,51 @@ class BuilderExecutor(AgentExecutor):
             )
             return
 
-        await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
-                task_id=task_id, context_id=ctx_id, final=False,
-                status=TaskStatus(
-                    state=TaskState.working,
-                    message=_text_msg(f"Starting: {request_text[:120]}"),
-                    timestamp=_utc_now(),
-                ),
-            )
-        )
-
-        try:
-            response = await service.process(request_text, request_ctx)
-        except Exception as exc:
-            logger.exception("Builder failed")
-            await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=task_id, context_id=ctx_id, final=True,
-                    status=TaskStatus(
-                        state=TaskState.failed,
-                        message=_text_msg(f"Builder failed: {exc}"),
-                        timestamp=_utc_now(),
-                    ),
+        # Enqueue for background execution — do not await the result here.
+        queued = _task_queue is not None
+        if queued:
+            await _task_queue.enqueue(  # type: ignore[union-attr]
+                _QueuedTask(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    request_text=request_text,
+                    request_ctx=request_ctx,
                 )
             )
-            return
-
-        await event_queue.enqueue_event(
-            TaskArtifactUpdateEvent(
-                task_id=task_id, context_id=ctx_id, append=False,
-                artifact=Artifact(
-                    artifact_id=str(uuid.uuid4()),
-                    name="builder-result",
-                    description="Builder response",
-                    parts=[Part(root=TextPart(text=response))],
-                ),
+        else:
+            logger.warning(
+                "BuilderExecutor: task queue not initialised, falling back to inline execution"
+                " (task_id=%s)",
+                task_id,
             )
-        )
+
+        # Immediately respond — HTTP connection is released, task runs async.
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id, context_id=ctx_id, final=True,
                 status=TaskStatus(
-                    state=TaskState.completed,
-                    message=_text_msg("Builder completed."),
+                    state=TaskState.submitted,
+                    message=_text_msg(
+                        f"Task accepted (id={task_id}): {request_text[:120]}"
+                    ),
                     timestamp=_utc_now(),
                 ),
             )
         )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        task_id = context.task_id or ""
+        cancelled = False
+        if _task_queue is not None and task_id:
+            cancelled = await _task_queue.cancel(task_id)
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                task_id=context.task_id or "",
+                task_id=task_id,
                 context_id=context.context_id or "",
                 final=True,
                 status=TaskStatus(
                     state=TaskState.canceled,
-                    message=_text_msg("Cancelled."),
+                    message=_text_msg("Cancelled." if cancelled else "No active task to cancel."),
                     timestamp=_utc_now(),
                 ),
             )
@@ -564,6 +595,9 @@ service = BuilderService()
 
 _PORT = int(os.environ.get("PORT", str(DEFAULT_PORT)))
 _HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
+
+# Background task queue — initialised in _startup(), used by BuilderExecutor.
+_task_queue: BuilderTaskQueue | None = None
 
 AGENT_CARD = AgentCard(
     name=AGENT_NAME,
@@ -600,14 +634,22 @@ async def _health(request: Any) -> JSONResponse:
 app.add_route("/health", _health, methods=["GET"])
 
 
-@app.on_event("startup")
-async def _startup() -> None:
+@asynccontextmanager
+async def _lifespan(_app: Any):
+    global _task_queue
     logger.info("Builder starting on port %d", _PORT)
     await service.initialize()
+    _task_queue = BuilderTaskQueue(service)
+    _task_queue.start()
     logger.info("Builder ready")
+    try:
+        yield
+    finally:
+        logger.info("Builder shutting down")
+        if _task_queue is not None:
+            await _task_queue.stop()
+            _task_queue = None
+        await service.shutdown()
 
 
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    logger.info("Builder shutting down")
-    await service.shutdown()
+app.router.lifespan_context = _lifespan

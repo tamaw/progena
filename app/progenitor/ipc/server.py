@@ -284,14 +284,7 @@ class IPCServer:
         async with self._request_lock:
             logger.info("Processing request %s: %s", request_id, content[:50])
 
-            # Drain any stale output from previous requests that may have timed out
-            while not self.loop_runner._output_queue.empty():
-                try:
-                    stale = self.loop_runner._output_queue.get_nowait()
-                    logger.warning("Drained stale output (%d chars) for %s",
-                                   len(stale) if stale else 0, request_id)
-                except Exception:
-                    break
+            await self._drain_response_queues(request_id)
 
             # Enqueue input and wait for output
             await self.loop_runner.enqueue_input(content)
@@ -313,6 +306,7 @@ class IPCServer:
 
             except TimeoutError:
                 logger.error("Request %s timed out waiting for response", request_id)
+                await self._drain_response_queues(request_id)
                 await write_message(
                     writer,
                     error_message("Request timed out", error_code="TIMEOUT", request_id=request_id),
@@ -356,25 +350,7 @@ class IPCServer:
         async with self._request_lock:
             logger.info("Processing streaming request %s: %s", request_id, content[:50])
 
-            # Drain any stale output/stream data from previous requests
-            drained_count = 0
-            while not self.loop_runner._output_queue.empty():
-                try:
-                    stale = self.loop_runner._output_queue.get_nowait()
-                    drained_count += 1
-                    logger.warning("Drained stale output (%d chars) for %s",
-                                   len(stale) if stale else 0, request_id)
-                except Exception:
-                    break
-            while not self.loop_runner._stream_queue.empty():
-                try:
-                    self.loop_runner._stream_queue.get_nowait()
-                    logger.warning("Drained stale stream chunk for %s", request_id)
-                except Exception:
-                    break
-
-            if drained_count > 0:
-                logger.info("Drained %d stale items before processing %s", drained_count, request_id)
+            await self._drain_response_queues(request_id)
 
             # Enqueue input
             await self.loop_runner.enqueue_input(content)
@@ -419,6 +395,7 @@ class IPCServer:
 
                 # If we exited the loop without finding output, we timed out
                 logger.error("Streaming request %s timed out after %d polls", request_id, poll_count)
+                await self._drain_response_queues(request_id)
                 await write_message(
                     writer,
                     error_message("Streaming timed out", error_code="TIMEOUT", request_id=request_id),
@@ -426,6 +403,7 @@ class IPCServer:
 
             except Exception as e:
                 logger.error("Streaming error for %s: %s", request_id, e)
+                await self._drain_response_queues(request_id)
                 await write_message(
                     writer,
                     error_message(str(e), error_code="STREAM_ERROR", request_id=request_id),
@@ -450,6 +428,38 @@ class IPCServer:
             "client_count": self._client_count,
             "max_clients": self.max_clients,
         }
+
+    async def _drain_response_queues(self, request_id: str) -> None:
+        """Clear any stale response data left behind by earlier requests."""
+        drained_output = 0
+        while not self.loop_runner._output_queue.empty():
+            try:
+                stale = self.loop_runner._output_queue.get_nowait()
+                drained_output += 1
+                logger.warning(
+                    "Drained stale output (%d chars) for %s",
+                    len(stale) if stale else 0,
+                    request_id,
+                )
+            except Exception:
+                break
+
+        drained_stream = 0
+        while not self.loop_runner._stream_queue.empty():
+            try:
+                self.loop_runner._stream_queue.get_nowait()
+                drained_stream += 1
+                logger.warning("Drained stale stream chunk for %s", request_id)
+            except Exception:
+                break
+
+        if drained_output or drained_stream:
+            logger.info(
+                "Drained stale response data before/after %s (output=%d, stream=%d)",
+                request_id,
+                drained_output,
+                drained_stream,
+            )
 
     async def _event_broadcast_loop(self) -> None:
         """Background task that broadcasts events from the loop to all connected clients.

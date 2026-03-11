@@ -26,11 +26,12 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import HumanMessage
+
 from .config import ProgenitorConfig, get_config
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .state.manager import StateManager
-from .state.models import ConversationMessage, ProgenitorState
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -186,46 +187,14 @@ class ProgenitorService:
             self._message_count,
         )
 
-        # Build initial state
-        initial_state: ProgenitorState = {
-            "current_input": message,
-            "messages": [],
-            "cycle_count": 0,
-            "actions_this_cycle": 0,
-            "shutdown_requested": False,
-        }
-
-        # Invoke the graph
-        config = {"configurable": {"thread_id": request_id}}
-
         try:
             if self.graph is None:
                 raise RuntimeError("Graph not initialized")
-            result = await self.graph.ainvoke(initial_state, config)
-
-            # Extract response
-            response = result.get("pending_response", "")
-
-            # Log conversation
-            if self.state_manager:
-                await self.state_manager.log_conversation(
-                    ConversationMessage(
-                        id=f"msg_{uuid.uuid4().hex[:8]}",
-                        role="user",
-                        content=message,
-                        metadata={"request_id": request_id},
-                    )
-                )
-                if response:
-                    await self.state_manager.log_conversation(
-                        ConversationMessage(
-                            id=f"msg_{uuid.uuid4().hex[:8]}",
-                            role="assistant",
-                            content=response,
-                            metadata={"request_id": request_id},
-                        )
-                    )
-
+            thread_id = await self._get_thread_id()
+            graph_input = self._build_graph_input(message)
+            config = {"configurable": {"thread_id": thread_id}}
+            result = await self.graph.ainvoke(graph_input, config)
+            response = self._extract_response(result)
             return response or "I processed your request but have no response."
 
         except Exception as e:
@@ -262,51 +231,32 @@ class ProgenitorService:
             request_id,
         )
 
-        # Build initial state
-        initial_state: ProgenitorState = {
-            "current_input": message,
-            "messages": [],
-            "cycle_count": 0,
-            "actions_this_cycle": 0,
-            "shutdown_requested": False,
-        }
-
-        config = {"configurable": {"thread_id": request_id}}
-
         try:
             if self.graph is None:
                 raise RuntimeError("Graph not initialized")
+            thread_id = await self._get_thread_id()
+            graph_input = self._build_graph_input(message)
+            config = {"configurable": {"thread_id": thread_id}}
             # Use astream for streaming
             full_response = ""
-            async for event in self.graph.astream(initial_state, config):
+            last_result: dict[str, Any] = {}
+            async for event in self.graph.astream(graph_input, config):
                 # Extract any response updates
                 for _node_name, node_output in event.items():
-                    if isinstance(node_output, dict) and (chunk := node_output.get("pending_response")):
+                    if not isinstance(node_output, dict):
+                        continue
+                    last_result.update(node_output)
+                    if chunk := node_output.get("pending_response"):
                         # Yield new content
                         new_content = chunk[len(full_response):]
                         if new_content:
                             full_response = chunk
                             yield new_content
 
-            # Log conversation
-            if self.state_manager:
-                await self.state_manager.log_conversation(
-                    ConversationMessage(
-                        id=f"msg_{uuid.uuid4().hex[:8]}",
-                        role="user",
-                        content=message,
-                        metadata={"request_id": request_id},
-                    )
-                )
-                if full_response:
-                    await self.state_manager.log_conversation(
-                        ConversationMessage(
-                            id=f"msg_{uuid.uuid4().hex[:8]}",
-                            role="assistant",
-                            content=full_response,
-                            metadata={"request_id": request_id},
-                        )
-                    )
+            if not full_response:
+                fallback_response = self._extract_response(last_result)
+                if fallback_response:
+                    yield fallback_response
 
         except Exception as e:
             logger.error(
@@ -353,6 +303,93 @@ class ProgenitorService:
 
         self._initialized = False
         logger.info("Progenitor service shutdown complete")
+
+    def _build_graph_input(self, message: str) -> dict[str, Any]:
+        """Build the same graph input shape used by ProgenitorLoop."""
+        return {"messages": [HumanMessage(content=message)]}
+
+    async def _get_thread_id(self) -> str:
+        """Use the persisted conversation run_id so service mode preserves context."""
+        if self.state_manager:
+            current_state = await self.state_manager.get_current_state()
+            run_id = str(current_state.get("run_id") or "").strip()
+            if run_id:
+                return run_id
+        return self._session_id or "progenitor_service"
+
+    def _extract_response(self, result: Any) -> str:
+        """Extract the final assistant response from a graph result/state dict."""
+        if isinstance(result, dict):
+            pending_response = result.get("pending_response")
+            if isinstance(pending_response, str) and pending_response.strip():
+                return pending_response
+            last_ai_message = self._get_last_ai_message(result.get("messages"))
+            extracted = self._extract_message_text(last_ai_message)
+            if extracted:
+                return extracted
+        return ""
+
+    def _coerce_messages_list(self, messages: Any) -> list[Any]:
+        """Coerce LangGraph message containers into a plain list."""
+        if messages is None:
+            return []
+        if isinstance(messages, list):
+            return messages
+        value = getattr(messages, "value", None)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        if isinstance(messages, dict):
+            return [messages]
+        try:
+            return list(messages)
+        except TypeError:
+            return []
+
+    def _get_last_ai_message(self, messages: Any) -> Any | None:
+        """Return the most recent assistant message."""
+        for msg in reversed(self._coerce_messages_list(messages)):
+            msg_type = str(getattr(msg, "type", "")).lower()
+            msg_role = str(getattr(msg, "role", "")).lower()
+            if msg_type == "ai" or msg_role == "assistant":
+                return msg
+            if isinstance(msg, dict):
+                role = str(msg.get("role", "")).lower()
+                msg_type = str(msg.get("type", "")).lower()
+                if role == "assistant" or msg_type == "ai":
+                    return msg
+        return None
+
+    def _extract_message_text(self, msg: Any) -> str | None:
+        """Extract assistant-facing text from a message content payload."""
+        if msg is None:
+            return None
+
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, str):
+            text = content.strip()
+            return text or None
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text = part.strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "")).lower()
+                if part_type in {"text", "output_text", "message"}:
+                    candidate = part.get("text") or part.get("content")
+                    if isinstance(candidate, str) and candidate.strip():
+                        parts.append(candidate.strip())
+            if parts:
+                return "\n".join(parts)
+
+        return None
 
     async def _discover_agents(self) -> None:
         """Discover and register agents from the agents/ folder."""
