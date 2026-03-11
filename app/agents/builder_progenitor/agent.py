@@ -482,12 +482,15 @@ class BuilderExecutor(AgentExecutor):
     """
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        task_id = context.task_id or str(uuid.uuid4())
-        ctx_id = context.context_id or str(uuid.uuid4())
         request_text = _extract_request_text(context.message)
         request_ctx = _extract_context(context.message)
-        request_ctx.setdefault("a2a_task_id", task_id)
-        request_ctx.setdefault("a2a_context_id", ctx_id)
+
+        # Preserve caller-supplied async IDs when present so the remote builder
+        # task can be correlated with Progenitor's local dispatch record.
+        task_id = str(request_ctx.get("a2a_task_id") or context.task_id or uuid.uuid4())
+        ctx_id = str(request_ctx.get("a2a_context_id") or context.context_id or uuid.uuid4())
+        request_ctx["a2a_task_id"] = task_id
+        request_ctx["a2a_context_id"] = ctx_id
 
         if not request_text:
             await event_queue.enqueue_event(
