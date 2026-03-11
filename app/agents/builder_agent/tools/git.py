@@ -7,6 +7,7 @@ Includes automatic cleanup of orphaned worktrees on startup and failure.
 
 import asyncio
 import logging
+import os
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -33,6 +34,8 @@ class GitWorktreeManager:
 
     # File to track worktree metadata
     METADATA_FILE = ".progenitor_worktree"
+    DEFAULT_GIT_USER_NAME = "Progenitor Builder"
+    DEFAULT_GIT_USER_EMAIL = "builder@progenitor.local"
 
     def __init__(
         self,
@@ -220,6 +223,7 @@ class GitWorktreeManager:
     ) -> str | None:
         """Commit all changes in a worktree."""
         worktree_path = Path(worktree_path)
+        await self.prepare_git_for_worktree(worktree_path)
 
         # Stage all changes
         await self._run_git(["add", "-A"], cwd=worktree_path)
@@ -234,18 +238,83 @@ class GitWorktreeManager:
             return None  # Nothing to commit
 
         # Commit
-        await self._run_git(
+        before = await self._run_git(["rev-parse", "HEAD"], cwd=worktree_path)
+        commit_result = await self._run_git(
             ["commit", "-m", message],
             cwd=worktree_path
         )
+        if commit_result["returncode"] != 0:
+            detail = (commit_result["stderr"] or commit_result["stdout"]).strip()
+            raise RuntimeError(f"Failed to commit changes: {detail or 'git commit failed'}")
 
         # Get commit hash
         result = await self._run_git(
             ["rev-parse", "HEAD"],
             cwd=worktree_path
         )
+        if result["returncode"] != 0:
+            return None
 
-        return cast(str, result["stdout"].strip())
+        before_sha = before["stdout"].strip() if before["returncode"] == 0 else ""
+        after_sha = result["stdout"].strip()
+        if before_sha and before_sha == after_sha:
+            raise RuntimeError("git commit completed without advancing HEAD")
+
+        return cast(str | None, after_sha or None)
+
+    async def prepare_git_for_worktree(self, worktree_path: Path) -> None:
+        """Best-effort git setup for commit/push operations in a worktree."""
+        worktree_path = Path(worktree_path)
+        setup_steps = [
+            (
+                ["config", "--global", "--add", "safe.directory", str(self.repo_path)],
+                "mark repo root as safe.directory",
+            ),
+            (
+                ["config", "--global", "--add", "safe.directory", str(worktree_path)],
+                "mark worktree as safe.directory",
+            ),
+            (
+                ["config", "user.name", self._git_user_name()],
+                "configure git user.name",
+            ),
+            (
+                ["config", "user.email", self._git_user_email()],
+                "configure git user.email",
+            ),
+        ]
+
+        if self._should_configure_credential_helper():
+            setup_steps.append(
+                (
+                    ["config", "credential.helper", "!gh auth git-credential"],
+                    "configure gh credential helper",
+                )
+            )
+
+        for args, description in setup_steps:
+            result = await self._run_git(args, cwd=worktree_path)
+            if result["returncode"] != 0:
+                logger.warning(
+                    "GIT: Failed to %s in %s: %s",
+                    description,
+                    worktree_path,
+                    result["stderr"] or result["stdout"],
+                )
+
+    def _git_user_name(self) -> str:
+        value = os.getenv("GIT_AUTHOR_NAME")
+        return value.strip() if value and value.strip() else self.DEFAULT_GIT_USER_NAME
+
+    def _git_user_email(self) -> str:
+        value = os.getenv("GIT_AUTHOR_EMAIL")
+        return value.strip() if value and value.strip() else self.DEFAULT_GIT_USER_EMAIL
+
+    def _should_configure_credential_helper(self) -> bool:
+        return any(
+            bool((os.getenv(var) or "").strip())
+            for var in ("GH_TOKEN", "GITHUB_TOKEN")
+        )
 
     async def merge_to_main(
         self,
@@ -425,6 +494,7 @@ class GitWorktreeManager:
             process = await asyncio.create_subprocess_exec(
                 "git", *args,
                 cwd=cwd,
+                env=os.environ.copy(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -437,9 +507,14 @@ class GitWorktreeManager:
                 logger.info("GIT: Command completed with code %s", process.returncode)
                 if stderr:
                     logger.warning("GIT stderr: %s", stderr.decode()[:200])
+            except asyncio.CancelledError:
+                process.kill()
+                await process.communicate()
+                raise
             except TimeoutError:
                 logger.error("GIT: Command timed out after %ss", timeout)
                 process.kill()
+                await process.communicate()
                 return {
                     "returncode": -1,
                     "stdout": "",
