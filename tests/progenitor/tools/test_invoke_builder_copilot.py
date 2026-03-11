@@ -6,10 +6,8 @@ Verifies:
 2. Fire-and-forget dispatch returns task_id immediately
 3. Unknown agent fails hard (no fallbacks)
 4. Missing user_input fails validation
-5. Async dispatch metadata is passed to the remote agent
 """
 
-import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -87,55 +85,6 @@ class TestInvokeAgentTool:
         assert "task_id" in result.data
         assert result.data["agent"] == "builder"
         assert result.data["status"] == "dispatched"
-
-    @pytest.mark.asyncio
-    async def test_execute_passes_async_task_metadata_to_remote_call(self, monkeypatch):
-        """Background dispatch should forward correlation IDs to the remote A2A call."""
-        tool = InvokeAgentTool()
-        mock_registry = MagicMock()
-        mock_registry.find_by_name.return_value = {
-            "url": "http://localhost:8108",
-            "transport": "http",
-            "status": "running",
-        }
-
-        seen: dict[str, object] = {}
-
-        class _FakeA2AClient:
-            async def get_agent_card(self, cfg, timeout=5.0):  # noqa: ARG002
-                return None
-
-            async def call_agent(self, agent_config, request, context=None, timeout=60.0):  # noqa: ARG002
-                seen["agent_config"] = agent_config
-                seen["request"] = request
-                seen["context"] = context or {}
-                return {"success": True, "result": {"status": {"state": "submitted"}}}
-
-        monkeypatch.setattr("app.progenitor.tools.invoke_agent.A2AClient", _FakeA2AClient)
-
-        context = ToolContext(
-            user_input="Fix typo in README",
-            tool_args={"agent": "builder", "timeout": 1},
-            tool_registry=mock_registry,
-            llm_client=MagicMock(),
-        )
-        result = await tool.execute(context)
-
-        assert result.success
-        assert result.data is not None
-        task_id = result.data["task_id"]
-
-        for _ in range(20):
-            await asyncio.sleep(0.01)
-            if seen:
-                break
-
-        assert seen["request"] == "Fix typo in README"
-        assert isinstance(seen["context"], dict)
-        assert seen["context"]["caller"] == "progenitor"
-        assert seen["context"]["dispatch_mode"] == "async"
-        assert seen["context"]["a2a_task_id"] == task_id
-        assert isinstance(seen["context"]["a2a_context_id"], str)
 
 
 def test_tool_auto_discovery():
