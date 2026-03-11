@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -232,7 +232,7 @@ class BuilderClient:
             logger.debug("Posting to Azure OpenAI: %s (model=%s)", self.endpoint_url, self.model)
             response = await self.client.post(self.endpoint_url, json=payload)
             response.raise_for_status()
-            return response.json()
+            return cast(dict[str, Any], response.json())
         except Exception as e:
             logger.error(
                 "Azure OpenAI API error: %s. Endpoint: %s. API key configured: %s",
@@ -301,7 +301,7 @@ class BuilderClient:
                 messages,
                 system_prompt=system_prompt,
                 response_format=response_format,
-                include_reasoning=False,
+                include_reasoning=True,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )

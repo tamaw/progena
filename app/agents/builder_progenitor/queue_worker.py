@@ -27,7 +27,7 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .agent import BuilderService
@@ -110,12 +110,12 @@ def append_task_record(record: TaskRecord, log_path: Path = TASK_LOG_PATH) -> No
             import fcntl  # POSIX only
 
             with open(lock_path, "a", encoding="utf-8") as lock_fh:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
                 try:
                     with open(log_path, "a", encoding="utf-8") as log_fh:
                         log_fh.write(line)
                 finally:
-                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
         except ImportError:
             # Non-POSIX fallback: threading.Lock already held above
             with open(log_path, "a", encoding="utf-8") as log_fh:
@@ -175,7 +175,7 @@ def _find_record(task_id: str, log_path: Path) -> dict[str, Any] | None:
                 try:
                     entry = json.loads(raw)
                     if entry.get("task_id") == task_id:
-                        return entry
+                        return cast(dict[str, Any], entry)
                 except json.JSONDecodeError:
                     continue
     except OSError:
@@ -206,6 +206,8 @@ class BuilderTaskQueue:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._worker_task: asyncio.Task[None] | None = None
         self._log_path = log_path
+        self._queued_task_ids: set[str] = set()
+        self._cancelled_task_ids: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -232,8 +234,16 @@ class BuilderTaskQueue:
 
     async def enqueue(self, task: _QueuedTask) -> None:
         """Enqueue a task for background execution."""
+        self._queued_task_ids.add(task.task_id)
         await self._queue.put(task)
         logger.debug("BuilderTaskQueue: enqueued task_id=%s", task.task_id)
+
+    async def cancel(self, task_id: str) -> bool:
+        """Cancel a queued or active task by ID."""
+        if task_id in self._queued_task_ids:
+            self._cancelled_task_ids.add(task_id)
+            return True
+        return await self._service.cancel_task(task_id)
 
     # ------------------------------------------------------------------
     # Internal
@@ -244,6 +254,12 @@ class BuilderTaskQueue:
         while True:
             try:
                 task = await self._queue.get()
+                self._queued_task_ids.discard(task.task_id)
+                if task.task_id in self._cancelled_task_ids:
+                    self._cancelled_task_ids.discard(task.task_id)
+                    self._queue.task_done()
+                    logger.info("BuilderTaskQueue: skipped cancelled queued task_id=%s", task.task_id)
+                    continue
                 asyncio.ensure_future(self._run_task(task))
                 self._queue.task_done()
             except asyncio.CancelledError:
@@ -267,7 +283,7 @@ class BuilderTaskQueue:
             )
 
             try:
-                response = await self._service.process(task.request_text, task.request_ctx)
+                response = await self._service.run_task(task.task_id, task.request_text, task.request_ctx)
                 status = "success"
                 phase_completed = "pr"
 
@@ -285,6 +301,10 @@ class BuilderTaskQueue:
                     pr_url,
                 )
 
+            except asyncio.CancelledError:
+                status = "cancelled"
+                phase_completed = "cancelled"
+                logger.info("BuilderTaskQueue: task cancelled task_id=%s", task.task_id)
             except Exception as exc:
                 status = "failure"
                 phase_completed = "failed"
