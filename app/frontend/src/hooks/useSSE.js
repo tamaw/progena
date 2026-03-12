@@ -54,7 +54,7 @@ export function useEventsSSE(onEvent) {
       try {
         const data = JSON.parse(event.data);
         onEvent?.({ type, data });
-      } catch (e) {
+      } catch {
         // Ignore parse errors
       }
     };
@@ -88,7 +88,7 @@ export function useEventsSSE(onEvent) {
     } else if (!isHealthy && eventSourceRef.current) {
       console.log('[useEventsSSE] Disconnecting (unhealthy)');
       cleanup();
-      setIsConnected(false);
+      queueMicrotask(() => setIsConnected(false));
     }
   }, [isHealthy, connect, cleanup]);
 
@@ -147,7 +147,7 @@ export function useStatusSSE(onEvent) {
       try {
         const data = JSON.parse(event.data);
         onEvent?.({ type, data });
-      } catch (e) {
+      } catch {
         // Ignore parse errors
       }
     };
@@ -173,7 +173,7 @@ export function useStatusSSE(onEvent) {
       connect();
     } else if (!isHealthy && eventSourceRef.current) {
       cleanup();
-      setIsConnected(false);
+      queueMicrotask(() => setIsConnected(false));
     }
   }, [isHealthy, connect, cleanup]);
 
