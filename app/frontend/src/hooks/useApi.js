@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { useConfig } from '../context/ConfigContext';
+import { useConfig } from '../hooks/useConfig';
 
 export function useApi() {
   const { config, getApiUrl } = useConfig();
@@ -54,16 +54,26 @@ export function useApi() {
   }, [fetchWithRetry]);
 
   const sendMessage = useCallback(async (message, history = []) => {
-    const messages = [...history, { role: 'user', content: message }];
-    const response = await fetchWithRetry('chat', {
+    const input = [
+      ...history.map((entry) => ({
+        role: entry.role,
+        content: entry.content
+      })),
+      {
+        role: 'user',
+        content: message
+      }
+    ];
+    const response = await fetchWithRetry('responses', {
       method: 'POST',
       body: JSON.stringify({
         model: config.chat.defaultModel,
-        messages,
+        input,
         stream: false
       })
     });
-    return response.json();
+    const data = await response.json();
+    return data.output?.[0]?.content?.[0]?.text || '';
   }, [config, fetchWithRetry]);
 
   const sendMessageStream = useCallback(async (message, history = [], onChunk, onComplete, onError) => {
@@ -72,8 +82,17 @@ export function useApi() {
     }
 
     abortControllerRef.current = new AbortController();
-    const messages = [...history, { role: 'user', content: message }];
-    const url = getApiUrl('chat');
+    const input = [
+      ...history.map((entry) => ({
+        role: entry.role,
+        content: entry.content
+      })),
+      {
+        role: 'user',
+        content: message
+      }
+    ];
+    const url = getApiUrl('responses');
 
     try {
       const response = await fetch(url, {
@@ -81,7 +100,7 @@ export function useApi() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: config.chat.defaultModel,
-          messages,
+          input,
           stream: true
         }),
         signal: abortControllerRef.current.signal
@@ -95,39 +114,58 @@ export function useApi() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let eventType = 'message';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
+        const messages = buffer.split('\n\n');
+        buffer = messages.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
+        for (const messageBlock of messages) {
+          const lines = messageBlock
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean);
 
-            if (data === '[DONE]') {
-              onComplete?.();
-              return;
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+              continue;
+            }
+
+            if (!line.startsWith('data: ')) {
+              continue;
+            }
+
+            const rawData = line.slice(6).trim();
+            if (!rawData) {
+              continue;
             }
 
             try {
-              const parsed = JSON.parse(data);
-              if (parsed.error) {
-                onError?.(new Error(parsed.error));
+              const parsed = JSON.parse(rawData);
+
+              if (eventType === 'error' || parsed.error) {
+                const messageText = typeof parsed.error === 'string'
+                  ? parsed.error
+                  : parsed.error?.message || 'Unknown streaming error';
+                onError?.(new Error(messageText));
                 return;
               }
-              if (parsed.choices?.[0]?.delta?.content) {
-                onChunk?.(parsed.choices[0].delta.content);
+
+              if (parsed.object === 'response.output_text.delta' && parsed.delta?.text) {
+                onChunk?.(parsed.delta.text);
               }
-              if (parsed.choices?.[0]?.finish_reason === 'stop') {
+
+              if (parsed.object === 'response.completed' || eventType === 'response.completed') {
                 onComplete?.();
                 return;
               }
-            } catch (e) {
-              // Ignore parse errors
+            } catch {
+              // Ignore parse errors from keepalive or partial events.
             }
           }
         }
@@ -145,7 +183,6 @@ export function useApi() {
   const cancelStream = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
-      abortControllerRef.current = null;
     }
   }, []);
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useConfig } from '../context/ConfigContext';
-import { useHealth } from '../context/HealthContext';
+import { useConfig } from '../hooks/useConfig';
+import { useHealth } from '../hooks/useHealth';
 
 /**
  * Build full URL for an API path.
@@ -54,7 +54,7 @@ export function useEventsSSE(onEvent) {
       try {
         const data = JSON.parse(event.data);
         onEvent?.({ type, data });
-      } catch (e) {
+      } catch {
         // Ignore parse errors
       }
     };
@@ -88,7 +88,6 @@ export function useEventsSSE(onEvent) {
     } else if (!isHealthy && eventSourceRef.current) {
       console.log('[useEventsSSE] Disconnecting (unhealthy)');
       cleanup();
-      setIsConnected(false);
     }
   }, [isHealthy, connect, cleanup]);
 
@@ -147,7 +146,7 @@ export function useStatusSSE(onEvent) {
       try {
         const data = JSON.parse(event.data);
         onEvent?.({ type, data });
-      } catch (e) {
+      } catch {
         // Ignore parse errors
       }
     };
@@ -173,7 +172,6 @@ export function useStatusSSE(onEvent) {
       connect();
     } else if (!isHealthy && eventSourceRef.current) {
       cleanup();
-      setIsConnected(false);
     }
   }, [isHealthy, connect, cleanup]);
 

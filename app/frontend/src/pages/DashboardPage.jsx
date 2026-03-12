@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useStatusSSE } from '../hooks/useSSE';
-import { useHealth } from '../context/HealthContext';
 import Header from '../components/layout/Header';
 import {
   Chart as ChartJS,
@@ -32,7 +31,6 @@ ChartJS.register(
 );
 
 function DashboardPage() {
-  const { isHealthy } = useHealth();
   const { connectionState } = useApi();
   const [status, setStatus] = useState(null);
 
@@ -46,6 +44,29 @@ function DashboardPage() {
 
   // Use status-only SSE stream for dashboard
   useStatusSSE(handleStatusEvent);
+
+  const metrics = {
+    requests: {
+      total: status?.active_requests || 0,
+      per_minute: status?.active_requests || 0
+    },
+    tokens: {
+      input: 0,
+      output: 0,
+      cached: 0
+    },
+    cost: {
+      total: 0
+    }
+  };
+
+  const tokenHistory = [
+    {
+      time: 'Now',
+      input: metrics.tokens.input,
+      output: metrics.tokens.output
+    }
+  ];
 
   const formatUptime = (seconds) => {
     if (!seconds) return '--';

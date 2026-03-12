@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { useConfig } from './ConfigContext';
+import React, { createContext, useState, useEffect, useRef } from 'react';
+import { useConfig } from '../hooks/useConfig';
 
 /**
  * Health check context that provides a single, cached health status
@@ -112,10 +112,4 @@ export function HealthProvider({ children }) {
  * Hook to access the shared health status.
  * Returns { isHealthy, lastCheck }
  */
-export function useHealth() {
-  const context = useContext(HealthContext);
-  if (!context) {
-    throw new Error('useHealth must be used within a HealthProvider');
-  }
-  return context;
-}
+export { HealthContext };

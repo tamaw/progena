@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useEventsSSE, useStatusSSE } from '../hooks/useSSE';
-import { useConfig } from '../context/ConfigContext';
-import { useHealth } from '../context/HealthContext';
-import { useNotifications } from '../context/NotificationContext';
+import { useConfig } from '../hooks/useConfig';
+import { useHealth } from '../hooks/useHealth';
+import { useNotifications } from '../hooks/useNotifications';
 import Header from '../components/layout/Header';
 import Sidebar from '../components/layout/Sidebar';
 import ChatInput from '../components/chat/ChatInput';
@@ -13,28 +13,28 @@ import QuickActions from '../components/chat/QuickActions';
 
 function ChatPage() {
   const { config } = useConfig();
-  const { isHealthy } = useHealth();
+  useHealth();
   const { connectionState, sendMessageStream, cancelStream } = useApi();
   const { show } = useNotifications();
 
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => {
+    const saved = localStorage.getItem(config.storage.chatHistory);
+    if (!saved) {
+      return [];
+    }
+
+    try {
+      return JSON.parse(saved);
+    } catch (error) {
+      console.warn('Failed to load chat history:', error);
+      return [];
+    }
+  });
   const [isGenerating, setIsGenerating] = useState(false);
   const [typingState, setTypingState] = useState('thinking');
   const [tokenCount, setTokenCount] = useState(0);
   const [status, setStatus] = useState(null);
   const messagesEndRef = useRef(null);
-
-  // Load chat history from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem(config.storage.chatHistory);
-    if (saved) {
-      try {
-        setMessages(JSON.parse(saved));
-      } catch (e) {
-        console.warn('Failed to load chat history:', e);
-      }
-    }
-  }, [config.storage.chatHistory]);
 
   // Save chat history to localStorage
   useEffect(() => {

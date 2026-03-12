@@ -1,42 +1,23 @@
-import { useState, useEffect } from 'react';
+function formatUptime(seconds) {
+  if (!seconds) return '--';
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
 
 function Sidebar({ status }) {
-  const [agentStatus, setAgentStatus] = useState({
-    running: 'Unknown',
-    cycles: '--',
-    pid: '--',
-    memory: '--',
-    uptime: '--',
-    version: '--'
-  });
-  const [loops, setLoops] = useState([]);
-  const [agents, setAgents] = useState([]);
-  const [backlog, setBacklog] = useState([]);
-  const [schedule, setSchedule] = useState([]);
-
-  useEffect(() => {
-    if (status) {
-      setAgentStatus({
-        running: status.progenitor_running ? 'Running' : 'Stopped',
-        cycles: status.cycle_count ?? '--',
-        pid: status.pid ?? '--',
-        memory: status.memory_mb ? `${status.memory_mb.toFixed(1)} MB` : '--',
-        uptime: formatUptime(status.uptime_seconds),
-        version: status.version ?? '--'
-      });
-      setLoops(status.loops || []);
-      setAgents(status.agents || []);
-      setBacklog(status.backlog || []);
-      setSchedule(status.schedule || []);
-    }
-  }, [status]);
-
-  const formatUptime = (seconds) => {
-    if (!seconds) return '--';
-    if (seconds < 60) return `${Math.floor(seconds)}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
-    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  const agentStatus = {
+    running: status?.progenitor_running ? 'Running' : 'Stopped',
+    cycles: status?.cycle_count ?? '--',
+    pid: status?.pid ?? '--',
+    memory: status?.memory_mb ? `${status.memory_mb.toFixed(1)} MB` : '--',
+    uptime: formatUptime(status?.uptime_seconds),
+    version: status?.version ?? '--'
   };
+  const loops = status?.loops || [];
+  const agents = status?.agents || [];
+  const backlog = status?.backlog || [];
+  const schedule = status?.schedule || [];
 
   return (
     <aside className="sidebar" id="sidebar">
@@ -122,8 +103,8 @@ function Sidebar({ status }) {
           {backlog.length > 0 ? (
             backlog.map((item, i) => (
               <div key={i} className="backlog-item">
-                <span className="backlog-priority">{item.priority}</span>
-                <span className="backlog-title">{item.title}</span>
+                <span className="backlog-priority">{item.status || item.type || '--'}</span>
+                <span className="backlog-title">{item.description || item.title || 'Untitled item'}</span>
               </div>
             ))
           ) : (
@@ -138,7 +119,7 @@ function Sidebar({ status }) {
           {schedule.length > 0 ? (
             schedule.map((task, i) => (
               <div key={i} className="schedule-item">
-                <span className="schedule-time">{task.time}</span>
+                <span className="schedule-time">{task.next_run || task.schedule || '--'}</span>
                 <span className="schedule-name">{task.name}</span>
               </div>
             ))

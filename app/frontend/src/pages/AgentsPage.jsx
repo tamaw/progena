@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
+import { useApi } from '../hooks/useApi';
 import { useStatusSSE } from '../hooks/useSSE';
-import { useHealth } from '../context/HealthContext';
 import Header from '../components/layout/Header';
 
 function AgentsPage() {
-  const { isHealthy } = useHealth();
+  const { connectionState } = useApi();
   const [agents, setAgents] = useState([]);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');

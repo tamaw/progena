@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useConfig } from '../context/ConfigContext';
+import { useConfig } from './useConfig';
 
 export function useTheme() {
   const { config, setTheme } = useConfig();

@@ -7,6 +7,8 @@ import ChatPage from './pages/ChatPage';
 import DashboardPage from './pages/DashboardPage';
 import AgentsPage from './pages/AgentsPage';
 import LogsPage from './pages/LogsPage';
+import WorkspacePage from './pages/WorkspacePage';
+import { WorkspaceProvider } from './context/WorkspaceContext';
 
 // Import styles
 import './styles/main.css';
@@ -16,6 +18,8 @@ import './styles/agents.css';
 import './styles/logs-page.css';
 import './styles/notifications.css';
 import './styles/status.css';
+import './styles/workspace.css';
+import './styles/nodes.css';
 
 function App() {
   return (
@@ -27,6 +31,14 @@ function App() {
               <Route path="/" element={<ChatPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/agents" element={<AgentsPage />} />
+              <Route
+                path="/workspace"
+                element={(
+                  <WorkspaceProvider>
+                    <WorkspacePage />
+                  </WorkspaceProvider>
+                )}
+              />
               <Route path="/logs" element={<LogsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

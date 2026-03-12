@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useState } from 'react';
 
 const ConfigContext = createContext(null);
 
@@ -7,9 +7,11 @@ const defaultConfig = {
     baseUrl: 'http://localhost:8000',
     endpoints: {
       responses: '/v1/responses',
+      chat: '/chat',
       health: '/health',
-      healthDetailed: '/health/detailed',
+      healthDetailed: '/health/features',
       events: '/api/ui/events',
+      status: '/api/ui/status',
       models: '/v1/models'
     },
     timeout: 120000,
@@ -76,7 +78,11 @@ export function ConfigProvider({ children }) {
 
   const getApiUrl = (endpoint) => {
     const path = config.api.endpoints[endpoint] || endpoint;
-    return `${config.api.baseUrl}${path}`;
+    const base = config.api.baseUrl.endsWith('/')
+      ? config.api.baseUrl.slice(0, -1)
+      : config.api.baseUrl;
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    return `${base}${normalizedPath}`;
   };
 
   const setTheme = (theme) => {
@@ -125,10 +131,4 @@ export function ConfigProvider({ children }) {
   );
 }
 
-export function useConfig() {
-  const context = useContext(ConfigContext);
-  if (!context) {
-    throw new Error('useConfig must be used within a ConfigProvider');
-  }
-  return context;
-}
+export { ConfigContext };
