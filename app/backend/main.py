@@ -791,6 +791,12 @@ async def health_check():
     }
 
 
+@app.get("/health/detailed")
+async def health_check_detailed_endpoint():
+    """HTTP wrapper for the detailed health payload used by the frontend."""
+    return await health_check_detailed()
+
+
 async def health_check_detailed():
     """
     Internal detailed health check for use by other modules.

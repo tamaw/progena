@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useEventsSSE, useStatusSSE } from '../hooks/useSSE';
 import { useConfig } from '../context/ConfigContext';
-import { useHealth } from '../context/HealthContext';
 import { useNotifications } from '../context/NotificationContext';
 import Header from '../components/layout/Header';
 import Sidebar from '../components/layout/Sidebar';
@@ -13,28 +12,61 @@ import QuickActions from '../components/chat/QuickActions';
 
 function ChatPage() {
   const { config } = useConfig();
-  const { isHealthy } = useHealth();
-  const { connectionState, sendMessageStream, cancelStream } = useApi();
+  const {
+    connectionState,
+    sendMessageStream,
+    cancelStream,
+    getSession,
+    createSession,
+  } = useApi();
   const { show } = useNotifications();
 
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => {
+    const saved = localStorage.getItem(config.storage.chatHistory);
+    if (!saved) {
+      return [];
+    }
+
+    try {
+      return JSON.parse(saved);
+    } catch (error) {
+      console.warn('Failed to load chat history:', error);
+      return [];
+    }
+  });
   const [isGenerating, setIsGenerating] = useState(false);
   const [typingState, setTypingState] = useState('thinking');
   const [tokenCount, setTokenCount] = useState(0);
   const [status, setStatus] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
   const messagesEndRef = useRef(null);
 
-  // Load chat history from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem(config.storage.chatHistory);
-    if (saved) {
+    let cancelled = false;
+
+    const ensureSession = async () => {
       try {
-        setMessages(JSON.parse(saved));
-      } catch (e) {
-        console.warn('Failed to load chat history:', e);
+        const session = await getSession();
+        if (!cancelled) {
+          setSessionId(session.session_id);
+        }
+      } catch {
+        try {
+          const session = await createSession();
+          if (!cancelled) {
+            setSessionId(session.session_id);
+          }
+        } catch (error) {
+          console.warn('[ChatPage] Failed to initialize session:', error);
+        }
       }
-    }
-  }, [config.storage.chatHistory]);
+    };
+
+    ensureSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [createSession, getSession]);
 
   // Save chat history to localStorage
   useEffect(() => {
@@ -211,6 +243,7 @@ function ChatPage() {
               <div className="welcome-message">
                 <h2>Welcome to Progenitor Chat</h2>
                 <p>Start a conversation with the Progenitor AI agent.</p>
+                {sessionId && <p>Session: {sessionId}</p>}
                 <QuickActions onAction={handleQuickAction} />
               </div>
             ) : (
