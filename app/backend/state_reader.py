@@ -58,7 +58,7 @@ class AgentInfo:
     last_error: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AgentInfo":
+    def from_dict(cls, data: dict[str, Any]) -> AgentInfo:
         return cls(
             name=data.get("name", "unknown"),
             kind=data.get("kind", "unknown"),
@@ -93,7 +93,7 @@ class ToolInfo:
     enabled: bool
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ToolInfo":
+    def from_dict(cls, data: dict[str, Any]) -> ToolInfo:
         return cls(
             name=data.get("name", "unknown"),
             description=data.get("description", ""),
@@ -112,7 +112,7 @@ class HealthInfo:
     pid: int | None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "HealthInfo":
+    def from_dict(cls, data: dict[str, Any]) -> HealthInfo:
         return cls(
             status=data.get("status", "unknown"),
             last_active=data.get("last_active"),
@@ -145,7 +145,7 @@ class BacklogItem:
     created_at: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "BacklogItem":
+    def from_dict(cls, data: dict[str, Any]) -> BacklogItem:
         return cls(
             id=data.get("id", ""),
             item_type=data.get("item_type", "task"),
@@ -168,7 +168,7 @@ class ScheduleItem:
     raw: dict[str, Any]
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ScheduleItem":
+    def from_dict(cls, data: dict[str, Any]) -> ScheduleItem:
         return cls(
             id=data.get("id", ""),
             name=data.get("name") or data.get("message", ""),
@@ -202,7 +202,7 @@ class BuildInfo:
     message_count: int = 0
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "BuildInfo":
+    def from_dict(cls, data: dict[str, Any]) -> BuildInfo:
         verification = data.get("verification", {})
         phases = data.get("phases", {})
         verify_phase = phases.get("verify", {}) if isinstance(phases, dict) else {}
@@ -759,9 +759,7 @@ class StateReader:
             return True
         if len(new.backlog) != len(old.backlog):
             return True
-        if (new.sessions.total if new.sessions else 0) != (old.sessions.total if old.sessions else 0):
-            return True
-        return False
+        return (new.sessions.total if new.sessions else 0) != (old.sessions.total if old.sessions else 0)
 
 
 _state_reader: StateReader | None = None
