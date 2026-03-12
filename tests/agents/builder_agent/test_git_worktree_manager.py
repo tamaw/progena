@@ -80,9 +80,11 @@ async def test_run_git_kills_process_on_cancellation(tmp_path: Path) -> None:
     process.communicate = AsyncMock(side_effect=asyncio.CancelledError())
     process.kill = MagicMock()
 
-    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
-        with pytest.raises(asyncio.CancelledError):
-            await manager._run_git(["status"], cwd=tmp_path)
+    with (
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await manager._run_git(["status"], cwd=tmp_path)
 
     process.kill.assert_called_once()
     assert process.communicate.await_count == 2
