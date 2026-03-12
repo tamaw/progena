@@ -1,22 +1,18 @@
 """
 State Reader Module.
 
-Reads state files from data/state/ and data/config/ and provides them to the UI.
-Watches for changes and notifies subscribers.
-
-State files:
-- health.json: Agent health status (status, last_active, run_id, cycle_count, pid)
-- agents.json: Registered agents
-- mcp.json: Registered MCP tools
-- build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
-- current_state.json: Progenitor agent state (chat history, tool calls) - user session
-- schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
+Reads state/config/session files from the Progenitor data directory and log
+files from the logs directory. The backend uses this as an in-memory adapter
+layer; it does not own any durable UI state.
 """
+
+from __future__ import annotations
 
 import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,9 +23,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _iso_now() -> str:
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _normalize_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 @dataclass
 class AgentInfo:
     """Information about a registered agent."""
+
     name: str
     kind: str
     version: str
@@ -43,7 +48,6 @@ class AgentInfo:
     enabled: bool
     created_at: str
     updated_at: str
-    # Runtime status fields
     status: str = "stopped"
     status_message: str | None = None
     port: int | None = None
@@ -54,7 +58,7 @@ class AgentInfo:
     last_error: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict) -> "AgentInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "AgentInfo":
         return cls(
             name=data.get("name", "unknown"),
             kind=data.get("kind", "unknown"),
@@ -63,13 +67,12 @@ class AgentInfo:
             capabilities=data.get("capabilities", []),
             entrypoint=data.get("entrypoint", ""),
             url=data.get("url"),
-            endpoint=data.get("url"),
+            endpoint=data.get("endpoint") or data.get("url"),
             headers=data.get("headers"),
             transport=data.get("transport", "http"),
             enabled=data.get("enabled", True),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
-            # Runtime status
             status=data.get("status", "stopped"),
             status_message=data.get("status_message"),
             port=data.get("port"),
@@ -83,13 +86,14 @@ class AgentInfo:
 
 @dataclass
 class ToolInfo:
-    """Information about a registered tool."""
+    """Information about a registered MCP tool."""
+
     name: str
     description: str
     enabled: bool
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ToolInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "ToolInfo":
         return cls(
             name=data.get("name", "unknown"),
             description=data.get("description", ""),
@@ -100,6 +104,7 @@ class ToolInfo:
 @dataclass
 class HealthInfo:
     """Health information from health.json."""
+
     status: str
     last_active: str | None
     run_id: str | None
@@ -107,7 +112,7 @@ class HealthInfo:
     pid: int | None
 
     @classmethod
-    def from_dict(cls, data: dict) -> "HealthInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "HealthInfo":
         return cls(
             status=data.get("status", "unknown"),
             last_active=data.get("last_active"),
@@ -118,17 +123,12 @@ class HealthInfo:
 
     def is_running(self) -> bool:
         """Check if progenitor appears to be running."""
-        if self.status != "running":
+        if self.status != "running" or not self.last_active:
             return False
-        if not self.last_active:
-            return False
-
-        # Check if last_active is within last 60 seconds
         try:
             last = datetime.fromisoformat(self.last_active.replace("Z", "+00:00"))
             now = datetime.now(last.tzinfo)
-            age_seconds = (now - last).total_seconds()
-            return age_seconds < 60
+            return (now - last).total_seconds() < 60
         except Exception:
             return False
 
@@ -136,6 +136,7 @@ class HealthInfo:
 @dataclass
 class BacklogItem:
     """A backlog work item."""
+
     id: str
     item_type: str
     status: str
@@ -144,7 +145,7 @@ class BacklogItem:
     created_at: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict) -> "BacklogItem":
+    def from_dict(cls, data: dict[str, Any]) -> "BacklogItem":
         return cls(
             id=data.get("id", ""),
             item_type=data.get("item_type", "task"),
@@ -158,28 +159,32 @@ class BacklogItem:
 @dataclass
 class ScheduleItem:
     """A scheduled task."""
+
     id: str
     name: str
     schedule: str
     next_run: str | None
     enabled: bool
+    raw: dict[str, Any]
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ScheduleItem":
+    def from_dict(cls, data: dict[str, Any]) -> "ScheduleItem":
         return cls(
             id=data.get("id", ""),
-            name=data.get("name", ""),
-            schedule=data.get("schedule", ""),
-            next_run=data.get("next_run"),
+            name=data.get("name") or data.get("message", ""),
+            schedule=data.get("schedule") or data.get("cron_expression", ""),
+            next_run=data.get("next_run") or data.get("last_run"),
             enabled=data.get("enabled", True),
+            raw=data,
         )
 
 
 @dataclass
 class LoopInfo:
     """Information about a processing loop (Planner/Executor)."""
+
     name: str
-    status: str  # active, idle, error
+    status: str
     last_activity: str | None = None
     current_task: str | None = None
 
@@ -187,8 +192,9 @@ class LoopInfo:
 @dataclass
 class BuildInfo:
     """Information about current build status."""
+
     in_progress: bool
-    phase: str | None = None  # observe, think, plan, build, execute, verify, learn
+    phase: str | None = None
     task_description: str | None = None
     started_at: str | None = None
     iteration: int = 0
@@ -196,21 +202,34 @@ class BuildInfo:
     message_count: int = 0
 
     @classmethod
-    def from_dict(cls, data: dict) -> "BuildInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "BuildInfo":
+        verification = data.get("verification", {})
+        phases = data.get("phases", {})
+        verify_phase = phases.get("verify", {}) if isinstance(phases, dict) else {}
         return cls(
             in_progress=data.get("build_in_progress", False),
             phase=data.get("build_phase"),
-            task_description=data.get("build_task_description"),
+            task_description=data.get("build_task_description") or data.get("task", {}).get("description"),
             started_at=data.get("build_started_at"),
             iteration=data.get("iteration", {}).get("current", 0),
-            score=data.get("verification", {}).get("current_score", 0.0),
-            message_count=len(data.get("build_messages", [])),
+            score=verification.get("current_score", verify_phase.get("score", 0.0)),
+            message_count=len(data.get("build_messages", [])) + len(data.get("history", {}).get("messages", [])),
         )
+
+
+@dataclass
+class SessionSummary:
+    """Chat session summary."""
+
+    total: int
+    latest_session_id: str | None
+    latest_activity: str | None
 
 
 @dataclass
 class StateSnapshot:
     """Complete state snapshot."""
+
     timestamp: float
     health: HealthInfo
     agents: list[AgentInfo]
@@ -222,59 +241,50 @@ class StateSnapshot:
     run_id: str | None
     messages_count: int
     build: BuildInfo | None = None
+    sessions: SessionSummary | None = None
 
 
 class StateReader:
-    """
-    Reads state from data/state/ and data/config/ directories.
+    """Reads state, session, config, and log data from the repo runtime dirs."""
 
-    Provides methods to get current state and watch for changes.
-    """
+    LOG_SUFFIXES = {".jsonl", ".log", ".txt", ".stderr", ".stdout"}
 
-    def __init__(self, state_dir: Path | None = None, config_dir: Path | None = None):
+    def __init__(
+        self,
+        state_dir: Path | None = None,
+        config_dir: Path | None = None,
+        sessions_dir: Path | None = None,
+        logs_dir: Path | None = None,
+    ):
         self.state_dir = state_dir or Path("data/state")
         self.config_dir = config_dir or self.state_dir.parent / "config"
-        self._cache: dict[str, tuple[float, Any]] = {}  # path -> (mtime, data)
-        self._cache_ttl = 2.0  # Cache for 2 seconds
+        self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
+        self.logs_dir = logs_dir or Path("logs")
+        self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
         self._watch_task: asyncio.Task | None = None
 
     def _read_json(self, filename: str) -> Any:
-        """Read and parse a JSON file with caching.
-
-        IMPORTANT: Opens file in read-only mode and closes handle immediately
-        after reading to avoid blocking atomic renames by the progenitor agent.
-        """
-        filepath = self.state_dir / filename
-        return self._read_json_from_path(filepath)
+        return self._read_json_from_path(self.state_dir / filename)
 
     def _read_json_from_path(self, filepath: Path) -> Any:
-        """Read and parse a JSON file at an explicit path with caching."""
         filepath = Path(filepath)
-
         try:
             if not filepath.exists():
                 return None
 
             mtime = filepath.stat().st_mtime
             cache_key = str(filepath)
-
-            # Check cache - avoid unnecessary file reads
             if cache_key in self._cache:
                 cached_mtime, cached_data = self._cache[cache_key]
                 if cached_mtime == mtime:
                     return cached_data
 
-            # Read file content into memory and close handle immediately
-            # This prevents holding file locks that block atomic renames on Windows
             content = filepath.read_text(encoding="utf-8")
             data = json.loads(content)
-
-            # Update cache
             self._cache[cache_key] = (mtime, data)
             return data
-
         except json.JSONDecodeError as e:
             logger.warning("Invalid JSON in %s: %s", filepath, e)
             return None
@@ -282,19 +292,27 @@ class StateReader:
             logger.debug("Failed to read %s: %s", filepath, e)
             return None
 
+    def _read_text_lines(self, filepath: Path, limit: int = 200) -> list[str]:
+        try:
+            if not filepath.exists():
+                return []
+            content = filepath.read_text(encoding="utf-8", errors="ignore")
+            return content.splitlines()[-limit:]
+        except Exception as e:
+            logger.debug("Failed to read lines from %s: %s", filepath, e)
+            return []
+
     def get_health(self) -> HealthInfo:
-        """Get health information."""
         data = self._read_json("health.json")
         if data:
             return HealthInfo.from_dict(data)
         return HealthInfo(status="unknown", last_active=None, run_id=None, cycle_count=0, pid=None)
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
-        """Get registered agents and tools."""
         agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
         mcp_data = self._read_json_from_path(self.config_dir / "mcp.json") or {}
 
-        agent_entries: list[dict] = []
+        agent_entries: list[dict[str, Any]] = []
         if isinstance(agents_data, dict):
             raw_agents = agents_data.get("agents")
             if isinstance(raw_agents, list):
@@ -317,42 +335,57 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
-        tools = [ToolInfo.from_dict(t) for t in mcp_data.get("tools", [])]
+        tools = []
+        if isinstance(mcp_data, dict):
+            tools = [ToolInfo.from_dict(t) for t in mcp_data.get("tools", []) if isinstance(t, dict)]
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:
-        """Get backlog items from build_state.json."""
         data = self._read_json("build_state.json")
-        if not data:
-            return []
-        backlog = data.get("backlog", [])
+        backlog = data.get("backlog", []) if isinstance(data, dict) else []
         if not isinstance(backlog, list):
             return []
-        return [BacklogItem.from_dict(item) for item in backlog]
+        return [BacklogItem.from_dict(item) for item in backlog if isinstance(item, dict)]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        """Get scheduled items from schedule.json.
-
-        Schedule is a system feature that persists beyond user sessions.
-        It is stored in schedule.json, not in current_state.json.
-        """
         data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
-        return [ScheduleItem.from_dict(item) for item in data]
+        return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]
 
-    def get_build_state(self) -> dict:
-        """Get build state (agent builds only: inner loop, LLM messages, verification)."""
+    def get_build_state(self) -> dict[str, Any]:
         data = self._read_json("build_state.json")
         return data or {}
 
-    def get_progenitor_state(self) -> dict:
-        """Get progenitor agent state (chat history, schedule, tool calls, attachments)."""
+    def get_progenitor_state(self) -> dict[str, Any]:
         data = self._read_json("current_state.json")
         return data or {}
 
+    def get_sessions_summary(self) -> SessionSummary:
+        data = self._read_json_from_path(self.sessions_dir / "sessions.json") or []
+        sessions: list[dict[str, Any]] = []
+        if isinstance(data, list):
+            sessions = [entry for entry in data if isinstance(entry, dict)]
+        elif isinstance(data, dict):
+            raw_sessions = data.get("sessions")
+            if isinstance(raw_sessions, list):
+                sessions = [entry for entry in raw_sessions if isinstance(entry, dict)]
+
+        latest = None
+        latest_session_id = None
+        for session in sessions:
+            session_last = session.get("last_activity") or session.get("updated_at") or session.get("created_at")
+            if session_last and (latest is None or str(session_last) > str(latest)):
+                latest = str(session_last)
+                latest_session_id = session.get("session_id") or session.get("id")
+
+        return SessionSummary(
+            total=len(sessions),
+            latest_session_id=latest_session_id,
+            latest_activity=latest,
+        )
+
     def get_loops(self, health: HealthInfo) -> list[LoopInfo]:
-        """Get loop status based on health and current state."""
         if not health.is_running():
             return []
 
@@ -362,10 +395,8 @@ class StateReader:
         build_actions = build.get("actions_this_cycle", 0) if isinstance(build, dict) else 0
         actions = max(actions, build_actions)
 
-        # Determine loop states based on activity
         planner_status = "active" if actions == 0 else "idle"
         executor_status = "active" if actions > 0 else "idle"
-
         return [
             LoopInfo(
                 name="Planner",
@@ -382,20 +413,13 @@ class StateReader:
         ]
 
     def get_snapshot(self) -> StateSnapshot:
-        """Get a complete state snapshot."""
         health = self.get_health()
         agents, tools = self.get_registry()
         backlog = self.get_backlog()
         schedule = self.get_schedule()
         loops = self.get_loops(health)
-
-        # Get both state files
         progenitor = self.get_progenitor_state()
         build = self.get_build_state()
-
-        # Extract build info from build state
-        build_info = BuildInfo.from_dict(build)
-
         return StateSnapshot(
             timestamp=time.time(),
             health=health,
@@ -407,11 +431,218 @@ class StateReader:
             cycle_count=progenitor.get("cycle_count", 0),
             run_id=progenitor.get("run_id"),
             messages_count=len(progenitor.get("messages", [])),
-            build=build_info,
+            build=BuildInfo.from_dict(build),
+            sessions=self.get_sessions_summary(),
         )
 
-    def snapshot_to_dict(self, snapshot: StateSnapshot) -> dict:
-        """Convert snapshot to JSON-serializable dict."""
+    def _iter_log_files(self) -> list[Path]:
+        if not self.logs_dir.exists():
+            return []
+        files = [path for path in self.logs_dir.rglob("*") if path.is_file()]
+        files.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+        return files
+
+    def _line_to_entry(self, line: str, source: str, path: Path) -> dict[str, Any] | None:
+        if not line.strip():
+            return None
+
+        try:
+            payload = json.loads(line)
+            timestamp = (
+                payload.get("timestamp")
+                or payload.get("time")
+                or payload.get("created_at")
+                or _iso_now()
+            )
+            message = payload.get("message") or payload.get("msg") or payload.get("content") or json.dumps(payload)
+            return {
+                "timestamp": str(timestamp),
+                "time": str(timestamp),
+                "level": str(payload.get("level", "info")).lower(),
+                "source": payload.get("source") or source,
+                "message": str(message),
+                "path": str(path),
+                "data": payload,
+            }
+        except json.JSONDecodeError:
+            pass
+
+        level = "info"
+        lowered = line.lower()
+        if "error" in lowered:
+            level = "error"
+        elif "warn" in lowered:
+            level = "warn"
+        elif "debug" in lowered:
+            level = "debug"
+
+        return {
+            "timestamp": _iso_now(),
+            "time": _iso_now(),
+            "level": level,
+            "source": source,
+            "message": line.strip(),
+            "path": str(path),
+            "data": None,
+        }
+
+    def _path_source(self, path: Path) -> str:
+        relative_parts = path.relative_to(self.logs_dir).parts if path.is_relative_to(self.logs_dir) else path.parts
+        for part in reversed(relative_parts[:-1]):
+            if part not in {"logs", "builder", "progenitor"}:
+                return part
+        return path.stem
+
+    def get_logs(
+        self,
+        level: str | None = None,
+        search: str | None = None,
+        limit: int = 500,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        search_lc = search.lower() if search else None
+        source_lc = source.lower() if source else None
+
+        for path in self._iter_log_files():
+            lines = self._read_text_lines(path, limit=min(limit, 200))
+            path_source = self._path_source(path)
+            for line in reversed(lines):
+                entry = self._line_to_entry(line, path_source, path)
+                if not entry:
+                    continue
+                if level and entry["level"] != level.lower():
+                    continue
+                if source_lc and source_lc not in str(entry["source"]).lower():
+                    continue
+                if search_lc and search_lc not in entry["message"].lower():
+                    continue
+                entries.append(entry)
+                if len(entries) >= limit:
+                    break
+            if len(entries) >= limit:
+                break
+
+        entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+        return entries[:limit]
+
+    def get_logs_for_widget(self, widget_name: str, limit: int = 40) -> list[dict[str, Any]]:
+        normalized = _normalize_name(widget_name)
+        if not normalized:
+            return []
+
+        matches: list[dict[str, Any]] = []
+        for path in self._iter_log_files():
+            relative = str(path.relative_to(self.logs_dir)) if path.is_relative_to(self.logs_dir) else str(path)
+            if normalized not in _normalize_name(relative):
+                continue
+            lines = self._read_text_lines(path, limit=min(limit, 80))
+            source = self._path_source(path)
+            for line in lines:
+                entry = self._line_to_entry(line, source, path)
+                if entry:
+                    matches.append(entry)
+        matches.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+        return matches[:limit]
+
+    def get_widgets(self) -> list[dict[str, Any]]:
+        health = self.get_health()
+        agents, tools = self.get_registry()
+        schedule = self.get_schedule()
+
+        widgets: list[dict[str, Any]] = []
+        for agent in agents:
+            if not agent.enabled:
+                continue
+            logs = self.get_logs_for_widget(agent.name)
+            widgets.append(
+                {
+                    "id": f"agent:{agent.name}",
+                    "type": "agent",
+                    "name": agent.name,
+                    "title": agent.name,
+                    "description": agent.description,
+                    "kind": agent.kind,
+                    "status": "ready" if health.is_running() else "offline",
+                    "summary": agent.description or f"{agent.name} is {'ready' if health.is_running() else 'offline'}",
+                    "transport": agent.transport,
+                    "current_run_id": health.run_id,
+                    "logs": logs,
+                    "updated_at": health.last_active,
+                }
+            )
+
+        for tool in tools:
+            if not tool.enabled:
+                continue
+            logs = self.get_logs_for_widget(tool.name)
+            widgets.append(
+                {
+                    "id": f"mcp:{tool.name}",
+                    "type": "mcp",
+                    "name": tool.name,
+                    "title": tool.name,
+                    "description": tool.description,
+                    "kind": "mcp",
+                    "status": "ready" if health.is_running() else "offline",
+                    "summary": tool.description or f"MCP {tool.name}",
+                    "transport": "mcp",
+                    "current_run_id": health.run_id,
+                    "logs": logs,
+                    "updated_at": health.last_active,
+                }
+            )
+
+        for item in schedule:
+            widgets.append(
+                {
+                    "id": f"schedule:{item.id}",
+                    "type": "schedule",
+                    "name": item.name,
+                    "title": item.name or item.id,
+                    "description": item.raw.get("user_request") or item.name,
+                    "status": "enabled" if item.enabled else "disabled",
+                    "summary": item.raw.get("message") or item.name,
+                    "schedule_id": item.id,
+                    "schedule_type": "cron",
+                    "expression": item.schedule,
+                    "enabled": item.enabled,
+                    "next_run_at": item.next_run,
+                    "last_run_at": item.raw.get("last_run"),
+                    "last_run_status": "idle",
+                    "timezone": "UTC",
+                    "logs": self.get_logs_for_widget(item.id, limit=20),
+                    "updated_at": item.raw.get("created_at"),
+                }
+            )
+
+        return widgets
+
+    def get_workspace_payload(self) -> dict[str, Any]:
+        snapshot = self.get_snapshot()
+        return {
+            "timestamp": snapshot.timestamp,
+            "sessions": {
+                "total": snapshot.sessions.total if snapshot.sessions else 0,
+                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
+            },
+            "health": {
+                "status": snapshot.health.status,
+                "last_active": snapshot.health.last_active,
+                "run_id": snapshot.health.run_id,
+                "cycle_count": snapshot.health.cycle_count,
+                "pid": snapshot.health.pid,
+                "is_running": snapshot.health.is_running(),
+            },
+            "widgets": self.get_widgets(),
+            "workspace": {
+                "storage": "indexeddb",
+                "layout_owner": "browser",
+            },
+        }
+
+    def snapshot_to_dict(self, snapshot: StateSnapshot) -> dict[str, Any]:
         return {
             "timestamp": snapshot.timestamp,
             "health": {
@@ -443,6 +674,7 @@ class StateReader:
                     "type": b.item_type,
                     "status": b.status,
                     "description": b.description,
+                    "priority": b.priority,
                 }
                 for b in snapshot.backlog
             ],
@@ -457,59 +689,51 @@ class StateReader:
                 for s in snapshot.schedule
             ],
             "loops": [
-                {
-                    "name": loop_item.name,
-                    "status": loop_item.status,
-                    "current_task": loop_item.current_task,
-                }
+                {"name": loop_item.name, "status": loop_item.status, "current_task": loop_item.current_task}
                 for loop_item in snapshot.loops
             ],
             "cycle_count": snapshot.cycle_count,
             "run_id": snapshot.run_id,
             "messages_count": snapshot.messages_count,
+            "sessions": {
+                "total": snapshot.sessions.total if snapshot.sessions else 0,
+                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
+            },
+            "widgets": self.get_widgets(),
         }
 
-    def add_watcher(self, callback: Callable[[StateSnapshot], None]):
-        """Add a state change watcher."""
+    def add_watcher(self, callback: Callable[[StateSnapshot], None]) -> None:
         self._watchers.append(callback)
 
-    def remove_watcher(self, callback: Callable[[StateSnapshot], None]):
-        """Remove a state change watcher."""
+    def remove_watcher(self, callback: Callable[[StateSnapshot], None]) -> None:
         if callback in self._watchers:
             self._watchers.remove(callback)
 
-    async def start_watching(self, interval: float = 5.0):
-        """Start watching for state changes."""
+    async def start_watching(self, interval: float = 5.0) -> None:
         if self._watch_task and not self._watch_task.done():
             return
-
         self._watch_task = asyncio.create_task(self._watch_loop(interval))
 
-    async def stop_watching(self):
-        """Stop watching for state changes."""
+    async def stop_watching(self) -> None:
         if self._watch_task:
             self._watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._watch_task
             self._watch_task = None
 
-    async def _watch_loop(self, interval: float):
-        """Background loop to watch for state changes."""
+    async def _watch_loop(self, interval: float) -> None:
         while True:
             try:
                 await asyncio.sleep(interval)
-
                 snapshot = self.get_snapshot()
-
-                # Check if state changed
                 if self._state_changed(snapshot):
                     self._last_snapshot = snapshot
-                    for watcher in self._watchers:
+                    for watcher in list(self._watchers):
                         try:
                             watcher(snapshot)
                         except Exception as e:
                             logger.warning("Watcher error: %s", e)
-
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -517,13 +741,10 @@ class StateReader:
                 await asyncio.sleep(interval)
 
     def _state_changed(self, new: StateSnapshot) -> bool:
-        """Check if state meaningfully changed."""
         if not self._last_snapshot:
             return True
 
         old = self._last_snapshot
-
-        # Check key changes
         if new.health.status != old.health.status:
             return True
         if new.health.is_running() != old.health.is_running():
@@ -532,10 +753,17 @@ class StateReader:
             return True
         if len(new.agents) != len(old.agents):
             return True
-        return len(new.backlog) != len(old.backlog)
+        if len(new.tools) != len(old.tools):
+            return True
+        if len(new.schedule) != len(old.schedule):
+            return True
+        if len(new.backlog) != len(old.backlog):
+            return True
+        if (new.sessions.total if new.sessions else 0) != (old.sessions.total if old.sessions else 0):
+            return True
+        return False
 
 
-# Global state reader instance
 _state_reader: StateReader | None = None
 
 

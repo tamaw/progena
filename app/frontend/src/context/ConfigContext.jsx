@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useState } from 'react';
 
 const ConfigContext = createContext(null);
 
@@ -9,8 +10,17 @@ const defaultConfig = {
       responses: '/v1/responses',
       health: '/health',
       healthDetailed: '/health/detailed',
+      chat: '/v1/responses',
       events: '/api/ui/events',
-      models: '/v1/models'
+      status: '/api/ui/status',
+      models: '/v1/models',
+      workspace: '/api/ui/workspace',
+      widgets: '/api/ui/widgets',
+      schedules: '/api/ui/schedules',
+      logs: '/api/ui/logs',
+      actionRun: '/api/ui/actions/run',
+      actionGenerate: '/api/ui/actions/generate',
+      session: '/v1/session',
     },
     timeout: 120000,
     retryAttempts: 3,
@@ -76,7 +86,9 @@ export function ConfigProvider({ children }) {
 
   const getApiUrl = (endpoint) => {
     const path = config.api.endpoints[endpoint] || endpoint;
-    return `${config.api.baseUrl}${path}`;
+    const base = config.api.baseUrl.endsWith('/') ? config.api.baseUrl.slice(0, -1) : config.api.baseUrl;
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    return `${base}${normalizedPath}`;
   };
 
   const setTheme = (theme) => {
