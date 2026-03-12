@@ -52,6 +52,19 @@ def test_assert_result_accepts_commit_with_pr_url():
     _assert_result_has_pr_when_committed(result)
 
 
+def test_assert_result_accepts_existing_pr_update_with_pr_url():
+    result = {
+        "messages": [
+            {"tool_name": "commit_changes", "content": '{"committed": true, "sha": "abc"}'},
+            {
+                "tool_name": "create_pull_request",
+                "content": '{"success": true, "pushed": true, "existing_pr": true, "url": "https://github.com/org/repo/pull/123"}',
+            },
+        ]
+    }
+    _assert_result_has_pr_when_committed(result)
+
+
 def test_assert_result_raises_when_pr_call_failed():
     result = {
         "messages": [

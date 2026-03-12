@@ -17,6 +17,7 @@ import logging
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,11 +31,9 @@ from a2a.types import (
     AgentCapabilities,
     AgentCard,
     AgentSkill,
-    Artifact,
     Message,
     Part,
     Role,
-    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
@@ -43,7 +42,8 @@ from a2a.types import (
 
 from .config import get_config, setup_logging
 from .llm.mock_client import create_llm_client
-from .runtime.background_build import BackgroundBuildRunner
+from .queue_worker import BuilderTaskQueue, _QueuedTask
+from .runtime.background_build import BackgroundBuildRunner, BuildResult, BuildStatus
 from .runtime.copilot_acp import CopilotACPManager
 from .runtime.time_utils import utcnow_isoformat
 from .state.manager import StateManager
@@ -61,6 +61,7 @@ _llm_client: Any = None
 _tool_registry: ToolRegistry | None = None
 _copilot_acp: CopilotACPManager | None = None
 _runner: BackgroundBuildRunner | None = None
+_task_queue: BuilderTaskQueue | None = None
 _initialized = False
 
 
@@ -104,6 +105,7 @@ async def _ensure_workspace() -> None:
         proc = await asyncio.create_subprocess_exec(
             "git",
             *args,
+            env=os.environ.copy(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -207,31 +209,126 @@ async def _ensure_initialized() -> None:
     logger.info("Builder Agent initialised")
 
 
+def _get_or_create_task_queue() -> BuilderTaskQueue:
+    """Return the background task queue, creating it on first use."""
+    global _task_queue
+    if _task_queue is None:
+        if _runner is None:
+            raise RuntimeError("Builder task queue unavailable: runner is not initialized")
+        _task_queue = BuilderTaskQueue(_run_build_request)
+        _task_queue.start()
+    return _task_queue
+
+
+def _extract_context(message: Message | None) -> dict[str, Any]:
+    """Extract metadata/context attached to the incoming A2A message."""
+    if not message:
+        return {}
+    metadata = getattr(message, "metadata", None)
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+async def _run_build_request(
+    task_id: str,
+    context_id: str,
+    request_text: str,
+    request_ctx: dict[str, Any],
+) -> BuildResult:
+    """Execute a builder request and return the recorded build result."""
+    del request_ctx  # Reserved for future correlation/context expansion.
+
+    await _ensure_initialized()
+    assert _runner is not None
+    assert _llm_client is not None
+    assert _tool_registry is not None
+
+    started_at = datetime.now(UTC)
+
+    import contextlib
+
+    from .runtime import decide as decide_mod  # local import to avoid circular
+
+    tool_context = ""
+    with contextlib.suppress(Exception):
+        tool_context = _tool_registry.get_tool_context()
+
+    decision = await decide_mod._request_decision_data(
+        llm_client=_llm_client,
+        user_input=request_text,
+        conversation_history=[],
+        tool_context=tool_context,
+    )
+    action = _normalize_build_action(decision.get("action"))
+
+    if action not in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
+        return BuildResult(
+            build_id=f"rejected_{task_id}",
+            status=BuildStatus.FAILED,
+            task_description=request_text,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+            error_message=(
+                f"Request not recognised as a build action (action={action or '(empty)'}). "
+                "Be explicit, e.g. 'build an agent that…'"
+            ),
+        )
+
+    build_settings = await decide_mod._generate_build_settings(
+        user_input=request_text,
+        llm_client=_llm_client,
+        llm_action=action,
+        decision_data=decision,
+    )
+    target_capabilities = decide_mod._infer_target_capabilities(request_text)
+    task_description = f"{action}: {build_settings.project_name}"
+    build_id: str | None = None
+    try:
+        build_id, _ack_message = await _runner.start_build(
+            user_input=request_text,
+            task_description=task_description,
+            target_capabilities=target_capabilities,
+            initial_state={
+                "a2a_task_id": task_id,
+                "a2a_context_id": context_id,
+            },
+            build_settings=build_settings,
+        )
+
+        bg_task = _runner._current_task
+        if bg_task is not None:
+            await bg_task
+
+        result = _runner.get_build_status(build_id)
+        if result is not None:
+            return result
+    except asyncio.CancelledError:
+        if build_id is not None:
+            await _runner.cancel_build(build_id)
+        raise
+
+    return BuildResult(
+        build_id=build_id or f"cancelled_{task_id}",
+        status=BuildStatus.FAILED,
+        task_description=task_description,
+        started_at=started_at,
+        completed_at=datetime.now(UTC),
+        error_message="Build completed but no result was recorded.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # A2A AgentExecutor implementation
 # ---------------------------------------------------------------------------
 
 class BuilderAgentExecutor(AgentExecutor):
-    """Executes build tasks via the inner-loop LangGraph.
+    """Accept build tasks immediately and execute them in the background."""
 
-    On each ``message/send`` call the executor:
-    1. Extracts the natural-language build request from the A2A Message.
-    2. Emits a ``working`` status update.
-    3. Kicks off the BackgroundBuildRunner (which runs the inner loop graph).
-    4. Streams progress as ``TaskStatusUpdateEvent`` messages.
-    5. Emits a final ``completed`` or ``failed`` status with an Artifact
-       containing the build summary.
-    """
-
-    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:  # noqa: C901
-        await _ensure_initialized()
-        assert _runner is not None
-        assert _llm_client is not None
-        assert _tool_registry is not None
-        assert _config is not None
-
-        task_id = context.task_id or str(uuid.uuid4())
-        ctx_id = context.context_id or str(uuid.uuid4())
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        request_ctx = _extract_context(context.message)
+        task_id = str(request_ctx.get("a2a_task_id") or context.task_id or uuid.uuid4())
+        ctx_id = str(request_ctx.get("a2a_context_id") or context.context_id or uuid.uuid4())
+        request_ctx["a2a_task_id"] = task_id
+        request_ctx["a2a_context_id"] = ctx_id
 
         # ------------------------------------------------------------------
         # Extract request text from the A2A Message
@@ -259,149 +356,14 @@ class BuilderAgentExecutor(AgentExecutor):
             )
             return
 
-        # ------------------------------------------------------------------
-        # Emit "working" status
-        # ------------------------------------------------------------------
-        await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
+        await _ensure_initialized()
+        task_queue = _get_or_create_task_queue()
+        await task_queue.enqueue(
+            _QueuedTask(
                 task_id=task_id,
                 context_id=ctx_id,
-                status=TaskStatus(
-                    state=TaskState.working,
-                    message=_text_message(f"Starting build: {request_text[:120]}", role=Role.agent),
-                    timestamp=utcnow_isoformat(),
-                ),
-                final=False,
-            )
-        )
-
-        # ------------------------------------------------------------------
-        # Decide action via LLM and validate it is a build request
-        # ------------------------------------------------------------------
-        import contextlib
-
-        from .runtime import decide as decide_mod  # local import to avoid circular
-
-        tool_context = ""
-        with contextlib.suppress(Exception):
-            tool_context = _tool_registry.get_tool_context()
-
-        decision = await decide_mod._request_decision_data(
-            llm_client=_llm_client,
-            user_input=request_text,
-            conversation_history=[],
-            tool_context=tool_context,
-        )
-        action = _normalize_build_action(decision.get("action"))
-
-        if action not in ("build_agent", "build_mcp", "build_progenitor", "upgrade"):
-            await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=task_id,
-                    context_id=ctx_id,
-                    status=TaskStatus(
-                        state=TaskState.failed,
-                        message=_text_message(
-                            f"Request not recognised as a build action (action={action or '(empty)'}). "
-                            "Be explicit, e.g. 'build an agent that…'",
-                            role=Role.agent,
-                        ),
-                        timestamp=utcnow_isoformat(),
-                    ),
-                    final=True,
-                )
-            )
-            return
-
-        # ------------------------------------------------------------------
-        # Generate build settings and start the inner-loop run
-        # ------------------------------------------------------------------
-        build_settings = await decide_mod._generate_build_settings(
-            user_input=request_text,
-            llm_client=_llm_client,
-            llm_action=action,
-            decision_data=decision,
-        )
-        target_capabilities = decide_mod._infer_target_capabilities(request_text)
-        task_description = f"{action}: {build_settings.project_name}"
-
-        build_id, ack_message = await _runner.start_build(
-            user_input=request_text,
-            task_description=task_description,
-            target_capabilities=target_capabilities,
-            initial_state={},
-            build_settings=build_settings,
-        )
-
-        await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
-                task_id=task_id,
-                context_id=ctx_id,
-                status=TaskStatus(
-                    state=TaskState.working,
-                    message=_text_message(ack_message, role=Role.agent),
-                    timestamp=utcnow_isoformat(),
-                ),
-                final=False,
-            )
-        )
-
-        # ------------------------------------------------------------------
-        # Wait for the build to complete
-        # ------------------------------------------------------------------
-        bg_task = _runner._current_task
-        if bg_task is not None:
-            await bg_task
-
-        result = _runner.get_build_status(build_id)
-
-        if result is None:
-            await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=task_id,
-                    context_id=ctx_id,
-                    status=TaskStatus(
-                        state=TaskState.failed,
-                        message=_text_message("Build completed but no result was recorded.", role=Role.agent),
-                        timestamp=utcnow_isoformat(),
-                    ),
-                    final=True,
-                )
-            )
-            return
-
-        # ------------------------------------------------------------------
-        # Emit result artifact + final status
-        # ------------------------------------------------------------------
-        status_value = getattr(result.status, "value", str(result.status))
-        succeeded = status_value == "completed"
-
-        summary_lines = [
-            f"**Build ID**: {build_id}",
-            f"**Status**: {status_value}",
-            f"**Task**: {result.task_description}",
-            f"**Iterations**: {result.iterations}",
-            f"**Verification score**: {result.verification_score}",
-        ]
-        if result.pr_url:
-            summary_lines.append(f"**PR**: {result.pr_url}")
-        if result.output_summary:
-            summary_lines.append(f"\n{result.output_summary}")
-        if result.error_message:
-            summary_lines.append(f"\n⚠️ Error: {result.error_message}")
-        summary_text = "\n".join(summary_lines)
-
-        await event_queue.enqueue_event(
-            TaskArtifactUpdateEvent(
-                task_id=task_id,
-                context_id=ctx_id,
-                artifact=Artifact(
-                    artifact_id=str(uuid.uuid4()),
-                    name="build-result",
-                    description=f"Build result for {task_description}",
-                    parts=[Part(root=TextPart(text=summary_text))],
-                ),
-                append=False,
+                request_text=request_text,
+                request_ctx=request_ctx,
             )
         )
 
@@ -410,9 +372,9 @@ class BuilderAgentExecutor(AgentExecutor):
                 task_id=task_id,
                 context_id=ctx_id,
                 status=TaskStatus(
-                    state=TaskState.completed if succeeded else TaskState.failed,
+                    state=TaskState.submitted,
                     message=_text_message(
-                        "Build completed successfully." if succeeded else f"Build failed: {result.error_message}",
+                        f"Task accepted (id={task_id}): {request_text[:120]}",
                         role=Role.agent,
                     ),
                     timestamp=utcnow_isoformat(),
@@ -425,12 +387,9 @@ class BuilderAgentExecutor(AgentExecutor):
         """Cancel a running build task."""
         task_id = context.task_id or ""
         ctx_id = context.context_id or ""
-
-        if _runner is not None:
-            # Best-effort: cancel whatever is currently running.
-            task = _runner._current_task
-            if task is not None and not task.done():
-                task.cancel()
+        cancelled = False
+        if _task_queue is not None and task_id:
+            cancelled = await _task_queue.cancel(task_id)
 
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
@@ -438,7 +397,10 @@ class BuilderAgentExecutor(AgentExecutor):
                 context_id=ctx_id,
                 status=TaskStatus(
                     state=TaskState.canceled,
-                    message=_text_message("Build task cancelled.", role=Role.agent),
+                    message=_text_message(
+                        "Build task cancelled." if cancelled else "No active task to cancel.",
+                        role=Role.agent,
+                    ),
                     timestamp=utcnow_isoformat(),
                 ),
                 final=True,
@@ -552,9 +514,24 @@ async def _health(request: Any) -> JSONResponse:
 app.add_route("/health", _health, methods=["GET"])
 
 
-@app.on_event("startup")
-async def _startup() -> None:
+@asynccontextmanager
+async def _lifespan(_app: Any):
     port = int(os.environ.get("PORT", "8107"))
     logger.info("Builder Agent starting on port %d", port)
     await _ensure_initialized()
+    _get_or_create_task_queue()
     logger.info("Builder Agent ready — listening on port %d", port)
+    try:
+        yield
+    finally:
+        await _shutdown()
+
+
+async def _shutdown() -> None:
+    global _task_queue
+    if _task_queue is not None:
+        await _task_queue.stop()
+        _task_queue = None
+
+
+app.router.lifespan_context = _lifespan

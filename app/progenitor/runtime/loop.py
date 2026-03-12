@@ -302,7 +302,7 @@ class ProgenitorLoop:
                 return 30.0
         return 30.0
 
-    async def _check_and_enqueue_scheduled_work(self, scheduler: Scheduler) -> bool:
+    async def _check_and_enqueue_scheduled_work(self, scheduler: Scheduler) -> int:
         schedule_entries = await self.state_manager.get_schedule()
         schedule_dicts: list[dict[str, Any]] = [
             entry.model_dump() if hasattr(entry, "model_dump") else entry
@@ -310,46 +310,49 @@ class ProgenitorLoop:
         ]
         due_items = scheduler.get_due_items(schedule_dicts, current_time=utcnow())
         if not due_items:
-            return False
+            return 0
 
-        entry = due_items[0]
-        schedule_id = str(entry.get("id") or "")
-        if not schedule_id:
-            return False
-        message = str(entry.get("message") or "").strip()
-        if not message:
-            return False
-        user_request = (entry.get("user_request") or "").strip()
-
-        if user_request:
-            full_message = f"<original_message>{user_request}</original_message>\n\n{message}"
-        else:
-            full_message = message
-
-        queued = await self.enqueue_input(
-            f"{SCHEDULED_INPUT_PREFIX}{full_message}",
-            timeout=0.5,
-        )
-        if not queued:
-            return False
-
+        enqueued_count = 0
         now = utcnow()
-        cron_expression = str(entry.get("cron_expression") or "")
-        is_one_shot = scheduler.is_one_shot_expression(cron_expression)
-        if is_one_shot:
-            await self.state_manager.remove_schedule_entry(schedule_id)
-        else:
-            await self.state_manager.update_schedule_entry(
-                schedule_id,
-                {"last_run": now.isoformat()},
-            )
+        for entry in due_items:
+            schedule_id = str(entry.get("id") or "")
+            if not schedule_id:
+                continue
+            message = str(entry.get("message") or "").strip()
+            if not message:
+                continue
+            user_request = (entry.get("user_request") or "").strip()
 
-        await self._push_event(
-            "scheduled_task_triggered",
-            f"Scheduled task triggered: {entry.get('message') or schedule_id}",
-            {"schedule_id": schedule_id, "one_shot": is_one_shot},
-        )
-        return True
+            if user_request:
+                full_message = f"<original_message>{user_request}</original_message>\n\n{message}"
+            else:
+                full_message = message
+
+            queued = await self.enqueue_input(
+                f"{SCHEDULED_INPUT_PREFIX}{full_message}",
+                timeout=0.5,
+            )
+            if not queued:
+                break
+
+            cron_expression = str(entry.get("cron_expression") or "")
+            is_one_shot = scheduler.is_one_shot_expression(cron_expression)
+            if is_one_shot:
+                await self.state_manager.remove_schedule_entry(schedule_id)
+            else:
+                await self.state_manager.update_schedule_entry(
+                    schedule_id,
+                    {"last_run": now.isoformat()},
+                )
+
+            await self._push_event(
+                "scheduled_task_triggered",
+                f"Scheduled task triggered: {entry.get('message') or schedule_id}",
+                {"schedule_id": schedule_id, "one_shot": is_one_shot},
+            )
+            enqueued_count += 1
+
+        return enqueued_count
 
     async def _scheduler_loop(self) -> None:
         scheduler = Scheduler(timezone=getattr(self.config.runtime, "timezone", "UTC"))

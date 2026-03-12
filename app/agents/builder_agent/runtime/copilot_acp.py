@@ -13,6 +13,7 @@ Components:
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -495,6 +496,7 @@ class CopilotACPManager:
                 self.copilot_cmd,
                 *args,
                 cwd=str(cwd),
+                env=os.environ.copy(),
             ) as (conn, proc):
                 logger.info(
                     "COPILOT_ACP [%s]: Process spawned with PID %s",

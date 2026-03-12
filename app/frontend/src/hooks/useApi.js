@@ -53,17 +53,84 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const getWorkspace = useCallback(async () => {
+    const response = await fetchWithRetry('workspace');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getWidgets = useCallback(async () => {
+    const response = await fetchWithRetry('widgets');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const updateWidget = useCallback(async (widgetId, updates) => {
+    const response = await fetchWithRetry(`/api/ui/widgets/${widgetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getSchedules = useCallback(async () => {
+    const response = await fetchWithRetry('schedules');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getLogs = useCallback(async (params = {}) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        searchParams.set(key, String(value));
+      }
+    });
+    const query = searchParams.size > 0 ? `?${searchParams.toString()}` : '';
+    const response = await fetchWithRetry(`/api/ui/logs${query}`);
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const runAction = useCallback(async (payload) => {
+    const response = await fetchWithRetry('actionRun', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const generateAction = useCallback(async (payload) => {
+    const response = await fetchWithRetry('actionGenerate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getSession = useCallback(async () => {
+    const response = await fetchWithRetry('session');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const createSession = useCallback(async () => {
+    const response = await fetchWithRetry('session', {
+      method: 'POST',
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
   const sendMessage = useCallback(async (message, history = []) => {
-    const messages = [...history, { role: 'user', content: message }];
-    const response = await fetchWithRetry('chat', {
+    const input = history
+      .concat([{ role: 'user', content: message }])
+      .map((entry) => ({ role: entry.role, content: entry.content }))
+      .filter((entry) => entry.content);
+    const response = await fetchWithRetry('responses', {
       method: 'POST',
       body: JSON.stringify({
         model: config.chat.defaultModel,
-        messages,
+        input,
         stream: false
       })
     });
-    return response.json();
+    const data = await response.json();
+    return data.output?.[0]?.content?.[0]?.text || '';
   }, [config, fetchWithRetry]);
 
   const sendMessageStream = useCallback(async (message, history = [], onChunk, onComplete, onError) => {
@@ -72,8 +139,11 @@ export function useApi() {
     }
 
     abortControllerRef.current = new AbortController();
-    const messages = [...history, { role: 'user', content: message }];
-    const url = getApiUrl('chat');
+    const input = history
+      .concat([{ role: 'user', content: message }])
+      .map((entry) => ({ role: entry.role, content: entry.content }))
+      .filter((entry) => entry.content);
+    const url = getApiUrl('responses');
 
     try {
       const response = await fetch(url, {
@@ -81,7 +151,7 @@ export function useApi() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: config.chat.defaultModel,
-          messages,
+          input,
           stream: true
         }),
         signal: abortControllerRef.current.signal
@@ -107,26 +177,21 @@ export function useApi() {
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6).trim();
-
-            if (data === '[DONE]') {
-              onComplete?.();
-              return;
-            }
-
             try {
               const parsed = JSON.parse(data);
-              if (parsed.error) {
+              if (line.startsWith('event: error') || parsed.error) {
                 onError?.(new Error(parsed.error));
                 return;
               }
-              if (parsed.choices?.[0]?.delta?.content) {
-                onChunk?.(parsed.choices[0].delta.content);
+              const text = parsed.delta?.text || parsed.output?.[0]?.content?.[0]?.text;
+              if (text) {
+                onChunk?.(text);
               }
-              if (parsed.choices?.[0]?.finish_reason === 'stop') {
+              if (parsed.object === 'response.completed') {
                 onComplete?.();
                 return;
               }
-            } catch (e) {
+            } catch {
               // Ignore parse errors
             }
           }
@@ -157,6 +222,15 @@ export function useApi() {
     connectionState,
     getHealth,
     getHealthDetailed,
+    getWorkspace,
+    getWidgets,
+    updateWidget,
+    getSchedules,
+    getLogs,
+    runAction,
+    generateAction,
+    getSession,
+    createSession,
     sendMessage,
     sendMessageStream,
     cancelStream,

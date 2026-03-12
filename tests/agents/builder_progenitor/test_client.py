@@ -133,3 +133,28 @@ async def test_plan_step_requires_pr_step():
     with pytest.raises(ValueError, match="Plan must include a 'pr' step"):
         await client.plan_step("fix the bug", {"branch": "main"})
 
+
+@pytest.mark.asyncio
+async def test_plan_step_requests_reasoning():
+    client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
+
+    async def fake_post_response(*args, **kwargs):
+        del args
+        assert kwargs["include_reasoning"] is True
+        return {
+            "output_text": (
+                '{"summary":"Implement and validate the change.",'
+                '"steps":['
+                '{"step":"plan","objective":"Inspect the request","commands":[]},'
+                '{"step":"pr","objective":"Open PR","commands":["gh pr create"]}'
+                '],'
+                '"risks":[]}'
+            ),
+            "reasoning": {"summary": "Think first."},
+        }
+
+    client._post_response = fake_post_response  # type: ignore[method-assign]
+
+    result = await client.plan_step("fix the bug", {"branch": "main"})
+
+    assert result.reasoning == "Think first."
