@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -21,6 +21,7 @@ import ScheduleNode from '../components/workspace/nodes/ScheduleNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
 import { useApi } from '../hooks/useApi';
+import { useStatusSSE } from '../hooks/useSSE';
 
 const nodeTypes = {
   prompt: PromptNode,
@@ -54,6 +55,7 @@ const minimapNodeColor = (node) => {
 function WorkspaceInner() {
   const {
     nodes,
+    viewport,
     onNodesChange,
     addNode,
     removeNodes,
@@ -65,6 +67,7 @@ function WorkspaceInner() {
     loading,
     error,
     refreshWorkspace,
+    syncWidgets,
   } = useWorkspaceContext();
 
   const reactFlowInstance = useReactFlow();
@@ -72,6 +75,29 @@ function WorkspaceInner() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+
+  useEffect(() => {
+    reactFlowInstance.setViewport(viewport);
+  }, [reactFlowInstance, viewport]);
+
+  const handleStatusEvent = useCallback((event) => {
+    if (!event?.data) {
+      return;
+    }
+
+    if (event.type === 'widgets') {
+      syncWidgets(event.data.items || event.data.widgets || []);
+      return;
+    }
+
+    if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
+      if (Array.isArray(event.data.widgets)) {
+        syncWidgets(event.data.widgets);
+      }
+    }
+  }, [syncWidgets]);
+
+  useStatusSSE(handleStatusEvent);
 
   // Handle drop from sidebar
   const onDrop = useCallback(
@@ -233,7 +259,7 @@ function WorkspaceInner() {
           snapGrid={[16, 16]}
           minZoom={0.1}
           maxZoom={4}
-          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+          defaultViewport={viewport}
         >
           <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
           <Controls showInteractive={false} />

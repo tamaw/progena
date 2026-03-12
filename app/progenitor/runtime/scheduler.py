@@ -2,9 +2,9 @@
 
 import re
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
-from croniter import croniter
+from croniter import croniter  # type: ignore[import-untyped]
 
 from .time_utils import utcnow
 
@@ -172,7 +172,7 @@ class Scheduler:
         created_at = self._parse_datetime(item.get("created_at"))
         reference = last_run or created_at or utcnow()
         try:
-            return croniter(cron_expression, reference).get_next(datetime)
+            return cast(datetime, croniter(cron_expression, reference).get_next(datetime))
         except Exception:
             return None
 

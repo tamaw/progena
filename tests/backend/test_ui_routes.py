@@ -7,8 +7,10 @@ The frontend runs separately via npm/Vite.
 
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock
 
 from app.backend.main import app
+from app.backend.state_reader import get_state_reader
 
 
 @pytest.fixture
@@ -55,6 +57,29 @@ class TestUIRoutes:
         assert response.status_code == 200
         data = response.json()
         assert "tasks" in data
+        assert "total" in data
+
+    def test_workspace_endpoint(self, client):
+        response = client.get("/api/ui/workspace")
+        assert response.status_code == 200
+        data = response.json()
+        assert "workspace" in data
+        assert "health" in data
+        assert "sessions" in data
+        assert "widgets" in data
+
+    def test_widgets_endpoint(self, client):
+        response = client.get("/api/ui/widgets")
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
+        assert "total" in data
+
+    def test_schedules_alias_endpoint(self, client):
+        response = client.get("/api/ui/schedules")
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
         assert "total" in data
 
     def test_ui_alerts_endpoint(self, client):
@@ -349,3 +374,59 @@ class TestSplitSSEEndpoints:
         # Just verify they're callable
         assert callable(broadcast_chat_event)
         assert callable(broadcast_status_event)
+
+
+class TestWorkspaceBridgeActions:
+    """Tests for backend action bridge endpoints."""
+
+    def test_patch_schedule_widget_updates_schedule_file(self, client, tmp_path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        schedule_path = state_dir / "schedule.json"
+        schedule_path.write_text(
+            '[{"id":"sched-1","name":"Daily check","schedule":"0 0 * * *","enabled":true,"timezone":"UTC"}]',
+            encoding="utf-8",
+        )
+
+        state_reader = get_state_reader()
+        original_state_dir = state_reader.state_dir
+        try:
+            state_reader.state_dir = state_dir
+            state_reader.invalidate()
+            response = client.patch(
+                "/api/ui/widgets/schedule:sched-1",
+                json={"name": "Nightly check", "enabled": False, "expression": "0 1 * * *"},
+            )
+            assert response.status_code == 200
+            updated = schedule_path.read_text(encoding="utf-8")
+            assert "Nightly check" in updated
+            assert "0 1 * * *" in updated
+            assert "false" in updated.lower()
+        finally:
+            state_reader.state_dir = original_state_dir
+            state_reader.invalidate()
+
+    def test_run_and_generate_actions_use_existing_client(self, client):
+        from app.backend import main as backend_main
+
+        original_client = backend_main.client
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value="bridge-response")
+        backend_main.client = mock_client
+        try:
+            run_response = client.post(
+                "/api/ui/actions/run",
+                json={"widget_id": "prompt:test", "prompt": "Run this"},
+            )
+            generate_response = client.post(
+                "/api/ui/actions/generate",
+                json={"widget_id": "prompt:test", "prompt": "Generate this"},
+            )
+
+            assert run_response.status_code == 200
+            assert generate_response.status_code == 200
+            assert run_response.json()["response"] == "bridge-response"
+            assert generate_response.json()["response"] == "bridge-response"
+            assert mock_client.send_message.await_count == 2
+        finally:
+            backend_main.client = original_client

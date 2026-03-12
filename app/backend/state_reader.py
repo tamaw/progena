@@ -16,7 +16,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _iso_now() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_name(value: str) -> str:
@@ -91,6 +91,9 @@ class ToolInfo:
     name: str
     description: str
     enabled: bool
+    kind: str = "mcp"
+    status: str = "ready"
+    transport: str = "mcp"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolInfo:
@@ -98,6 +101,9 @@ class ToolInfo:
             name=data.get("name", "unknown"),
             description=data.get("description", ""),
             enabled=data.get("enabled", True),
+            kind=data.get("kind", "mcp"),
+            status=data.get("status", "ready"),
+            transport=data.get("transport", "mcp"),
         )
 
 
@@ -265,6 +271,14 @@ class StateReader:
         self._watchers: list[Callable[[StateSnapshot], None]] = []
         self._watch_task: asyncio.Task | None = None
 
+    def invalidate(self, *paths: Path) -> None:
+        """Invalidate cached file contents."""
+        if not paths:
+            self._cache.clear()
+            return
+        for path in paths:
+            self._cache.pop(str(Path(path)), None)
+
     def _read_json(self, filename: str) -> Any:
         return self._read_json_from_path(self.state_dir / filename)
 
@@ -335,9 +349,21 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
-        tools = []
+        tools: list[ToolInfo] = []
         if isinstance(mcp_data, dict):
-            tools = [ToolInfo.from_dict(t) for t in mcp_data.get("tools", []) if isinstance(t, dict)]
+            raw_tools = mcp_data.get("tools")
+            if isinstance(raw_tools, list):
+                tools.extend(ToolInfo.from_dict(t) for t in raw_tools if isinstance(t, dict))
+            tool_map = {
+                str(name): cfg
+                for name, cfg in mcp_data.items()
+                if name != "tools" and isinstance(cfg, dict)
+            }
+            seen_names = {tool.name for tool in tools}
+            for name, cfg in tool_map.items():
+                if name in seen_names:
+                    continue
+                tools.append(ToolInfo.from_dict({"name": name, **cfg}))
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:
@@ -384,6 +410,34 @@ class StateReader:
             latest_session_id=latest_session_id,
             latest_activity=latest,
         )
+
+    def _status_with_health(self, status: str | None, is_running: bool) -> str:
+        candidate = (status or "").strip().lower()
+        if candidate:
+            if candidate == "stopped" and is_running:
+                return "running"
+            return candidate
+        return "running" if is_running else "offline"
+
+    def _summary_from_logs(self, logs: list[dict[str, Any]], fallback: str) -> str:
+        if logs:
+            return str(logs[0].get("message") or fallback)
+        return fallback
+
+    def _normalize_widget_logs(self, entries: list[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for entry in entries[:limit]:
+            normalized.append(
+                {
+                    "time": entry.get("time") or entry.get("timestamp"),
+                    "timestamp": entry.get("timestamp") or entry.get("time"),
+                    "level": entry.get("level", "info"),
+                    "source": entry.get("source") or entry.get("path") or "system",
+                    "message": entry.get("message") or "",
+                    "path": entry.get("path"),
+                }
+            )
+        return normalized
 
     def get_loops(self, health: HealthInfo) -> list[LoopInfo]:
         if not health.is_running():
@@ -554,7 +608,12 @@ class StateReader:
         for agent in agents:
             if not agent.enabled:
                 continue
-            logs = self.get_logs_for_widget(agent.name)
+            logs = self._normalize_widget_logs(self.get_logs_for_widget(agent.name))
+            status = self._status_with_health(agent.status, health.is_running())
+            summary = (
+                agent.status_message
+                or self._summary_from_logs(logs, agent.description or f"{agent.name} is {status}")
+            )
             widgets.append(
                 {
                     "id": f"agent:{agent.name}",
@@ -563,19 +622,20 @@ class StateReader:
                     "title": agent.name,
                     "description": agent.description,
                     "kind": agent.kind,
-                    "status": "ready" if health.is_running() else "offline",
-                    "summary": agent.description or f"{agent.name} is {'ready' if health.is_running() else 'offline'}",
+                    "status": status,
+                    "summary": summary,
                     "transport": agent.transport,
                     "current_run_id": health.run_id,
                     "logs": logs,
-                    "updated_at": health.last_active,
+                    "updated_at": agent.updated_at or health.last_active,
                 }
             )
 
         for tool in tools:
             if not tool.enabled:
                 continue
-            logs = self.get_logs_for_widget(tool.name)
+            logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
+            summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
             widgets.append(
                 {
                     "id": f"mcp:{tool.name}",
@@ -583,10 +643,10 @@ class StateReader:
                     "name": tool.name,
                     "title": tool.name,
                     "description": tool.description,
-                    "kind": "mcp",
-                    "status": "ready" if health.is_running() else "offline",
-                    "summary": tool.description or f"MCP {tool.name}",
-                    "transport": "mcp",
+                    "kind": tool.kind,
+                    "status": self._status_with_health(tool.status, health.is_running()),
+                    "summary": summary,
+                    "transport": tool.transport,
                     "current_run_id": health.run_id,
                     "logs": logs,
                     "updated_at": health.last_active,
@@ -604,15 +664,15 @@ class StateReader:
                     "status": "enabled" if item.enabled else "disabled",
                     "summary": item.raw.get("message") or item.name,
                     "schedule_id": item.id,
-                    "schedule_type": "cron",
+                    "schedule_type": item.raw.get("schedule_type", "cron"),
                     "expression": item.schedule,
                     "enabled": item.enabled,
-                    "next_run_at": item.next_run,
+                    "next_run_at": item.raw.get("next_run_at") or item.next_run,
                     "last_run_at": item.raw.get("last_run"),
-                    "last_run_status": "idle",
-                    "timezone": "UTC",
-                    "logs": self.get_logs_for_widget(item.id, limit=20),
-                    "updated_at": item.raw.get("created_at"),
+                    "last_run_status": item.raw.get("last_run_status", "idle"),
+                    "timezone": item.raw.get("timezone", "UTC"),
+                    "logs": self._normalize_widget_logs(self.get_logs_for_widget(item.id, limit=20), limit=20),
+                    "updated_at": item.raw.get("updated_at") or item.raw.get("created_at"),
                 }
             )
 
