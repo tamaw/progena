@@ -210,6 +210,10 @@ class ShellExecTool(BaseSystemTool):
         timed_out = False
         try:
             stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            process.kill()
+            await process.communicate()
+            raise
         except TimeoutError:
             timed_out = True
             process.kill()
