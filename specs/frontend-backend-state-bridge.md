@@ -3,22 +3,29 @@
 ## Summary
 Implement the frontend so it talks only to the backend, while the backend acts as an in-memory adapter over Progenitor's existing `data/state`, `data/sessions`, `data/config`, and `logs` content. The backend will not introduce new durable state files. Workspace canvas state stays client-side in browser storage, but UI-visible agent, MCP, schedule, session, status, and log data should be loaded from backend APIs that read the Progenitor files and existing logs.
 
+When execution starts, do it from a new clean branch created from `origin/main`, in a clean worktree, because the current checkout has unrelated untracked files.
+
+Suggested spec file for implementation phase:
+- `specs/frontend-backend-state-bridge.md`
+
 ## Execution Setup
+Before any code changes:
 1. Fetch `origin/main`.
-2. Create a new clean worktree from `origin/main`.
-3. Create a feature branch there for this work.
-4. Implement and validate only in that clean branch.
-5. Open a PR when complete.
+2. Create a new worktree or otherwise clean checkout from `origin/main`.
+3. Create a new feature branch there for this work.
+4. Copy this plan into `specs/frontend-backend-state-bridge.md`.
+5. Implement and validate only in that clean branch.
+6. Open a PR when complete.
 
 ## Backend and State Consumption
 The backend should read and cache in memory:
-- `data/state/current_state.json`
-- `data/state/build_state.json`
-- `data/state/schedule.json`
-- `data/state/health.json`
-- `data/config/agents.json`
-- `data/config/mcp.json` when present
-- `data/sessions/sessions.json`
+- `data/state/current_state.json` for current chat/session-facing agent state
+- `data/state/build_state.json` for build/backlog state where relevant
+- `data/state/schedule.json` for schedules
+- `data/state/health.json` for runtime status
+- `data/config/agents.json` as the primary registry source for agent widgets
+- `data/config/mcp.json` when present, as the registry source for MCP widgets
+- `data/sessions/sessions.json` and related session data for chat session support
 - existing JSONL and plain log files under `logs/`
 
 Required backend API surface:
@@ -80,14 +87,40 @@ No JSONL format changes are part of this work, but recommend:
 - documenting how agent and MCP names map to log directories/files
 
 ## Test Plan
-- backend reader tests for state, config, session, and log inputs
-- backend API tests for widgets, logs, schedules, and actions
-- frontend tests for IndexedDB workspace persistence and backend-driven widget rendering
-- end-to-end validation that frontend changes only go through backend and backend only consumes existing Progenitor files
+- backend reader tests for:
+  - `current_state.json`
+  - `build_state.json`
+  - `schedule.json`
+  - `health.json`
+  - `agents.json`
+  - optional `mcp.json`
+  - session files
+  - existing JSONL and plain log files
+- backend API tests for:
+  - workspace bootstrap
+  - unified widgets response
+  - schedules
+  - logs
+  - action endpoints
+  - session-backed chat behavior
+- frontend tests for:
+  - IndexedDB workspace persistence
+  - merging browser layout with backend widget data
+  - agent and MCP widget rendering
+  - per-widget log display
+  - backend-only data loading for schedules/agents/MCPs
+- end-to-end scenario:
+  - frontend loads workspace and widgets
+  - backend reads state/config/log files into memory
+  - user runs/generates through backend
+  - backend uses existing IPC
+  - Progenitor updates files
+  - backend refreshes memory view
+  - frontend updates without direct Progenitor access
 
 ## Assumptions and Defaults
-- `agents.json` is the primary registry file.
-- `mcp.json` is optional.
+- `agents.json` is the primary registry file and is expected to exist.
+- `mcp.json` is optional; when present it should also produce widgets.
 - Workspace canvas/layout is browser-owned and stored in IndexedDB.
 - Backend remains non-persistent and uses only in-memory caches over existing Progenitor files.
 - Existing JSONL files are consumed as-is.

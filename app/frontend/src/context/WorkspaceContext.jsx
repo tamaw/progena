@@ -144,6 +144,50 @@ function normalizeLogs(logs) {
   }));
 }
 
+function mapWidgetToNodeData(widget, existingData = {}) {
+  const timestamp = widget.updated_at || existingData.updatedAt || new Date().toISOString();
+  const title = widget.title || widget.name || existingData.title || widget.id;
+  const summary = widget.summary || widget.description || existingData.summaryState || '';
+  const logs = normalizeLogs(widget.logs || widget.data?.logs || existingData.logs);
+
+  if (widget.type === 'schedule') {
+    return {
+      ...defaultNodeData.schedule(),
+      ...existingData,
+      ...widget.data,
+      title,
+      summaryState: summary,
+      logs,
+      serverManaged: true,
+      status: widget.status || existingData.status || 'idle',
+      scheduleType: widget.data?.schedule_type || widget.schedule_type || existingData.scheduleType || 'cron',
+      expression: widget.data?.expression || widget.expression || existingData.expression || '',
+      timezone: widget.data?.timezone || widget.timezone || existingData.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      enabled: widget.data?.enabled ?? widget.enabled ?? existingData.enabled ?? false,
+      nextRunAt: widget.data?.next_run_at || widget.next_run_at || existingData.nextRunAt || null,
+      lastRunAt: widget.data?.last_run_at || widget.last_run_at || existingData.lastRunAt || null,
+      lastRunStatus: widget.data?.last_run_status || widget.last_run_status || existingData.lastRunStatus || 'idle',
+      updatedAt: timestamp,
+    };
+  }
+
+  return {
+    ...(widget.type === 'mcp' ? defaultNodeData.mcp() : defaultNodeData.agent()),
+    ...existingData,
+    ...widget.data,
+    title,
+    summaryState: summary,
+    logs,
+    serverManaged: true,
+    widgetKind: widget.type === 'mcp' ? 'mcp' : 'agent',
+    agentId: widget.name || existingData.agentId || '',
+    agentStatus: widget.status || existingData.agentStatus || 'idle',
+    currentRunId: widget.data?.current_run_id || widget.current_run_id || existingData.currentRunId || null,
+    transport: widget.transport || widget.data?.transport || existingData.transport || '',
+    updatedAt: timestamp,
+  };
+}
+
 function getActionText(payload) {
   if (!payload) {
     return '';
@@ -184,13 +228,7 @@ function buildServerNodes(widgets, existingNodes) {
         height: existing?.style?.height || size.height,
       },
       data: {
-        ...defaultNodeData[type]?.(),
-        ...existing?.data,
-        ...widget.data,
-        title: widget.data?.title || widget.title || existing?.data?.title || typeLabels[type],
-        logs: normalizeLogs(widget.data?.logs || existing?.data?.logs),
-        serverManaged: true,
-        updatedAt: widget.data?.updatedAt || new Date().toISOString(),
+        ...mapWidgetToNodeData(widget, existing?.data),
       },
     };
   });
@@ -220,6 +258,25 @@ export function WorkspaceProvider({ children }) {
   const latestNodesRef = useRef([]);
   const latestViewportRef = useRef({ x: 0, y: 0, zoom: 1 });
 
+  const mergeWidgetNodes = useCallback((widgetPayload, nextViewport = null) => {
+    const widgetList = widgetPayload?.items || widgetPayload?.widgets || widgetPayload || [];
+    if (!Array.isArray(widgetList)) {
+      return;
+    }
+
+    setNodes((currentNodes) => {
+      const baseNodes = latestNodesRef.current.length > 0 ? latestNodesRef.current : currentNodes;
+      const mergedNodes = mergeNodes(baseNodes, widgetList);
+      latestNodesRef.current = mergedNodes;
+      return mergedNodes;
+    });
+
+    if (nextViewport) {
+      latestViewportRef.current = nextViewport;
+      setViewport(nextViewport);
+    }
+  }, []);
+
   const refreshWorkspace = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -247,6 +304,10 @@ export function WorkspaceProvider({ children }) {
       setLoading(false);
     }
   }, [getWidgets, getWorkspace]);
+
+  const syncWidgets = useCallback((widgetPayload) => {
+    mergeWidgetNodes(widgetPayload);
+  }, [mergeWidgetNodes]);
 
   useEffect(() => {
     refreshWorkspace();
@@ -566,6 +627,7 @@ export function WorkspaceProvider({ children }) {
         sendToBack,
         toggleExpanded,
         refreshWorkspace,
+        syncWidgets,
         runPromptNode,
         generateFromPromptNode,
         runCodeNode,
