@@ -32,6 +32,20 @@ logger = logging.getLogger(__name__)
 _AGENTS_JSON = Path(__file__).resolve().parents[3] / "data" / "config" / "agents.json"
 
 
+def _log_background_task_completion(task: asyncio.Task[None], task_id: str, agent_name: str) -> None:
+    """Log the outcome of a background agent dispatch task."""
+    if task.cancelled():
+        logger.info("Task %s (%s): cancelled", task_id, agent_name)
+        return
+
+    exception = task.exception()
+    if exception is not None:
+        logger.warning("Task %s (%s): unhandled exception: %s", task_id, agent_name, exception)
+        return
+
+    logger.info("Task %s (%s): completed", task_id, agent_name)
+
+
 # ---------------------------------------------------------------------------
 # Structured-output schema for the agent-selection LLM routing call
 # ---------------------------------------------------------------------------
@@ -200,13 +214,10 @@ class InvokeAgentTool(BaseSystemTool):
                 timeout=timeout,
             )
         )
-        task.add_done_callback(
-            lambda t, _id=task_id, _name=agent_name: (
-                logger.warning("Task %s (%s): unhandled exception: %s", _id, _name, t.exception())
-                if not t.cancelled() and t.exception() is not None
-                else logger.info("Task %s (%s): completed", _id, _name)
-            )
-        )
+        def _on_complete(task_result: asyncio.Task[None]) -> None:
+            _log_background_task_completion(task_result, task_id, agent_name)
+
+        task.add_done_callback(_on_complete)
 
         return ToolResult.ok({
             "task_id": task_id,
@@ -275,7 +286,8 @@ def _load_agents() -> dict[str, Any]:
         if not _AGENTS_JSON.exists():
             logger.warning("agents.json not found at %s", _AGENTS_JSON)
             return {}
-        return json.loads(_AGENTS_JSON.read_text(encoding="utf-8"))
+        loaded = json.loads(_AGENTS_JSON.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
     except Exception as exc:
         logger.error("Failed to load agents.json: %s", exc)
         return {}
@@ -319,7 +331,7 @@ async def _route_agent(
     )
 
     try:
-        return await context.llm_client.chat_structured(
+        selection = await context.llm_client.chat_structured(
             messages=[{"role": "user", "content": user_prompt}],
             response_model=AgentSelection,
             schema_name="AgentSelection",
@@ -327,6 +339,7 @@ async def _route_agent(
             temperature=0.2,
             max_tokens=512,
         )
+        return cast(AgentSelection, selection)
     except Exception as exc:
         logger.error("Agent routing LLM call failed: %s", exc)
         return AgentSelection(

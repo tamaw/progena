@@ -316,7 +316,7 @@ class AgentDiscovery:
             if isinstance(maybe_agents, list):
                 existing_agents = [a for a in maybe_agents if isinstance(a, dict)]
         if existing_agents:
-            summary: dict[str, Any] = {
+            registry_summary: dict[str, Any] = {
                 "success": True,
                 "agents_found": len(existing_agents),
                 "agents_registered": 0,
@@ -328,18 +328,18 @@ class AgentDiscovery:
             try:
                 from .mcp import A2AClient
 
-                summary["agent_card_refresh"] = await self.registry.refresh_agent_cards(
+                registry_summary["agent_card_refresh"] = await self.registry.refresh_agent_cards(
                     A2AClient(),
                 )
             except Exception as e:
-                summary["agent_card_refresh"] = {"error": str(e)}
+                registry_summary["agent_card_refresh"] = {"error": str(e)}
             if hasattr(self.registry, "refresh_agent_health"):
                 try:
-                    summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
+                    registry_summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
                     )
                 except Exception as e:
-                    summary["agent_health_refresh"] = {"error": str(e)}
-            return summary
+                    registry_summary["agent_health_refresh"] = {"error": str(e)}
+            return registry_summary
 
         # Scan folders
         folders = self.scan_agents_folder()

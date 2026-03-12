@@ -460,6 +460,11 @@ def _atomic_write_json(filepath: Path, data: object) -> None:
         raise
 
 
+def _broadcast_widget_refresh(state_reader) -> None:
+    """Notify status listeners that backend-derived widgets changed."""
+    broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
+
+
 @router.get("/workspace", response_model=WorkspaceResponse)
 async def get_workspace():
     """Get browser-workspace bootstrap plus backend-derived widgets."""
@@ -523,6 +528,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         raise HTTPException(status_code=404, detail="Widget not found")
 
     _atomic_write_json(schedule_path, schedule_data)
+    state_reader.invalidate(schedule_path)
 
     refreshed = next((widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None)
     if refreshed is None:
@@ -538,7 +544,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             "updated_at": updated.get("created_at"),
         }
 
-    broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
+    _broadcast_widget_refresh(state_reader)
     return _widget_to_response(refreshed)
 
 
@@ -573,6 +579,12 @@ async def action_run(body: ActionRunRequest):
         raise HTTPException(status_code=400, detail="No run payload provided")
 
     response = await chat_main.client.send_message("\n\n".join(segments))
+    broadcast_chat_event("agent_message", {
+        "content": response,
+        "metadata": {"widget_id": body.widget_id, "action": "run"},
+        "timestamp": time.time(),
+    })
+    _broadcast_widget_refresh(get_state_reader())
     return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
 
 
@@ -591,6 +603,12 @@ async def action_generate(body: ActionGenerateRequest):
         prompt = f"Widget ID: {body.widget_id}\n\n{prompt}"
 
     response = await chat_main.client.send_message(prompt)
+    broadcast_chat_event("agent_message", {
+        "content": response,
+        "metadata": {"widget_id": body.widget_id, "action": "generate"},
+        "timestamp": time.time(),
+    })
+    _broadcast_widget_refresh(get_state_reader())
     return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
 
 

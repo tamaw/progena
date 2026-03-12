@@ -221,6 +221,39 @@ class TestUIFeedbackIntegration:
         assert parsed["health"]["is_running"] is True
         assert len(parsed["agents"]) == 2
 
+    def test_workspace_payload_and_widgets_include_mcp_and_schedule(self, mock_state_files, tmp_path):
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "galactic-translator.log").write_text("translator online\n", encoding="utf-8")
+        (logs_dir / "universal_decoder.jsonl").write_text(
+            json.dumps({"message": "decoder ready", "level": "info"}) + "\n",
+            encoding="utf-8",
+        )
+
+        reader = StateReader(state_dir=mock_state_files, logs_dir=logs_dir)
+        payload = reader.get_workspace_payload()
+
+        assert payload["workspace"]["storage"] == "indexeddb"
+        assert payload["health"]["run_id"] == "alien-demo-001"
+        widget_types = {widget["type"] for widget in payload["widgets"]}
+        assert {"agent", "mcp", "schedule"} <= widget_types
+
+    def test_widget_logs_are_normalized_for_agent_nodes(self, mock_state_files, tmp_path):
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "tech-analyzer.jsonl").write_text(
+            json.dumps({"timestamp": "2026-03-12T10:00:00Z", "level": "warn", "message": "analysis delayed"}) + "\n",
+            encoding="utf-8",
+        )
+
+        reader = StateReader(state_dir=mock_state_files, logs_dir=logs_dir)
+        widgets = reader.get_widgets()
+        tech_widget = next(widget for widget in widgets if widget["id"] == "agent:tech-analyzer")
+
+        assert tech_widget["status"] == "busy"
+        assert tech_widget["logs"][0]["message"] == "analysis delayed"
+        assert tech_widget["logs"][0]["level"] == "warn"
+
 
 class TestAgentFeedbackVisibility:
     """Tests that agent activity is visible to the UI."""

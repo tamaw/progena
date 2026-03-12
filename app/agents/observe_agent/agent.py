@@ -573,11 +573,11 @@ async def handle(req: Request) -> JSONResponse:
 
     req_str = body.get("request", "") if isinstance(body, dict) else ""
     context_raw = body.get("context") if isinstance(body, dict) else {}
-    ctx: dict[str, Any] = context_raw if isinstance(context_raw, dict) else {}
+    request_context: dict[str, Any] = context_raw if isinstance(context_raw, dict) else {}
 
     print("STATUS:executing:Calling responses API with tool access", flush=True)
     try:
-        text = await agent.process(req_str, ctx)
+        text = await agent.process(req_str, request_context)
         response = {
             "success": True,
             "response": text,
