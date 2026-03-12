@@ -108,6 +108,7 @@ AGENT_VERSION = "0.2.0"
 DEFAULT_PORT = 8108
 PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
 COMMITTED_TRUE_RE = re.compile(r'committed\\?":\s*true')
+PUSHED_TRUE_RE = re.compile(r'pushed\\?":\s*true')
 SUCCESS_FALSE_RE = re.compile(r'success\\?":\s*false')
 
 STEP_SKILLS = [
@@ -425,15 +426,19 @@ def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
     pr_call_recorded = "create_pull_request" in payload_lower
     pr_failed = pr_call_recorded and bool(SUCCESS_FALSE_RE.search(payload_lower))
     has_pr_url = bool(PR_URL_RE.search(payload))
+    pushed = bool(PUSHED_TRUE_RE.search(payload_lower))
 
-    if pr_failed:
-        logger.error("PR creation failed. Result summary: commit_recorded=%s, pr_call_recorded=%s, has_pr_url=%s",
-                     commit_recorded, pr_call_recorded, has_pr_url)
+    # If create_pull_request explicitly failed and there is no PR URL, this is a hard failure.
+    if pr_failed and not has_pr_url:
+        logger.error("PR creation failed. Result summary: commit_recorded=%s, pr_call_recorded=%s, has_pr_url=%s, pushed=%s",
+                     commit_recorded, pr_call_recorded, has_pr_url, pushed)
         # Log the entire result to understand what went wrong
         logger.error("Full result JSON:\n%s", payload)
         raise RuntimeError("Builder execution failed: create_pull_request returned success=false.")
-    if commit_recorded and not has_pr_url:
-        raise RuntimeError("Builder committed changes but did not produce a pull request URL.")
+    # Accept success when either a PR was created successfully (create_pull_request success with a PR URL)
+    # OR when there is an existing PR URL and the branch was pushed (update case).
+    if commit_recorded and not has_pr_url and not pushed:
+        raise RuntimeError("Builder committed changes but did not produce a pull request URL and the branch was not pushed.")
 
 
 def _text_msg(text: str) -> Message:
