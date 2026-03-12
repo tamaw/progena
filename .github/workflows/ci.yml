@@ -38,15 +38,14 @@ jobs:
     container:
       image: python:3.12-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
-      volumes:
-        - /var/cache/gh-pip:/github/home/.cache/pip
     env:
-      PIP_CACHE_DIR: /github/home/.cache/pip
+      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Python deps
         run: |
+          mkdir -p "$PIP_CACHE_DIR"
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
@@ -71,15 +70,14 @@ jobs:
     container:
       image: python:3.12-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
-      volumes:
-        - /var/cache/gh-pip:/github/home/.cache/pip
     env:
-      PIP_CACHE_DIR: /github/home/.cache/pip
+      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Python deps
         run: |
+          mkdir -p "$PIP_CACHE_DIR"
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip

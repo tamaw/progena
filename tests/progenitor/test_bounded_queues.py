@@ -167,6 +167,32 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         assert stats["input_queue"]["full"] is True
 
+    async def test_scheduler_enqueues_all_due_items(self):
+        """Scheduler should enqueue every due task in a single poll cycle."""
+        scheduler = MagicMock()
+        scheduler.get_due_items.return_value = [
+            {
+                "id": "sched-1",
+                "message": "first task",
+                "cron_expression": "0 9 * * *",
+            },
+            {
+                "id": "sched-2",
+                "message": "second task",
+                "cron_expression": "0 10 5 5 *",
+            },
+        ]
+        scheduler.is_one_shot_expression.side_effect = [False, True]
+
+        self.state_manager.get_schedule.return_value = scheduler.get_due_items.return_value
+
+        count = await self.loop._check_and_enqueue_scheduled_work(scheduler)
+
+        assert count == 2
+        assert self.loop._input_queue.qsize() == 2
+        self.state_manager.update_schedule_entry.assert_awaited_once()
+        self.state_manager.remove_schedule_entry.assert_awaited_once_with("sched-2")
+
     async def test_enqueue_input_none_timeout_waits_forever(self):
         """Test that timeout=None waits indefinitely (until space available)."""
         # Fill the queue
@@ -217,7 +243,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
 
-        assert fired is True
+        assert fired == 1
         self.loop.enqueue_input.assert_awaited_once()
         self.state_manager.remove_schedule_entry.assert_awaited_once_with("sched_one_off")
 
@@ -242,7 +268,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
 
-        assert fired is True
+        assert fired == 1
         self.loop.enqueue_input.assert_awaited_once()
         self.state_manager.update_schedule_entry.assert_awaited_once()
 

@@ -1,0 +1,212 @@
+/* ============================================================================
+   Progenitor Visual Workspace - Workspace Styles
+   ============================================================================ */
+
+@import '@xyflow/react/dist/style.css';
+
+/* Workspace Layout */
+.workspace-container {
+  display: flex;
+  height: calc(100vh - var(--header-height));
+  width: 100%;
+  overflow: hidden;
+}
+
+/* ---- Sidebar ---- */
+.workspace-sidebar {
+  width: 240px;
+  min-width: 240px;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: width var(--transition-normal), min-width var(--transition-normal);
+}
+
+.workspace-sidebar.collapsed {
+  width: 48px;
+  min-width: 48px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.sidebar-header h3 {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.workspace-sidebar.collapsed .sidebar-header h3 {
+  display: none;
+}
+
+.sidebar-toggle {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--border-radius-sm);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.sidebar-palette {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.workspace-sidebar.collapsed .sidebar-palette {
+  padding: var(--spacing-xs);
+}
+
+/* Palette Items */
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--border-radius-md);
+  cursor: grab;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-primary);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  user-select: none;
+}
+
+.palette-item:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border);
+}
+
+.palette-item:active {
+  cursor: grabbing;
+  background: var(--color-bg-tertiary);
+}
+
+.palette-item-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--border-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.palette-item-icon.prompt { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
+.palette-item-icon.code { background: rgba(63, 185, 80, 0.15); color: #3fb950; }
+.palette-item-icon.webframe { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+.palette-item-icon.label { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
+.palette-item-icon.schedule { background: rgba(188, 140, 255, 0.15); color: #bc8cff; }
+.palette-item-icon.group { background: rgba(110, 118, 129, 0.15); color: #6e7681; }
+.palette-item-icon.agent { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+
+.palette-item-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-sidebar.collapsed .palette-item-info {
+  display: none;
+}
+
+.workspace-sidebar.collapsed .palette-item {
+  padding: var(--spacing-sm);
+  justify-content: center;
+}
+
+.palette-item-name {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item-desc {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Canvas ---- */
+.workspace-canvas {
+  flex: 1;
+  height: 100%;
+}
+
+/* React Flow overrides for theme */
+.workspace-canvas .react-flow__background {
+  background: var(--color-bg-primary);
+}
+
+.workspace-canvas .react-flow__minimap {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-md);
+}
+
+.workspace-canvas .react-flow__controls {
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+
+.workspace-canvas .react-flow__controls button {
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  width: 32px;
+  height: 32px;
+}
+
+.workspace-canvas .react-flow__controls button:hover {
+  background: var(--color-bg-hover);
+}
+
+.workspace-canvas .react-flow__controls button svg {
+  fill: var(--color-text-primary);
+}
+
+.workspace-canvas .react-flow__selection {
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.4);
+}
+
+/* Drop indicator */
+.workspace-canvas.drag-over {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -2px;
+}
