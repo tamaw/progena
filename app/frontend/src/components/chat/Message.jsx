@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 function Message({ message }) {
-  const { role, content, timestamp, isStreaming, error, isScheduled, scheduleId } = message;
+  const { role, content, timestamp, isStreaming, error, isScheduled } = message;
 
   const formattedContent = useMemo(() => {
     if (!content) return '';

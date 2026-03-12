@@ -13,9 +13,13 @@ Reads real state data from data/state/ and data/config/:
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
+import tempfile
 import time
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -62,8 +66,11 @@ class UIStatusResponse(BaseModel):
     # Lists
     loops: list["LoopInfo"] = []
     agents: list["SubAgentInfo"] = []
+    tools: list[dict] = []
     backlog: list["BacklogItemInfo"] = []
     schedule: list["ScheduleItemInfo"] = []
+    widgets: list[dict] = []
+    sessions: dict = {}
 
 
 class LoopInfo(BaseModel):
@@ -123,6 +130,68 @@ class ScheduleResponse(BaseModel):
     """Response containing schedule items."""
     items: list[ScheduleItemInfo]
     total: int
+
+
+class WidgetResponse(BaseModel):
+    """Unified widget payload."""
+    id: str
+    type: str
+    title: str
+    name: str
+    status: str
+    description: str | None = None
+    summary: str | None = None
+    logs: list[dict] = []
+    updated_at: str | None = None
+    data: dict = {}
+
+
+class WidgetsResponse(BaseModel):
+    """Response containing widget entries."""
+    items: list[WidgetResponse]
+    total: int
+
+
+class WorkspaceResponse(BaseModel):
+    """Workspace bootstrap payload."""
+    timestamp: float
+    workspace: dict
+    health: dict
+    sessions: dict
+    widgets: list[WidgetResponse]
+
+
+class WidgetPatchRequest(BaseModel):
+    """Patch request for mutable backend-backed widgets."""
+    enabled: bool | None = None
+    name: str | None = None
+    schedule_type: str | None = None
+    expression: str | None = None
+    timezone: str | None = None
+
+
+class ActionRunRequest(BaseModel):
+    """Run an action using the existing IPC message flow."""
+    widget_id: str | None = None
+    prompt: str | None = None
+    code: str | None = None
+    content: str | None = None
+    input: str | None = None
+    language: str | None = None
+
+
+class ActionGenerateRequest(BaseModel):
+    """Generate content using the existing IPC message flow."""
+    widget_id: str | None = None
+    prompt: str
+    target: str | None = None
+
+
+class ActionResponse(BaseModel):
+    """Action response payload."""
+    ok: bool
+    widget_id: str | None = None
+    response: str
 
 
 class TaskInfo(BaseModel):
@@ -242,6 +311,10 @@ async def get_ui_status_snapshot():
                 )
                 for a in snapshot.agents
             ],
+            tools=[
+                {"name": tool.name, "description": tool.description, "enabled": tool.enabled}
+                for tool in snapshot.tools
+            ],
             backlog=[
                 BacklogItemInfo(id=b.id, type=b.item_type, status=b.status, description=b.description)
                 for b in snapshot.backlog
@@ -250,6 +323,12 @@ async def get_ui_status_snapshot():
                 ScheduleItemInfo(id=s.id, name=s.name, schedule=s.schedule, next_run=s.next_run, enabled=s.enabled)
                 for s in snapshot.schedule
             ],
+            widgets=state_reader.get_widgets(),
+            sessions={
+                "total": snapshot.sessions.total if snapshot.sessions else 0,
+                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
+            },
         )
     except Exception as e:
         logger.error("Failed to get UI status: %s", e)
@@ -346,6 +425,173 @@ async def get_schedule():
         ],
         total=len(schedule),
     )
+
+
+def _widget_to_response(widget: dict) -> WidgetResponse:
+    """Normalize state-reader widget payloads for API responses."""
+    payload = dict(widget)
+    return WidgetResponse(
+        id=payload.get("id", ""),
+        type=payload.get("type", "unknown"),
+        title=payload.get("title") or payload.get("name", ""),
+        name=payload.get("name", ""),
+        status=payload.get("status", "unknown"),
+        description=payload.get("description"),
+        summary=payload.get("summary"),
+        logs=payload.get("logs", []),
+        updated_at=payload.get("updated_at"),
+        data=payload,
+    )
+
+
+def _atomic_write_json(filepath: Path, data: object) -> None:
+    """Atomically write JSON for backend-backed state updates."""
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, prefix=f".{filepath.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, filepath)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_path)
+        raise
+
+
+@router.get("/workspace", response_model=WorkspaceResponse)
+async def get_workspace():
+    """Get browser-workspace bootstrap plus backend-derived widgets."""
+    state_reader = get_state_reader()
+    payload = state_reader.get_workspace_payload()
+    return WorkspaceResponse(
+        timestamp=payload["timestamp"],
+        workspace=payload["workspace"],
+        health=payload["health"],
+        sessions=payload["sessions"],
+        widgets=[_widget_to_response(widget) for widget in payload["widgets"]],
+    )
+
+
+@router.get("/widgets", response_model=WidgetsResponse)
+async def get_widgets():
+    """Get unified widget data derived from existing state/config/log files."""
+    state_reader = get_state_reader()
+    widgets = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
+    return WidgetsResponse(items=widgets, total=len(widgets))
+
+
+@router.patch("/widgets/{widget_id}", response_model=WidgetResponse)
+async def patch_widget(widget_id: str, body: WidgetPatchRequest):
+    """Patch a backend-owned widget where a matching state file exists."""
+    state_reader = get_state_reader()
+    if not widget_id.startswith("schedule:"):
+        raise HTTPException(status_code=400, detail="Only schedule widgets are mutable from the backend")
+
+    schedule_id = widget_id.split(":", 1)[1]
+    schedule_path = state_reader.state_dir / "schedule.json"
+    schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
+    if not isinstance(schedule_data, list):
+        raise HTTPException(status_code=404, detail="Schedule state not found")
+
+    updated = None
+    for entry in schedule_data:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("id") != schedule_id:
+            continue
+        if body.enabled is not None:
+            entry["enabled"] = body.enabled
+        if body.name is not None:
+            entry["name"] = body.name
+            if "message" in entry and not entry.get("message"):
+                entry["message"] = body.name
+        if body.expression is not None:
+            if "schedule" in entry:
+                entry["schedule"] = body.expression
+            if "cron_expression" in entry:
+                entry["cron_expression"] = body.expression
+        if body.timezone is not None:
+            entry["timezone"] = body.timezone
+        if body.schedule_type is not None:
+            entry["schedule_type"] = body.schedule_type
+        updated = entry
+        break
+
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Widget not found")
+
+    _atomic_write_json(schedule_path, schedule_data)
+
+    refreshed = next((widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None)
+    if refreshed is None:
+        refreshed = {
+            "id": widget_id,
+            "type": "schedule",
+            "name": updated.get("name", schedule_id),
+            "title": updated.get("name", schedule_id),
+            "status": "enabled" if updated.get("enabled", True) else "disabled",
+            "description": updated.get("message"),
+            "summary": updated.get("message"),
+            "logs": [],
+            "updated_at": updated.get("created_at"),
+        }
+
+    broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
+    return _widget_to_response(refreshed)
+
+
+@router.get("/schedules", response_model=ScheduleResponse)
+async def get_schedules():
+    """Alias for schedule data using the requested plural path."""
+    return await get_schedule()
+
+
+@router.post("/actions/run", response_model=ActionResponse)
+async def action_run(body: ActionRunRequest):
+    """Run a prompt/code action through the existing IPC message flow."""
+    from . import main as chat_main
+
+    if not chat_main.client:
+        raise HTTPException(status_code=503, detail="Client not initialized")
+
+    code = body.code or body.content
+    segments = []
+    if body.widget_id:
+        segments.append(f"Widget ID: {body.widget_id}")
+    if body.language and code:
+        segments.append(f"Run this {body.language} code:\n{code}")
+    elif code:
+        segments.append(f"Run this code:\n{code}")
+    if body.prompt:
+        segments.append(f"Prompt:\n{body.prompt}")
+    if body.input:
+        segments.append(f"Input:\n{body.input}")
+
+    if not segments:
+        raise HTTPException(status_code=400, detail="No run payload provided")
+
+    response = await chat_main.client.send_message("\n\n".join(segments))
+    return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
+
+
+@router.post("/actions/generate", response_model=ActionResponse)
+async def action_generate(body: ActionGenerateRequest):
+    """Generate output through the existing IPC message flow."""
+    from . import main as chat_main
+
+    if not chat_main.client:
+        raise HTTPException(status_code=503, detail="Client not initialized")
+
+    prompt = body.prompt
+    if body.target:
+        prompt = f"Target: {body.target}\n\n{prompt}"
+    if body.widget_id:
+        prompt = f"Widget ID: {body.widget_id}\n\n{prompt}"
+
+    response = await chat_main.client.send_message(prompt)
+    return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
 
 
 class TelegramStatusResponse(BaseModel):
@@ -590,6 +836,7 @@ async def get_prompts():
 async def get_logs(
     level: str | None = None,
     search: str | None = None,
+    source: str | None = None,
     limit: int = 500,
     format: str = "text",
 ):
@@ -604,82 +851,21 @@ async def get_logs(
 
     Returns recent logs from the agent.
     """
-    import json as json_module
-    import re
-    from pathlib import Path
-
-    logs_dir = Path("logs")
-    log_entries = []
-    log_content = ""
-
-    # Try to read the most recent log file
-    try:
-        log_files = list(logs_dir.glob("*.log")) + list(logs_dir.glob("*.jsonl"))
-        if log_files:
-            # Get most recent by modification time
-            log_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-            recent_log = log_files[0]
-
-            # Read last N lines
-            with open(recent_log, encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-                lines = lines[-limit:]
-
-            # Parse and filter logs
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-
-                # Try to parse as JSON (jsonl format)
-                try:
-                    entry = json_module.loads(line)
-                    log_level = entry.get("level", "info").lower()
-                    message = entry.get("message", entry.get("msg", line))
-                    timestamp = entry.get("timestamp", entry.get("time", ""))
-                except json_module.JSONDecodeError:
-                    # Parse standard log format: [TIMESTAMP] [LEVEL] MESSAGE
-                    log_level = "info"
-                    message = line
-                    timestamp = ""
-
-                    # Try to extract level from common patterns
-                    level_match = re.search(r'\[(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL)\]', line, re.I)
-                    if level_match:
-                        log_level = level_match.group(1).lower()
-                        if log_level == "warning":
-                            log_level = "warn"
-
-                    # Try to extract timestamp
-                    time_match = re.search(r'^\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})', line)
-                    if time_match:
-                        timestamp = time_match.group(1)
-                    entry = {"level": log_level, "message": message, "timestamp": timestamp}
-
-                # Apply filters
-                if level and log_level != level.lower():
-                    continue
-                if search and search.lower() not in message.lower():
-                    continue
-
-                log_entries.append({
-                    "level": log_level,
-                    "message": message,
-                    "timestamp": timestamp,
-                })
-
-            log_content = '\n'.join(lines)
-    except Exception as e:
-        logger.warning("Failed to read logs: %s", e)
+    state_reader = get_state_reader()
+    entries = state_reader.get_logs(level=level, search=search, source=source, limit=limit)
 
     if format == "json":
         return {
-            "entries": log_entries,
-            "total": len(log_entries),
-            "filtered": level is not None or search is not None,
+            "entries": entries,
+            "total": len(entries),
+            "filtered": level is not None or search is not None or source is not None,
         }
 
-    return {"logs": log_content, "total": len(log_entries)}
+    content = "\n".join(
+        f"[{entry['time']}] [{entry['level'].upper()}] [{entry['source']}] {entry['message']}"
+        for entry in entries
+    )
+    return {"logs": content, "total": len(entries)}
 
 
 def create_alert(
@@ -801,6 +987,10 @@ async def _get_current_status() -> dict:
             }
             for a in snapshot.agents
         ],
+        "tools": [
+            {"name": tool.name, "description": tool.description, "enabled": tool.enabled}
+            for tool in snapshot.tools
+        ],
         # Backlog
         "backlog": [
             {"id": b.id, "type": b.item_type, "status": b.status, "description": b.description}
@@ -821,6 +1011,12 @@ async def _get_current_status() -> dict:
             "score": snapshot.build.score if snapshot.build else 0.0,
             "message_count": snapshot.build.message_count if snapshot.build else 0,
         } if snapshot.build else None,
+        "widgets": state_reader.get_widgets(),
+        "sessions": {
+            "total": snapshot.sessions.total if snapshot.sessions else 0,
+            "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+            "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
+        },
     }
 
     if shutdown_mgr and shutdown_mgr.is_shutting_down:
