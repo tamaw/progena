@@ -46,7 +46,10 @@ from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 
 logger = logging.getLogger(__name__)
-AGENT_SLUG = "builder_progenitor"
+
+
+def _agent_log_name() -> str:
+    return os.getenv("AGENT_NAME", "builder_progenitor")
 
 
 # ---------------------------------------------------------------------------
@@ -291,12 +294,13 @@ class BuilderService:
 
         repo_root = Path(__file__).resolve().parents[3]
         config = get_config(repo_root)
-        setup_logging(config, AGENT_SLUG)
+        agent_log_name = _agent_log_name()
+        setup_logging(config, agent_log_name)
 
         for p in (config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir):
             p.mkdir(parents=True, exist_ok=True)
 
-        log_dir = config.storage.log_dir / AGENT_SLUG
+        log_dir = config.storage.log_dir / agent_log_name
         self._graph = _create_graph(config, repo_root, log_dir)
         self._config = config
         self._planner = BuilderClient(config.llm, role="planner", log_dir=log_dir)
