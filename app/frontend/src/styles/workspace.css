@@ -81,6 +81,11 @@
   gap: var(--spacing-xs);
 }
 
+.sidebar-palette.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .workspace-sidebar.collapsed .sidebar-palette {
   padding: var(--spacing-xs);
 }
@@ -108,6 +113,10 @@
 .palette-item:active {
   cursor: grabbing;
   background: var(--color-bg-tertiary);
+}
+
+.palette-item.disabled {
+  cursor: not-allowed;
 }
 
 .palette-item-icon {
@@ -164,6 +173,7 @@
 .workspace-canvas {
   flex: 1;
   height: 100%;
+  position: relative;
 }
 
 /* React Flow overrides for theme */
@@ -209,4 +219,28 @@
 .workspace-canvas.drag-over {
   outline: 2px dashed var(--color-accent);
   outline-offset: -2px;
+}
+
+.workspace-canvas.locked .react-flow {
+  pointer-events: none;
+  filter: saturate(0.7);
+}
+
+.workspace-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+  background: rgba(13, 17, 23, 0.78);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  backdrop-filter: blur(4px);
+}
+
+.workspace-error {
+  flex-direction: column;
 }
