@@ -550,6 +550,47 @@ class TestStateReaderFileOperations:
         assert snapshot.build.in_progress is True
         assert snapshot.build.phase == "verify"
 
+    def test_workspace_payload_tolerates_scalar_json_log_lines(self, temp_state_dir):
+        """Scalar JSON log lines should not crash widget or workspace payload generation."""
+        config_dir = temp_state_dir.parent / "config"
+        logs_dir = temp_state_dir.parent / "logs"
+        config_dir.mkdir(exist_ok=True)
+        logs_dir.mkdir(exist_ok=True)
+
+        (config_dir / "agents.json").write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {
+                            "name": "observe_agent",
+                            "kind": "a2a_agent",
+                            "version": "1.0.0",
+                            "description": "Observer",
+                            "capabilities": [],
+                            "entrypoint": "python",
+                            "transport": "http",
+                            "enabled": True,
+                            "created_at": "2024-01-01T00:00:00Z",
+                            "updated_at": "2024-01-01T00:00:00Z",
+                            "status": "ready",
+                        }
+                    ]
+                }
+            )
+        )
+        (logs_dir / "observe_agent.log").write_text('1\n{"message":"started"}\n', encoding="utf-8")
+
+        reader = StateReader(
+            state_dir=temp_state_dir,
+            config_dir=config_dir,
+            logs_dir=logs_dir,
+        )
+
+        payload = reader.get_workspace_payload()
+
+        assert "widgets" in payload
+        assert any(widget["name"] == "observe_agent" for widget in payload["widgets"])
+
 
 
 
