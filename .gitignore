@@ -64,6 +64,7 @@ venv.bak/
 .idea/
 *.swp
 *.swo
+.progenitor_worktree
 
 # Project specific
 data/state/*.json

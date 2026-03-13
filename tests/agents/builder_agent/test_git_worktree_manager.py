@@ -63,6 +63,7 @@ async def test_commit_changes_raises_when_commit_does_not_advance_head(tmp_path:
     manager.prepare_git_for_worktree = AsyncMock()  # type: ignore[method-assign]
     manager._run_git = AsyncMock(side_effect=[  # type: ignore[method-assign]
         {"returncode": 0, "stdout": "", "stderr": ""},  # add -A
+        {"returncode": 0, "stdout": "", "stderr": ""},  # reset metadata
         {"returncode": 0, "stdout": "M file.py", "stderr": ""},  # status --porcelain
         {"returncode": 0, "stdout": "abc123\n", "stderr": ""},  # rev-parse before
         {"returncode": 0, "stdout": "", "stderr": ""},  # commit
@@ -120,3 +121,20 @@ async def test_commit_changes_prepares_git_for_worktree(
     assert ["config", "user.name", "Builder Bot"] in calls
     assert ["config", "user.email", "builder@example.com"] in calls
     assert ["config", "credential.helper", "!gh auth git-credential"] in calls
+
+
+@pytest.mark.asyncio
+async def test_commit_changes_ignores_worktree_metadata_file(tmp_path: Path) -> None:
+    manager = GitWorktreeManager(worktrees_dir=tmp_path / "worktrees", repo_path=tmp_path, cleanup_on_init=False)
+    manager.prepare_git_for_worktree = AsyncMock()  # type: ignore[method-assign]
+    manager._run_git = AsyncMock(side_effect=[  # type: ignore[method-assign]
+        {"returncode": 0, "stdout": "", "stderr": ""},  # add -A
+        {"returncode": 0, "stdout": "", "stderr": ""},  # reset metadata
+        {"returncode": 0, "stdout": "?? .progenitor_worktree\n", "stderr": ""},  # status --porcelain
+    ])
+
+    sha = await manager.commit_changes(tmp_path / "worktree", "test commit")
+
+    assert sha is None
+    calls = [call.args[0] for call in manager._run_git.await_args_list]  # type: ignore[attr-defined]
+    assert ["reset", "--", ".progenitor_worktree"] in calls

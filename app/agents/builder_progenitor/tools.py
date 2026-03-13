@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +21,7 @@ from .git import GitWorktreeManager
 logger = logging.getLogger(__name__)
 
 _ACTIVE_TOOL_RUNTIMES: list[ToolRuntime] = []
+PR_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +44,11 @@ def _derive_work_item_suffix(context_json: str | None) -> str:
         if isinstance(val, str) and val.strip():
             return "".join(c for c in val.lower() if c.isalnum())[:16]
     return "manual"
+
+
+def _extract_pr_url(text: str) -> str:
+    match = PR_URL_RE.search(text or "")
+    return match.group(0) if match else ""
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +584,7 @@ def create_builder_tools(
         if not push.get("success"):
             return {
                 "success": False,
+                "pushed": False,
                 "url": "",
                 "error": f"Push failed: {push.get('stderr', '')}".strip(),
             }
@@ -597,29 +605,47 @@ def create_builder_tools(
             ],
             timeout=180,
         )
+        pr_output = "\n".join(
+            str(part).strip()
+            for part in (pr.get("stdout"), pr.get("stderr"))
+            if str(part or "").strip()
+        ).strip()
+        url = _extract_pr_url(pr_output)
         if not pr.get("success"):
+            if url and "already exists" in pr_output.lower():
+                return {
+                    "success": True,
+                    "pushed": True,
+                    "existing_pr": True,
+                    "url": url,
+                    "error": "",
+                    "output": pr_output[-4000:],
+                }
             return {
                 "success": False,
+                "pushed": True,
                 "url": "",
                 "error": (pr.get("stderr") or pr.get("stdout") or "gh pr create failed").strip(),
+                "output": pr_output[-4000:],
             }
-
-        pr_output = (pr.get("stdout") or "").strip()
-        url = ""
-        for line in pr_output.splitlines():
-            line = line.strip()
-            if line.startswith("https://github.com/") and "/pull/" in line:
-                url = line
-                break
 
         if not url:
             return {
                 "success": False,
+                "pushed": True,
                 "url": "",
                 "error": f"gh pr create succeeded but no PR URL found in output: {pr_output[:500]}",
+                "output": pr_output[-4000:],
             }
 
-        return {"success": True, "url": url, "error": "", "output": pr_output[-4000:]}
+        return {
+            "success": True,
+            "pushed": True,
+            "existing_pr": False,
+            "url": url,
+            "error": "",
+            "output": pr_output[-4000:],
+        }
 
     async def gh_cli(
         worktree_path: str,
