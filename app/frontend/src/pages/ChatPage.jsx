@@ -1,14 +1,43 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useEventsSSE, useStatusSSE } from '../hooks/useSSE';
+import { useEventsSSE } from '../hooks/useSSE';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import Header from '../components/layout/Header';
-import Sidebar from '../components/layout/Sidebar';
 import ChatInput from '../components/chat/ChatInput';
 import Message from '../components/chat/Message';
 import TypingIndicator from '../components/chat/TypingIndicator';
 import QuickActions from '../components/chat/QuickActions';
+
+function normalizeStoredMessage(message, index) {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  const role = typeof message.role === 'string' ? message.role : 'assistant';
+  const timestamp = typeof message.timestamp === 'number' ? message.timestamp : Date.now();
+  let content = message.content;
+
+  if (typeof content !== 'string') {
+    if (content === null || content === undefined) {
+      content = '';
+    } else {
+      try {
+        content = JSON.stringify(content);
+      } catch {
+        content = String(content);
+      }
+    }
+  }
+
+  return {
+    ...message,
+    id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
+    role,
+    content,
+    timestamp,
+  };
+}
 
 function ChatPage() {
   const { config } = useConfig();
@@ -28,7 +57,13 @@ function ChatPage() {
     }
 
     try {
-      return JSON.parse(saved);
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .map((message, index) => normalizeStoredMessage(message, index))
+        .filter(Boolean);
     } catch (error) {
       console.warn('Failed to load chat history:', error);
       return [];
@@ -37,7 +72,6 @@ function ChatPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [typingState, setTypingState] = useState('thinking');
   const [tokenCount, setTokenCount] = useState(0);
-  const [status, setStatus] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const messagesEndRef = useRef(null);
 
@@ -140,18 +174,8 @@ function ChatPage() {
     }
   }, [show]);
 
-  // Handle status events (from /status/stream SSE stream)
-  const handleStatusEvent = useCallback((event) => {
-    if (!event?.data) return;
-
-    if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
-      setStatus(event.data);
-    }
-  }, []);
-
-  // Connect to both SSE streams
+  // Connect to chat SSE stream
   useEventsSSE(handleChatEvent);
-  useStatusSSE(handleStatusEvent);
 
   const handleSend = useCallback(async (content) => {
     const userMessage = {
@@ -236,7 +260,6 @@ function ChatPage() {
     <div className="app-container">
       <Header connectionState={connectionState} />
       <main className="main-content">
-        <Sidebar status={status} />
         <div className="chat-container">
           <div className="chat-messages">
             {messages.length === 0 ? (

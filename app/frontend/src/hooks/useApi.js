@@ -1,10 +1,48 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useConfig } from '../context/ConfigContext';
+import { useHealth } from '../context/HealthContext';
+
+function normalizeInputContent(content) {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (content === null || content === undefined) {
+    return '';
+  }
+  if (typeof content === 'number' || typeof content === 'boolean') {
+    return String(content);
+  }
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function buildResponsesInput(history, message) {
+  return history
+    .concat([{ role: 'user', content: message }])
+    .map((entry) => ({
+      role: entry.role,
+      content: normalizeInputContent(entry.content),
+    }))
+    .filter((entry) => entry.content);
+}
 
 export function useApi() {
   const { config, getApiUrl } = useConfig();
+  const { isHealthy } = useHealth();
   const [connectionState, setConnectionState] = useState('disconnected');
   const abortControllerRef = useRef(null);
+
+  useEffect(() => {
+    setConnectionState((current) => {
+      if (isHealthy) {
+        return current === 'connecting' ? current : 'connected';
+      }
+      return current === 'connecting' ? current : 'disconnected';
+    });
+  }, [isHealthy]);
 
   const fetchWithRetry = useCallback(async (endpoint, options = {}) => {
     const url = getApiUrl(endpoint);
@@ -20,7 +58,7 @@ export function useApi() {
 
     for (let attempt = 0; attempt < config.api.retryAttempts; attempt++) {
       try {
-        setConnectionState('connecting');
+        setConnectionState((current) => (isHealthy ? current : 'connecting'));
         const response = await fetch(url, mergedOptions);
 
         if (!response.ok) {
@@ -41,7 +79,7 @@ export function useApi() {
         }
       }
     }
-  }, [config, getApiUrl]);
+  }, [config, getApiUrl, isHealthy]);
 
   const getHealth = useCallback(async () => {
     const response = await fetchWithRetry('health');
@@ -117,10 +155,7 @@ export function useApi() {
   }, [fetchWithRetry]);
 
   const sendMessage = useCallback(async (message, history = []) => {
-    const input = history
-      .concat([{ role: 'user', content: message }])
-      .map((entry) => ({ role: entry.role, content: entry.content }))
-      .filter((entry) => entry.content);
+    const input = buildResponsesInput(history, message);
     const response = await fetchWithRetry('responses', {
       method: 'POST',
       body: JSON.stringify({
@@ -139,13 +174,11 @@ export function useApi() {
     }
 
     abortControllerRef.current = new AbortController();
-    const input = history
-      .concat([{ role: 'user', content: message }])
-      .map((entry) => ({ role: entry.role, content: entry.content }))
-      .filter((entry) => entry.content);
+    const input = buildResponsesInput(history, message);
     const url = getApiUrl('responses');
 
     try {
+      setConnectionState((current) => (isHealthy ? current : 'connecting'));
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -161,6 +194,8 @@ export function useApi() {
         const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
         throw new Error(error.error?.message || `HTTP ${response.status}`);
       }
+
+      setConnectionState('connected');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -202,10 +237,11 @@ export function useApi() {
       if (error.name === 'AbortError') {
         onComplete?.('cancelled');
       } else {
+        setConnectionState('error');
         onError?.(error);
       }
     }
-  }, [config, getApiUrl]);
+  }, [config, getApiUrl, isHealthy]);
 
   const cancelStream = useCallback(() => {
     if (abortControllerRef.current) {

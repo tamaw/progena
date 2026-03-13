@@ -69,6 +69,7 @@ function WorkspaceInner() {
     refreshWorkspace,
     syncWidgets,
   } = useWorkspaceContext();
+  const workspaceReady = !loading && !error;
 
   const reactFlowInstance = useReactFlow();
   const reactFlowWrapper = useRef(null);
@@ -102,6 +103,10 @@ function WorkspaceInner() {
   // Handle drop from sidebar
   const onDrop = useCallback(
     (event) => {
+      if (!workspaceReady) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       setDragOver(false);
 
@@ -115,14 +120,17 @@ function WorkspaceInner() {
 
       addNode(type, position);
     },
-    [reactFlowInstance, addNode]
+    [workspaceReady, reactFlowInstance, addNode]
   );
 
   const onDragOver = useCallback((event) => {
+    if (!workspaceReady) {
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     setDragOver(true);
-  }, []);
+  }, [workspaceReady]);
 
   const onDragLeave = useCallback(() => {
     setDragOver(false);
@@ -138,22 +146,28 @@ function WorkspaceInner() {
 
   // Context menu
   const onNodeContextMenu = useCallback((event, node) => {
+    if (!workspaceReady) {
+      return;
+    }
     event.preventDefault();
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
       nodeId: node.id,
     });
-  }, []);
+  }, [workspaceReady]);
 
   const onPaneContextMenu = useCallback((event) => {
+    if (!workspaceReady) {
+      return;
+    }
     event.preventDefault();
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
       nodeId: null,
     });
-  }, []);
+  }, [workspaceReady]);
 
   const onContextMenuAction = useCallback(
     (action, nodeId) => {
@@ -196,6 +210,9 @@ function WorkspaceInner() {
   // Keyboard shortcuts
   const onKeyDown = useCallback(
     (event) => {
+      if (!workspaceReady) {
+        return;
+      }
       // Only handle if not in an input/textarea
       const tag = event.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -217,7 +234,7 @@ function WorkspaceInner() {
         }
       }
     },
-    [nodes, removeNodes, duplicateNode]
+    [workspaceReady, nodes, removeNodes, duplicateNode]
   );
 
   return (
@@ -225,9 +242,10 @@ function WorkspaceInner() {
       <WorkspaceSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
+        disabled={!workspaceReady}
       />
       <div
-        className={`workspace-canvas ${dragOver ? 'drag-over' : ''}`}
+        className={`workspace-canvas ${dragOver ? 'drag-over' : ''} ${!workspaceReady ? 'locked' : ''}`}
         ref={reactFlowWrapper}
         onDrop={onDrop}
         onDragOver={onDragOver}
@@ -243,17 +261,24 @@ function WorkspaceInner() {
         <ReactFlow
           nodes={nodes}
           edges={[]}
-          onNodesChange={onNodesChange}
-          onMoveEnd={onMoveEnd}
-          onNodeContextMenu={onNodeContextMenu}
-          onPaneContextMenu={onPaneContextMenu}
-          onPaneClick={onPaneClick}
+          onNodesChange={workspaceReady ? onNodesChange : undefined}
+          onMoveEnd={workspaceReady ? onMoveEnd : undefined}
+          onNodeContextMenu={workspaceReady ? onNodeContextMenu : undefined}
+          onPaneContextMenu={workspaceReady ? onPaneContextMenu : undefined}
+          onPaneClick={workspaceReady ? onPaneClick : undefined}
           nodeTypes={nodeTypes}
           fitView={false}
           deleteKeyCode={null}
           multiSelectionKeyCode="Shift"
-          selectionOnDrag
-          panOnDrag={[1, 2]}
+          selectionOnDrag={workspaceReady}
+          panOnDrag={workspaceReady ? [1, 2] : false}
+          nodesDraggable={workspaceReady}
+          nodesConnectable={workspaceReady}
+          elementsSelectable={workspaceReady}
+          zoomOnScroll={workspaceReady}
+          zoomOnPinch={workspaceReady}
+          zoomOnDoubleClick={workspaceReady}
+          panOnScroll={workspaceReady}
           selectionMode="partial"
           snapToGrid
           snapGrid={[16, 16]}
