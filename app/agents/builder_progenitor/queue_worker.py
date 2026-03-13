@@ -38,7 +38,10 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-TASK_LOG_PATH = Path(os.environ.get("BUILDER_TASK_LOG", "/app/logs/builder/builder_tasks.jsonl"))
+_agent_name = os.environ.get("PROGENITOR_AGENT_NAME", "builder_progenitor")
+TASK_LOG_PATH = Path(
+    os.environ.get("BUILDER_TASK_LOG", f"/app/logs/{_agent_name}/{_agent_name}_tasks.jsonl")
+)
 
 _PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
 _COMMIT_HASH_RE = re.compile(r"(?:SHA|sha|commit|hash)[:\s]+([0-9a-f]{7,40})\b", re.IGNORECASE)

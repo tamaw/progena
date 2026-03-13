@@ -46,6 +46,7 @@ from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 
 logger = logging.getLogger(__name__)
+AGENT_SLUG = "builder_progenitor"
 
 
 # ---------------------------------------------------------------------------
@@ -290,12 +291,12 @@ class BuilderService:
 
         repo_root = Path(__file__).resolve().parents[3]
         config = get_config(repo_root)
-        setup_logging(config, "builder")
+        setup_logging(config, AGENT_SLUG)
 
         for p in (config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir):
             p.mkdir(parents=True, exist_ok=True)
 
-        log_dir = config.storage.log_dir / "builder"
+        log_dir = config.storage.log_dir / AGENT_SLUG
         self._graph = _create_graph(config, repo_root, log_dir)
         self._config = config
         self._planner = BuilderClient(config.llm, role="planner", log_dir=log_dir)
@@ -549,7 +550,7 @@ class BuilderExecutor(AgentExecutor):
 
     On completion the background worker appends a JSONL record under the
     configured log directory, defaulting to
-    ``/app/logs/builder/builder_tasks.jsonl``
+    ``/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl``
     (see :mod:`queue_worker`).
     """
 
