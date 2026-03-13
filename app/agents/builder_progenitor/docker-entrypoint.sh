@@ -19,13 +19,14 @@ if [ -n "${GH_TOKEN:-}" ]; then
 fi
 
 ensure_workspace() {
+  agent_name="${AGENT_NAME:?AGENT_NAME must be set}"
   base_dir="${PROGENITOR_WORKTREES_ROOT:-/app/worktrees}"
   repo_url="${PROGENITOR_REPO_URL:-}"
   token="${GH_TOKEN:-}"
   auth_repo_url="$repo_url"
-  log_dir="${PROGENITOR_LOG_DIR:-/app/logs/builder}"
+  log_dir="${PROGENITOR_LOG_DIR:-/app/logs}"
 
-  mkdir -p "$log_dir" /app/data "$base_dir"
+  mkdir -p "$log_dir" "$log_dir/$agent_name" /app/data "$base_dir"
 
   # Containers often mount host-owned directories, which triggers Git's
   # ownership protection for non-root users. Mark our workspace as safe.

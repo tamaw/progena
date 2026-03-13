@@ -4,14 +4,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     AZURE_OPENAI_BASE_URL= \
     AZURE_OPENAI_API_KEY= \
+    AGENT_NAME=observe_agent \
     PROGENITOR_MODEL_DEFAULT= \
     GH_TOKEN= \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
     TEST_MODE=false \
     PROGENITOR_STATE_DIR=/app/data/state \
-    PROGENITOR_LOG_DIR=/app/logs \
-    OBSERVE_STATE_DIR=/app/data/state \
-    OBSERVE_LOGS_DIR=/app/logs
+    PROGENITOR_LOG_DIR=/app/logs
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 

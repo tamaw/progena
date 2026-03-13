@@ -38,7 +38,20 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-TASK_LOG_PATH = Path(os.environ.get("BUILDER_TASK_LOG", "/logs/builder_progenitor_tasks.jsonl"))
+def _require_agent_name() -> str:
+    agent_name = os.environ.get("AGENT_NAME", "").strip()
+    if not agent_name:
+        raise RuntimeError("AGENT_NAME must be set for builder_progenitor")
+    return agent_name
+
+
+def get_task_log_path() -> Path:
+    agent_name = _require_agent_name()
+    base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs"))
+    return base_log_dir / agent_name / f"{agent_name}_tasks.jsonl"
+
+
+TASK_LOG_PATH: Path | None = get_task_log_path() if os.environ.get("AGENT_NAME", "").strip() else None
 
 _PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
 _COMMIT_HASH_RE = re.compile(r"(?:SHA|sha|commit|hash)[:\s]+([0-9a-f]{7,40})\b", re.IGNORECASE)
@@ -79,7 +92,11 @@ class _QueuedTask:
 # ---------------------------------------------------------------------------
 
 
-def append_task_record(record: TaskRecord, log_path: Path = TASK_LOG_PATH) -> None:
+def _resolve_log_path(log_path: Path | None) -> Path:
+    return log_path if log_path is not None else get_task_log_path()
+
+
+def append_task_record(record: TaskRecord, log_path: Path | None = None) -> None:
     """Atomically append *record* as a JSON line to *log_path*.
 
     The parent directory is created when missing.  A ``<log>.lock`` file is
@@ -87,6 +104,7 @@ def append_task_record(record: TaskRecord, log_path: Path = TASK_LOG_PATH) -> No
     interleave partial writes.  An in-process ``threading.Lock`` adds an
     extra safety layer for in-process concurrency.
     """
+    log_path = _resolve_log_path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     line = (
@@ -141,7 +159,7 @@ def sync_wait_for_completion(
     task_id: str,
     timeout_seconds: float = 60.0,
     poll_interval: float = 1.0,
-    log_path: Path = TASK_LOG_PATH,
+    log_path: Path | None = None,
 ) -> dict[str, Any] | None:
     """Block until a completion record for *task_id* appears in *log_path*.
 
@@ -153,6 +171,7 @@ def sync_wait_for_completion(
     """
     import time
 
+    log_path = _resolve_log_path(log_path)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         record = _find_record(task_id, log_path)
@@ -199,13 +218,13 @@ class BuilderTaskQueue:
         self,
         service: BuilderService,
         max_concurrent: int = 1,
-        log_path: Path = TASK_LOG_PATH,
+        log_path: Path | None = None,
     ) -> None:
         self._service = service
         self._queue: asyncio.Queue[_QueuedTask] = asyncio.Queue()
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._worker_task: asyncio.Task[None] | None = None
-        self._log_path = log_path
+        self._log_path = _resolve_log_path(log_path)
         self._queued_task_ids: set[str] = set()
         self._cancelled_task_ids: set[str] = set()
 

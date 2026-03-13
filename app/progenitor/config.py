@@ -516,7 +516,7 @@ def reload_config(
     return _config
 
 
-def setup_logging(config: ProgenitorConfig, agent_name: str = "progenitor") -> None:
+def setup_logging(config: ProgenitorConfig, agent_name: str) -> None:
     """Configure logging based on configuration.
 
     Supports two formats:

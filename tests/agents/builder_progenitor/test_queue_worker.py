@@ -1,7 +1,13 @@
 """Tests for the builder background queue worker."""
 
+import importlib
+import os
+
 import pytest
 
+os.environ.setdefault("AGENT_NAME", "builder_progenitor")
+
+from app.agents.builder_progenitor import queue_worker
 from app.agents.builder_progenitor.queue_worker import BuilderTaskQueue, _QueuedTask
 
 
@@ -38,3 +44,33 @@ async def test_cancel_delegates_to_service_for_running_task():
 
     assert cancelled is True
     assert service.cancelled == ["running-task"]
+
+
+def test_task_log_path_defaults_to_progenitor_log_dir(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AGENT_NAME", "builder_progenitor")
+
+    reloaded = importlib.reload(queue_worker)
+    try:
+        assert reloaded.get_task_log_path().as_posix() == "/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl"
+    finally:
+        importlib.reload(queue_worker)
+
+
+def test_task_log_path_uses_agent_name_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AGENT_NAME", "custom_builder")
+
+    reloaded = importlib.reload(queue_worker)
+    try:
+        assert reloaded.get_task_log_path().as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
+    finally:
+        importlib.reload(queue_worker)
+
+
+def test_task_log_path_requires_agent_name(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("AGENT_NAME", raising=False)
+
+    with pytest.raises(RuntimeError, match="AGENT_NAME must be set"):
+        importlib.reload(queue_worker).get_task_log_path()
+
+    monkeypatch.setenv("AGENT_NAME", "builder_progenitor")
+    importlib.reload(queue_worker)

@@ -48,6 +48,13 @@ from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 logger = logging.getLogger(__name__)
 
 
+def _agent_log_name() -> str:
+    agent_name = os.getenv("AGENT_NAME", "").strip()
+    if not agent_name:
+        raise RuntimeError("AGENT_NAME must be set for builder_progenitor")
+    return agent_name
+
+
 # ---------------------------------------------------------------------------
 # Logging utilities
 # ---------------------------------------------------------------------------
@@ -290,12 +297,13 @@ class BuilderService:
 
         repo_root = Path(__file__).resolve().parents[3]
         config = get_config(repo_root)
-        setup_logging(config, "builder")
+        agent_log_name = _agent_log_name()
+        setup_logging(config, agent_log_name)
 
         for p in (config.storage.state_dir, config.storage.log_dir, config.storage.worktree_dir):
             p.mkdir(parents=True, exist_ok=True)
 
-        log_dir = config.storage.log_dir / "builder"
+        log_dir = config.storage.log_dir / agent_log_name
         self._graph = _create_graph(config, repo_root, log_dir)
         self._config = config
         self._planner = BuilderClient(config.llm, role="planner", log_dir=log_dir)
@@ -547,8 +555,10 @@ class BuilderExecutor(AgentExecutor):
     "accepted" response without blocking on execution.  Tasks that run longer
     than 30 s therefore never affect HTTP response times.
 
-    On completion the background worker appends a JSONL record to
-    ``/logs/builder_progenitor_tasks.jsonl`` (see :mod:`queue_worker`).
+    On completion the background worker appends a JSONL record under the
+    configured log directory, defaulting to
+    ``/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl``
+    (see :mod:`queue_worker`).
     """
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
