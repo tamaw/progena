@@ -2,6 +2,33 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useConfig } from '../context/ConfigContext';
 import { useHealth } from '../context/HealthContext';
 
+function normalizeInputContent(content) {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (content === null || content === undefined) {
+    return '';
+  }
+  if (typeof content === 'number' || typeof content === 'boolean') {
+    return String(content);
+  }
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function buildResponsesInput(history, message) {
+  return history
+    .concat([{ role: 'user', content: message }])
+    .map((entry) => ({
+      role: entry.role,
+      content: normalizeInputContent(entry.content),
+    }))
+    .filter((entry) => entry.content);
+}
+
 export function useApi() {
   const { config, getApiUrl } = useConfig();
   const { isHealthy } = useHealth();
@@ -128,10 +155,7 @@ export function useApi() {
   }, [fetchWithRetry]);
 
   const sendMessage = useCallback(async (message, history = []) => {
-    const input = history
-      .concat([{ role: 'user', content: message }])
-      .map((entry) => ({ role: entry.role, content: entry.content }))
-      .filter((entry) => entry.content);
+    const input = buildResponsesInput(history, message);
     const response = await fetchWithRetry('responses', {
       method: 'POST',
       body: JSON.stringify({
@@ -150,10 +174,7 @@ export function useApi() {
     }
 
     abortControllerRef.current = new AbortController();
-    const input = history
-      .concat([{ role: 'user', content: message }])
-      .map((entry) => ({ role: entry.role, content: entry.content }))
-      .filter((entry) => entry.content);
+    const input = buildResponsesInput(history, message);
     const url = getApiUrl('responses');
 
     try {

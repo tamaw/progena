@@ -10,6 +10,36 @@ import Message from '../components/chat/Message';
 import TypingIndicator from '../components/chat/TypingIndicator';
 import QuickActions from '../components/chat/QuickActions';
 
+function normalizeStoredMessage(message, index) {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  const role = typeof message.role === 'string' ? message.role : 'assistant';
+  const timestamp = typeof message.timestamp === 'number' ? message.timestamp : Date.now();
+  let content = message.content;
+
+  if (typeof content !== 'string') {
+    if (content === null || content === undefined) {
+      content = '';
+    } else {
+      try {
+        content = JSON.stringify(content);
+      } catch {
+        content = String(content);
+      }
+    }
+  }
+
+  return {
+    ...message,
+    id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
+    role,
+    content,
+    timestamp,
+  };
+}
+
 function ChatPage() {
   const { config } = useConfig();
   const {
@@ -28,7 +58,13 @@ function ChatPage() {
     }
 
     try {
-      return JSON.parse(saved);
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .map((message, index) => normalizeStoredMessage(message, index))
+        .filter(Boolean);
     } catch (error) {
       console.warn('Failed to load chat history:', error);
       return [];
