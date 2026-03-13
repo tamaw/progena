@@ -5,7 +5,7 @@ function formatUptime(seconds) {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
-function Sidebar({ status }) {
+function SidebarContent({ status, mode = 'sidebar' }) {
   const agentStatus = {
     running: status?.progenitor_running ? 'Running' : 'Stopped',
     cycles: status?.cycle_count ?? '--',
@@ -18,12 +18,16 @@ function Sidebar({ status }) {
   const agents = status?.agents || [];
   const backlog = status?.backlog || [];
   const schedule = status?.schedule || [];
+  const sectionClassName = mode === 'dashboard' ? 'dashboard-panel' : 'sidebar-section';
+  const titleClassName = mode === 'dashboard' ? 'panel-header' : 'sidebar-title';
 
   return (
-    <aside className="sidebar" id="sidebar">
-      <div className="sidebar-section">
-        <h3 className="sidebar-title">Progenitor Status</h3>
-        <div className="agent-status-panel">
+    <>
+      <div className={`${sectionClassName} ${mode === 'dashboard' ? 'detail-panel' : ''}`.trim()}>
+        <div className={titleClassName}>
+          <h3>Progenitor Status</h3>
+        </div>
+        <div className={mode === 'dashboard' ? 'panel-body status-detail-grid' : 'agent-status-panel'}>
           <div className="status-item">
             <span className="status-label">Status</span>
             <span className="status-value">{agentStatus.running}</span>
@@ -51,9 +55,12 @@ function Sidebar({ status }) {
         </div>
       </div>
 
-      <div className="sidebar-section">
-        <h3 className="sidebar-title">Loops</h3>
-        <div className="sub-agents-list">
+      <div className={sectionClassName}>
+        <div className={titleClassName}>
+          <h3>Loops</h3>
+          {mode === 'dashboard' && <span className="badge">{loops.length}</span>}
+        </div>
+        <div className={mode === 'dashboard' ? 'panel-body panel-list' : 'sub-agents-list'}>
           {loops.length > 0 ? (
             loops.map((loop, i) => (
               <div key={i} className="loop-item">
@@ -62,17 +69,17 @@ function Sidebar({ status }) {
               </div>
             ))
           ) : (
-            <div className="empty-state">No active loops</div>
+            <div className={`empty-state ${mode === 'dashboard' ? 'small' : ''}`.trim()}>No active loops</div>
           )}
         </div>
       </div>
 
-      <div className="sidebar-section build-status-section">
-        <h3 className="sidebar-title">
-          <span>Build Status</span>
-          <span className="build-indicator idle"></span>
-        </h3>
-        <div className="build-status-panel">
+      <div className={`${sectionClassName} build-panel`.trim()}>
+        <div className={titleClassName}>
+          <h3>Build Status</h3>
+          {mode !== 'dashboard' && <span className="build-indicator idle"></span>}
+        </div>
+        <div className={mode === 'dashboard' ? 'panel-body build-status-panel' : 'build-status-panel'}>
           <div className="build-idle-state">
             <span className="build-icon">✓</span>
             <span>No build in progress</span>
@@ -80,9 +87,12 @@ function Sidebar({ status }) {
         </div>
       </div>
 
-      <div className="sidebar-section">
-        <h3 className="sidebar-title">Registered Agents</h3>
-        <div className="sub-agents-list">
+      <div className={sectionClassName}>
+        <div className={titleClassName}>
+          <h3>Registered Agents</h3>
+          {mode === 'dashboard' && <span className="badge">{agents.length}</span>}
+        </div>
+        <div className={mode === 'dashboard' ? 'panel-body panel-list' : 'sub-agents-list'}>
           {agents.length > 0 ? (
             agents.map((agent, i) => (
               <div key={i} className="agent-item">
@@ -92,14 +102,17 @@ function Sidebar({ status }) {
               </div>
             ))
           ) : (
-            <div className="empty-state">No registered agents</div>
+            <div className={`empty-state ${mode === 'dashboard' ? 'small' : ''}`.trim()}>No registered agents</div>
           )}
         </div>
       </div>
 
-      <div className="sidebar-section">
-        <h3 className="sidebar-title">Backlog</h3>
-        <div className="backlog-list">
+      <div className={sectionClassName}>
+        <div className={titleClassName}>
+          <h3>Backlog</h3>
+          {mode === 'dashboard' && <span className="badge">{backlog.length}</span>}
+        </div>
+        <div className={mode === 'dashboard' ? 'panel-body panel-list' : 'backlog-list'}>
           {backlog.length > 0 ? (
             backlog.map((item, i) => (
               <div key={i} className="backlog-item">
@@ -108,14 +121,17 @@ function Sidebar({ status }) {
               </div>
             ))
           ) : (
-            <div className="empty-state">No backlog items</div>
+            <div className={`empty-state ${mode === 'dashboard' ? 'small' : ''}`.trim()}>No backlog items</div>
           )}
         </div>
       </div>
 
-      <div className="sidebar-section">
-        <h3 className="sidebar-title">Schedule</h3>
-        <div className="schedule-list">
+      <div className={sectionClassName}>
+        <div className={titleClassName}>
+          <h3>Schedule</h3>
+          {mode === 'dashboard' && <span className="badge">{schedule.length}</span>}
+        </div>
+        <div className={mode === 'dashboard' ? 'panel-body panel-list' : 'schedule-list'}>
           {schedule.length > 0 ? (
             schedule.map((task, i) => (
               <div key={i} className="schedule-item">
@@ -124,12 +140,24 @@ function Sidebar({ status }) {
               </div>
             ))
           ) : (
-            <div className="empty-state">No scheduled tasks</div>
+            <div className={`empty-state ${mode === 'dashboard' ? 'small' : ''}`.trim()}>No scheduled tasks</div>
           )}
         </div>
       </div>
+    </>
+  );
+}
+
+function Sidebar({ status }) {
+  return (
+    <aside className="sidebar" id="sidebar">
+      <SidebarContent status={status} />
     </aside>
   );
+}
+
+export function DashboardSidebarSections({ status }) {
+  return <SidebarContent status={status} mode="dashboard" />;
 }
 
 export default Sidebar;
