@@ -33,9 +33,11 @@
     display: flex;
     align-items: center;
     gap: var(--spacing-md);
+    flex-wrap: wrap;
 }
 
 .filter-select {
+    min-width: 180px;
     padding: 8px 12px;
     border: 1px solid var(--color-border);
     border-radius: var(--border-radius-sm);
@@ -162,12 +164,21 @@
     flex-direction: column;
 }
 
+.logs-container-full .badge {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+}
+
 .logs-scroll-area {
     flex: 1;
     overflow-y: auto;
     font-family: var(--font-family-mono);
     font-size: var(--font-size-xs);
     line-height: 1.6;
+    padding-bottom: var(--spacing-sm);
 }
 
 /* Log Entry */
@@ -233,6 +244,7 @@
 .log-message-full {
     color: var(--color-text-primary);
     word-break: break-word;
+    white-space: pre-wrap;
 }
 
 .log-message-full .highlight {

@@ -58,7 +58,7 @@ export function useApi() {
 
     for (let attempt = 0; attempt < config.api.retryAttempts; attempt++) {
       try {
-        setConnectionState('connecting');
+        setConnectionState((current) => (isHealthy ? current : 'connecting'));
         const response = await fetch(url, mergedOptions);
 
         if (!response.ok) {
@@ -79,7 +79,7 @@ export function useApi() {
         }
       }
     }
-  }, [config, getApiUrl]);
+  }, [config, getApiUrl, isHealthy]);
 
   const getHealth = useCallback(async () => {
     const response = await fetchWithRetry('health');
@@ -178,7 +178,7 @@ export function useApi() {
     const url = getApiUrl('responses');
 
     try {
-      setConnectionState('connecting');
+      setConnectionState((current) => (isHealthy ? current : 'connecting'));
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -241,7 +241,7 @@ export function useApi() {
         onError?.(error);
       }
     }
-  }, [config, getApiUrl]);
+  }, [config, getApiUrl, isHealthy]);
 
   const cancelStream = useCallback(() => {
     if (abortControllerRef.current) {
