@@ -10,9 +10,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     COPILOT_GITHUB_TOKEN= \
     GIT_AUTHOR_NAME= \
     GIT_AUTHOR_EMAIL= \
+    PROGENITOR_AGENT_NAME=builder_progenitor \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
-    PROGENITOR_LOG_DIR=/app/logs/builder \
-    BUILDER_TASK_LOG=/app/logs/builder/builder_tasks.jsonl \
+    PROGENITOR_LOG_DIR=/app/logs/builder_progenitor \
+    BUILDER_TASK_LOG=/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl \
     PROGENITOR_COPILOT_DEFAULT=gpt-5-mini \
     PROGENITOR_COPILOT_ADDITIONAL_FLAGS= \
     PROGENITOR_MODEL_PLANNER_OVERRIDE= \
@@ -56,7 +57,7 @@ COPY app/ /app/app/
 COPY prompts/ /app/prompts/
 COPY scripts/ /app/scripts/
 
-RUN mkdir -p /app/data/state /app/logs/builder /app/worktrees /home/runner && \
+RUN mkdir -p /app/data/state /app/logs/builder_progenitor /app/worktrees /home/runner && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /home/runner
 
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]

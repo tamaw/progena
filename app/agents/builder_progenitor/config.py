@@ -166,7 +166,7 @@ class _BelowErrorFilter(logging.Filter):
         return record.levelno < logging.ERROR
 
 
-def setup_logging(config: BuilderConfig, agent_name: str = "builder") -> None:
+def setup_logging(config: BuilderConfig, agent_name: str = "builder_progenitor") -> None:
     """Configure console + rotating file logging."""
     level = getattr(logging, config.log_level.upper(), logging.INFO)
 
