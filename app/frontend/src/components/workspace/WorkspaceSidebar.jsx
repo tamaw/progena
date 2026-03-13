@@ -45,8 +45,12 @@ const paletteItems = [
   },
 ];
 
-function WorkspaceSidebar({ collapsed, onToggle }) {
+function WorkspaceSidebar({ collapsed, onToggle, disabled = false }) {
   const onDragStart = (event, nodeType) => {
+    if (disabled) {
+      event.preventDefault();
+      return;
+    }
     event.dataTransfer.setData('application/reactflow', nodeType);
     event.dataTransfer.effectAllowed = 'move';
   };
@@ -63,12 +67,12 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
           {collapsed ? '\u25B6' : '\u25C0'}
         </button>
       </div>
-      <div className="sidebar-palette">
+      <div className={`sidebar-palette ${disabled ? 'disabled' : ''}`}>
         {paletteItems.map((item) => (
           <div
             key={item.type}
-            className="palette-item"
-            draggable
+            className={`palette-item ${disabled ? 'disabled' : ''}`}
+            draggable={!disabled}
             onDragStart={(e) => onDragStart(e, item.type)}
             title={item.description}
           >

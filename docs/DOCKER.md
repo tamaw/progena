@@ -4,7 +4,7 @@ The project ships compose stacks under `docker/`.
 
 ## Compose Files
 
-- `docker/docker-compose.progenitor.yml` - Progenitor stack (progenitor + backend) with direct Azure Responses configuration
+- `docker/docker-compose.progenitor.yml` - Progenitor stack (progenitor + backend + frontend) with direct Azure Responses configuration
 
 ## Start Full Stack
 
@@ -26,10 +26,12 @@ docker compose -f docker/docker-compose.progenitor.yml down
 docker compose -f docker/docker-compose.progenitor.yml logs -f
 docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 docker compose -f docker/docker-compose.progenitor.yml logs -f backend
+docker compose -f docker/docker-compose.progenitor.yml logs -f frontend
 ```
 
 ## Exposed Services
 
+- Frontend UI: `http://localhost`
 - Backend API: `http://localhost:8000`
 
 Health checks:

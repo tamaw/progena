@@ -69,6 +69,8 @@ docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 docker compose -f docker/docker-compose.progenitor.yml down
 ```
 
+Open `http://localhost` for the UI and `http://localhost:8000` for the backend API.
+
 ## Architecture
 
 ### LangGraph Topology (Outer Loop)

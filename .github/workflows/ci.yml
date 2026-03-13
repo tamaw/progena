@@ -228,7 +228,7 @@ jobs:
         run: |
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
-          docker rm -f progenitor progenitor-backend 2>/dev/null || true
+          docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
           if command -v sudo >/dev/null 2>&1; then
             sudo mkdir -p \
               "${PROGENITOR_HOST_DATA_DIR}" \
@@ -283,6 +283,7 @@ jobs:
 
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
+          wait_healthy progenitor-frontend 60
 
       - name: Cleanup unused managed images
         if: success()
