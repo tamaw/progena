@@ -549,7 +549,7 @@ class BuilderExecutor(AgentExecutor):
 
     On completion the background worker appends a JSONL record under the
     configured log directory, defaulting to
-    ``/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl``
+    ``/app/logs/builder/builder_tasks.jsonl``
     (see :mod:`queue_worker`).
     """
 

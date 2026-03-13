@@ -45,10 +45,19 @@ async def test_cancel_delegates_to_service_for_running_task():
 
 def test_task_log_path_defaults_to_progenitor_log_dir(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
-    monkeypatch.setenv("PROGENITOR_LOG_DIR", "/app/logs/builder_progenitor")
 
     reloaded = importlib.reload(queue_worker)
     try:
-        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl"
+        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/builder/builder_tasks.jsonl"
+    finally:
+        importlib.reload(queue_worker)
+
+
+def test_task_log_path_honors_runtime_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BUILDER_TASK_LOG", "/app/logs/builder/custom_tasks.jsonl")
+
+    reloaded = importlib.reload(queue_worker)
+    try:
+        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/builder/custom_tasks.jsonl"
     finally:
         importlib.reload(queue_worker)

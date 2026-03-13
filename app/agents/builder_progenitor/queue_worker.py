@@ -38,13 +38,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-
-def _default_task_log_path() -> Path:
-    log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs/builder_progenitor"))
-    return Path(os.environ.get("BUILDER_TASK_LOG", str(log_dir / "builder_progenitor_tasks.jsonl")))
-
-
-TASK_LOG_PATH = _default_task_log_path()
+TASK_LOG_PATH = Path(os.environ.get("BUILDER_TASK_LOG", "/app/logs/builder/builder_tasks.jsonl"))
 
 _PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
 _COMMIT_HASH_RE = re.compile(r"(?:SHA|sha|commit|hash)[:\s]+([0-9a-f]{7,40})\b", re.IGNORECASE)
