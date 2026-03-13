@@ -19,7 +19,7 @@ if [ -n "${GH_TOKEN:-}" ]; then
 fi
 
 ensure_workspace() {
-  agent_name="${PROGENITOR_AGENT_NAME:-builder_progenitor}"
+  agent_name="${AGENT_NAME:-builder_progenitor}"
   base_dir="${PROGENITOR_WORKTREES_ROOT:-/app/worktrees}"
   repo_url="${PROGENITOR_REPO_URL:-}"
   token="${GH_TOKEN:-}"

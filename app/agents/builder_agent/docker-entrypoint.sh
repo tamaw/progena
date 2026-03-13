@@ -5,6 +5,9 @@ export COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN:-}"
 export GH_TOKEN="${GH_TOKEN:-}"
 export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-}"
 export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-}"
+export AGENT_NAME="${AGENT_NAME:-builder_agent}"
+export PROGENITOR_LOG_DIR="${PROGENITOR_LOG_DIR:-/app/logs/${AGENT_NAME}}"
+export BUILDER_TASK_LOG="${BUILDER_TASK_LOG:-${PROGENITOR_LOG_DIR}/${AGENT_NAME}_tasks.jsonl}"
 
 ensure_dir() {
   mkdir -p "$1"
@@ -13,7 +16,7 @@ ensure_dir() {
 for target in /app/data /app/logs /app/worktrees; do
   ensure_dir "$target"
 done
-ensure_dir /app/logs/builder_agent
+ensure_dir "$PROGENITOR_LOG_DIR"
 
 if [ -n "${GH_TOKEN:-}" ]; then
   git config --global --replace-all credential.helper "!gh auth git-credential" 2>/dev/null || true

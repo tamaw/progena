@@ -234,10 +234,13 @@ jobs:
         run: docker pull ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest
 
       - name: Stop existing container (if any)
-        run: docker rm -f progenitor-agent-${{ matrix.agent }} 2>/dev/null || true
+        env:
+          AGENT_NAME: ${{ matrix.agent }}
+        run: docker rm -f progenitor-agent-${AGENT_NAME} 2>/dev/null || true
 
       - name: Run agent container
         env:
+          AGENT_NAME: ${{ matrix.agent }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
@@ -252,6 +255,7 @@ jobs:
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
           TEST_MODE: "false"
         run: |
+          CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
           PORT=${{ steps.runtime.outputs.port }}
           VOLUME_ARGS="${{ steps.runtime.outputs.volume_args }}"
           CHOWN_PATHS="${{ steps.runtime.outputs.chown_paths }}"
@@ -302,10 +306,11 @@ jobs:
 
           # Let each image use its own USER/entrypoint ownership model.
           docker run -d \
-            --name progenitor-agent-${{ matrix.agent }} \
+            --name "${CONTAINER_NAME}" \
             --restart unless-stopped \
             --network progenitor_network \
-            -e A2A_PUBLIC_HOST=progenitor-agent-${{ matrix.agent }} \
+            -e AGENT_NAME="${AGENT_NAME}" \
+            -e A2A_PUBLIC_HOST="${CONTAINER_NAME}" \
             -e GH_TOKEN="${GH_TOKEN}" \
             -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
             ${VOLUME_ARGS} \
@@ -314,9 +319,11 @@ jobs:
 
       - name: Wait for agent to become healthy
         id: health
+        env:
+          AGENT_NAME: ${{ matrix.agent }}
         run: |
           PORT=${{ steps.runtime.outputs.port }}
-          CONTAINER_NAME="progenitor-agent-${{ matrix.agent }}"
+          CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
           REGISTRY_HOST="${CONTAINER_NAME}"
           DOCKER_HOSTNAME="$(docker inspect --format '{{.Config.Hostname}}' "${CONTAINER_NAME}")"
           if [ -z "${DOCKER_HOSTNAME}" ]; then

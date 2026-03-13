@@ -45,7 +45,7 @@ async def test_cancel_delegates_to_service_for_running_task():
 
 def test_task_log_path_defaults_to_progenitor_log_dir(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
-    monkeypatch.delenv("PROGENITOR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("AGENT_NAME", raising=False)
 
     reloaded = importlib.reload(queue_worker)
     try:
@@ -66,7 +66,7 @@ def test_task_log_path_honors_runtime_override(monkeypatch: pytest.MonkeyPatch):
 
 def test_task_log_path_uses_agent_name_override(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
-    monkeypatch.setenv("PROGENITOR_AGENT_NAME", "custom_builder")
+    monkeypatch.setenv("AGENT_NAME", "custom_builder")
 
     reloaded = importlib.reload(queue_worker)
     try:
