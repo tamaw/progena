@@ -10,6 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     AZURE_OPENAI_BASE_URL= \
     AZURE_OPENAI_API_KEY= \
+    AGENT_NAME=builder_agent \
     GH_TOKEN= \
     COPILOT_GITHUB_TOKEN= \
     GIT_AUTHOR_NAME= \
@@ -21,7 +22,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PROGENITOR_PROJECT_ROOT=/app/worktrees \
     PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
     PROGENITOR_STATE_DIR=/app/data/state \
-    PROGENITOR_LOG_DIR=/app/logs/builder_agent
+    PROGENITOR_LOG_DIR=/app/logs
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 
@@ -60,7 +61,7 @@ COPY prompts/ /app/prompts/
 # Runtime directories (state and logs are mounted as named volumes).
 # /app/worktrees is the git workspace used for worktrees — populated on first
 # boot if PROGENITOR_REPO_URL is set, or bind-mounted with a pre-cloned repo.
-RUN mkdir -p /app/data/state /app/logs/builder_agent /app/worktrees && \
+RUN mkdir -p /app/data/state /app/logs /app/worktrees && \
     chown -R runner:agent /app/data /app/logs /app/worktrees
 
 # Named volume mount-points — Docker Compose overrides these with named volumes.
