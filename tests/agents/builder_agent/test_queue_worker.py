@@ -24,24 +24,22 @@ from app.agents.builder_agent.runtime.time_utils import utcnow
 
 
 def test_default_task_log_path_uses_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
     monkeypatch.delenv("PROGENITOR_LOG_DIR", raising=False)
     monkeypatch.setenv("AGENT_NAME", "custom_builder")
 
     reloaded = importlib.reload(queue_worker)
     try:
-        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
+        assert reloaded.get_task_log_path().as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
     finally:
         importlib.reload(queue_worker)
 
 
 def test_default_task_log_path_requires_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
     monkeypatch.delenv("PROGENITOR_LOG_DIR", raising=False)
     monkeypatch.delenv("AGENT_NAME", raising=False)
 
     with pytest.raises(RuntimeError, match="AGENT_NAME must be set"):
-        importlib.reload(queue_worker)
+        importlib.reload(queue_worker).get_task_log_path()
 
     monkeypatch.setenv("AGENT_NAME", "builder_agent")
     importlib.reload(queue_worker)

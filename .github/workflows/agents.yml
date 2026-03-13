@@ -70,7 +70,10 @@ jobs:
       image: python:3.12-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
     env:
+      AGENT_NAME: ${{ matrix.agent }}
       PIP_CACHE_DIR: /tmp/pip-cache
+      PROGENITOR_LOG_DIR: /app/logs
+      PROGENITOR_STATE_DIR: /app/data/state
     strategy:
       fail-fast: false
       matrix:
@@ -316,7 +319,6 @@ jobs:
             -e PROGENITOR_PROJECT_ROOT=/app/worktrees \
             -e PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
             -e PROGENITOR_WORKTREES_ROOT=/app/worktrees \
-            -e OBSERVE_STATE_DIR=/app/data/state \
             -e GH_TOKEN="${GH_TOKEN}" \
             -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
             ${VOLUME_ARGS} \
