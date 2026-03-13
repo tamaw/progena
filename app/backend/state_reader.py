@@ -502,6 +502,16 @@ class StateReader:
 
         try:
             payload = json.loads(line)
+            if not isinstance(payload, dict):
+                return {
+                    "timestamp": _iso_now(),
+                    "time": _iso_now(),
+                    "level": "info",
+                    "source": source,
+                    "message": str(payload),
+                    "path": str(path),
+                    "data": payload,
+                }
             timestamp = (
                 payload.get("timestamp")
                 or payload.get("time")

@@ -1,10 +1,21 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useConfig } from '../context/ConfigContext';
+import { useHealth } from '../context/HealthContext';
 
 export function useApi() {
   const { config, getApiUrl } = useConfig();
+  const { isHealthy } = useHealth();
   const [connectionState, setConnectionState] = useState('disconnected');
   const abortControllerRef = useRef(null);
+
+  useEffect(() => {
+    setConnectionState((current) => {
+      if (isHealthy) {
+        return current === 'connecting' ? current : 'connected';
+      }
+      return current === 'connecting' ? current : 'disconnected';
+    });
+  }, [isHealthy]);
 
   const fetchWithRetry = useCallback(async (endpoint, options = {}) => {
     const url = getApiUrl(endpoint);
@@ -146,6 +157,7 @@ export function useApi() {
     const url = getApiUrl('responses');
 
     try {
+      setConnectionState('connecting');
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -161,6 +173,8 @@ export function useApi() {
         const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
         throw new Error(error.error?.message || `HTTP ${response.status}`);
       }
+
+      setConnectionState('connected');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -202,6 +216,7 @@ export function useApi() {
       if (error.name === 'AbortError') {
         onComplete?.('cancelled');
       } else {
+        setConnectionState('error');
         onError?.(error);
       }
     }
