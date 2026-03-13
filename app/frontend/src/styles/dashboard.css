@@ -373,6 +373,10 @@
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
+.widget-directory-panel {
+    min-height: 420px;
+}
+
 @media (max-width: 1200px) {
     .dashboard-grid {
         grid-template-columns: 1fr 1fr;
@@ -425,6 +429,73 @@
     display: flex;
     flex-direction: column;
     gap: var(--spacing-sm);
+}
+
+.widget-directory-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    max-height: none;
+}
+
+.dashboard-toolbar {
+    padding: 0;
+}
+
+.dashboard-agent-summary {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.widget-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--spacing-md);
+}
+
+.widget-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    width: 100%;
+    padding: var(--spacing-md);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-lg);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.widget-card:hover {
+    border-color: var(--color-accent);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+.widget-card-header,
+.widget-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+}
+
+.widget-card-title {
+    font-size: var(--font-size-md);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.widget-card-description {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+}
+
+.widget-card-footer {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
 }
 
 .detail-panel {
@@ -695,6 +766,34 @@
 
 .schedule-name {
     color: var(--color-text-primary);
+}
+
+.dashboard-agent-drawer .drawer-section h4 {
+    margin: 0 0 var(--spacing-sm) 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.dashboard-agent-drawer .drawer-section p {
+    margin: 0;
+    color: var(--color-text-primary);
+    line-height: 1.6;
+}
+
+.detail-data {
+    margin: 0;
+    padding: var(--spacing-md);
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-md);
+    color: var(--color-text-primary);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 /* Activity Timeline */

@@ -18,9 +18,6 @@ function Header({ connectionState }) {
         <NavLink to="/dashboard" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
           📊 Dashboard
         </NavLink>
-        <NavLink to="/agents" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-          🤖 Agents
-        </NavLink>
         <NavLink to="/workspace" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
           🧱 Workspace
         </NavLink>
