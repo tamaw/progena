@@ -450,19 +450,55 @@ def _assert_plan_contains_pr_step(plan: ReasonedPlan) -> None:
         raise RuntimeError("Builder planning output is invalid: missing required 'pr' step.")
 
 
+def _iter_tool_payloads(result: dict[str, Any], tool_name: str) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    messages = result.get("messages")
+    if not isinstance(messages, list):
+        return payloads
+
+    for message in messages:
+        if not isinstance(message, dict) or message.get("tool_name") != tool_name:
+            continue
+        content = message.get("content")
+        if isinstance(content, dict):
+            payloads.append(content)
+            continue
+        if isinstance(content, str):
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                payloads.append(parsed)
+    return payloads
+
+
 def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
     payload = json.dumps(result, default=str)
     payload_lower = payload.lower()
 
-    commit_recorded = "commit_changes" in payload_lower and bool(COMMITTED_TRUE_RE.search(payload_lower))
-    pr_call_recorded = "create_pull_request" in payload_lower
-    pr_failed = pr_call_recorded and bool(SUCCESS_FALSE_RE.search(payload_lower))
-    has_pr_url = bool(PR_URL_RE.search(payload))
+    commit_payloads = _iter_tool_payloads(result, "commit_changes")
+    pr_payloads = _iter_tool_payloads(result, "create_pull_request")
 
-    if pr_failed:
-        logger.error("PR creation failed. Result summary: commit_recorded=%s, pr_call_recorded=%s, has_pr_url=%s",
-                     commit_recorded, pr_call_recorded, has_pr_url)
-        # Log the entire result to understand what went wrong
+    commit_recorded = any(payload.get("committed") is True for payload in commit_payloads)
+    if not commit_recorded:
+        commit_recorded = "commit_changes" in payload_lower and bool(COMMITTED_TRUE_RE.search(payload_lower))
+
+    has_pr_url = any(
+        isinstance(tool_payload.get("url"), str) and bool(PR_URL_RE.search(tool_payload["url"]))
+        for tool_payload in pr_payloads
+    ) or bool(PR_URL_RE.search(payload))
+    pr_failed = any(tool_payload.get("success") is False for tool_payload in pr_payloads)
+    if not pr_payloads:
+        pr_failed = "create_pull_request" in payload_lower and bool(SUCCESS_FALSE_RE.search(payload_lower))
+
+    if pr_failed and not has_pr_url:
+        logger.error(
+            "PR creation failed. Result summary: commit_recorded=%s, has_pr_url=%s, pr_payloads=%s",
+            commit_recorded,
+            has_pr_url,
+            pr_payloads,
+        )
         logger.error("Full result JSON:\n%s", payload)
         raise RuntimeError("Builder execution failed: create_pull_request returned success=false.")
     if commit_recorded and not has_pr_url:

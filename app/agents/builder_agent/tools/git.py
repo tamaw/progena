@@ -227,6 +227,8 @@ class GitWorktreeManager:
 
         # Stage all changes
         await self._run_git(["add", "-A"], cwd=worktree_path)
+        # Never commit the internal worktree marker into the project history.
+        await self._run_git(["reset", "--", self.METADATA_FILE], cwd=worktree_path)
 
         # Check if there are changes to commit
         result = await self._run_git(
@@ -234,7 +236,11 @@ class GitWorktreeManager:
             cwd=worktree_path
         )
 
-        if not result["stdout"].strip():
+        changed_lines = [
+            line for line in result["stdout"].splitlines()
+            if line.strip() and not line.rstrip().endswith(self.METADATA_FILE)
+        ]
+        if not changed_lines:
             return None  # Nothing to commit
 
         # Commit
