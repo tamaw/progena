@@ -27,6 +27,8 @@ RUN mkdir -p /app/data/state /app/logs /app/worktrees
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+ENV AGENT_NAME=progenitor
+ENV PROGENITOR_LOG_DIR=/app/logs
 
 # Expose chat server port
 EXPOSE 8000

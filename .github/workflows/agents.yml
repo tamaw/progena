@@ -311,6 +311,14 @@ jobs:
             --network progenitor_network \
             -e AGENT_NAME="${AGENT_NAME}" \
             -e A2A_PUBLIC_HOST="${CONTAINER_NAME}" \
+            -e PROGENITOR_STATE_DIR=/app/data/state \
+            -e PROGENITOR_LOG_DIR=/app/logs \
+            -e PROGENITOR_PROJECT_ROOT=/app/worktrees \
+            -e PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
+            -e PROGENITOR_WORKTREES_ROOT=/app/worktrees \
+            -e BUILDER_TASK_LOG="/app/logs/${AGENT_NAME}/${AGENT_NAME}_tasks.jsonl" \
+            -e OBSERVE_STATE_DIR=/app/data/state \
+            -e OBSERVE_LOGS_DIR="/app/logs/${AGENT_NAME}" \
             -e GH_TOKEN="${GH_TOKEN}" \
             -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
             ${VOLUME_ARGS} \

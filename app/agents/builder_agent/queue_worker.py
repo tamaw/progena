@@ -20,8 +20,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _agent_name = os.environ.get("AGENT_NAME", "builder_agent")
-_default_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", f"/app/logs/{_agent_name}"))
-TASK_LOG_PATH = Path(os.environ.get("BUILDER_TASK_LOG", str(_default_log_dir / f"{_agent_name}_tasks.jsonl")))
+_base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs"))
+TASK_LOG_PATH = Path(
+    os.environ.get("BUILDER_TASK_LOG", str(_base_log_dir / _agent_name / f"{_agent_name}_tasks.jsonl"))
+)
 
 _append_lock = threading.Lock()
 

@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import signal
 from pathlib import Path
 from typing import Any
@@ -297,7 +298,7 @@ async def main() -> None:
     """Main entry point."""
     # Load configuration and setup logging first
     config = get_config(PROJECT_ROOT, CONFIG_DIR)
-    setup_logging(config, "progenitor")
+    setup_logging(config, os.getenv("AGENT_NAME", "progenitor"))
 
     progenitor = Progenitor(config)
     setup_signal_handlers(progenitor)

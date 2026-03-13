@@ -24,13 +24,9 @@ ensure_workspace() {
   repo_url="${PROGENITOR_REPO_URL:-}"
   token="${GH_TOKEN:-}"
   auth_repo_url="$repo_url"
-  log_dir="${PROGENITOR_LOG_DIR:-/app/logs/$agent_name}"
-  task_log="${BUILDER_TASK_LOG:-$log_dir/${agent_name}_tasks.jsonl}"
+  log_dir="${PROGENITOR_LOG_DIR:-/app/logs}"
 
-  export PROGENITOR_LOG_DIR="$log_dir"
-  export BUILDER_TASK_LOG="$task_log"
-
-  mkdir -p "$log_dir" /app/data "$base_dir"
+  mkdir -p "$log_dir" "$log_dir/$agent_name" /app/data "$base_dir"
 
   # Containers often mount host-owned directories, which triggers Git's
   # ownership protection for non-root users. Mark our workspace as safe.
