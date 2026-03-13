@@ -19,13 +19,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_agent_name = os.environ.get("AGENT_NAME", "").strip()
-if not _agent_name:
-    raise RuntimeError("AGENT_NAME must be set for builder_agent")
-_base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs"))
-TASK_LOG_PATH = Path(
-    os.environ.get("BUILDER_TASK_LOG", str(_base_log_dir / _agent_name / f"{_agent_name}_tasks.jsonl"))
-)
+def _require_agent_name() -> str:
+    agent_name = os.environ.get("AGENT_NAME", "").strip()
+    if not agent_name:
+        raise RuntimeError("AGENT_NAME must be set for builder_agent")
+    return agent_name
+
+
+def get_task_log_path() -> Path:
+    agent_name = _require_agent_name()
+    base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs"))
+    return base_log_dir / agent_name / f"{agent_name}_tasks.jsonl"
+
+
+TASK_LOG_PATH: Path | None = get_task_log_path() if os.environ.get("AGENT_NAME", "").strip() else None
 
 _append_lock = threading.Lock()
 
@@ -53,8 +60,13 @@ class _QueuedTask:
     request_ctx: dict[str, Any]
 
 
-def append_task_record(record: TaskRecord, log_path: Path = TASK_LOG_PATH) -> None:
+def _resolve_log_path(log_path: Path | None) -> Path:
+    return log_path if log_path is not None else get_task_log_path()
+
+
+def append_task_record(record: TaskRecord, log_path: Path | None = None) -> None:
     """Atomically append a task record to the JSONL log."""
+    log_path = _resolve_log_path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(
         {
@@ -91,11 +103,12 @@ def sync_wait_for_completion(
     task_id: str,
     timeout_seconds: float = 60.0,
     poll_interval: float = 1.0,
-    log_path: Path = TASK_LOG_PATH,
+    log_path: Path | None = None,
 ) -> dict[str, Any] | None:
     """Poll the task log for a completion record."""
     import time
 
+    log_path = _resolve_log_path(log_path)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         record = _find_record(task_id, log_path)
@@ -132,13 +145,13 @@ class BuilderTaskQueue:
         self,
         handler: Callable[[str, str, str, dict[str, Any]], Awaitable[BuildResult]],
         max_concurrent: int = 1,
-        log_path: Path = TASK_LOG_PATH,
+        log_path: Path | None = None,
     ) -> None:
         self._handler = handler
         self._queue: asyncio.Queue[_QueuedTask] = asyncio.Queue()
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._worker_task: asyncio.Task[None] | None = None
-        self._log_path = log_path
+        self._log_path = _resolve_log_path(log_path)
         self._queued_task_ids: set[str] = set()
         self._cancelled_task_ids: set[str] = set()
         self._running_tasks: dict[str, asyncio.Task[None]] = {}

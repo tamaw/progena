@@ -10,8 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
     TEST_MODE=false \
     PROGENITOR_STATE_DIR=/app/data/state \
-    PROGENITOR_LOG_DIR=/app/logs \
-    OBSERVE_STATE_DIR=/app/data/state
+    PROGENITOR_LOG_DIR=/app/logs
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 

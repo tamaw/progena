@@ -52,6 +52,13 @@ def _build_responses_endpoint(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
+def _require_agent_name() -> str:
+    agent_name = os.getenv("AGENT_NAME", "").strip()
+    if not agent_name:
+        raise RuntimeError("AGENT_NAME must be set for observe_agent")
+    return agent_name
+
+
 def _safe_read_json(path: Path) -> Any:
     try:
         if not path.exists() or not path.is_file():
@@ -95,9 +102,9 @@ class ObserveAgent:
         state_dir: Path | None = None,
         logs_dir: Path | None = None,
     ):
-        agent_name = os.getenv("AGENT_NAME", self.AGENT_ID)
+        agent_name = _require_agent_name()
         base_logs_dir = Path(os.getenv("PROGENITOR_LOG_DIR", "/app/logs"))
-        self.state_dir = state_dir or Path(os.getenv("OBSERVE_STATE_DIR", "/app/data/state"))
+        self.state_dir = state_dir or Path(os.getenv("PROGENITOR_STATE_DIR", "/app/data/state"))
         self.logs_dir = logs_dir or (base_logs_dir / agent_name)
         self._graph = self._build_graph()
 

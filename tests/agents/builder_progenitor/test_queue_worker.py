@@ -47,43 +47,30 @@ async def test_cancel_delegates_to_service_for_running_task():
 
 
 def test_task_log_path_defaults_to_progenitor_log_dir(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
     monkeypatch.setenv("AGENT_NAME", "builder_progenitor")
 
     reloaded = importlib.reload(queue_worker)
     try:
-        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl"
-    finally:
-        importlib.reload(queue_worker)
-
-
-def test_task_log_path_honors_runtime_override(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BUILDER_TASK_LOG", "/app/logs/builder/custom_tasks.jsonl")
-
-    reloaded = importlib.reload(queue_worker)
-    try:
-        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/builder/custom_tasks.jsonl"
+        assert reloaded.get_task_log_path().as_posix() == "/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl"
     finally:
         importlib.reload(queue_worker)
 
 
 def test_task_log_path_uses_agent_name_override(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
     monkeypatch.setenv("AGENT_NAME", "custom_builder")
 
     reloaded = importlib.reload(queue_worker)
     try:
-        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
+        assert reloaded.get_task_log_path().as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
     finally:
         importlib.reload(queue_worker)
 
 
 def test_task_log_path_requires_agent_name(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
     monkeypatch.delenv("AGENT_NAME", raising=False)
 
     with pytest.raises(RuntimeError, match="AGENT_NAME must be set"):
-        importlib.reload(queue_worker)
+        importlib.reload(queue_worker).get_task_log_path()
 
     monkeypatch.setenv("AGENT_NAME", "builder_progenitor")
     importlib.reload(queue_worker)

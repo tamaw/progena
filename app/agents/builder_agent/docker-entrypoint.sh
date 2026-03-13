@@ -5,7 +5,7 @@ export COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN:-}"
 export GH_TOKEN="${GH_TOKEN:-}"
 export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-}"
 export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-}"
-export AGENT_NAME="${AGENT_NAME:-builder_agent}"
+export AGENT_NAME="${AGENT_NAME:?AGENT_NAME must be set}"
 
 ensure_dir() {
   mkdir -p "$1"
