@@ -22,7 +22,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PROGENITOR_PROJECT_ROOT=/app/worktrees \
     PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
     PROGENITOR_STATE_DIR=/app/data/state \
-    PROGENITOR_LOG_DIR=/app/logs/builder_agent
+    PROGENITOR_LOG_DIR=/app/logs
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 

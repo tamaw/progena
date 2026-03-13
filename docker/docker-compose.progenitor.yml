@@ -22,6 +22,11 @@ services:
     restart: unless-stopped
     environment:
       <<: *progenitor-llm-env
+      AGENT_NAME: progenitor
+      PROGENITOR_STATE_DIR: /app/data/state
+      PROGENITOR_LOG_DIR: /app/logs
+      PROGENITOR_WORKTREE_DIR: /app/worktrees
+      PROGENITOR_PROMPTS_DIR: /app/prompts
       TZ: UTC
       # Bind IPC on all interfaces so other containers (backend) can connect.
       PROGENITOR_IPC_HOST: 0.0.0.0

@@ -39,8 +39,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _agent_name = os.environ.get("AGENT_NAME", "builder_progenitor")
+_base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs"))
 TASK_LOG_PATH = Path(
-    os.environ.get("BUILDER_TASK_LOG", f"/app/logs/{_agent_name}/{_agent_name}_tasks.jsonl")
+    os.environ.get("BUILDER_TASK_LOG", str(_base_log_dir / _agent_name / f"{_agent_name}_tasks.jsonl"))
 )
 
 _PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
