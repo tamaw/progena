@@ -24,6 +24,10 @@ ensure_workspace() {
   token="${GH_TOKEN:-}"
   auth_repo_url="$repo_url"
   log_dir="${PROGENITOR_LOG_DIR:-/app/logs/builder}"
+  task_log="${BUILDER_TASK_LOG:-$log_dir/builder_tasks.jsonl}"
+
+  export PROGENITOR_LOG_DIR="$log_dir"
+  export BUILDER_TASK_LOG="$task_log"
 
   mkdir -p "$log_dir" /app/data "$base_dir"
 
