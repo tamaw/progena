@@ -3,9 +3,31 @@ import { createContext, useContext, useState } from 'react';
 
 const ConfigContext = createContext(null);
 
+function resolveInitialApiBaseUrl() {
+  const savedApiUrl = localStorage.getItem('progenitor_api_url');
+
+  if (!savedApiUrl) {
+    return '';
+  }
+
+  try {
+    const savedUrl = new URL(savedApiUrl, window.location.origin);
+    const isSavedLocalhost = ['localhost', '127.0.0.1'].includes(savedUrl.hostname);
+    const isPageRemote = !['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+    if (isSavedLocalhost && isPageRemote) {
+      return '';
+    }
+  } catch {
+    // Preserve custom relative paths or non-URL values entered by the user.
+  }
+
+  return savedApiUrl;
+}
+
 const defaultConfig = {
   api: {
-    baseUrl: 'http://localhost:8000',
+    baseUrl: '',
     endpoints: {
       responses: '/v1/responses',
       health: '/health',
@@ -62,7 +84,6 @@ const defaultConfig = {
 export function ConfigProvider({ children }) {
   const [config, setConfig] = useState(() => {
     const savedTheme = localStorage.getItem('progenitor_theme');
-    const savedApiUrl = localStorage.getItem('progenitor_api_url');
     const savedNotifications = localStorage.getItem('progenitor_notifications');
     const savedSounds = localStorage.getItem('progenitor_sounds');
 
@@ -70,7 +91,7 @@ export function ConfigProvider({ children }) {
       ...defaultConfig,
       api: {
         ...defaultConfig.api,
-        baseUrl: savedApiUrl || defaultConfig.api.baseUrl
+        baseUrl: resolveInitialApiBaseUrl()
       },
       theme: {
         ...defaultConfig.theme,
