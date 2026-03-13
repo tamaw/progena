@@ -11,8 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TEST_MODE=false \
     PROGENITOR_STATE_DIR=/app/data/state \
     PROGENITOR_LOG_DIR=/app/logs \
-    OBSERVE_STATE_DIR=/app/data/state \
-    OBSERVE_LOGS_DIR=/app/logs/observe_agent
+    OBSERVE_STATE_DIR=/app/data/state
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 

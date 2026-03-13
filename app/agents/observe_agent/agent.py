@@ -98,7 +98,7 @@ class ObserveAgent:
         agent_name = os.getenv("AGENT_NAME", self.AGENT_ID)
         base_logs_dir = Path(os.getenv("PROGENITOR_LOG_DIR", "/app/logs"))
         self.state_dir = state_dir or Path(os.getenv("OBSERVE_STATE_DIR", "/app/data/state"))
-        self.logs_dir = logs_dir or Path(os.getenv("OBSERVE_LOGS_DIR", str(base_logs_dir / agent_name)))
+        self.logs_dir = logs_dir or (base_logs_dir / agent_name)
         self._graph = self._build_graph()
 
     # -------------------------------------------------------------------------
