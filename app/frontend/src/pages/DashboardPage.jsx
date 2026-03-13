@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useStatusSSE } from '../hooks/useSSE';
 import Header from '../components/layout/Header';
+import { DashboardSidebarSections } from '../components/layout/Sidebar';
 
 function DashboardPage() {
   const { connectionState, getWidgets } = useApi();
@@ -159,6 +160,10 @@ function DashboardPage() {
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="dashboard-grid dashboard-grid-expanded">
+          <DashboardSidebarSections status={status} />
         </section>
       </main>
     </div>
