@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+os.environ.setdefault("AGENT_NAME", "builder_progenitor")
 
 from app.agents.builder_progenitor.queue_worker import (
     BuilderTaskQueue,

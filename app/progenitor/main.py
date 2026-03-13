@@ -298,7 +298,10 @@ async def main() -> None:
     """Main entry point."""
     # Load configuration and setup logging first
     config = get_config(PROJECT_ROOT, CONFIG_DIR)
-    setup_logging(config, os.getenv("AGENT_NAME", "progenitor"))
+    agent_name = os.getenv("AGENT_NAME", "").strip()
+    if not agent_name:
+        raise RuntimeError("AGENT_NAME must be set for progenitor")
+    setup_logging(config, agent_name)
 
     progenitor = Progenitor(config)
     setup_signal_handlers(progenitor)

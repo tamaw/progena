@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+
+os.environ.setdefault("AGENT_NAME", "builder_agent")
 
 from app.agents.builder_agent import queue_worker
 from app.agents.builder_agent.queue_worker import (
@@ -30,6 +33,18 @@ def test_default_task_log_path_uses_agent_name(monkeypatch: pytest.MonkeyPatch) 
         assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
     finally:
         importlib.reload(queue_worker)
+
+
+def test_default_task_log_path_requires_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
+    monkeypatch.delenv("PROGENITOR_LOG_DIR", raising=False)
+    monkeypatch.delenv("AGENT_NAME", raising=False)
+
+    with pytest.raises(RuntimeError, match="AGENT_NAME must be set"):
+        importlib.reload(queue_worker)
+
+    monkeypatch.setenv("AGENT_NAME", "builder_agent")
+    importlib.reload(queue_worker)
 
 
 def test_append_task_record_and_poll(tmp_path: Path) -> None:
