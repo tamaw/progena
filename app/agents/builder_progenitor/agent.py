@@ -49,7 +49,10 @@ logger = logging.getLogger(__name__)
 
 
 def _agent_log_name() -> str:
-    return os.getenv("AGENT_NAME", "builder_progenitor")
+    agent_name = os.getenv("AGENT_NAME", "").strip()
+    if not agent_name:
+        raise RuntimeError("AGENT_NAME must be set for builder_progenitor")
+    return agent_name
 
 
 # ---------------------------------------------------------------------------

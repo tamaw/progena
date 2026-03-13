@@ -51,7 +51,13 @@ from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 _start_time = time.time()
-_agent_log_name = os.getenv("AGENT_NAME", "builder_agent")
+
+
+def _agent_log_name() -> str:
+    agent_name = os.getenv("AGENT_NAME", "").strip()
+    if not agent_name:
+        raise RuntimeError("AGENT_NAME must be set for builder_agent")
+    return agent_name
 
 # ---------------------------------------------------------------------------
 # Module-level singletons — initialised once on first request.
@@ -165,7 +171,7 @@ async def _ensure_initialized() -> None:
 
     project_root = Path(__file__).resolve().parent
     config = get_config(project_root, project_root / "config", validate=False)
-    setup_logging(config, _agent_log_name)
+    setup_logging(config, _agent_log_name())
     _config = config
 
     await _ensure_workspace()

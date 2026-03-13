@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_agent_name = os.environ.get("AGENT_NAME", "builder_progenitor")
+_agent_name = os.environ.get("AGENT_NAME", "").strip()
+if not _agent_name:
+    raise RuntimeError("AGENT_NAME must be set for builder_progenitor")
 _base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs"))
 TASK_LOG_PATH = Path(
     os.environ.get("BUILDER_TASK_LOG", str(_base_log_dir / _agent_name / f"{_agent_name}_tasks.jsonl"))
