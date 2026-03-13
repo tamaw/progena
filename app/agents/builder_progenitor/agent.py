@@ -547,8 +547,10 @@ class BuilderExecutor(AgentExecutor):
     "accepted" response without blocking on execution.  Tasks that run longer
     than 30 s therefore never affect HTTP response times.
 
-    On completion the background worker appends a JSONL record to
-    ``/logs/builder_progenitor_tasks.jsonl`` (see :mod:`queue_worker`).
+    On completion the background worker appends a JSONL record under the
+    configured log directory, defaulting to
+    ``/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl``
+    (see :mod:`queue_worker`).
     """
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:

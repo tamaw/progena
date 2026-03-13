@@ -1,7 +1,10 @@
 """Tests for the builder background queue worker."""
 
+import importlib
+
 import pytest
 
+from app.agents.builder_progenitor import queue_worker
 from app.agents.builder_progenitor.queue_worker import BuilderTaskQueue, _QueuedTask
 
 
@@ -38,3 +41,14 @@ async def test_cancel_delegates_to_service_for_running_task():
 
     assert cancelled is True
     assert service.cancelled == ["running-task"]
+
+
+def test_task_log_path_defaults_to_progenitor_log_dir(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("BUILDER_TASK_LOG", raising=False)
+    monkeypatch.setenv("PROGENITOR_LOG_DIR", "/app/logs/builder_progenitor")
+
+    reloaded = importlib.reload(queue_worker)
+    try:
+        assert reloaded.TASK_LOG_PATH.as_posix() == "/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl"
+    finally:
+        importlib.reload(queue_worker)
