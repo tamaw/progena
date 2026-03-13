@@ -8,6 +8,9 @@ function DashboardPage() {
   const { connectionState, getWidgets } = useApi();
   const [status, setStatus] = useState(null);
   const [widgets, setWidgets] = useState([]);
+  const [widgetFilter, setWidgetFilter] = useState('all');
+  const [widgetSearch, setWidgetSearch] = useState('');
+  const [selectedWidget, setSelectedWidget] = useState(null);
 
   const loadWidgets = useCallback(async () => {
     try {
@@ -40,6 +43,25 @@ function DashboardPage() {
   const agentWidgets = widgets.filter((widget) => widget.type === 'agent');
   const mcpWidgets = widgets.filter((widget) => widget.type === 'mcp');
   const scheduleWidgets = widgets.filter((widget) => widget.type === 'schedule');
+  const runtimeWidgets = widgets.filter((widget) => widget.type === 'agent' || widget.type === 'mcp');
+  const filteredRuntimeWidgets = runtimeWidgets.filter((widget) => {
+    const widgetStatus = widget.status || widget.data?.agentStatus || 'idle';
+    const normalizedStatus = widgetStatus === 'stopped' ? 'offline' : widgetStatus;
+    const label = widget.title || widget.data?.title || widget.id;
+    const description = widget.summary || widget.data?.summaryState || widget.data?.description || '';
+    const matchesFilter = widgetFilter === 'all' || normalizedStatus === widgetFilter;
+    const matchesSearch = !widgetSearch
+      || label.toLowerCase().includes(widgetSearch.toLowerCase())
+      || description.toLowerCase().includes(widgetSearch.toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
+
+  const runtimeStats = {
+    total: runtimeWidgets.length,
+    ready: runtimeWidgets.filter((widget) => (widget.status || widget.data?.agentStatus || 'idle') === 'ready').length,
+    running: runtimeWidgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus || 'idle')).length,
+    offline: runtimeWidgets.filter((widget) => ['offline', 'stopped'].includes(widget.status || widget.data?.agentStatus || 'idle')).length,
+  };
 
   const formatUptime = (seconds) => {
     if (!seconds) return '--';
@@ -162,10 +184,145 @@ function DashboardPage() {
           </div>
         </section>
 
+        <section className="dashboard-panel widget-directory-panel">
+          <div className="panel-header">
+            <h3>Widget Directory</h3>
+            <span className="badge">{filteredRuntimeWidgets.length}</span>
+          </div>
+          <div className="panel-body widget-directory-body">
+            <div className="agents-toolbar dashboard-toolbar">
+              <div className="search-box">
+                <span className="search-icon">🔍</span>
+                <input
+                  type="text"
+                  placeholder="Search agent and MCP widgets..."
+                  className="search-input"
+                  value={widgetSearch}
+                  onChange={(event) => setWidgetSearch(event.target.value)}
+                />
+              </div>
+              <div className="filter-buttons">
+                {['all', 'ready', 'running', 'offline'].map((value) => (
+                  <button
+                    key={value}
+                    className={`filter-btn ${widgetFilter === value ? 'active' : ''}`}
+                    onClick={() => setWidgetFilter(value)}
+                  >
+                    {value.charAt(0).toUpperCase() + value.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="agents-summary dashboard-agent-summary">
+              <div className="summary-card">
+                <span className="summary-icon">🧩</span>
+                <div className="summary-data">
+                  <span className="summary-value">{runtimeStats.total}</span>
+                  <span className="summary-label">Widgets</span>
+                </div>
+              </div>
+              <div className="summary-card success">
+                <span className="summary-icon">✓</span>
+                <div className="summary-data">
+                  <span className="summary-value">{runtimeStats.ready}</span>
+                  <span className="summary-label">Ready</span>
+                </div>
+              </div>
+              <div className="summary-card warning">
+                <span className="summary-icon">⏳</span>
+                <div className="summary-data">
+                  <span className="summary-value">{runtimeStats.running}</span>
+                  <span className="summary-label">Running</span>
+                </div>
+              </div>
+              <div className="summary-card info">
+                <span className="summary-icon">⏹️</span>
+                <div className="summary-data">
+                  <span className="summary-value">{runtimeStats.offline}</span>
+                  <span className="summary-label">Offline</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="widget-card-grid">
+              {filteredRuntimeWidgets.length > 0 ? (
+                filteredRuntimeWidgets.map((widget) => {
+                  const widgetStatus = widget.status || widget.data?.agentStatus || 'idle';
+                  return (
+                    <button
+                      key={widget.id}
+                      type="button"
+                      className="widget-card"
+                      onClick={() => setSelectedWidget(widget)}
+                    >
+                      <div className="widget-card-header">
+                        <span className="agent-icon">{widget.type === 'mcp' ? '🧰' : '🤖'}</span>
+                        <span className={`agent-status ${widgetStatus}`}>{widgetStatus}</span>
+                      </div>
+                      <div className="widget-card-title">
+                        {widget.title || widget.data?.title || widget.id}
+                      </div>
+                      <div className="widget-card-description">
+                        {widget.summary || widget.data?.summaryState || widget.data?.description || 'No description'}
+                      </div>
+                      <div className="widget-card-footer">
+                        <span>{widget.type.toUpperCase()}</span>
+                        <span>{widget.logs?.length || widget.data?.logs?.length || 0} logs</span>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="empty-state">
+                  <span className="empty-icon">🤖</span>
+                  <span>No matching widgets found</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
         <section className="dashboard-grid dashboard-grid-expanded">
           <DashboardSidebarSections status={status} />
         </section>
       </main>
+
+      {selectedWidget && (
+        <>
+          <aside className="agent-drawer dashboard-agent-drawer">
+            <div className="drawer-header">
+              <div className="drawer-title">
+                <span className="drawer-icon">{selectedWidget.type === 'mcp' ? '🧰' : '🤖'}</span>
+                <h2>{selectedWidget.title || selectedWidget.data?.title || selectedWidget.id}</h2>
+              </div>
+              <button className="drawer-close" onClick={() => setSelectedWidget(null)}>×</button>
+            </div>
+            <div className="drawer-content">
+              <div className="drawer-section">
+                <h4>Status</h4>
+                <span className={`agent-status ${selectedWidget.status || selectedWidget.data?.agentStatus || 'idle'}`}>
+                  {selectedWidget.status || selectedWidget.data?.agentStatus || 'idle'}
+                </span>
+              </div>
+              <div className="drawer-section">
+                <h4>Summary</h4>
+                <p>{selectedWidget.summary || selectedWidget.data?.summaryState || selectedWidget.data?.description || 'No summary available'}</p>
+              </div>
+              <div className="drawer-section">
+                <h4>Recent Logs</h4>
+                <pre className="detail-data">
+                  {(selectedWidget.logs || selectedWidget.data?.logs || [])
+                    .slice(-12)
+                    .map((log) => `[${log.time || '--'}] ${log.message}`)
+                    .join('\n') || 'No logs available'}
+                </pre>
+              </div>
+            </div>
+          </aside>
+          <div className="drawer-backdrop" onClick={() => setSelectedWidget(null)} />
+        </>
+      )}
     </div>
   );
 }
