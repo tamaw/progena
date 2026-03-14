@@ -21,6 +21,15 @@ from .utils import env_bool, env_float, env_int, env_list
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+
+def _first_env(*keys: str, default: str | None = None) -> str | None:
+    for key in keys:
+        value = os.getenv(key)
+        if value:
+            return value
+    return default
+
+
 # ---------------------------------------------------------------------------
 # Backward-compatible default constants
 #
@@ -59,9 +68,19 @@ class LLMConfig:
         return cls(
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
-            model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
-            model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
+            model_default=_first_env(
+                "PROGENITOR_BUILDER_AGENT_MODEL_DEFAULT",
+                "PROGENITOR_MODEL_DEFAULT",
+                default="gpt-5.2-chat",
+            ),
+            model_planner=_first_env(
+                "PROGENITOR_BUILDER_AGENT_MODEL_PLANNER",
+                "PROGENITOR_MODEL_PLANNER",
+            ),
+            model_builder=_first_env(
+                "PROGENITOR_BUILDER_AGENT_MODEL_BUILDER",
+                "PROGENITOR_MODEL_BUILDER",
+            ),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
         )
 
@@ -238,7 +257,11 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
-            model=os.getenv("PROGENITOR_COPILOT_MODEL", "gpt-5.3-codex"),
+            model=_first_env(
+                "PROGENITOR_BUILDER_AGENT_COPILOT_MODEL",
+                "PROGENITOR_COPILOT_MODEL",
+                default="gpt-5.3-codex",
+            ),
             max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", 8192),
             # ACP settings
             acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
