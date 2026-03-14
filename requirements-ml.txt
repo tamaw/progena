@@ -1,4 +1,0 @@
-# Optional ML dependencies (semantic search)
-numpy>=1.26.0
-sentence-transformers>=2.5.0
-
