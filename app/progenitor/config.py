@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from .utils import env_bool, env_float, env_int, env_list
 
 # Auto-load .env file from project root
-load_dotenv()
+# load_dotenv()  # Disabled: loading .env at import-time causes test side-effects. Call explicitly where needed.
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -215,6 +215,19 @@ class StorageConfig:
         default_logs = "/logs" if project_root is None else str(project_root / "logs")
         default_worktrees = "/worktrees" if project_root is None else str(project_root / "worktrees")
         default_prompts = "/prompts" if project_root is None else str(project_root / "prompts")
+
+        # If a project_root is provided, prefer project-relative defaults and
+        # do not allow process environment variables to override them. This
+        # makes configuration deterministic in tests that pass an explicit
+        # project_root.
+        if project_root is not None:
+            return cls(
+                state_dir=Path(default_state),
+                log_dir=Path(default_logs),
+                worktree_dir=Path(default_worktrees),
+                prompts_dir=Path(default_prompts),
+                state_lock_timeout_seconds=env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
+            )
 
         return cls(
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", default_state)),
