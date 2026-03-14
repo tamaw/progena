@@ -6,7 +6,7 @@ monitors stdout/stderr for status updates, and maintains registry state.
 
 Agents are expected to:
 1. Start an HTTP server on the port specified via --port argument
-2. Expose /.well-known/agent.json for the agent card
+2. Expose /.well-known/agent-card.json for the agent card
 3. Output status lines to stdout: STATUS:<status>:<message>
 4. Accept requests at POST /
 """
@@ -62,7 +62,7 @@ class ManagedAgent:
 
     @property
     def agent_card_url(self) -> str:
-        return f"{self.endpoint}/.well-known/agent.json"
+        return f"{self.endpoint}/.well-known/agent-card.json"
 
 
 class HTTPAgentManager:

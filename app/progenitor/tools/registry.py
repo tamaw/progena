@@ -403,7 +403,7 @@ class ToolRegistry:
                 if port is not None:
                     agent["port"] = port
                     agent["url"] = f"http://{self.host}:{port}"
-                    agent["agent_card_url"] = f"{agent['url']}/.well-known/agent.json"
+                    agent["agent_card_url"] = f"{agent['url']}/.well-known/agent-card.json"
 
                 if last_error is not None:
                     agent["last_error"] = last_error
