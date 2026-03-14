@@ -232,7 +232,7 @@ def _create_model(config: BuilderConfig, log_dir: Path | None = None) -> ChatOpe
         output_version="responses/v1",
         streaming=True,
         timeout=300.0,  # 5 minutes: allow time for complex reasoning
-        max_retries=3,  # Retry up to 3 times on transient failures
+        max_retries=5,  # Retry up to 5 times on transient failures
     )
 
 
@@ -459,36 +459,37 @@ def _assert_plan_contains_pr_step(plan: ReasonedPlan) -> None:
 
 
 def _iter_tool_payloads(result: dict[str, Any], tool_name: str) -> list[dict[str, Any]]:
-    payloads: list[dict[str, Any]] = []
     messages = result.get("messages")
     if not isinstance(messages, list):
-        return payloads
+        return []
 
+    payloads: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict) or message.get("tool_name") != tool_name:
             continue
+
         content = message.get("content")
         if isinstance(content, dict):
             payloads.append(content)
             continue
-        if isinstance(content, str):
-            try:
-                parsed = json.loads(content)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                payloads.append(parsed)
+        if not isinstance(content, str):
+            continue
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            payloads.append(parsed)
     return payloads
 
 
 def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
     payload = json.dumps(result, default=str)
     payload_lower = payload.lower()
-
     commit_payloads = _iter_tool_payloads(result, "commit_changes")
     pr_payloads = _iter_tool_payloads(result, "create_pull_request")
 
-    commit_recorded = any(payload.get("committed") is True for payload in commit_payloads)
+    commit_recorded = any(tool_payload.get("committed") is True for tool_payload in commit_payloads)
     if not commit_recorded:
         commit_recorded = "commit_changes" in payload_lower and bool(COMMITTED_TRUE_RE.search(payload_lower))
 
@@ -511,7 +512,6 @@ def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
         raise RuntimeError("Builder execution failed: create_pull_request returned success=false.")
     if commit_recorded and not has_pr_url:
         raise RuntimeError("Builder committed changes but did not produce a pull request URL.")
-
 
 def _text_msg(text: str) -> Message:
     return Message(

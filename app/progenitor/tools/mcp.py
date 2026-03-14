@@ -471,7 +471,7 @@ class A2AClient:
             url = agent_config.get("url")
             if not url:
                 return None
-            agent_card_url = f"{url}/.well-known/agent.json"
+            agent_card_url = f"{url}/.well-known/agent-card.json"
 
         try:
             async with aiohttp.ClientSession() as session, session.get(

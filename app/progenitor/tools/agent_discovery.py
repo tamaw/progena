@@ -437,7 +437,7 @@ class AgentDiscovery:
         if spec.transport == "http":
             port = self.registry.allocate_port()
             url = f"http://{self.host}:{port}"
-            agent_card_url = f"{url}/.well-known/agent.json"
+            agent_card_url = f"{url}/.well-known/agent-card.json"
 
         entry = AgentRegistryEntry(
             name=spec.name,

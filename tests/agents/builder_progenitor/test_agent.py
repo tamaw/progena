@@ -73,3 +73,24 @@ def test_assert_result_raises_when_pr_call_failed():
     }
     with pytest.raises(RuntimeError, match="create_pull_request returned success=false"):
         _assert_result_has_pr_when_committed(result)
+
+
+def test_assert_result_ignores_unrelated_success_false_values():
+    result = {
+        "messages": [
+            {"tool_name": "commit_changes", "content": '{"committed": true, "sha": "abc"}'},
+            {
+                "tool_name": "validate_code",
+                "content": '{"pytest": {"passed": true}, "pyright": {"passed": false}}',
+            },
+            {
+                "tool_name": "create_pull_request",
+                "content": '{"success": true, "url": "https://github.com/org/repo/pull/123"}',
+            },
+            {
+                "content": 'Final report with example JSON {"success": false, "error": "unrelated"}',
+            },
+        ]
+    }
+
+    _assert_result_has_pr_when_committed(result)

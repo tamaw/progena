@@ -487,6 +487,7 @@ async def shutdown_event() -> None:
     print("STATUS:stopped:Agent terminated", flush=True)
 
 
+@app.get("/.well-known/agent-card.json")
 @app.get("/.well-known/agent.json")
 async def agent_card() -> JSONResponse:
     port = int(os.environ.get("PORT", "8080"))
