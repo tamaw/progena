@@ -26,5 +26,3 @@ pytest-asyncio>=0.23.0
 httpx>=0.26.0  # For FastAPI TestClient
 hypothesis>=6.100.0
 locust>=2.20.0
-
-# Optional ML dependencies (semantic search) live in requirements-ml.txt

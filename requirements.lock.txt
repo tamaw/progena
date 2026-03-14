@@ -267,7 +267,7 @@ pytz==2025.2
     # via
     #   -r requirements.txt
     #   croniter
-pywin32==311 ; sys_platform == "win32"
+pywin32==311
     # via locust
 pyyaml==6.0.3
     # via
