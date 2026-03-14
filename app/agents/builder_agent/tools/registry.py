@@ -399,7 +399,7 @@ class ToolRegistry:
                 if port is not None:
                     agent["port"] = port
                     agent["endpoint"] = f"http://{self.host}:{port}"
-                    agent["agent_card_url"] = f"http://{self.host}:{port}/.well-known/agent.json"
+                    agent["agent_card_url"] = f"http://{self.host}:{port}/.well-known/agent-card.json"
 
                 if last_error is not None:
                     agent["last_error"] = last_error
