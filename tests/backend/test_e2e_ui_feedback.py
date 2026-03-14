@@ -531,7 +531,7 @@ class TestDataIntegrity:
             "status": "ready",
             "status_message": "Waiting for requests",
             "port": 9001,
-            "agent_card_url": "http://localhost:9001/.well-known/agent.json",
+            "agent_card_url": "http://localhost:9001/.well-known/agent-card.json",
             "pid": 54321,
             "startup_time": "2024-01-15T11:00:00Z",
             "last_heartbeat": "2024-01-15T12:00:00Z",

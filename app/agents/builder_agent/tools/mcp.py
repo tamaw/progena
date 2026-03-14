@@ -458,7 +458,7 @@ class A2AClient:
         if not agent_card_url:
             endpoint = agent_config.get("endpoint")
             if endpoint:
-                agent_card_url = f"{endpoint}/.well-known/agent.json"
+                agent_card_url = f"{endpoint}/.well-known/agent-card.json"
             else:
                 return None
 

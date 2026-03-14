@@ -96,7 +96,7 @@ def create_node(
             transport="http",
             port=port,
             url=f"http://localhost:{port}",
-            agent_card_url=f"http://localhost:{port}/.well-known/agent.json",
+            agent_card_url=f"http://localhost:{port}/.well-known/agent-card.json",
         )
 
         await tool_registry.register_agent(entry)

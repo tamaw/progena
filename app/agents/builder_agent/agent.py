@@ -439,7 +439,7 @@ def _utc_now_iso() -> str:
 
 
 # ---------------------------------------------------------------------------
-# AgentCard — advertised at /.well-known/agent.json
+# AgentCard — advertised at /.well-known/agent-card.json
 # ---------------------------------------------------------------------------
 _PORT = int(os.environ.get("PORT", "8107"))
 _PUBLIC_HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"

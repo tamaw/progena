@@ -295,7 +295,7 @@ class AgentRegistryEntry(BaseModel):
     url: str | None = None  # Config-style URL (preferred for static registry entries)
     headers: dict[str, str] | None = None  # Optional HTTP headers for agent calls
     endpoint: str | None = None  # Base URL (e.g., http://localhost:8100)
-    agent_card_url: str | None = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent.json)
+    agent_card_url: str | None = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent-card.json)
 
     # Runtime status (updated from process stdout/stderr)
     status: AgentStatus = AgentStatus.STOPPED
