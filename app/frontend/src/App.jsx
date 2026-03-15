@@ -6,6 +6,7 @@ import NotificationContainer from './components/common/NotificationContainer';
 import ChatPage from './pages/ChatPage';
 import DashboardPage from './pages/DashboardPage';
 import LogsPage from './pages/LogsPage';
+import PromptsPage from './pages/PromptsPage';
 import WorkspacePage from './pages/WorkspacePage';
 
 // Import styles
@@ -18,6 +19,7 @@ import './styles/notifications.css';
 import './styles/status.css';
 import './styles/workspace.css';
 import './styles/nodes.css';
+import './styles/prompts.css';
 
 function App() {
   return (
@@ -30,6 +32,7 @@ function App() {
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/agents" element={<Navigate to="/dashboard" replace />} />
               <Route path="/logs" element={<LogsPage />} />
+              <Route path="/prompts" element={<PromptsPage />} />
               <Route path="/workspace" element={<WorkspacePage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

@@ -11,6 +11,7 @@ function PromptNode({ id, data, selected }) {
   } = useWorkspaceContext();
   const titleRef = useRef(null);
   const { expanded } = data;
+  const associatedAgents = data.associatedAgents || [];
 
   const onTitleChange = useCallback((e) => {
     updateNodeData(id, { title: e.target.value });
@@ -50,6 +51,9 @@ function PromptNode({ id, data, selected }) {
             onChange={onTitleChange}
             ref={titleRef}
           />
+          {data.primaryAgent && (
+            <span className="node-meta-chip prompt-agent">{data.primaryAgent}</span>
+          )}
           {data.status !== 'idle' && (
             <span className={`node-status-badge ${data.status}`}>{data.status}</span>
           )}
@@ -69,6 +73,18 @@ function PromptNode({ id, data, selected }) {
                   onChange={onRoleChange}
                 />
               </div>
+              {(data.sourcePath || associatedAgents.length > 0) && (
+                <div className="prompt-source-meta">
+                  {data.sourcePath && <div className="prompt-source-path">{data.sourcePath}</div>}
+                  {associatedAgents.length > 0 && (
+                    <div className="prompt-tags">
+                      {associatedAgents.map((agent) => (
+                        <span key={agent} className="prompt-tag">{agent}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <textarea
                 className="prompt-editor nodrag nowheel"
                 value={data.prompt || ''}
@@ -85,6 +101,18 @@ function PromptNode({ id, data, selected }) {
             </div>
           ) : (
             <div className="node-body-compact">
+              {(data.sourcePath || associatedAgents.length > 0) && (
+                <div className="prompt-source-meta compact">
+                  {data.sourcePath && <div className="prompt-source-path">{data.sourcePath}</div>}
+                  {associatedAgents.length > 0 && (
+                    <div className="prompt-tags">
+                      {associatedAgents.map((agent) => (
+                        <span key={agent} className="prompt-tag">{agent}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="prompt-preview">{promptPreview}</div>
               {data.tags?.length > 0 && (
                 <div className="prompt-tags">

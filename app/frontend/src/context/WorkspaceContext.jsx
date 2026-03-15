@@ -24,6 +24,9 @@ const defaultNodeData = {
   prompt: () => ({
     prompt: '',
     role: '',
+    sourcePath: '',
+    primaryAgent: '',
+    associatedAgents: [],
     variables: {},
     linkedOutputIds: [],
     lastRunId: null,
@@ -368,6 +371,23 @@ export function WorkspaceProvider({ children }) {
     return newNode;
   }, []);
 
+  const addPromptFromLibrary = useCallback((prompt, position = null) => {
+    const baseIndex = latestNodesRef.current.length;
+    const nextPosition = position || {
+      x: 120 + (baseIndex % 3) * 340,
+      y: 100 + Math.floor(baseIndex / 3) * 220,
+    };
+    return addNode('prompt', nextPosition, {
+      title: prompt.filename.replace(/\.md$/i, ''),
+      prompt: prompt.content || '',
+      role: prompt.filename.toLowerCase().includes('system') ? 'system' : '',
+      sourcePath: prompt.path,
+      primaryAgent: prompt.primary_agent || '',
+      associatedAgents: prompt.associated_agents || [],
+      tags: [...(prompt.associated_agents || [])],
+    });
+  }, [addNode]);
+
   const upsertNode = useCallback((nextNode) => {
     setNodes((currentNodes) => {
       const hasNode = currentNodes.some((node) => node.id === nextNode.id);
@@ -620,6 +640,7 @@ export function WorkspaceProvider({ children }) {
         error,
         onNodesChange,
         addNode,
+        addPromptFromLibrary,
         updateNodeData,
         removeNodes,
         duplicateNode,

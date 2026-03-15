@@ -101,6 +101,15 @@
 .node-status-badge.editing { background: rgba(210, 153, 34, 0.2); color: #d29922; }
 .node-status-badge.paused { background: rgba(188, 140, 255, 0.2); color: #bc8cff; }
 
+.node-meta-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(88, 166, 255, 0.12);
+  color: #58a6ff;
+  flex-shrink: 0;
+}
+
 .node-expand-btn {
   background: none;
   border: none;
@@ -249,6 +258,26 @@
   gap: 4px;
   flex-wrap: wrap;
   margin-top: var(--spacing-xs);
+}
+
+.prompt-source-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--spacing-sm);
+}
+
+.prompt-source-meta.compact {
+  margin-bottom: var(--spacing-xs);
+}
+
+.prompt-source-path {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prompt-tag {

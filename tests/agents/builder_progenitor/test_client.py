@@ -9,6 +9,7 @@ from app.agents.builder_progenitor.client import (
     _build_responses_endpoint,
 )
 from app.agents.builder_progenitor.config import LLMConfig
+from app.agents.builder_progenitor.prompts import load_prompt
 
 
 def test_build_responses_endpoint_keeps_existing_query_and_path():
@@ -141,6 +142,7 @@ async def test_plan_step_requests_reasoning():
     async def fake_post_response(*args, **kwargs):
         del args
         assert kwargs["include_reasoning"] is True
+        assert kwargs["system_prompt"] == load_prompt("planner_system.md").strip()
         return {
             "output_text": (
                 '{"summary":"Implement and validate the change.",'

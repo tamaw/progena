@@ -18,7 +18,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OVERRIDE_AGENT_BUILDER_MODEL= \
     DEFAULT_COPILOT_MODEL= \
     PROGENITOR_COPILOT_ADDITIONAL_FLAGS= \
-    PROGENITOR_WORKTREES_ROOT=/app/worktrees
+    PROGENITOR_WORKTREES_ROOT=/app/worktrees \
+    PROGENITOR_PROMPTS_DIR=/app/prompts
 
 RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
 
@@ -60,7 +61,7 @@ COPY scripts/ /app/scripts/
 RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
 
-VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
+VOLUME ["/app/data", "/app/logs", "/app/worktrees", "/app/prompts"]
 
 COPY app/agents/builder_progenitor/docker-entrypoint.sh /usr/local/bin/builder-entrypoint.sh
 RUN chmod +x /usr/local/bin/builder-entrypoint.sh
