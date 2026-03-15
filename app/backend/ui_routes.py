@@ -21,10 +21,11 @@ import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from .prompt_service import PromptService
 from .state_reader import get_state_reader
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,35 @@ class WorkspaceResponse(BaseModel):
     health: dict
     sessions: dict
     widgets: list[WidgetResponse]
+
+
+class PromptFileResponse(BaseModel):
+    """Workspace prompt metadata."""
+
+    path: str
+    filename: str
+    directory: str
+    category: str | None = None
+    primary_agent: str | None = None
+    associated_agents: list[str] = Field(default_factory=list)
+    size_bytes: int
+    updated_at: float
+    preview: str
+    content: str
+
+
+class PromptsResponse(BaseModel):
+    """Response containing discovered prompts."""
+
+    prompts: list[PromptFileResponse]
+    total: int
+
+
+class PromptUpdateRequest(BaseModel):
+    """Prompt update payload."""
+
+    path: str
+    content: str
 
 
 class WidgetPatchRequest(BaseModel):
@@ -839,15 +869,42 @@ async def get_agent_detail(agent_name: str):
     )
 
 
-@router.get("/prompts")
-async def get_prompts():
+@router.get("/prompts", response_model=PromptsResponse)
+async def get_prompts(agent: str | None = None):
     """
-    Get available prompt templates.
+    Get available prompt templates from the mounted prompts directory.
 
-    Returns list of prompt templates from prompts/ directory.
+    Returns prompt files recursively, including their content and inferred agent
+    associations for the workspace prompt library.
     """
-    # TODO: Implement actual prompt loading from prompts/
-    return {"prompts": []}
+    service = PromptService()
+    prompts = [PromptFileResponse.model_validate(prompt, from_attributes=True) for prompt in service.list_prompts(agent=agent)]
+    return PromptsResponse(prompts=prompts, total=len(prompts))
+
+
+@router.get("/prompts/content", response_model=PromptFileResponse)
+async def get_prompt_content(path: str = Query(..., min_length=1)):
+    """Get a single prompt file from the mounted prompts directory."""
+    try:
+        return PromptFileResponse.model_validate(PromptService().get_prompt(path), from_attributes=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Prompt '{path}' not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/prompts/content", response_model=PromptFileResponse)
+async def update_prompt_content(request: PromptUpdateRequest):
+    """Persist edits to an existing prompt file."""
+    try:
+        return PromptFileResponse.model_validate(
+            PromptService().save_prompt(request.path, request.content),
+            from_attributes=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Prompt '{request.path}' not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/logs")

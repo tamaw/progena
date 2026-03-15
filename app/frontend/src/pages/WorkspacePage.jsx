@@ -10,6 +10,7 @@ import {
 
 import Header from '../components/layout/Header';
 import WorkspaceSidebar from '../components/workspace/WorkspaceSidebar';
+import PromptLibraryPanel from '../components/workspace/PromptLibraryPanel';
 import NodeContextMenu from '../components/workspace/NodeContextMenu';
 import { WorkspaceProvider, useWorkspaceContext } from '../context/WorkspaceContext';
 
@@ -307,6 +308,7 @@ function WorkspaceInner() {
           />
         )}
       </div>
+      <PromptLibraryPanel disabled={!workspaceReady} />
     </div>
   );
 }

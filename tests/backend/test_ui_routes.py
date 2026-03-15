@@ -75,6 +75,43 @@ class TestUIRoutes:
         assert "items" in data
         assert "total" in data
 
+    def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
+        prompts_dir = tmp_path / "prompts"
+        (prompts_dir / "builder_agent").mkdir(parents=True)
+        (prompts_dir / "progenitor" / "nested").mkdir(parents=True)
+        (prompts_dir / "builder_agent" / "think.md").write_text("builder content", encoding="utf-8")
+        (prompts_dir / "progenitor" / "nested" / "decide.md").write_text("progenitor content", encoding="utf-8")
+        monkeypatch.setenv("PROGENITOR_PROMPTS_DIR", str(prompts_dir))
+
+        response = client.get("/api/ui/prompts")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert {prompt["path"] for prompt in data["prompts"]} == {
+            "builder_agent/think.md",
+            "progenitor/nested/decide.md",
+        }
+        builder_prompt = next(prompt for prompt in data["prompts"] if prompt["path"] == "builder_agent/think.md")
+        assert builder_prompt["primary_agent"] == "builder_agent"
+        assert "builder_agent" in builder_prompt["associated_agents"]
+
+    def test_prompts_endpoint_updates_prompt_content(self, client, tmp_path, monkeypatch):
+        prompts_dir = tmp_path / "prompts"
+        (prompts_dir / "builder_agent").mkdir(parents=True)
+        prompt_path = prompts_dir / "builder_agent" / "think.md"
+        prompt_path.write_text("before", encoding="utf-8")
+        monkeypatch.setenv("PROGENITOR_PROMPTS_DIR", str(prompts_dir))
+
+        response = client.put(
+            "/api/ui/prompts/content",
+            json={"path": "builder_agent/think.md", "content": "after"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["content"] == "after"
+        assert prompt_path.read_text(encoding="utf-8") == "after"
+
     def test_schedules_alias_endpoint(self, client):
         response = client.get("/api/ui/schedules")
         assert response.status_code == 200

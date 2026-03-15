@@ -21,6 +21,9 @@ function Header({ connectionState }) {
         <NavLink to="/workspace" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
           🧱 Workspace
         </NavLink>
+        <NavLink to="/prompts" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+          ✍️ Prompts
+        </NavLink>
         <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
           📜 Logs
         </NavLink>
