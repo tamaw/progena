@@ -248,7 +248,7 @@ class CopilotConfig:
             timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
             model=_first_env(
-                "BUILDER_AGENT_COPILOT_MODEL",
+                "DEFAULT_COPILOT_MODEL",
                 "PROGENITOR_COPILOT_MODEL",
                 default="gpt-5.3-codex",
             ) or "gpt-5.3-codex",

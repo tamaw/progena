@@ -9,7 +9,7 @@ def test_builder_agent_uses_dedicated_model_env_vars(monkeypatch) -> None:
     monkeypatch.setenv("PROGENITOR_MODEL_PLANNER", "shared-planner")
     monkeypatch.setenv("PROGENITOR_MODEL_BUILDER", "shared-builder")
     monkeypatch.setenv("PROGENITOR_COPILOT_MODEL", "shared-copilot")
-    monkeypatch.setenv("BUILDER_AGENT_COPILOT_MODEL", "agent-copilot")
+    monkeypatch.setenv("DEFAULT_COPILOT_MODEL", "agent-copilot")
 
     llm = BuilderAgentLLMConfig.from_env()
     copilot = BuilderAgentCopilotConfig.from_env()
@@ -42,7 +42,7 @@ def test_builder_progenitor_uses_dedicated_model_env_vars(monkeypatch) -> None:
     monkeypatch.setenv("PROGENITOR_COPILOT_DEFAULT", "legacy-default")
     monkeypatch.setenv("PROGENITOR_MODEL_PLANNER_OVERRIDE", "legacy-planner")
     monkeypatch.setenv("PROGENITOR_MODEL_BUILDER_OVERRIDE", "legacy-builder")
-    monkeypatch.setenv("BUILDER_PROGENITOR_COPILOT_MODEL", "gpt-5.4")
+    monkeypatch.setenv("DEFAULT_COPILOT_MODEL", "gpt-5.4")
 
     llm = BuilderProgenitorLLMConfig.from_env()
     copilot = BuilderProgenitorCopilotConfig.from_env()
