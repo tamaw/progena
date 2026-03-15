@@ -296,7 +296,7 @@ class CopilotTool(BaseSystemTool):
             "acp_allowed_dirs": cfg.acp_allowed_dirs,
             "env": {
                 "PROGENITOR_COPILOT_BIN": os.getenv("PROGENITOR_COPILOT_BIN"),
-                "PROGENITOR_COPILOT_MODEL": os.getenv("PROGENITOR_COPILOT_MODEL"),
+                "DEFAULT_COPILOT_MODEL": os.getenv("DEFAULT_COPILOT_MODEL"),
             },
             "note": "Copilot is used internally by the build actuator; this tool reports configuration.",
         })
