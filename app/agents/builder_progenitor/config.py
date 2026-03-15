@@ -16,6 +16,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _first_env(*keys: str, default: str | None = None) -> str | None:
+    for key in keys:
+        value = os.getenv(key)
+        if value:
+            return value
+    return default
+
+
 def _env_int(key: str, default: int) -> int:
     raw = os.getenv(key)
     if raw is None:
@@ -51,9 +59,12 @@ class LLMConfig:
         return cls(
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            model_default=os.getenv("PROGENITOR_COPILOT_DEFAULT", "gpt-5-mini"),
-            model_planner_override=os.getenv("PROGENITOR_MODEL_PLANNER_OVERRIDE"),
-            model_builder_override=os.getenv("PROGENITOR_MODEL_BUILDER_OVERRIDE"),
+            model_default=_first_env(
+                "AGENT_MODEL_DEFAULT",
+                default="gpt-5-mini",
+            ) or "gpt-5-mini",
+            model_planner_override=os.getenv("OVERRIDE_AGENT_PLANNER_MODEL"),
+            model_builder_override=os.getenv("OVERRIDE_AGENT_BUILDER_MODEL"),
         )
 
     def get_model_for_role(self, role: str | None = None) -> str:
@@ -107,7 +118,7 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             additional_flags=_env_list("PROGENITOR_COPILOT_ADDITIONAL_FLAGS"),
-            model=os.getenv("PROGENITOR_COPILOT_DEFAULT", "gpt-5-mini"),
+            model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5-mini"),
             allowed_dirs=[wt_root],
         )
 
