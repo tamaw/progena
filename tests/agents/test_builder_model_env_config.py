@@ -37,8 +37,6 @@ def test_builder_progenitor_uses_dedicated_model_env_vars(monkeypatch) -> None:
     monkeypatch.setenv("PROGENITOR_MODEL_DEFAULT", "shared-default")
     monkeypatch.setenv("PROGENITOR_MODEL_PLANNER", "shared-planner")
     monkeypatch.setenv("PROGENITOR_MODEL_BUILDER", "shared-builder")
-    monkeypatch.setenv("PROGENITOR_MODEL_PLANNER_OVERRIDE", "legacy-planner")
-    monkeypatch.setenv("PROGENITOR_MODEL_BUILDER_OVERRIDE", "legacy-builder")
     monkeypatch.setenv("DEFAULT_COPILOT_MODEL", "gpt-5.4")
 
     llm = BuilderProgenitorLLMConfig.from_env()
@@ -50,14 +48,11 @@ def test_builder_progenitor_uses_dedicated_model_env_vars(monkeypatch) -> None:
     assert copilot.model == "gpt-5.4"
 
 
-def test_builder_progenitor_falls_back_to_legacy_model_env_vars(monkeypatch) -> None:
-    monkeypatch.setenv("PROGENITOR_MODEL_PLANNER_OVERRIDE", "legacy-planner")
-    monkeypatch.setenv("PROGENITOR_MODEL_BUILDER_OVERRIDE", "legacy-builder")
-
+def test_builder_progenitor_defaults_without_role_specific_models(monkeypatch) -> None:
     llm = BuilderProgenitorLLMConfig.from_env()
     copilot = BuilderProgenitorCopilotConfig.from_env()
 
     assert llm.model_default == "gpt-5-mini"
-    assert llm.model_planner_override == "legacy-planner"
-    assert llm.model_builder_override == "legacy-builder"
+    assert llm.model_planner_override is None
+    assert llm.model_builder_override is None
     assert copilot.model == "gpt-5.4"
