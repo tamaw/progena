@@ -61,7 +61,6 @@ class LLMConfig:
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             model_default=_first_env(
                 "PROGENITOR_MODEL_DEFAULT",
-                "PROGENITOR_COPILOT_DEFAULT",
                 default="gpt-5-mini",
             ) or "gpt-5-mini",
             model_planner_override=_first_env(
@@ -125,11 +124,7 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             additional_flags=_env_list("PROGENITOR_COPILOT_ADDITIONAL_FLAGS"),
-            model=_first_env(
-                "DEFAULT_COPILOT_MODEL",
-                "PROGENITOR_COPILOT_DEFAULT",
-                default="gpt-5.4",
-            ) or "gpt-5.4",
+            model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5.4"),
             allowed_dirs=[wt_root],
         )
 
