@@ -33,9 +33,9 @@ services:
     volumes:
       - ${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
-      - ${PROGENITOR_HOST_WORKTREES_DIR:-../worktrees}:/app/worktrees
-      - ${PROGENITOR_HOST_TMP_DIR:-../tmp}:/app/tmp
       - ${PROGENITOR_HOST_PROMPTS_DIR:-../prompts}:/app/prompts
+    tmpfs:
+      - /app/tmp:rw,noexec,nosuid,size=1g
     stdin_open: true
     tty: true
     networks:
@@ -80,12 +80,12 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
       TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-true}
-    ports:
-      - "8000:8000"
     volumes:
       - ${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
-      - ${PROGENITOR_HOST_TMP_DIR:-../tmp}:/app/tmp
+      - ${PROGENITOR_HOST_PROMPTS_DIR:-../prompts}:/app/prompts
+    tmpfs:
+      - /app/tmp:rw,noexec,nosuid,size=512m
     networks:
       - progenitor-net
       - progenitor_network

@@ -259,6 +259,7 @@ jobs:
           VOLUME_ARGS="${{ steps.runtime.outputs.volume_args }}"
           CHOWN_PATHS="${{ steps.runtime.outputs.chown_paths }}"
           ENV_ARGS="${{ steps.runtime.outputs.env_args }}"
+          TMPFS_ARGS="${{ steps.runtime.outputs.tmpfs_args }}"
 
           PROGENITOR_REPO_URL="https://github.com/tamaw/progenitor.git"
           if [ -n "${GH_TOKEN}" ]; then
@@ -318,6 +319,7 @@ jobs:
             -e GH_TOKEN="${GH_TOKEN}" \
             -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
             ${VOLUME_ARGS} \
+            ${TMPFS_ARGS} \
             ${ENV_ARGS} \
             "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
 
