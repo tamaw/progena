@@ -182,6 +182,7 @@ def main() -> int:
     volume_args_str = " ".join(volume_args)
     chown_paths_str = " ".join(chown_paths)
     env_args_str = " ".join(f"-e {key}" for key in runtime_env_keys)
+    tmpfs_args_str = "--tmpfs /app/tmp:rw,noexec,nosuid,size=512m"
 
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path:
@@ -190,11 +191,13 @@ def main() -> int:
             f.write(f"volume_args={volume_args_str}\n")
             f.write(f"chown_paths={chown_paths_str}\n")
             f.write(f"env_args={env_args_str}\n")
+            f.write(f"tmpfs_args={tmpfs_args_str}\n")
     else:
         print(f"port={port}")
         print(f"volume_args={volume_args_str}")
         print(f"chown_paths={chown_paths_str}")
         print(f"env_args={env_args_str}")
+        print(f"tmpfs_args={tmpfs_args_str}")
     return 0
 
 
