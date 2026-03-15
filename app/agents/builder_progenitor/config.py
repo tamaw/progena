@@ -63,14 +63,8 @@ class LLMConfig:
                 "PROGENITOR_MODEL_DEFAULT",
                 default="gpt-5-mini",
             ) or "gpt-5-mini",
-            model_planner_override=_first_env(
-                "PROGENITOR_MODEL_PLANNER",
-                "PROGENITOR_MODEL_PLANNER_OVERRIDE",
-            ),
-            model_builder_override=_first_env(
-                "PROGENITOR_MODEL_BUILDER",
-                "PROGENITOR_MODEL_BUILDER_OVERRIDE",
-            ),
+            model_planner_override=os.getenv("PROGENITOR_MODEL_PLANNER"),
+            model_builder_override=os.getenv("PROGENITOR_MODEL_BUILDER"),
         )
 
     def get_model_for_role(self, role: str | None = None) -> str:

@@ -19,8 +19,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEFAULT_COPILOT_MODEL= \
     PROGENITOR_COPILOT_DEFAULT=gpt-5-mini \
     PROGENITOR_COPILOT_ADDITIONAL_FLAGS= \
-    PROGENITOR_MODEL_PLANNER_OVERRIDE= \
-    PROGENITOR_MODEL_BUILDER_OVERRIDE= \
     PROGENITOR_WORKTREES_ROOT=/app/worktrees
 
 RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
