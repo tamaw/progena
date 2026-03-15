@@ -56,7 +56,7 @@ class LLMConfig:
     api_key: str | None = None
 
     # Model selection
-    model_default: str = "gpt-5.1-codex-max"
+    model_default: str = "gpt-5-mini"
 
     # Per-role model overrides (optional)
     model_planner: str | None = None
@@ -68,9 +68,9 @@ class LLMConfig:
         return cls(
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
-            model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
-            model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
+            model_default=os.getenv("AGENT_MODEL_DEFAULT", "gpt-5-mini"),
+            model_planner=os.getenv("OVERRIDE_AGENT_PLANNER_MODEL"),
+            model_builder=os.getenv("OVERRIDE_AGENT_BUILDER_MODEL"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
         )
 
@@ -232,7 +232,7 @@ class CopilotConfig:
     bin_path: str = "copilot"
     timeout_seconds: int = 1200  # 20 minutes per ACP request
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
-    model: str = "gpt-5.3-codex"
+    model: str = "gpt-5-mini"
     max_tokens: int = 8192
 
     # ACP (Agent Client Protocol) settings
@@ -246,7 +246,7 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
-            model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5.3-codex"),
+            model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5-mini"),
             max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", 8192),
             # ACP settings
             acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
