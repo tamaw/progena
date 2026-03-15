@@ -101,6 +101,25 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const getPrompts = useCallback(async () => {
+    const response = await fetchWithRetry('prompts');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getPromptContent = useCallback(async (path) => {
+    const search = new URLSearchParams({ path });
+    const response = await fetchWithRetry(`/api/ui/prompts/content?${search.toString()}`);
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const updatePromptContent = useCallback(async (path, content) => {
+    const response = await fetchWithRetry('/api/ui/prompts/content', {
+      method: 'PUT',
+      body: JSON.stringify({ path, content }),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
   const updateWidget = useCallback(async (widgetId, updates) => {
     const response = await fetchWithRetry(`/api/ui/widgets/${widgetId}`, {
       method: 'PATCH',
@@ -260,6 +279,9 @@ export function useApi() {
     getHealthDetailed,
     getWorkspace,
     getWidgets,
+    getPrompts,
+    getPromptContent,
+    updatePromptContent,
     updateWidget,
     getSchedules,
     getLogs,

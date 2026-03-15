@@ -103,6 +103,7 @@ def _map_target_to_host(target: str, mounts: dict[str, str]) -> str | None:
         ("/app/data", "/app/data"),
         ("/app/logs", "/app/logs"),
         ("/app/worktrees", "/app/worktrees"),
+        ("/app/prompts", "/app/prompts"),
     ]
     for target_root, progenitor_root in mapping_roots:
         if target == target_root or target.startswith(f"{target_root}/"):

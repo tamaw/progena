@@ -13,6 +13,7 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from .config import LLMConfig
+from .prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -355,13 +356,7 @@ class BuilderClient:
     async def plan_step(self, request_text: str, context: dict[str, Any]) -> ReasonedPlan:
         """Run the dedicated reasoning-backed planning call."""
         context_json = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
-        system_prompt = (
-            "You are Builder's planning pass. Produce a compact execution plan before any edits. "
-            "Return only JSON matching the schema. Keep the plan focused on: plan, build, test, lint, pr. "
-            "The 'pr' step is mandatory and must explicitly include commit/push/PR creation intent. "
-            "Keep each command concise and avoid large inline file bodies (for example, use placeholders or "
-            "short commands instead of full heredoc contents)."
-        )
+        system_prompt = load_prompt("planner_system.md").strip()
         user_message = (
             f"User request:\n{request_text.strip()}\n\n"
             f"Execution context (JSON):\n{context_json}\n\n"
