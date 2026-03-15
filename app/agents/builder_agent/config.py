@@ -238,7 +238,6 @@ class CopilotConfig:
     # ACP (Agent Client Protocol) settings
     acp_port: int = 3000  # Port for the ACP server
     acp_allowed_dirs: list[str] = field(default_factory=list)  # Restricted directories
-    acp_url: str | None = None  # TCP URL for remote ACP proxy (e.g. tcp://copilot-acp:3000)
 
     @classmethod
     def from_env(cls) -> "CopilotConfig":
@@ -256,7 +255,6 @@ class CopilotConfig:
             # ACP settings
             acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
             acp_allowed_dirs=env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", []),
-            acp_url=os.getenv("COPILOT_ACP_URL"),
         )
 
 
