@@ -219,18 +219,14 @@ jobs:
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           COPILOT_ACP_URL: tcp://progenitor-agent-copilot_acp:3000
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_MODEL_PLANNER: ${{ vars.PROGENITOR_MODEL_PLANNER }}
           PROGENITOR_MODEL_BUILDER: ${{ vars.PROGENITOR_MODEL_BUILDER }}
-          PROGENITOR_COPILOT_MODEL: ${{ vars.PROGENITOR_COPILOT_MODEL }}
-          BUILDER_AGENT_COPILOT_MODEL: ${{ vars.BUILDER_AGENT_COPILOT_MODEL }}
-          BUILDER_PROGENITOR_COPILOT_MODEL: ${{ vars.BUILDER_PROGENITOR_COPILOT_MODEL }}
+          DEFAULT_COPILOT_MODEL: ${{ vars.DEFAULT_COPILOT_MODEL }}
           GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          TEST_MODE: "false"
         run: python .github/scripts/get_agent_runtime_config.py
 
       - name: Docker login (GHCR)
@@ -251,18 +247,14 @@ jobs:
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           COPILOT_ACP_URL: tcp://progenitor-agent-copilot_acp:3000
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_MODEL_PLANNER: ${{ vars.PROGENITOR_MODEL_PLANNER }}
           PROGENITOR_MODEL_BUILDER: ${{ vars.PROGENITOR_MODEL_BUILDER }}
-          PROGENITOR_COPILOT_MODEL: ${{ vars.PROGENITOR_COPILOT_MODEL }}
-          BUILDER_AGENT_COPILOT_MODEL: ${{ vars.BUILDER_AGENT_COPILOT_MODEL }}
-          BUILDER_PROGENITOR_COPILOT_MODEL: ${{ vars.BUILDER_PROGENITOR_COPILOT_MODEL }}
+          DEFAULT_COPILOT_MODEL: ${{ vars.DEFAULT_COPILOT_MODEL }}
           GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          TEST_MODE: "false"
         run: |
           CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
           PORT=${{ steps.runtime.outputs.port }}
