@@ -219,7 +219,6 @@ jobs:
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          COPILOT_ACP_URL: tcp://progenitor-agent-copilot_acp:3000
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_MODEL_PLANNER: ${{ vars.PROGENITOR_MODEL_PLANNER }}
           PROGENITOR_MODEL_BUILDER: ${{ vars.PROGENITOR_MODEL_BUILDER }}
@@ -247,7 +246,6 @@ jobs:
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          COPILOT_ACP_URL: tcp://progenitor-agent-copilot_acp:3000
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_MODEL_PLANNER: ${{ vars.PROGENITOR_MODEL_PLANNER }}
           PROGENITOR_MODEL_BUILDER: ${{ vars.PROGENITOR_MODEL_BUILDER }}
