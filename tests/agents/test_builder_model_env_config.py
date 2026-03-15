@@ -5,9 +5,9 @@ from app.agents.builder_progenitor.config import LLMConfig as BuilderProgenitorL
 
 
 def test_builder_agent_uses_dedicated_model_env_vars(monkeypatch) -> None:
-    monkeypatch.setenv("PROGENITOR_MODEL_DEFAULT", "shared-default")
-    monkeypatch.setenv("PROGENITOR_MODEL_PLANNER", "shared-planner")
-    monkeypatch.setenv("PROGENITOR_MODEL_BUILDER", "shared-builder")
+    monkeypatch.setenv("AGENT_MODEL_DEFAULT", "shared-default")
+    monkeypatch.setenv("OVERRIDE_AGENT_PLANNER_MODEL", "shared-planner")
+    monkeypatch.setenv("OVERRIDE_AGENT_BUILDER_MODEL", "shared-builder")
     monkeypatch.setenv("DEFAULT_COPILOT_MODEL", "agent-copilot")
 
     llm = BuilderAgentLLMConfig.from_env()
@@ -20,23 +20,19 @@ def test_builder_agent_uses_dedicated_model_env_vars(monkeypatch) -> None:
 
 
 def test_builder_agent_falls_back_to_shared_model_env_vars(monkeypatch) -> None:
-    monkeypatch.setenv("PROGENITOR_MODEL_DEFAULT", "shared-default")
-    monkeypatch.setenv("PROGENITOR_MODEL_PLANNER", "shared-planner")
-    monkeypatch.setenv("PROGENITOR_MODEL_BUILDER", "shared-builder")
-
     llm = BuilderAgentLLMConfig.from_env()
     copilot = BuilderAgentCopilotConfig.from_env()
 
-    assert llm.model_default == "shared-default"
-    assert llm.model_planner == "shared-planner"
-    assert llm.model_builder == "shared-builder"
-    assert copilot.model == "gpt-5.3-codex"
+    assert llm.model_default == "gpt-5-mini"
+    assert llm.model_planner is None
+    assert llm.model_builder is None
+    assert copilot.model == "gpt-5-mini"
 
 
 def test_builder_progenitor_uses_dedicated_model_env_vars(monkeypatch) -> None:
-    monkeypatch.setenv("PROGENITOR_MODEL_DEFAULT", "shared-default")
-    monkeypatch.setenv("PROGENITOR_MODEL_PLANNER", "shared-planner")
-    monkeypatch.setenv("PROGENITOR_MODEL_BUILDER", "shared-builder")
+    monkeypatch.setenv("AGENT_MODEL_DEFAULT", "shared-default")
+    monkeypatch.setenv("OVERRIDE_AGENT_PLANNER_MODEL", "shared-planner")
+    monkeypatch.setenv("OVERRIDE_AGENT_BUILDER_MODEL", "shared-builder")
     monkeypatch.setenv("DEFAULT_COPILOT_MODEL", "gpt-5.4")
 
     llm = BuilderProgenitorLLMConfig.from_env()
