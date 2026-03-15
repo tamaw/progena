@@ -297,7 +297,6 @@ class CopilotTool(BaseSystemTool):
             "env": {
                 "PROGENITOR_COPILOT_BIN": os.getenv("PROGENITOR_COPILOT_BIN"),
                 "DEFAULT_COPILOT_MODEL": os.getenv("DEFAULT_COPILOT_MODEL"),
-                "PROGENITOR_COPILOT_MODEL": os.getenv("PROGENITOR_COPILOT_MODEL"),
             },
             "note": "Copilot is used internally by the build actuator; this tool reports configuration.",
         })
