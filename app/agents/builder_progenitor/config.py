@@ -118,7 +118,7 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             additional_flags=_env_list("PROGENITOR_COPILOT_ADDITIONAL_FLAGS"),
-            model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5.4"),
+            model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5-mini"),
             allowed_dirs=[wt_root],
         )
 
