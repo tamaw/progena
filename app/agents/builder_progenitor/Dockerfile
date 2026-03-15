@@ -57,8 +57,8 @@ COPY app/ /app/app/
 COPY prompts/ /app/prompts/
 COPY scripts/ /app/scripts/
 
-RUN mkdir -p /app/data/state /app/logs /app/worktrees /home/runner && \
-    chown -R runner:agent /app/data /app/logs /app/worktrees /home/runner
+RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \
+    chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
 
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 

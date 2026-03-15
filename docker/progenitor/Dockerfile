@@ -22,7 +22,7 @@ COPY prompts/ ./prompts/
 COPY scripts/ ./scripts/
 
 # Create directories for mounted volumes
-RUN mkdir -p /app/data/state /app/logs /app/worktrees
+RUN mkdir -p /app/data/state /app/logs /app/tmp /app/prompts
 
 # Set environment variables
 ENV PYTHONPATH=/app

@@ -62,8 +62,8 @@ COPY prompts/ /app/prompts/
 # Runtime directories (state and logs are mounted as named volumes).
 # /app/worktrees is the git workspace used for worktrees — populated on first
 # boot if PROGENITOR_REPO_URL is set, or bind-mounted with a pre-cloned repo.
-RUN mkdir -p /app/data/state /app/logs /app/worktrees && \
-    chown -R runner:agent /app/data /app/logs /app/worktrees
+RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp && \
+    chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp
 
 # Named volume mount-points — Docker Compose overrides these with named volumes.
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]

@@ -20,6 +20,11 @@ COPY scripts/ ./scripts/
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
+# Create directories for mounted volumes
+RUN mkdir -p /app/data /app/logs /app/tmp /app/prompts
+
+VOLUME ["/app/data", "/app/logs", "/app/prompts"]
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
