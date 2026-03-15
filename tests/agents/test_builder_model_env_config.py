@@ -55,4 +55,4 @@ def test_builder_progenitor_defaults_without_role_specific_models(monkeypatch) -
     assert llm.model_default == "gpt-5-mini"
     assert llm.model_planner_override is None
     assert llm.model_builder_override is None
-    assert copilot.model == "gpt-5.4"
+    assert copilot.model == "gpt-5-mini"
