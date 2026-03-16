@@ -10,8 +10,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-# Project root: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# Project root can be overridden in container/test environments by PROGENITOR_PROJECT_ROOT
+# (this ensures tests that run across different worktree layouts resolve correctly).
+env_proj = os.getenv("PROGENITOR_PROJECT_ROOT", "").strip()
+if env_proj:
+    PROJECT_ROOT = Path(env_proj).resolve()
+else:
+    # Project root: prompts.py -> llm/ -> progenitor/ -> app/ -> project_root/
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 DEFAULT_PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 
