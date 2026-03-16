@@ -67,9 +67,9 @@ class LLMConfig:
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
-            model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
-            model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
-            model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
+            model_planner=os.getenv("PROGENITOR_MODEL_PLANNER") or None,
+            model_builder=os.getenv("PROGENITOR_MODEL_BUILDER") or None,
+            model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY") or None,
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", False),
             reasoning_budget_tokens=budget_tokens,
         )
@@ -215,6 +215,17 @@ class StorageConfig:
         default_logs = "/logs" if project_root is None else str(project_root / "logs")
         default_worktrees = "/worktrees" if project_root is None else str(project_root / "worktrees")
         default_prompts = "/prompts" if project_root is None else str(project_root / "prompts")
+
+        # If a project_root is explicitly provided, prefer project-relative defaults
+        # to make testing deterministic (env vars should not override test fixtures).
+        if project_root is not None:
+            return cls(
+                state_dir=Path(project_root / "data" / "state"),
+                log_dir=Path(project_root / "logs"),
+                worktree_dir=Path(project_root / "worktrees"),
+                prompts_dir=Path(project_root / "prompts"),
+                state_lock_timeout_seconds=env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
+            )
 
         return cls(
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", default_state)),

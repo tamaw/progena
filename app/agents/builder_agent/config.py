@@ -69,9 +69,9 @@ class LLMConfig:
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             model_default=os.getenv("AGENT_MODEL_DEFAULT", "gpt-5-mini"),
-            model_planner=os.getenv("OVERRIDE_AGENT_PLANNER_MODEL"),
-            model_builder=os.getenv("OVERRIDE_AGENT_BUILDER_MODEL"),
-            model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
+            model_planner=os.getenv("OVERRIDE_AGENT_PLANNER_MODEL") or None,
+            model_builder=os.getenv("OVERRIDE_AGENT_BUILDER_MODEL") or None,
+            model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY") or None,
         )
 
     def get_model_for_role(self, role: str) -> str:
