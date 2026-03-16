@@ -24,6 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.agents.builder_agent.llm.client import LLMClient as BuilderAgentLLMClient
+from app.agents.builder_agent.nodes.think import ThinkResponse
+from app.agents.builder_agent.state.ideal_state import IdealState
 from app.agents.builder_progenitor.client import BuilderClient
 
 load_dotenv()
@@ -94,6 +97,60 @@ async def _run_builder_structured_plan(request_text: str, model: str) -> int:
     return 0
 
 
+async def _run_builder_agent_structured_think(prompt: str, model: str) -> int:
+    previous_override = os.getenv("OVERRIDE_AGENT_PLANNER_MODEL")
+    os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = model
+    try:
+        async with BuilderAgentLLMClient(role="planner") as client:
+            result = await client.chat_structured(
+                messages=[{"role": "user", "content": prompt}],
+                response_model=ThinkResponse,
+                schema_name="think_response",
+                system_prompt="You are a structured test. Return valid JSON matching the schema.",
+                temperature=0.7,
+            )
+    except Exception as exc:
+        print(f"BUILDER_AGENT_THINK_FAILED: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if previous_override is None:
+            os.environ.pop("OVERRIDE_AGENT_PLANNER_MODEL", None)
+        else:
+            os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = previous_override
+
+    print("BUILDER_AGENT_THINK_OK")
+    print(f"model={client.model}")
+    print(f"approaches={len(result.approaches)}")
+    return 0
+
+
+async def _run_builder_agent_ideal_state(prompt: str, model: str) -> int:
+    previous_override = os.getenv("OVERRIDE_AGENT_PLANNER_MODEL")
+    os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = model
+    try:
+        async with BuilderAgentLLMClient(role="planner") as client:
+            result = await client.chat_structured(
+                messages=[{"role": "user", "content": prompt}],
+                response_model=IdealState,
+                schema_name="ideal_state",
+                system_prompt="You are a structured test. Return valid JSON matching the schema.",
+                temperature=0.3,
+            )
+    except Exception as exc:
+        print(f"BUILDER_AGENT_IDEAL_STATE_FAILED: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if previous_override is None:
+            os.environ.pop("OVERRIDE_AGENT_PLANNER_MODEL", None)
+        else:
+            os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = previous_override
+
+    print("BUILDER_AGENT_IDEAL_STATE_OK")
+    print(f"model={client.model}")
+    print(f"success_criteria={len(result.success_criteria)}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Azure Responses API smoke test")
     parser.add_argument("--model", default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"))
@@ -109,6 +166,16 @@ def main() -> int:
         "--structured-builder-plan",
         action="store_true",
         help="Exercise the same structured planning path BuilderClient.plan_step() uses.",
+    )
+    parser.add_argument(
+        "--structured-builder-agent-think",
+        action="store_true",
+        help="Exercise the builder_agent ThinkResponse structured path that was returning Azure 400s.",
+    )
+    parser.add_argument(
+        "--structured-builder-agent-ideal-state",
+        action="store_true",
+        help="Exercise the builder_agent IdealState structured path that was returning Azure 400s.",
     )
     parser.add_argument(
         "--dry-run",
@@ -134,6 +201,42 @@ def main() -> int:
         import asyncio
 
         return asyncio.run(_run_builder_structured_plan(args.builder_request, args.model))
+
+    if args.structured_builder_agent_think:
+        if args.dry_run:
+            print(
+                json.dumps(
+                    {
+                        "prompt": args.prompt,
+                        "mode": "structured_builder_agent_think",
+                        "model": args.model,
+                    },
+                    indent=2,
+                )
+            )
+            print("DRY_RUN_OK")
+            return 0
+        import asyncio
+
+        return asyncio.run(_run_builder_agent_structured_think(args.prompt, args.model))
+
+    if args.structured_builder_agent_ideal_state:
+        if args.dry_run:
+            print(
+                json.dumps(
+                    {
+                        "prompt": args.prompt,
+                        "mode": "structured_builder_agent_ideal_state",
+                        "model": args.model,
+                    },
+                    indent=2,
+                )
+            )
+            print("DRY_RUN_OK")
+            return 0
+        import asyncio
+
+        return asyncio.run(_run_builder_agent_ideal_state(args.prompt, args.model))
 
     payload = _build_payload(args.model, args.prompt, args.reasoning)
     if args.dry_run:
