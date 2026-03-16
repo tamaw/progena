@@ -16,14 +16,21 @@ import contextlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time
+import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime
 from pathlib import Path
 
+from croniter import croniter  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from app.progenitor.runtime.scheduler import Scheduler
+from app.progenitor.runtime.time_utils import utcnow
 
 from .prompt_service import PromptService
 from .state_reader import get_state_reader
@@ -195,9 +202,20 @@ class WidgetPatchRequest(BaseModel):
     """Patch request for mutable backend-backed widgets."""
     enabled: bool | None = None
     name: str | None = None
+    instruction: str | None = None
     schedule_type: str | None = None
     expression: str | None = None
     timezone: str | None = None
+
+
+class ScheduleCreateRequest(BaseModel):
+    """Create request for a new schedule entry."""
+    name: str
+    instruction: str
+    schedule_type: str = "cron"
+    expression: str
+    timezone: str | None = None
+    enabled: bool = True
 
 
 class ActionRunRequest(BaseModel):
@@ -495,6 +513,107 @@ def _broadcast_widget_refresh(state_reader) -> None:
     broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
 
 
+def _parse_once_datetime(expression: str) -> datetime:
+    try:
+        return datetime.fromisoformat(expression.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="One-off schedules must use an ISO datetime like 2026-03-15T14:30:00Z",
+        ) from exc
+
+
+def _interval_to_cron(expression: str) -> str:
+    match = re.fullmatch(
+        r"\s*(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*",
+        expression,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        raise HTTPException(
+            status_code=400,
+            detail="Interval schedules must look like 5m, 2h, or 1d",
+        )
+
+    value = int(match.group(1))
+    unit = match.group(2).lower()
+    if value <= 0:
+        raise HTTPException(status_code=400, detail="Interval schedules must be greater than zero")
+
+    if unit in {"s", "sec", "secs", "second", "seconds"}:
+        if value % 60 != 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Second-based intervals must be divisible by 60",
+            )
+        value //= 60
+        unit = "minute"
+
+    if unit in {"m", "min", "mins", "minute", "minutes"}:
+        return f"*/{value} * * * *"
+    if unit in {"h", "hr", "hrs", "hour", "hours"}:
+        return f"0 */{value} * * *"
+    return f"0 0 */{value} * *"
+
+
+def _resolve_schedule_expression(schedule_type: str, expression: str) -> tuple[str, str]:
+    normalized_type = (schedule_type or "cron").strip().lower()
+    normalized_expression = expression.strip()
+    if not normalized_expression:
+        raise HTTPException(status_code=400, detail="Schedule expression is required")
+
+    if normalized_type == "cron":
+        try:
+            croniter(normalized_expression, utcnow())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid cron expression") from exc
+        return normalized_type, normalized_expression
+
+    if normalized_type == "interval":
+        return normalized_type, _interval_to_cron(normalized_expression)
+
+    if normalized_type == "once":
+        run_at = _parse_once_datetime(normalized_expression)
+        cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
+        return normalized_type, cron_expression
+
+    raise HTTPException(status_code=400, detail=f"Unsupported schedule type: {schedule_type}")
+
+
+def _build_schedule_entry(
+    *,
+    schedule_id: str,
+    name: str,
+    instruction: str,
+    schedule_type: str,
+    expression: str,
+    timezone_name: str | None,
+    enabled: bool,
+    created_at: str,
+) -> dict:
+    normalized_type, cron_expression = _resolve_schedule_expression(schedule_type, expression)
+    entry = {
+        "id": schedule_id,
+        "name": name,
+        "message": instruction,
+        "instruction": instruction,
+        "user_request": name,
+        "schedule": expression,
+        "schedule_type": normalized_type,
+        "cron_expression": cron_expression,
+        "timezone": timezone_name or "UTC",
+        "enabled": enabled,
+        "last_run": None,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    next_run = Scheduler().next_run_for_entry(entry)
+    if next_run:
+        entry["next_run"] = next_run.isoformat()
+        entry["next_run_at"] = next_run.isoformat()
+    return entry
+
+
 @router.get("/workspace", response_model=WorkspaceResponse)
 async def get_workspace():
     """Get browser-workspace bootstrap plus backend-derived widgets."""
@@ -536,21 +655,27 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             continue
         if entry.get("id") != schedule_id:
             continue
+        current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
+        current_expression = body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
         if body.enabled is not None:
             entry["enabled"] = body.enabled
         if body.name is not None:
             entry["name"] = body.name
-            if "message" in entry and not entry.get("message"):
-                entry["message"] = body.name
-        if body.expression is not None:
-            if "schedule" in entry:
-                entry["schedule"] = body.expression
-            if "cron_expression" in entry:
-                entry["cron_expression"] = body.expression
+            entry["user_request"] = body.name
+        if body.instruction is not None:
+            entry["message"] = body.instruction
+            entry["instruction"] = body.instruction
+        if body.expression is not None or body.schedule_type is not None:
+            normalized_type, cron_expression = _resolve_schedule_expression(current_schedule_type, current_expression)
+            entry["schedule_type"] = normalized_type
+            entry["schedule"] = current_expression
+            entry["cron_expression"] = cron_expression
         if body.timezone is not None:
             entry["timezone"] = body.timezone
-        if body.schedule_type is not None:
-            entry["schedule_type"] = body.schedule_type
+        entry["updated_at"] = utcnow().isoformat()
+        next_run = Scheduler().next_run_for_entry(entry)
+        entry["next_run"] = next_run.isoformat() if next_run else None
+        entry["next_run_at"] = next_run.isoformat() if next_run else None
         updated = entry
         break
 
@@ -582,6 +707,59 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
 async def get_schedules():
     """Alias for schedule data using the requested plural path."""
     return await get_schedule()
+
+
+@router.post("/schedules", response_model=WidgetResponse)
+async def create_schedule(body: ScheduleCreateRequest):
+    """Create a new schedule entry by writing directly to schedule.json."""
+    name = body.name.strip()
+    instruction = body.instruction.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Schedule name is required")
+    if not instruction:
+        raise HTTPException(status_code=400, detail="Schedule task is required")
+
+    state_reader = get_state_reader()
+    schedule_path = state_reader.state_dir / "schedule.json"
+    schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
+    if schedule_data is None:
+        schedule_data = []
+    if not isinstance(schedule_data, list):
+        raise HTTPException(status_code=500, detail="Schedule state is invalid")
+
+    created_at = utcnow().isoformat()
+    schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+    entry = _build_schedule_entry(
+        schedule_id=schedule_id,
+        name=name,
+        instruction=instruction,
+        schedule_type=body.schedule_type,
+        expression=body.expression,
+        timezone_name=body.timezone,
+        enabled=body.enabled,
+        created_at=created_at,
+    )
+    schedule_data.append(entry)
+
+    _atomic_write_json(schedule_path, schedule_data)
+    state_reader.invalidate(schedule_path)
+
+    refreshed = next((widget for widget in state_reader.get_widgets() if widget["id"] == f"schedule:{schedule_id}"), None)
+    if refreshed is None:
+        refreshed = {
+            "id": f"schedule:{schedule_id}",
+            "type": "schedule",
+            "name": name,
+            "title": name,
+            "status": "enabled" if body.enabled else "disabled",
+            "description": name,
+            "summary": instruction,
+            "updated_at": created_at,
+            "data": entry,
+        }
+
+    _broadcast_widget_refresh(state_reader)
+    return _widget_to_response(refreshed)
 
 
 @router.post("/actions/run", response_model=ActionResponse)
@@ -991,6 +1169,8 @@ _sse_shutdown_event: asyncio.Event | None = None
 # Status monitor state
 _status_monitor_task: asyncio.Task | None = None
 _last_status: dict = {}
+_state_watch_callback = None
+_state_watch_push_task: asyncio.Task | None = None
 
 # Track active SSE response tasks so we can cancel them on shutdown
 _active_chat_tasks: list[asyncio.Task] = []
@@ -1148,6 +1328,43 @@ async def _status_monitor():
         except Exception as e:
             print(f"[StatusMonitor] Error: {e}", flush=True)
             await asyncio.sleep(10)
+
+
+async def _broadcast_latest_status() -> None:
+    global _last_status, _state_watch_push_task
+    try:
+        current = await _get_current_status()
+        _last_status = current.copy()
+        broadcast_status_event("status", current)
+    finally:
+        _state_watch_push_task = None
+
+
+def _queue_state_watch_status(_snapshot) -> None:
+    global _state_watch_push_task
+    if not _status_subscribers:
+        return
+    if _state_watch_push_task and not _state_watch_push_task.done():
+        return
+    _state_watch_push_task = asyncio.create_task(_broadcast_latest_status())
+
+
+async def start_state_status_watcher(interval: float = 1.0) -> None:
+    global _state_watch_callback
+    state_reader = get_state_reader()
+    if _state_watch_callback is None:
+        _state_watch_callback = _queue_state_watch_status
+        state_reader.add_watcher(_state_watch_callback)
+    await state_reader.start_watching(interval)
+
+
+async def stop_state_status_watcher() -> None:
+    global _state_watch_callback
+    state_reader = get_state_reader()
+    if _state_watch_callback is not None:
+        state_reader.remove_watcher(_state_watch_callback)
+        _state_watch_callback = None
+    await state_reader.stop_watching()
 
 
 def _status_changed(current: dict, previous: dict) -> bool:

@@ -421,7 +421,7 @@ class TestWorkspaceBridgeActions:
         state_dir.mkdir(parents=True)
         schedule_path = state_dir / "schedule.json"
         schedule_path.write_text(
-            '[{"id":"sched-1","name":"Daily check","schedule":"0 0 * * *","enabled":true,"timezone":"UTC"}]',
+            '[{"id":"sched-1","name":"Daily check","message":"Run the daily review","schedule":"0 0 * * *","cron_expression":"0 0 * * *","schedule_type":"cron","enabled":true,"timezone":"UTC"}]',
             encoding="utf-8",
         )
 
@@ -432,13 +432,54 @@ class TestWorkspaceBridgeActions:
             state_reader.invalidate()
             response = client.patch(
                 "/api/ui/widgets/schedule:sched-1",
-                json={"name": "Nightly check", "enabled": False, "expression": "0 1 * * *"},
+                json={
+                    "name": "Nightly check",
+                    "instruction": "Run the nightly review",
+                    "enabled": False,
+                    "expression": "0 1 * * *",
+                },
             )
             assert response.status_code == 200
             updated = schedule_path.read_text(encoding="utf-8")
             assert "Nightly check" in updated
+            assert "Run the nightly review" in updated
             assert "0 1 * * *" in updated
             assert "false" in updated.lower()
+        finally:
+            state_reader.state_dir = original_state_dir
+            state_reader.invalidate()
+
+    def test_create_schedule_writes_schedule_file(self, client, tmp_path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        schedule_path = state_dir / "schedule.json"
+        schedule_path.write_text("[]", encoding="utf-8")
+
+        state_reader = get_state_reader()
+        original_state_dir = state_reader.state_dir
+        try:
+            state_reader.state_dir = state_dir
+            state_reader.invalidate()
+            response = client.post(
+                "/api/ui/schedules",
+                json={
+                    "name": "Morning Check-in",
+                    "instruction": "Summarize overnight alerts and prep the inbox.",
+                    "schedule_type": "interval",
+                    "expression": "15m",
+                    "timezone": "UTC",
+                    "enabled": True,
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["type"] == "schedule"
+            assert payload["title"] == "Morning Check-in"
+            assert payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
+            updated = schedule_path.read_text(encoding="utf-8")
+            assert "Morning Check-in" in updated
+            assert "Summarize overnight alerts and prep the inbox." in updated
+            assert "*/15 * * * *" in updated
         finally:
             state_reader.state_dir = original_state_dir
             state_reader.invalidate()

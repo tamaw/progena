@@ -62,10 +62,14 @@ const defaultNodeData = {
     expression: '',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     enabled: false,
+    instruction: '',
     targetArtefactId: null,
     nextRunAt: null,
     lastRunAt: null,
     lastRunStatus: 'idle',
+    isUnsaved: false,
+    isSaving: false,
+    saveError: null,
   }),
   group: () => ({
     childIds: [],
@@ -165,11 +169,15 @@ function mapWidgetToNodeData(widget, existingData = {}) {
       status: widget.status || existingData.status || 'idle',
       scheduleType: widget.data?.schedule_type || widget.schedule_type || existingData.scheduleType || 'cron',
       expression: widget.data?.expression || widget.expression || existingData.expression || '',
+      instruction: widget.data?.instruction || widget.data?.message || existingData.instruction || '',
       timezone: widget.data?.timezone || widget.timezone || existingData.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       enabled: widget.data?.enabled ?? widget.enabled ?? existingData.enabled ?? false,
       nextRunAt: widget.data?.next_run_at || widget.next_run_at || existingData.nextRunAt || null,
       lastRunAt: widget.data?.last_run_at || widget.last_run_at || existingData.lastRunAt || null,
       lastRunStatus: widget.data?.last_run_status || widget.last_run_status || existingData.lastRunStatus || 'idle',
+      isUnsaved: false,
+      isSaving: false,
+      saveError: null,
       updatedAt: timestamp,
     };
   }
@@ -213,28 +221,31 @@ function buildServerNodes(widgets, existingNodes) {
   const existingMap = new Map(existingNodes.map((node) => [node.id, node]));
 
   return widgets.map((widget, index) => {
-    const existing = existingMap.get(widget.id);
-    const type = widget.type;
-    const size = defaultNodeSizes[type] || { width: 320, height: 200 };
-    const column = index % 3;
-    const row = Math.floor(index / 3);
-    const position = existing?.position || { x: 80 + column * 360, y: 80 + row * 240 };
-
-    return {
-      id: widget.id,
-      type,
-      position,
-      zIndex: existing?.zIndex,
-      selected: existing?.selected,
-      style: {
-        width: existing?.style?.width || size.width,
-        height: existing?.style?.height || size.height,
-      },
-      data: {
-        ...mapWidgetToNodeData(widget, existing?.data),
-      },
-    };
+    return buildServerNode(widget, existingMap.get(widget.id), index);
   });
+}
+
+function buildServerNode(widget, existing, index = 0) {
+  const type = widget.type;
+  const size = defaultNodeSizes[type] || { width: 320, height: 200 };
+  const column = index % 3;
+  const row = Math.floor(index / 3);
+  const position = existing?.position || { x: 80 + column * 360, y: 80 + row * 240 };
+
+  return {
+    id: widget.id,
+    type,
+    position,
+    zIndex: existing?.zIndex,
+    selected: existing?.selected,
+    style: {
+      width: existing?.style?.width || size.width,
+      height: existing?.style?.height || size.height,
+    },
+    data: {
+      ...mapWidgetToNodeData(widget, existing?.data),
+    },
+  };
 }
 
 function mergeNodes(savedNodes, widgets) {
@@ -249,6 +260,7 @@ export function WorkspaceProvider({ children }) {
     getWorkspace,
     getWidgets,
     updateWidget,
+    createSchedule,
     runAction,
     generateAction,
   } = useApi();
@@ -367,6 +379,19 @@ export function WorkspaceProvider({ children }) {
 
   const addNode = useCallback((type, position, overrides = {}) => {
     const newNode = createArtefact(type, position, overrides);
+    if (type === 'schedule' && !newNode.data.serverManaged) {
+      newNode.style = {
+        ...newNode.style,
+        width: Math.max(defaultNodeSizes.schedule.width, 480),
+        height: Math.max(defaultNodeSizes.schedule.height, 420),
+      };
+      newNode.data = {
+        ...newNode.data,
+        title: overrides.title || 'New Schedule',
+        expanded: overrides.expanded ?? true,
+        isUnsaved: true,
+      };
+    }
     setNodes((currentNodes) => [...currentNodes, newNode]);
     return newNode;
   }, []);
@@ -417,6 +442,7 @@ export function WorkspaceProvider({ children }) {
         if (node.type === 'schedule' && node.data?.serverManaged) {
           scheduleWidgetPatch(nodeId, {
             name: updatedNode.data.title,
+            instruction: updatedNode.data.instruction,
             enabled: updatedNode.data.enabled,
             schedule_type: updatedNode.data.scheduleType,
             expression: updatedNode.data.expression,
@@ -428,6 +454,81 @@ export function WorkspaceProvider({ children }) {
       })
     );
   }, [scheduleWidgetPatch]);
+
+  const saveScheduleNode = useCallback(async (nodeId) => {
+    const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+    if (!node || node.type !== 'schedule' || node.data?.serverManaged) {
+      return;
+    }
+
+    const title = (node.data.title || '').trim();
+    const instruction = (node.data.instruction || '').trim();
+    const expression = (node.data.expression || '').trim();
+
+    if (!title || !instruction || !expression) {
+      updateNodeData(nodeId, {
+        saveError: 'Name, task, and schedule expression are required before saving.',
+      });
+      return;
+    }
+
+    setNodes((currentNodes) => currentNodes.map((entry) => (
+      entry.id === nodeId
+        ? {
+          ...entry,
+          data: {
+            ...entry.data,
+            isSaving: true,
+            saveError: null,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+        : entry
+    )));
+
+    try {
+      const widget = await createSchedule({
+        name: title,
+        instruction,
+        schedule_type: node.data.scheduleType,
+        expression,
+        timezone: node.data.timezone,
+        enabled: node.data.enabled,
+      });
+
+      setNodes((currentNodes) => {
+        const existingNode = currentNodes.find((entry) => entry.id === nodeId) || node;
+        const remainingNodes = currentNodes.filter((entry) => entry.id !== nodeId);
+        const serverNode = buildServerNode(
+          widget,
+          {
+            ...existingNode,
+            id: widget.id,
+            data: {
+              ...existingNode.data,
+              expanded: existingNode.data.expanded,
+            },
+          },
+          remainingNodes.length,
+        );
+        return [...remainingNodes, serverNode];
+      });
+    } catch (saveError) {
+      setNodes((currentNodes) => currentNodes.map((entry) => (
+        entry.id === nodeId
+          ? {
+            ...entry,
+            data: {
+              ...entry.data,
+              isSaving: false,
+              saveError: saveError.message,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+          : entry
+      )));
+    }
+  }, [createSchedule, updateNodeData]);
 
   const removeNodes = useCallback((nodeIds) => {
     const idSet = new Set(nodeIds);
@@ -653,6 +754,7 @@ export function WorkspaceProvider({ children }) {
         generateFromPromptNode,
         runCodeNode,
         runScheduleNode,
+        saveScheduleNode,
       }}
     >
       {children}
