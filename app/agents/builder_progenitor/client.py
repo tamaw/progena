@@ -36,6 +36,11 @@ def _build_responses_endpoint(base_url: str) -> str:
 def _close_object_schemas(node: Any) -> None:
     """Recursively enforce strict object schemas Azure Responses accepts."""
     if isinstance(node, dict):
+        if "$ref" in node:
+            ref = node["$ref"]
+            node.clear()
+            node["$ref"] = ref
+            return
         if node.get("type") == "object":
             node["additionalProperties"] = False
             properties = node.get("properties")
