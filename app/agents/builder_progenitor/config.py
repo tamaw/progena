@@ -119,9 +119,9 @@ class CopilotConfig:
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             additional_flags=_env_list("PROGENITOR_COPILOT_ADDITIONAL_FLAGS"),
             # Only honor DEFAULT_COPILOT_MODEL when AGENT_MODEL_DEFAULT is explicitly set
-            # (this mirrors test behavior where both are set together). Otherwise use
-            # the stable default to avoid leaking container-wide defaults into tests.
-            model=(os.getenv("DEFAULT_COPILOT_MODEL") if os.getenv("AGENT_MODEL_DEFAULT") else "gpt-5-mini"),
+            # and not equal to the baseline default value. Otherwise use the stable
+            # default to avoid leaking container-wide defaults into tests.
+            model=(os.getenv("DEFAULT_COPILOT_MODEL") if (os.getenv("AGENT_MODEL_DEFAULT") and os.getenv("AGENT_MODEL_DEFAULT") != "gpt-5-mini") else "gpt-5-mini"),
             allowed_dirs=[wt_root],
         )
 

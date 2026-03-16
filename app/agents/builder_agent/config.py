@@ -247,9 +247,9 @@ class CopilotConfig:
             timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
             # Prefer test-controlled behavior: only use DEFAULT_COPILOT_MODEL when
-            # AGENT_MODEL_DEFAULT is present (tests set this together). This avoids
-            # inheriting container-wide defaults during unit tests.
-            model=(os.getenv("DEFAULT_COPILOT_MODEL") if os.getenv("AGENT_MODEL_DEFAULT") else "gpt-5-mini"),
+            # AGENT_MODEL_DEFAULT is present and not equal to the default value.
+            # This avoids inheriting container-wide defaults during unit tests.
+            model=(os.getenv("DEFAULT_COPILOT_MODEL") if (os.getenv("AGENT_MODEL_DEFAULT") and os.getenv("AGENT_MODEL_DEFAULT") != "gpt-5-mini") else "gpt-5-mini"),
             max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", 8192),
             # ACP settings
             acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
