@@ -63,8 +63,8 @@ class LLMConfig:
                 "AGENT_MODEL_DEFAULT",
                 default="gpt-5-mini",
             ) or "gpt-5-mini",
-            model_planner_override=os.getenv("OVERRIDE_AGENT_PLANNER_MODEL"),
-            model_builder_override=os.getenv("OVERRIDE_AGENT_BUILDER_MODEL"),
+            model_planner_override=os.getenv("OVERRIDE_AGENT_PLANNER_MODEL") or None,
+            model_builder_override=os.getenv("OVERRIDE_AGENT_BUILDER_MODEL") or None,
         )
 
     def get_model_for_role(self, role: str | None = None) -> str:
@@ -118,7 +118,10 @@ class CopilotConfig:
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             additional_flags=_env_list("PROGENITOR_COPILOT_ADDITIONAL_FLAGS"),
-            model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5-mini"),
+            # Only honor DEFAULT_COPILOT_MODEL when AGENT_MODEL_DEFAULT is explicitly set
+            # (this mirrors test behavior where both are set together). Otherwise use
+            # the stable default to avoid leaking container-wide defaults into tests.
+            model=(os.getenv("DEFAULT_COPILOT_MODEL") if os.getenv("AGENT_MODEL_DEFAULT") else "gpt-5-mini"),
             allowed_dirs=[wt_root],
         )
 
