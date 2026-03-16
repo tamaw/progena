@@ -1,8 +1,9 @@
 """
-Quick Azure Responses API contract smoke test.
+Quick Azure Responses API smoke test.
 
 Usage:
   python scripts/flash_test_azure_responses_contract.py --reasoning
+  python scripts/flash_test_azure_responses_contract.py --structured-builder-plan
   python scripts/flash_test_azure_responses_contract.py --dry-run
 """
 
@@ -12,10 +13,20 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+from dotenv import load_dotenv
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.agents.builder_progenitor.client import BuilderClient
+
+load_dotenv()
 
 
 def _extract_output_text(payload: dict[str, Any]) -> str:
@@ -60,18 +71,69 @@ def _build_responses_endpoint(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
+async def _run_builder_structured_plan(request_text: str, model: str) -> int:
+    previous_override = os.getenv("OVERRIDE_AGENT_PLANNER_MODEL")
+    os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = model
+    try:
+        async with BuilderClient(role="planner") as client:
+            result = await client.plan_step(request_text, {})
+    except Exception as exc:
+        print(f"STRUCTURED_REQUEST_FAILED: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if previous_override is None:
+            os.environ.pop("OVERRIDE_AGENT_PLANNER_MODEL", None)
+        else:
+            os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = previous_override
+
+    print("STRUCTURED_PLAN_OK")
+    print(f"model={client.model}")
+    print(f"summary={result.plan.summary}")
+    print(f"steps={len(result.plan.steps)}")
+    print(f"has_reasoning={bool(result.reasoning)}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Azure Responses API smoke test")
     parser.add_argument("--model", default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"))
     parser.add_argument("--prompt", default="Reply with 'OK' only.")
+    parser.add_argument(
+        "--builder-request",
+        default="Say hello and include a pr step.",
+        help="Request text for the builder_progenitor structured planning path.",
+    )
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--reasoning", action="store_true")
+    parser.add_argument(
+        "--structured-builder-plan",
+        action="store_true",
+        help="Exercise the same structured planning path BuilderClient.plan_step() uses.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print request payload and exit without network call",
     )
     args = parser.parse_args()
+
+    if args.structured_builder_plan:
+        if args.dry_run:
+            print(
+                json.dumps(
+                    {
+                        "builder_request": args.builder_request,
+                        "mode": "structured_builder_plan",
+                        "model": args.model,
+                    },
+                    indent=2,
+                )
+            )
+            print("DRY_RUN_OK")
+            return 0
+        import asyncio
+
+        return asyncio.run(_run_builder_structured_plan(args.builder_request, args.model))
 
     payload = _build_payload(args.model, args.prompt, args.reasoning)
     if args.dry_run:
