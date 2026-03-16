@@ -63,6 +63,27 @@ def _build_responses_endpoint(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
 
 
+def _close_object_schemas(node: Any) -> None:
+    """Recursively enforce strict object schemas Azure Responses accepts."""
+    if isinstance(node, dict):
+        if "$ref" in node:
+            ref = node["$ref"]
+            node.clear()
+            node["$ref"] = ref
+            return
+        if node.get("type") == "object":
+            node["additionalProperties"] = False
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["required"] = list(properties.keys())
+        for value in node.values():
+            _close_object_schemas(value)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _close_object_schemas(item)
+
+
 def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str, Any]:
     """Build response_format dict for structured output using Pydantic model.
 
@@ -74,9 +95,7 @@ def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str
         Dictionary in format: {"type": "json_schema", "json_schema": {...}}
     """
     schema = response_model.model_json_schema()
-    schema["additionalProperties"] = False
-    if "properties" in schema:
-        schema["required"] = list(schema["properties"].keys())
+    _close_object_schemas(schema)
 
     return {
         "type": "json_schema",
