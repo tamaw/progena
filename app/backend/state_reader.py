@@ -270,6 +270,7 @@ class StateReader:
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
         self._watch_task: asyncio.Task | None = None
+        self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
 
     def invalidate(self, *paths: Path) -> None:
         """Invalidate cached file contents."""
@@ -673,6 +674,8 @@ class StateReader:
                     "description": item.raw.get("user_request") or item.name,
                     "status": "enabled" if item.enabled else "disabled",
                     "summary": item.raw.get("message") or item.name,
+                    "instruction": item.raw.get("instruction") or item.raw.get("message") or "",
+                    "user_request": item.raw.get("user_request") or "",
                     "schedule_id": item.id,
                     "schedule_type": item.raw.get("schedule_type", "cron"),
                     "expression": item.schedule,
@@ -711,6 +714,27 @@ class StateReader:
                 "layout_owner": "browser",
             },
         }
+
+    def _watched_paths(self) -> list[Path]:
+        return [
+            self.state_dir / "health.json",
+            self.state_dir / "current_state.json",
+            self.state_dir / "build_state.json",
+            self.state_dir / "schedule.json",
+            self.config_dir / "agents.json",
+            self.config_dir / "mcp.json",
+            self.sessions_dir / "sessions.json",
+        ]
+
+    def _path_version(self, path: Path) -> tuple[int, int] | None:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
+
+    def _collect_watch_versions(self) -> dict[str, tuple[int, int] | None]:
+        return {str(path): self._path_version(path) for path in self._watched_paths()}
 
     def snapshot_to_dict(self, snapshot: StateSnapshot) -> dict[str, Any]:
         return {
@@ -796,14 +820,29 @@ class StateReader:
         while True:
             try:
                 await asyncio.sleep(interval)
+                versions = self._collect_watch_versions()
+                if self._last_watch_versions is None:
+                    self._last_watch_versions = versions
+                    self._last_snapshot = self.get_snapshot()
+                    continue
+
+                changed_paths = [
+                    Path(path)
+                    for path, version in versions.items()
+                    if self._last_watch_versions.get(path) != version
+                ]
+                if not changed_paths:
+                    continue
+
+                self._last_watch_versions = versions
+                self.invalidate(*changed_paths)
                 snapshot = self.get_snapshot()
-                if self._state_changed(snapshot):
-                    self._last_snapshot = snapshot
-                    for watcher in list(self._watchers):
-                        try:
-                            watcher(snapshot)
-                        except Exception as e:
-                            logger.warning("Watcher error: %s", e)
+                self._last_snapshot = snapshot
+                for watcher in list(self._watchers):
+                    try:
+                        watcher(snapshot)
+                    except Exception as e:
+                        logger.warning("Watcher error: %s", e)
             except asyncio.CancelledError:
                 break
             except Exception as e:
