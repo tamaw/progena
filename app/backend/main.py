@@ -72,7 +72,12 @@ from .telegram_client import (
     init_telegram_client,
     stop_telegram_client,
 )
-from .ui_routes import close_all_sse_connections, has_active_chat_subscribers
+from .ui_routes import (
+    close_all_sse_connections,
+    has_active_chat_subscribers,
+    start_state_status_watcher,
+    stop_state_status_watcher,
+)
 from .ui_routes import router as ui_router
 
 logger = logging.getLogger(__name__)
@@ -618,6 +623,13 @@ async def lifespan(app: FastAPI):
         config.rate_limit_enabled,
     )
     logger.info("Enhanced features: streaming, metadata, attachments, sessions")
+    await start_state_status_watcher(interval=1.0)
+    graceful_shutdown.register_callback(
+        "stop_state_status_watcher",
+        stop_state_status_watcher,
+        priority=40,
+        timeout=5.0,
+    )
 
     yield
 

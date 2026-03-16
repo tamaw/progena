@@ -3,8 +3,10 @@ import { NodeResizer } from '@xyflow/react';
 import { useWorkspaceContext } from '../../../context/WorkspaceContext';
 
 function ScheduleNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runScheduleNode } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode } = useWorkspaceContext();
   const { expanded } = data;
+  const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
+  const isSaving = Boolean(data.isSaving && !data.serverManaged);
 
   const onTitleChange = useCallback((e) => {
     updateNodeData(id, { title: e.target.value });
@@ -40,7 +42,7 @@ function ScheduleNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
-      <div className={`workspace-node ${selected ? 'selected' : ''}`}>
+      <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''}`}>
         <div className="node-title-bar">
           <div className="node-type-icon schedule">S</div>
           <input
@@ -48,6 +50,11 @@ function ScheduleNode({ id, data, selected }) {
             value={data.title}
             onChange={onTitleChange}
           />
+          {isUnsaved && (
+            <span className={`node-status-badge ${isSaving ? 'running' : 'editing'}`}>
+              {isSaving ? 'saving' : 'unsaved'}
+            </span>
+          )}
           <span className={`schedule-enabled-badge ${data.enabled ? 'enabled' : 'disabled'}`}>
             {data.enabled ? 'ON' : 'OFF'}
           </span>
@@ -65,6 +72,17 @@ function ScheduleNode({ id, data, selected }) {
           {expanded ? (
             <div className="node-body-expanded">
               <div className="schedule-form">
+                <div className="schedule-form-field">
+                  <label>Task</label>
+                  <textarea
+                    className="nodrag schedule-task-input"
+                    value={data.instruction || ''}
+                    onChange={onFieldChange('instruction')}
+                    placeholder="What should Progenitor do when this schedule fires?"
+                    rows={4}
+                  />
+                </div>
+
                 <div className="schedule-form-field">
                   <label>Type</label>
                   <select
@@ -106,6 +124,14 @@ function ScheduleNode({ id, data, selected }) {
                 </div>
 
                 <div className="schedule-info">
+                  {data.saveError && (
+                    <div className="schedule-save-error">{data.saveError}</div>
+                  )}
+                  {isUnsaved && (
+                    <div className="schedule-unsaved-note">
+                      This schedule stays local to the workspace until you save it.
+                    </div>
+                  )}
                   <div className="schedule-row">
                     <span className="schedule-row-label">Next run</span>
                     <span className="schedule-row-value">{formatTime(data.nextRunAt)}</span>
@@ -141,7 +167,17 @@ function ScheduleNode({ id, data, selected }) {
 
         {expanded && (
           <div className="node-actions">
-            <button className="node-action-btn primary" onClick={() => runScheduleNode(id)}>Run Now</button>
+            {isUnsaved ? (
+              <button
+                className="node-action-btn primary"
+                onClick={() => saveScheduleNode(id)}
+                disabled={isSaving}
+              >
+                {isSaving ? 'Saving...' : 'Save Schedule'}
+              </button>
+            ) : (
+              <button className="node-action-btn primary" onClick={() => runScheduleNode(id)}>Run Now</button>
+            )}
           </div>
         )}
       </div>

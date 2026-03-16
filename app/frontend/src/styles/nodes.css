@@ -191,6 +191,11 @@
   background: rgba(88, 166, 255, 0.2);
 }
 
+.node-action-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .node-action-btn.danger {
   color: #f85149;
 }
@@ -549,7 +554,8 @@
 }
 
 .schedule-form-field input,
-.schedule-form-field select {
+.schedule-form-field select,
+.schedule-task-input {
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   border: 1px solid var(--color-border);
@@ -561,8 +567,15 @@
 }
 
 .schedule-form-field input:focus,
-.schedule-form-field select:focus {
+.schedule-form-field select:focus,
+.schedule-task-input:focus {
   border-color: var(--color-accent);
+}
+
+.schedule-task-input {
+  resize: vertical;
+  min-height: 92px;
+  line-height: 1.4;
 }
 
 .schedule-toggle {
@@ -602,6 +615,30 @@
 .schedule-toggle-switch.enabled::after {
   transform: translateX(14px);
   background: #3fb950;
+}
+
+.schedule-node-unsaved {
+  border-color: rgba(210, 153, 34, 0.9);
+  box-shadow: 0 0 0 1px rgba(210, 153, 34, 0.3);
+}
+
+.schedule-unsaved-note,
+.schedule-save-error {
+  font-size: var(--font-size-xs);
+  border-radius: var(--border-radius-sm);
+  padding: 6px 8px;
+}
+
+.schedule-unsaved-note {
+  color: #d29922;
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.25);
+}
+
+.schedule-save-error {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.25);
 }
 
 /* ---- Group Node ---- */
