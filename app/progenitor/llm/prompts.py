@@ -29,18 +29,37 @@ def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
     env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
     if env_prompts_dir:
         resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
+        # If the env dir is explicitly set to a different location than the
+        # project default, honor it (and validate). This allows tests to
+        # override behavior. If it resolves to the same path as the project
+        # default, prefer the project default to avoid inheriting container-wide
+        # environment values.
+        if resolved_env_dir != DEFAULT_PROMPTS_DIR.resolve():
+            if not resolved_env_dir.exists():
+                raise FileNotFoundError(
+                    f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
+                )
+            return resolved_env_dir
+
+    # Prefer the project-local prompts directory when present.
+    if DEFAULT_PROMPTS_DIR.exists():
+        return DEFAULT_PROMPTS_DIR
+
+    # If default doesn't exist but env was provided (and points to that same
+    # path), validate and return it (this handles container setups where the
+    # project default is absent).
+    if env_prompts_dir:
+        resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
         if not resolved_env_dir.exists():
             raise FileNotFoundError(
                 f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
             )
         return resolved_env_dir
 
-    if not DEFAULT_PROMPTS_DIR.exists():
-        raise FileNotFoundError(
-            f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
-            "Ensure the prompts/ directory exists at the project root."
-        )
-    return DEFAULT_PROMPTS_DIR
+    raise FileNotFoundError(
+        f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
+        "Ensure the prompts/ directory exists at the project root."
+    )
 
 
 class PromptTemplates:
