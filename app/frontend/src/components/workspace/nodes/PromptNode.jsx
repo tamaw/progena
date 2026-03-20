@@ -1,21 +1,56 @@
-import { memo, useCallback, useRef } from 'react';
-import { NodeResizer } from '@xyflow/react';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import WidgetTabs from './WidgetTabs';
+import { resolveWidgetDefaultTab } from './widgetTabUtils';
+
+function buildTargetOptions(data, nodes) {
+  return [...new Set(
+    [
+      data.targetAgent,
+      data.primaryAgent,
+      ...(data.associatedAgents || []),
+      ...nodes
+        .filter((node) => node.type === 'agent' || node.type === 'mcp')
+        .map((node) => node.data?.agentId || node.data?.title || ''),
+      'progenitor',
+    ]
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter(Boolean)
+  )];
+}
+
+function formatAgentLabel(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+}
 
 function PromptNode({ id, data, selected }) {
   const {
+    nodes,
+    connectPromptToAgent,
     updateNodeData,
     toggleExpanded,
     runPromptNode,
     generateFromPromptNode,
+    getWidgetTabs,
+    getWidgetDefaultTab,
   } = useWorkspaceContext();
-  const titleRef = useRef(null);
   const { expanded } = data;
   const associatedAgents = data.associatedAgents || [];
-
-  const onTitleChange = useCallback((e) => {
-    updateNodeData(id, { title: e.target.value });
-  }, [id, updateNodeData]);
+  const targetAgentOptions = buildTargetOptions(data, nodes);
+  const activeTargetAgent = data.targetAgent || targetAgentOptions[0] || 'progenitor';
+  const tabs = getWidgetTabs('prompt');
+  const defaultTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('prompt'), 'editor'),
+    [getWidgetDefaultTab, tabs]
+  );
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  const resolvedActiveTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, activeTab, defaultTab),
+    [activeTab, defaultTab, tabs]
+  );
 
   const onPromptChange = useCallback((e) => {
     updateNodeData(id, { prompt: e.target.value });
@@ -25,6 +60,10 @@ function PromptNode({ id, data, selected }) {
     updateNodeData(id, { role: e.target.value });
   }, [id, updateNodeData]);
 
+  const onTargetAgentChange = useCallback((e) => {
+    connectPromptToAgent(id, e.target.value);
+  }, [connectPromptToAgent, id]);
+
   const onToggle = useCallback(() => {
     toggleExpanded(id);
   }, [id, toggleExpanded]);
@@ -32,6 +71,9 @@ function PromptNode({ id, data, selected }) {
   const promptPreview = data.prompt
     ? data.prompt.substring(0, 120) + (data.prompt.length > 120 ? '...' : '')
     : 'Empty prompt';
+  const responsePreview = data.summaryState
+    ? data.summaryState.substring(0, 160) + (data.summaryState.length > 160 ? '...' : '')
+    : '';
 
   return (
     <>
@@ -42,17 +84,14 @@ function PromptNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
-        <div className="node-title-bar">
+        <div className="node-title-bar drag-handle">
           <div className="node-type-icon prompt">P</div>
-          <input
-            className="node-title nodrag"
-            value={data.title}
-            onChange={onTitleChange}
-            ref={titleRef}
-          />
-          {data.primaryAgent && (
-            <span className="node-meta-chip prompt-agent">{data.primaryAgent}</span>
+          <div className="node-title">{data.title}</div>
+          {activeTargetAgent && (
+            <span className="node-meta-chip prompt-agent">{formatAgentLabel(activeTargetAgent)}</span>
           )}
           {data.status !== 'idle' && (
             <span className={`node-status-badge ${data.status}`}>{data.status}</span>
@@ -65,6 +104,7 @@ function PromptNode({ id, data, selected }) {
         <div className="node-body">
           {expanded ? (
             <div className="node-body-expanded">
+              <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
               <div className="prompt-meta">
                 <input
                   className="nodrag"
@@ -72,6 +112,13 @@ function PromptNode({ id, data, selected }) {
                   value={data.role || ''}
                   onChange={onRoleChange}
                 />
+                <select className="nodrag" value={activeTargetAgent} onChange={onTargetAgentChange}>
+                  {targetAgentOptions.map((agent) => (
+                    <option key={agent} value={agent}>
+                      {agent === 'progenitor' ? 'Run as progenitor' : `Call ${agent}`}
+                    </option>
+                  ))}
+                </select>
               </div>
               {(data.sourcePath || associatedAgents.length > 0) && (
                 <div className="prompt-source-meta">
@@ -85,12 +132,28 @@ function PromptNode({ id, data, selected }) {
                   )}
                 </div>
               )}
-              <textarea
-                className="prompt-editor nodrag nowheel"
-                value={data.prompt || ''}
-                onChange={onPromptChange}
-                placeholder="Enter your prompt..."
-              />
+              {resolvedActiveTab === 'output' ? (
+                <div className="node-tab-panel">
+                  <div className="prompt-response">
+                    <div className="prompt-response-label">Latest response</div>
+                    <div className="prompt-response-body">{data.summaryState || 'No output yet.'}</div>
+                  </div>
+                  {data.linkedOutputIds?.length > 0 && (
+                    <div className="node-output-meta">
+                      {data.linkedOutputIds.map((outputId) => (
+                        <span key={outputId} className="prompt-tag">{outputId}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <textarea
+                  className="prompt-editor nodrag nowheel"
+                  value={data.prompt || ''}
+                  onChange={onPromptChange}
+                  placeholder="Enter your prompt..."
+                />
+              )}
               {data.tags?.length > 0 && (
                 <div className="prompt-tags">
                   {data.tags.map((tag, i) => (
@@ -114,6 +177,7 @@ function PromptNode({ id, data, selected }) {
                 </div>
               )}
               <div className="prompt-preview">{promptPreview}</div>
+              {responsePreview && <div className="prompt-response-preview">{responsePreview}</div>}
               {data.tags?.length > 0 && (
                 <div className="prompt-tags">
                   {data.tags.map((tag, i) => (
@@ -127,7 +191,7 @@ function PromptNode({ id, data, selected }) {
 
         {expanded && (
           <div className="node-actions">
-            <button className="node-action-btn primary" onClick={() => runPromptNode(id)}>Execute</button>
+            <button className="node-action-btn primary" onClick={() => runPromptNode(id)}>Run</button>
             <button className="node-action-btn" onClick={() => generateFromPromptNode(id)}>Generate Code</button>
           </div>
         )}

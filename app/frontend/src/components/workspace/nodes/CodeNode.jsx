@@ -1,6 +1,8 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
 import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import WidgetTabs from './WidgetTabs';
+import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 const LANGUAGES = [
   'javascript', 'python', 'html', 'css', 'bash',
@@ -8,12 +10,18 @@ const LANGUAGES = [
 ];
 
 function CodeNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runCodeNode } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, runCodeNode, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
   const { expanded } = data;
-
-  const onTitleChange = useCallback((e) => {
-    updateNodeData(id, { title: e.target.value });
-  }, [id, updateNodeData]);
+  const tabs = getWidgetTabs('code');
+  const defaultTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('code'), 'editor'),
+    [getWidgetDefaultTab, tabs]
+  );
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  const resolvedActiveTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, activeTab, defaultTab),
+    [activeTab, defaultTab, tabs]
+  );
 
   const onContentChange = useCallback((e) => {
     updateNodeData(id, { content: e.target.value });
@@ -57,13 +65,9 @@ function CodeNode({ id, data, selected }) {
         handleClassName="react-flow__resize-control handle"
       />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
-        <div className="node-title-bar">
+        <div className="node-title-bar drag-handle">
           <div className="node-type-icon code">&lt;&gt;</div>
-          <input
-            className="node-title nodrag"
-            value={data.title}
-            onChange={onTitleChange}
-          />
+          <div className="node-title">{data.title}</div>
           <span className="code-language-badge">{data.language || 'js'}</span>
           {data.status !== 'idle' && (
             <span className={`node-status-badge ${data.status}`}>{data.status}</span>
@@ -76,30 +80,34 @@ function CodeNode({ id, data, selected }) {
         <div className="node-body">
           {expanded ? (
             <div className="node-body-expanded">
+              <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
               <div className="code-editor-container">
-                <div className="code-editor-toolbar">
-                  <select
-                    className="code-language-select nodrag"
-                    value={data.language || 'javascript'}
-                    onChange={onLanguageChange}
-                  >
-                    {LANGUAGES.map((lang) => (
-                      <option key={lang} value={lang}>{lang}</option>
-                    ))}
-                  </select>
-                </div>
-                <textarea
-                  className="code-editor nodrag nowheel"
-                  value={data.content || ''}
-                  onChange={onContentChange}
-                  onKeyDown={onKeyDown}
-                  placeholder="// Write your code here..."
-                  spellCheck={false}
-                />
-                {data.outputRefs?.length > 0 && (
+                {resolvedActiveTab === 'output' ? (
                   <div className="code-output">
-                    {data.outputRefs.join('\n')}
+                    {data.outputRefs?.length > 0 ? data.outputRefs.join('\n') : 'No output yet.'}
                   </div>
+                ) : (
+                  <>
+                    <div className="code-editor-toolbar">
+                      <select
+                        className="code-language-select nodrag"
+                        value={data.language || 'javascript'}
+                        onChange={onLanguageChange}
+                      >
+                        {LANGUAGES.map((lang) => (
+                          <option key={lang} value={lang}>{lang}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <textarea
+                      className="code-editor nodrag nowheel"
+                      value={data.content || ''}
+                      onChange={onContentChange}
+                      onKeyDown={onKeyDown}
+                      placeholder="// Write your code here..."
+                      spellCheck={false}
+                    />
+                  </>
                 )}
               </div>
             </div>
