@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
-import { applyNodeChanges } from '@xyflow/react';
+import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
 import { useApi } from '../hooks/useApi';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/indexedDb';
 
@@ -19,7 +19,6 @@ const defaultNodeSizes = {
   agent: { width: 320, height: 200 },
   mcp: { width: 320, height: 200 },
 };
-
 const defaultNodeData = {
   prompt: () => ({
     prompt: '',
@@ -27,6 +26,7 @@ const defaultNodeData = {
     sourcePath: '',
     primaryAgent: '',
     associatedAgents: [],
+    targetAgent: 'progenitor',
     variables: {},
     linkedOutputIds: [],
     lastRunId: null,
@@ -217,6 +217,69 @@ function getActionText(payload) {
   );
 }
 
+function dedupeNodeValues(values) {
+  return [...new Set(
+    values
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter(Boolean)
+  )];
+}
+
+function normalizeAgentName(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function getAgentNameFromNode(node) {
+  return node?.data?.agentId || node?.data?.title || '';
+}
+
+function getPromptTargetAgent(promptData = {}, connectedTargetAgent = '') {
+  return dedupeNodeValues([
+    connectedTargetAgent,
+    promptData.targetAgent,
+    promptData.primaryAgent,
+    ...(promptData.associatedAgents || []),
+    'progenitor',
+  ])[0] || 'progenitor';
+}
+
+function getConnectedAgentTarget(promptNodeId, nodes, edges) {
+  const edge = edges.find((entry) => entry.source === promptNodeId);
+  if (!edge) {
+    return null;
+  }
+
+  const targetNode = nodes.find((node) => node.id === edge.target && (node.type === 'agent' || node.type === 'mcp'));
+  if (!targetNode) {
+    return null;
+  }
+
+  return {
+    nodeId: targetNode.id,
+    agentName: getAgentNameFromNode(targetNode),
+  };
+}
+
+function buildPromptInvocation(promptData = {}, connectedTargetAgent = '') {
+  const prompt = (promptData.prompt || '').trim();
+  if (!prompt) {
+    return '';
+  }
+
+  const targetAgent = getPromptTargetAgent(promptData, connectedTargetAgent);
+  if (targetAgent === 'progenitor') {
+    return prompt;
+  }
+
+  return [
+    `Call agent ${targetAgent} for this task.`,
+    'You are orchestrating from progenitor, so delegate the work and return the response here.',
+    '',
+    'Task:',
+    prompt,
+  ].join('\n');
+}
+
 function buildServerNodes(widgets, existingNodes) {
   const existingMap = new Map(existingNodes.map((node) => [node.id, node]));
 
@@ -259,6 +322,7 @@ export function WorkspaceProvider({ children }) {
   const {
     getWorkspace,
     getWidgets,
+    getWidgetSchemas,
     updateWidget,
     createSchedule,
     runAction,
@@ -268,10 +332,13 @@ export function WorkspaceProvider({ children }) {
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [widgetSchemas, setWidgetSchemas] = useState({});
   const saveTimerRef = useRef(null);
   const patchTimersRef = useRef(new Map());
   const latestNodesRef = useRef([]);
+  const latestEdgesRef = useRef([]);
   const latestViewportRef = useRef({ x: 0, y: 0, zoom: 1 });
+  const [edges, setEdges] = useState([]);
 
   const mergeWidgetNodes = useCallback((widgetPayload, nextViewport = null) => {
     const widgetList = widgetPayload?.items || widgetPayload?.widgets || widgetPayload || [];
@@ -280,8 +347,7 @@ export function WorkspaceProvider({ children }) {
     }
 
     setNodes((currentNodes) => {
-      const baseNodes = latestNodesRef.current.length > 0 ? latestNodesRef.current : currentNodes;
-      const mergedNodes = mergeNodes(baseNodes, widgetList);
+      const mergedNodes = mergeNodes(currentNodes, widgetList);
       latestNodesRef.current = mergedNodes;
       return mergedNodes;
     });
@@ -297,20 +363,28 @@ export function WorkspaceProvider({ children }) {
     setError(null);
 
     try {
-      const [savedState, workspacePayload, widgetsPayload] = await Promise.all([
+      const [savedState, workspacePayload, widgetsPayload, schemasPayload] = await Promise.all([
         loadWorkspaceState(),
         getWorkspace().catch(() => ({})),
         getWidgets(),
+        getWidgetSchemas().catch(() => ({ schemas: [] })),
       ]);
 
       const savedNodes = savedState?.nodes || [];
+      const savedEdges = savedState?.edges || [];
       const savedViewport = savedState?.viewport || workspacePayload?.viewport || { x: 0, y: 0, zoom: 1 };
       const widgetList = widgetsPayload?.items || widgetsPayload?.widgets || widgetsPayload || [];
+      const schemaMap = Object.fromEntries(
+        ((schemasPayload?.schemas) || []).map((schema) => [schema.type, schema])
+      );
       const mergedNodes = mergeNodes(savedNodes, widgetList);
 
       latestNodesRef.current = mergedNodes;
+      latestEdgesRef.current = savedEdges;
       latestViewportRef.current = savedViewport;
+      setWidgetSchemas(schemaMap);
       setNodes(mergedNodes);
+      setEdges(savedEdges);
       setViewport(savedViewport);
     } catch (loadError) {
       console.error('[WorkspaceContext] Failed to load workspace:', loadError);
@@ -318,7 +392,10 @@ export function WorkspaceProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [getWidgets, getWorkspace]);
+  }, [getWidgetSchemas, getWidgets, getWorkspace]);
+
+  const getWidgetTabs = useCallback((type) => widgetSchemas[type]?.tabs || [], [widgetSchemas]);
+  const getWidgetDefaultTab = useCallback((type) => widgetSchemas[type]?.default_tab || null, [widgetSchemas]);
 
   const syncWidgets = useCallback((widgetPayload) => {
     mergeWidgetNodes(widgetPayload);
@@ -328,13 +405,14 @@ export function WorkspaceProvider({ children }) {
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const persistWorkspace = useCallback((currentNodes, currentViewport) => {
+  const persistWorkspace = useCallback((currentNodes, currentEdges, currentViewport) => {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
     }
     saveTimerRef.current = setTimeout(() => {
       saveWorkspaceState({
         nodes: currentNodes,
+        edges: currentEdges,
         viewport: currentViewport,
       });
     }, SAVE_DEBOUNCE_MS);
@@ -342,11 +420,18 @@ export function WorkspaceProvider({ children }) {
 
   useEffect(() => {
     latestNodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    latestEdgesRef.current = edges;
+  }, [edges]);
+
+  useEffect(() => {
     latestViewportRef.current = viewport;
     if (!loading) {
-      persistWorkspace(nodes, viewport);
+      persistWorkspace(nodes, edges, viewport);
     }
-  }, [nodes, viewport, loading, persistWorkspace]);
+  }, [nodes, edges, viewport, loading, persistWorkspace]);
 
   useEffect(() => () => {
     if (saveTimerRef.current) {
@@ -375,6 +460,10 @@ export function WorkspaceProvider({ children }) {
 
   const onNodesChange = useCallback((changes) => {
     setNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
+  }, []);
+
+  const onEdgesChange = useCallback((changes) => {
+    setEdges((currentEdges) => applyEdgeChanges(changes, currentEdges));
   }, []);
 
   const addNode = useCallback((type, position, overrides = {}) => {
@@ -409,6 +498,7 @@ export function WorkspaceProvider({ children }) {
       sourcePath: prompt.path,
       primaryAgent: prompt.primary_agent || '',
       associatedAgents: prompt.associated_agents || [],
+      targetAgent: prompt.primary_agent || prompt.associated_agents?.[0] || 'progenitor',
       tags: [...(prompt.associated_agents || [])],
     });
   }, [addNode]);
@@ -454,6 +544,52 @@ export function WorkspaceProvider({ children }) {
       })
     );
   }, [scheduleWidgetPatch]);
+
+  const connectPromptToAgent = useCallback((promptNodeId, targetAgent) => {
+    const promptNode = latestNodesRef.current.find((node) => node.id === promptNodeId && node.type === 'prompt');
+    if (!promptNode) {
+      return;
+    }
+
+    const normalizedTarget = normalizeAgentName(targetAgent);
+    const targetNode = latestNodesRef.current.find((node) => (
+      (node.type === 'agent' || node.type === 'mcp')
+      && normalizeAgentName(getAgentNameFromNode(node)) === normalizedTarget
+    ));
+
+    setEdges((currentEdges) => {
+      const withoutPromptEdges = currentEdges.filter((edge) => edge.source !== promptNodeId);
+      if (!targetNode || normalizedTarget === 'progenitor') {
+        return withoutPromptEdges;
+      }
+
+      return addEdge({
+        id: `edge_${promptNodeId}_${targetNode.id}`,
+        source: promptNodeId,
+        target: targetNode.id,
+        type: 'smoothstep',
+        animated: true,
+      }, withoutPromptEdges);
+    });
+
+    updateNodeData(promptNodeId, {
+      targetAgent: targetNode ? getAgentNameFromNode(targetNode) : 'progenitor',
+    });
+  }, [updateNodeData]);
+
+  const onConnect = useCallback((connection) => {
+    const sourceNode = latestNodesRef.current.find((node) => node.id === connection.source);
+    const targetNode = latestNodesRef.current.find((node) => node.id === connection.target);
+    if (!sourceNode || !targetNode) {
+      return;
+    }
+
+    if (sourceNode.type !== 'prompt' || !['agent', 'mcp'].includes(targetNode.type)) {
+      return;
+    }
+
+    connectPromptToAgent(sourceNode.id, getAgentNameFromNode(targetNode));
+  }, [connectPromptToAgent]);
 
   const saveScheduleNode = useCallback(async (nodeId) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
@@ -534,6 +670,9 @@ export function WorkspaceProvider({ children }) {
     const idSet = new Set(nodeIds);
     setNodes((currentNodes) =>
       currentNodes.filter((node) => !idSet.has(node.id) || node.data?.serverManaged)
+    );
+    setEdges((currentEdges) =>
+      currentEdges.filter((edge) => !idSet.has(edge.source) && !idSet.has(edge.target))
     );
   }, []);
 
@@ -618,24 +757,35 @@ export function WorkspaceProvider({ children }) {
       return;
     }
 
-    updateNodeData(nodeId, { status: 'running' });
+    const connectedTarget = getConnectedAgentTarget(nodeId, latestNodesRef.current, latestEdgesRef.current);
+    const prompt = buildPromptInvocation(node.data, connectedTarget?.agentName);
+    if (!prompt) {
+      updateNodeData(nodeId, {
+        status: 'failed',
+        summaryState: 'Enter a prompt before running it.',
+      });
+      return;
+    }
+
+    updateNodeData(nodeId, { status: 'running', summaryState: '' });
 
     try {
       const result = await runAction({
         widget_id: nodeId,
         action_type: 'run_prompt',
-        prompt: node.data.prompt,
+        prompt,
         role: node.data.role,
         title: node.data.title,
       });
       updateNodeData(nodeId, {
-        status: 'completed',
+        status: 'success',
+        targetAgent: getPromptTargetAgent(node.data, connectedTarget?.agentName),
         lastRunId: result.run_id || result.request_id || node.data.lastRunId,
         summaryState: getActionText(result),
       });
     } catch (runError) {
       updateNodeData(nodeId, {
-        status: 'error',
+        status: 'failed',
         summaryState: runError.message,
       });
     }
@@ -647,13 +797,23 @@ export function WorkspaceProvider({ children }) {
       return;
     }
 
-    updateNodeData(nodeId, { status: 'running' });
+    const connectedTarget = getConnectedAgentTarget(nodeId, latestNodesRef.current, latestEdgesRef.current);
+    const prompt = buildPromptInvocation(node.data, connectedTarget?.agentName);
+    if (!prompt) {
+      updateNodeData(nodeId, {
+        status: 'failed',
+        summaryState: 'Enter a prompt before generating code.',
+      });
+      return;
+    }
+
+    updateNodeData(nodeId, { status: 'running', summaryState: '' });
 
     try {
       const result = await generateAction({
         widget_id: nodeId,
         action_type: 'generate_code',
-        prompt: node.data.prompt,
+        prompt,
         role: node.data.role,
         title: node.data.title,
       });
@@ -669,13 +829,14 @@ export function WorkspaceProvider({ children }) {
 
       upsertNode(codeNode);
       updateNodeData(nodeId, {
-        status: 'completed',
+        status: 'success',
+        targetAgent: getPromptTargetAgent(node.data, connectedTarget?.agentName),
         summaryState: generatedContent ? 'Code generated via backend.' : 'Generation completed.',
         linkedOutputIds: [...(node.data.linkedOutputIds || []), codeNode.id],
       });
     } catch (generateError) {
       updateNodeData(nodeId, {
-        status: 'error',
+        status: 'failed',
         summaryState: generateError.message,
       });
     }
@@ -734,15 +895,20 @@ export function WorkspaceProvider({ children }) {
     <WorkspaceContext.Provider
       value={{
         nodes,
+        edges,
         setNodes,
+        setEdges,
         viewport,
         setViewport,
         loading,
         error,
         onNodesChange,
+        onEdgesChange,
+        onConnect,
         addNode,
         addPromptFromLibrary,
         updateNodeData,
+        connectPromptToAgent,
         removeNodes,
         duplicateNode,
         bringToFront,
@@ -755,6 +921,8 @@ export function WorkspaceProvider({ children }) {
         runCodeNode,
         runScheduleNode,
         saveScheduleNode,
+        getWidgetTabs,
+        getWidgetDefaultTab,
       }}
     >
       {children}
@@ -769,3 +937,6 @@ export function useWorkspaceContext() {
   }
   return context;
 }
+
+
+

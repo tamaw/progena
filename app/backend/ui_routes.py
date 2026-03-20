@@ -160,6 +160,50 @@ class WidgetsResponse(BaseModel):
     total: int
 
 
+class WidgetFieldOptionResponse(BaseModel):
+    """Selectable option for a widget field."""
+    value: str
+    label: str
+
+
+class WidgetFieldSchemaResponse(BaseModel):
+    """Schema for a single editable or readonly widget field."""
+    key: str
+    label: str
+    control: str = "text"
+    editable: bool = False
+    option_source: str | None = None
+    help_text: str | None = None
+    options: list[WidgetFieldOptionResponse] = Field(default_factory=list)
+
+
+class WidgetSectionSchemaResponse(BaseModel):
+    """Schema for a collapsible widget details section."""
+    id: str
+    label: str
+    default_expanded: bool = True
+    fields: list[WidgetFieldSchemaResponse] = Field(default_factory=list)
+
+
+class WidgetTabSchemaResponse(BaseModel):
+    """Schema for a widget canvas tab."""
+    id: str
+    label: str
+
+
+class WidgetSchemaResponse(BaseModel):
+    """Details-pane schema for a widget type."""
+    type: str
+    default_tab: str | None = None
+    tabs: list[WidgetTabSchemaResponse] = Field(default_factory=list)
+    sections: list[WidgetSectionSchemaResponse] = Field(default_factory=list)
+
+
+class WidgetSchemasResponse(BaseModel):
+    """Response containing details-pane schemas by widget type."""
+    schemas: list[WidgetSchemaResponse]
+
+
 class WorkspaceResponse(BaseModel):
     """Workspace bootstrap payload."""
     timestamp: float
@@ -492,6 +536,307 @@ def _widget_to_response(widget: dict) -> WidgetResponse:
     )
 
 
+def _widget_schemas() -> list[WidgetSchemaResponse]:
+    """Return schema definitions for workspace details editing."""
+    return [
+        WidgetSchemaResponse(
+            type="prompt",
+            default_tab="editor",
+            tabs=[
+                WidgetTabSchemaResponse(id="editor", label="Editor"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="targetAgent",
+                            label="Target Agent",
+                            control="select",
+                            editable=True,
+                            option_source="agents",
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="role",
+                            label="Role",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="user", label="User"),
+                                WidgetFieldOptionResponse(value="system", label="System"),
+                                WidgetFieldOptionResponse(value="assistant", label="Assistant"),
+                            ],
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="content",
+                    label="Content",
+                    fields=[
+                        WidgetFieldSchemaResponse(
+                            key="prompt",
+                            label="Prompt",
+                            control="textarea",
+                            editable=True,
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="metadata",
+                    label="Metadata",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="sourcePath", label="Source Path"),
+                        WidgetFieldSchemaResponse(key="primaryAgent", label="Primary Agent"),
+                        WidgetFieldSchemaResponse(key="associatedAgents", label="Associated Agents", control="list"),
+                        WidgetFieldSchemaResponse(key="linkedOutputIds", label="Linked Outputs", control="list"),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="code",
+            default_tab="editor",
+            tabs=[
+                WidgetTabSchemaResponse(id="editor", label="Editor"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
+                        WidgetFieldSchemaResponse(key="language", label="Language", editable=True),
+                        WidgetFieldSchemaResponse(key="runtimeProfile", label="Runtime Profile", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="content",
+                    label="Content",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="content", label="Code", control="textarea", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="execution",
+                    label="Execution",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="lastRunId", label="Last Run"),
+                        WidgetFieldSchemaResponse(key="outputRefs", label="Outputs", control="list"),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="webframe",
+            default_tab="preview",
+            tabs=[
+                WidgetTabSchemaResponse(id="preview", label="Preview"),
+                WidgetTabSchemaResponse(id="source", label="Source"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="sourceType",
+                            label="Source Type",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="html", label="HTML"),
+                                WidgetFieldOptionResponse(value="url", label="URL"),
+                            ],
+                        ),
+                        WidgetFieldSchemaResponse(key="url", label="URL", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="markup",
+                    label="Markup",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="html", label="HTML", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(key="css", label="CSS", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(key="js", label="JavaScript", control="textarea", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="updated",
+                    label="Metadata",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="label",
+            default_tab="content",
+            tabs=[
+                WidgetTabSchemaResponse(id="content", label="Content"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="content",
+                    label="Content",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
+                        WidgetFieldSchemaResponse(key="text", label="Text", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="variant",
+                            label="Variant",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="note", label="Note"),
+                                WidgetFieldOptionResponse(value="warning", label="Warning"),
+                                WidgetFieldOptionResponse(value="info", label="Info"),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="group",
+            default_tab="content",
+            tabs=[
+                WidgetTabSchemaResponse(id="content", label="Content"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="content",
+                    label="Content",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
+                        WidgetFieldSchemaResponse(key="description", label="Description", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(key="childIds", label="Children", control="list"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="schedule",
+            default_tab="details",
+            tabs=[
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
+                        WidgetFieldSchemaResponse(key="enabled", label="Enabled", control="boolean", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="scheduleType",
+                            label="Schedule Type",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="cron", label="Cron"),
+                                WidgetFieldOptionResponse(value="interval", label="Interval"),
+                                WidgetFieldOptionResponse(value="once", label="Once"),
+                            ],
+                        ),
+                        WidgetFieldSchemaResponse(key="expression", label="Expression", editable=True),
+                        WidgetFieldSchemaResponse(key="timezone", label="Timezone", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="content",
+                    label="Task",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="instruction", label="Instruction", control="textarea", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="status",
+                    label="Status",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="nextRunAt", label="Next Run"),
+                        WidgetFieldSchemaResponse(key="lastRunAt", label="Last Run"),
+                        WidgetFieldSchemaResponse(key="lastRunStatus", label="Last Run Status"),
+                        WidgetFieldSchemaResponse(key="saveError", label="Save Error"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="agent",
+            default_tab="overview",
+            tabs=[
+                WidgetTabSchemaResponse(id="overview", label="Overview"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+                WidgetTabSchemaResponse(id="logs", label="Logs"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Title"),
+                        WidgetFieldSchemaResponse(key="agentId", label="Agent"),
+                        WidgetFieldSchemaResponse(key="transport", label="Transport"),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="status",
+                    label="Status",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
+                        WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
+                        WidgetFieldSchemaResponse(key="summaryState", label="Summary", control="textarea"),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="mcp",
+            default_tab="overview",
+            tabs=[
+                WidgetTabSchemaResponse(id="overview", label="Overview"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+                WidgetTabSchemaResponse(id="logs", label="Logs"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Title"),
+                        WidgetFieldSchemaResponse(key="agentId", label="Tool"),
+                        WidgetFieldSchemaResponse(key="transport", label="Transport"),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="status",
+                    label="Status",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
+                        WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
+                        WidgetFieldSchemaResponse(key="summaryState", label="Summary", control="textarea"),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+    ]
+
+
 def _atomic_write_json(filepath: Path, data: object) -> None:
     """Atomically write JSON for backend-backed state updates."""
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -634,6 +979,12 @@ async def get_widgets():
     state_reader = get_state_reader()
     widgets = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
     return WidgetsResponse(items=widgets, total=len(widgets))
+
+
+@router.get("/widget-schemas", response_model=WidgetSchemasResponse)
+async def get_widget_schemas():
+    """Get schema metadata for the workspace details pane."""
+    return WidgetSchemasResponse(schemas=_widget_schemas())
 
 
 @router.patch("/widgets/{widget_id}", response_model=WidgetResponse)
