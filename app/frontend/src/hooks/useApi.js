@@ -101,8 +101,14 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
-  const getPrompts = useCallback(async () => {
-    const response = await fetchWithRetry('prompts');
+  const getWidgetSchemas = useCallback(async () => {
+    const response = await fetchWithRetry('widgetSchemas');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getPrompts = useCallback(async (agent = null) => {
+    const search = agent ? `?${new URLSearchParams({ agent }).toString()}` : '';
+    const response = await fetchWithRetry(`prompts${search}`);
     return response.json();
   }, [fetchWithRetry]);
 
@@ -287,6 +293,7 @@ export function useApi() {
     getHealthDetailed,
     getWorkspace,
     getWidgets,
+    getWidgetSchemas,
     getPrompts,
     getPromptContent,
     updatePromptContent,

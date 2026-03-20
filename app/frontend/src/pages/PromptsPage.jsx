@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import { useApi } from '../hooks/useApi';
 
@@ -115,6 +116,7 @@ function PromptTreeBranch({
 
 export default function PromptsPage() {
   const { connectionState, getPrompts, updatePromptContent } = useApi();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [prompts, setPrompts] = useState([]);
   const [selectedPath, setSelectedPath] = useState('');
   const [draftContent, setDraftContent] = useState('');
@@ -123,6 +125,7 @@ export default function PromptsPage() {
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [expandedNodes, setExpandedNodes] = useState({});
+  const requestedPath = searchParams.get('path') || '';
 
   useEffect(() => {
     let active = true;
@@ -138,7 +141,10 @@ export default function PromptsPage() {
         const items = response.prompts || [];
         setPrompts(items);
         setSelectedPath((currentSelected) => {
-          const nextSelected = items.find((prompt) => prompt.path === currentSelected)?.path || items[0]?.path || '';
+          const nextSelected = items.find((prompt) => prompt.path === requestedPath)?.path
+            || items.find((prompt) => prompt.path === currentSelected)?.path
+            || items[0]?.path
+            || '';
           const nextPrompt = items.find((prompt) => prompt.path === nextSelected);
           setDraftContent(nextPrompt?.content || '');
           return nextSelected;
@@ -158,7 +164,18 @@ export default function PromptsPage() {
     return () => {
       active = false;
     };
-  }, [getPrompts]);
+  }, [getPrompts, requestedPath]);
+
+  useEffect(() => {
+    const currentPath = searchParams.get('path') || '';
+    if (!selectedPath || currentPath === selectedPath) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('path', selectedPath);
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, selectedPath, setSearchParams]);
 
   const promptTree = useMemo(
     () => buildPromptTree(prompts).map((group) => ({ ...group, ...sortTreeNode(group) })),

@@ -17,6 +17,23 @@ def _normalize_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
+def _expand_filter_names(value: str) -> set[str]:
+    normalized = _normalize_name(value)
+    if not normalized:
+        return set()
+
+    names = {normalized}
+    if normalized.endswith("copilot"):
+        names.add(f"{normalized.removesuffix('copilot')}agent")
+    if normalized.endswith("agent"):
+        names.add(f"{normalized.removesuffix('agent')}copilot")
+    if normalized == "progenitor":
+        names.add("builderprogenitor")
+    if normalized == "builderprogenitor":
+        names.add("progenitor")
+    return names
+
+
 @dataclass(frozen=True)
 class PromptRecord:
     """Workspace-facing prompt metadata."""
@@ -141,15 +158,15 @@ class PromptService:
         )
 
     def list_prompts(self, agent: str | None = None) -> list[PromptRecord]:
-        filter_name = _normalize_name(agent) if agent else None
+        filter_names = _expand_filter_names(agent) if agent else None
         prompts = [self._build_record(path) for path in sorted(self.prompts_dir.rglob("*.md"))]
-        if filter_name is None:
+        if filter_names is None:
             return prompts
         return [
             prompt
             for prompt in prompts
-            if any(_normalize_name(name) == filter_name for name in prompt.associated_agents)
-            or _normalize_name(prompt.primary_agent or "") == filter_name
+            if any(_normalize_name(name) in filter_names for name in prompt.associated_agents)
+            or _normalize_name(prompt.primary_agent or "") in filter_names
         ]
 
     def get_prompt(self, relative_path: str) -> PromptRecord:

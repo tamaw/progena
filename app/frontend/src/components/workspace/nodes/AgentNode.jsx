@@ -1,13 +1,25 @@
-import { memo, useCallback } from 'react';
-import { NodeResizer } from '@xyflow/react';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import WidgetTabs from './WidgetTabs';
+import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function AgentNode({ id, data, selected }) {
-  const { toggleExpanded, refreshWorkspace } = useWorkspaceContext();
+  const { toggleExpanded, refreshWorkspace, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
   const { expanded } = data;
   const widgetKind = data.widgetKind || 'agent';
   const icon = widgetKind === 'mcp' ? 'M' : 'A';
   const titleLabel = widgetKind === 'mcp' ? 'MCP' : 'Agent';
+  const tabs = getWidgetTabs(widgetKind);
+  const defaultTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab(widgetKind), 'overview'),
+    [getWidgetDefaultTab, tabs, widgetKind]
+  );
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  const resolvedActiveTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, activeTab, defaultTab),
+    [activeTab, defaultTab, tabs]
+  );
 
   const onToggle = useCallback(() => {
     toggleExpanded(id);
@@ -33,8 +45,10 @@ function AgentNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
-        <div className="node-title-bar">
+        <div className="node-title-bar drag-handle">
           <div className="node-type-icon agent">{icon}</div>
           <div className="node-title nodrag">{data.title}</div>
           <div className={`agent-status-indicator ${statusClass}`} title={statusClass} />
@@ -46,49 +60,44 @@ function AgentNode({ id, data, selected }) {
         <div className="node-body">
           {expanded ? (
             <div className="node-body-expanded">
-              <div className="schedule-info" style={{ marginBottom: 'var(--spacing-sm)' }}>
-                <div className="schedule-row">
-                  <span className="schedule-row-label">Status</span>
-                  <span className={`node-status-badge ${statusClass}`}>{statusClass}</span>
+              <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
+              {resolvedActiveTab === 'output' ? (
+                <div className="node-output-panel">{data.summaryState || 'No output yet.'}</div>
+              ) : resolvedActiveTab === 'logs' ? (
+                <div className="agent-logs nodrag nowheel">
+                  {data.logs?.length > 0
+                    ? data.logs.map((l) => `[${formatTime(l.time)}] ${l.message}`).join('\n')
+                    : 'No logs available'}
                 </div>
-                {data.currentRunId && (
-                  <div className="schedule-row">
-                    <span className="schedule-row-label">Run ID</span>
-                    <span className="schedule-row-value">{data.currentRunId}</span>
-                  </div>
-                )}
-              </div>
-
-              {data.summaryState && (
-                <div className="agent-summary" style={{ marginBottom: 'var(--spacing-sm)' }}>
-                  {data.summaryState}
-                </div>
-              )}
-
-              {data.logs?.length > 0 && (
+              ) : (
                 <>
-                  <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginBottom: '4px' }}>
-                    Recent Events
-                  </div>
-                  <div className="agent-events">
-                    {data.logs.slice(-10).map((log, i) => (
-                      <div key={i} className="agent-event-item">
-                        <span className="agent-event-time">{formatTime(log.time)}</span>
-                        <span>{log.message}</span>
+                  <div className="schedule-info" style={{ marginBottom: 'var(--spacing-sm)' }}>
+                    <div className="schedule-row">
+                      <span className="schedule-row-label">Status</span>
+                      <span className={`node-status-badge ${statusClass}`}>{statusClass}</span>
+                    </div>
+                    {data.currentRunId && (
+                      <div className="schedule-row">
+                        <span className="schedule-row-label">Run ID</span>
+                        <span className="schedule-row-value">{data.currentRunId}</span>
                       </div>
-                    ))}
+                    )}
                   </div>
+                  {data.logs?.length > 0 && (
+                    <>
+                      <div className="node-section-label">Recent Events</div>
+                      <div className="agent-events">
+                        {data.logs.slice(-10).map((log, i) => (
+                          <div key={i} className="agent-event-item">
+                            <span className="agent-event-time">{formatTime(log.time)}</span>
+                            <span>{log.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
-
-              <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginBottom: '4px' }}>
-                Logs
-              </div>
-              <div className="agent-logs nodrag nowheel">
-                {data.logs?.length > 0
-                  ? data.logs.map((l) => `[${formatTime(l.time)}] ${l.message}`).join('\n')
-                  : 'No logs available'}
-              </div>
             </div>
           ) : (
             <div className="node-body-compact">

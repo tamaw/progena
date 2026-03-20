@@ -38,6 +38,7 @@ const defaultConfig = {
       models: '/v1/models',
       workspace: '/api/ui/workspace',
       widgets: '/api/ui/widgets',
+      widgetSchemas: '/api/ui/widget-schemas',
       prompts: '/api/ui/prompts',
       schedules: '/api/ui/schedules',
       logs: '/api/ui/logs',

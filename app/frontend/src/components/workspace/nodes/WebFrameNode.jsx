@@ -1,16 +1,23 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
 import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import WidgetTabs from './WidgetTabs';
+import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function WebFrameNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
   const { expanded } = data;
   const iframeRef = useRef(null);
-  const [editingSource, setEditingSource] = useState(false);
-
-  const onTitleChange = useCallback((e) => {
-    updateNodeData(id, { title: e.target.value });
-  }, [id, updateNodeData]);
+  const tabs = getWidgetTabs('webframe');
+  const defaultTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('webframe'), 'preview'),
+    [getWidgetDefaultTab, tabs]
+  );
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  const resolvedActiveTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, activeTab, defaultTab),
+    [activeTab, defaultTab, tabs]
+  );
 
   const onToggle = useCallback(() => {
     toggleExpanded(id);
@@ -78,13 +85,9 @@ function WebFrameNode({ id, data, selected }) {
         handleClassName="react-flow__resize-control handle"
       />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
-        <div className="node-title-bar">
+        <div className="node-title-bar drag-handle">
           <div className="node-type-icon webframe">W</div>
-          <input
-            className="node-title nodrag"
-            value={data.title}
-            onChange={onTitleChange}
-          />
+          <div className="node-title">{data.title}</div>
           <span className="webframe-source-badge">{sourceTypeLabel}</span>
           <button className="node-expand-btn" onClick={onToggle}>
             {expanded ? '\u25B2' : '\u25BC'}
@@ -95,7 +98,8 @@ function WebFrameNode({ id, data, selected }) {
           {expanded ? (
             <div className="node-body-expanded">
               <div className="webframe-container">
-                {!editingSource ? (
+                <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
+                {resolvedActiveTab === 'preview' ? (
                   <iframe
                     ref={iframeRef}
                     className="webframe-iframe nodrag nowheel"
@@ -149,9 +153,6 @@ function WebFrameNode({ id, data, selected }) {
 
         {expanded && (
           <div className="node-actions">
-            <button className="node-action-btn" onClick={() => setEditingSource(!editingSource)}>
-              {editingSource ? 'Preview' : 'Edit Source'}
-            </button>
             <button className="node-action-btn" onClick={reload}>Reload</button>
             <select
               className="code-language-select nodrag"
