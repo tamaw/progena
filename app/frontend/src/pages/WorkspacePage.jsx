@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -10,7 +10,7 @@ import {
 
 import Header from '../components/layout/Header';
 import WorkspaceSidebar from '../components/workspace/WorkspaceSidebar';
-import PromptLibraryPanel from '../components/workspace/PromptLibraryPanel';
+import WorkspaceDock from '../components/workspace/WorkspaceDock';
 import NodeContextMenu from '../components/workspace/NodeContextMenu';
 import { WorkspaceProvider, useWorkspaceContext } from '../context/WorkspaceContext';
 
@@ -40,6 +40,34 @@ const minimapStyle = {
   width: 150,
 };
 
+const SIDEBAR_WIDTH_STORAGE_KEY = 'workspace.sidebar.width';
+const SIDEBAR_MIN_WIDTH_PERCENT = 18;
+const SIDEBAR_MAX_WIDTH_PERCENT = 42;
+const SIDEBAR_DEFAULT_WIDTH_PERCENT = 24;
+
+function clampSidebarWidth(width) {
+  if (typeof window === 'undefined') {
+    return width;
+  }
+
+  const minWidth = window.innerWidth * (SIDEBAR_MIN_WIDTH_PERCENT / 100);
+  const maxWidth = window.innerWidth * (SIDEBAR_MAX_WIDTH_PERCENT / 100);
+  return Math.min(maxWidth, Math.max(minWidth, width));
+}
+
+function getDefaultSidebarWidth() {
+  if (typeof window === 'undefined') {
+    return 320;
+  }
+
+  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  if (Number.isFinite(storedWidth) && storedWidth > 0) {
+    return clampSidebarWidth(storedWidth);
+  }
+
+  return clampSidebarWidth(window.innerWidth * (SIDEBAR_DEFAULT_WIDTH_PERCENT / 100));
+}
+
 const minimapNodeColor = (node) => {
   switch (node.type) {
     case 'prompt': return '#58a6ff';
@@ -56,8 +84,11 @@ const minimapNodeColor = (node) => {
 function WorkspaceInner() {
   const {
     nodes,
+    edges,
     viewport,
     onNodesChange,
+    onEdgesChange,
+    onConnect,
     addNode,
     removeNodes,
     duplicateNode,
@@ -75,12 +106,68 @@ function WorkspaceInner() {
   const reactFlowInstance = useReactFlow();
   const reactFlowWrapper = useRef(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(getDefaultSidebarWidth);
   const [contextMenu, setContextMenu] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const resizeStateRef = useRef({
+    active: false,
+    startX: 0,
+    startWidth: 0,
+  });
+  const selectedNode = useMemo(
+    () => nodes.find((node) => node.id === selectedNodeId)
+      || nodes.find((node) => node.selected)
+      || null,
+    [nodes, selectedNodeId]
+  );
 
   useEffect(() => {
     reactFlowInstance.setViewport(viewport);
   }, [reactFlowInstance, viewport]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setSidebarWidth((current) => clampSidebarWidth(current));
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !sidebarCollapsed) {
+      window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(Math.round(sidebarWidth)));
+    }
+  }, [sidebarCollapsed, sidebarWidth]);
+
+  useEffect(() => {
+    const handleMouseMove = (event) => {
+      if (!resizeStateRef.current.active || sidebarCollapsed) {
+        return;
+      }
+
+      const delta = event.clientX - resizeStateRef.current.startX;
+      setSidebarWidth(clampSidebarWidth(resizeStateRef.current.startWidth + delta));
+    };
+
+    const handleMouseUp = () => {
+      if (!resizeStateRef.current.active) {
+        return;
+      }
+
+      resizeStateRef.current.active = false;
+      document.body.classList.remove('workspace-resizing');
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [sidebarCollapsed]);
 
   const handleStatusEvent = useCallback((event) => {
     if (!event?.data) {
@@ -206,7 +293,28 @@ function WorkspaceInner() {
   // Close context menu on click
   const onPaneClick = useCallback(() => {
     setContextMenu(null);
+    setSelectedNodeId(null);
   }, []);
+
+  const onSelectionChange = useCallback(({ nodes: selectedNodes }) => {
+    if (selectedNodes?.length > 0) {
+      setSelectedNodeId(selectedNodes[0].id);
+    }
+  }, []);
+
+  const onSidebarResizeStart = useCallback((event) => {
+    if (sidebarCollapsed) {
+      return;
+    }
+
+    resizeStateRef.current = {
+      active: true,
+      startX: event.clientX,
+      startWidth: sidebarWidth,
+    };
+    document.body.classList.add('workspace-resizing');
+    event.preventDefault();
+  }, [sidebarCollapsed, sidebarWidth]);
 
   // Keyboard shortcuts
   const onKeyDown = useCallback(
@@ -244,7 +352,18 @@ function WorkspaceInner() {
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         disabled={!workspaceReady}
+        selectedNode={selectedNode}
+        width={sidebarWidth}
       />
+      {!sidebarCollapsed && (
+        <div
+          className="workspace-sidebar-resizer"
+          onMouseDown={onSidebarResizeStart}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize details pane"
+        />
+      )}
       <div
         className={`workspace-canvas ${dragOver ? 'drag-over' : ''} ${!workspaceReady ? 'locked' : ''}`}
         ref={reactFlowWrapper}
@@ -261,12 +380,15 @@ function WorkspaceInner() {
         )}
         <ReactFlow
           nodes={nodes}
-          edges={[]}
+          edges={edges}
           onNodesChange={workspaceReady ? onNodesChange : undefined}
+          onEdgesChange={workspaceReady ? onEdgesChange : undefined}
+          onConnect={workspaceReady ? onConnect : undefined}
           onMoveEnd={workspaceReady ? onMoveEnd : undefined}
           onNodeContextMenu={workspaceReady ? onNodeContextMenu : undefined}
           onPaneContextMenu={workspaceReady ? onPaneContextMenu : undefined}
           onPaneClick={workspaceReady ? onPaneClick : undefined}
+          onSelectionChange={workspaceReady ? onSelectionChange : undefined}
           nodeTypes={nodeTypes}
           fitView={false}
           deleteKeyCode={null}
@@ -279,8 +401,9 @@ function WorkspaceInner() {
           zoomOnScroll={workspaceReady}
           zoomOnPinch={workspaceReady}
           zoomOnDoubleClick={workspaceReady}
-          panOnScroll={workspaceReady}
+          panOnScroll={false}
           selectionMode="partial"
+          defaultEdgeOptions={{ type: 'smoothstep', animated: true }}
           snapToGrid
           snapGrid={[16, 16]}
           minZoom={0.1}
@@ -307,8 +430,8 @@ function WorkspaceInner() {
             onAction={onContextMenuAction}
           />
         )}
+        <WorkspaceDock disabled={!workspaceReady} />
       </div>
-      <PromptLibraryPanel disabled={!workspaceReady} />
     </div>
   );
 }

@@ -1,16 +1,24 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
 import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import WidgetTabs from './WidgetTabs';
+import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function ScheduleNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
   const isSaving = Boolean(data.isSaving && !data.serverManaged);
-
-  const onTitleChange = useCallback((e) => {
-    updateNodeData(id, { title: e.target.value });
-  }, [id, updateNodeData]);
+  const tabs = getWidgetTabs('schedule');
+  const defaultTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('schedule'), 'details'),
+    [getWidgetDefaultTab, tabs]
+  );
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  const resolvedActiveTab = useMemo(
+    () => resolveWidgetDefaultTab(tabs, activeTab, defaultTab),
+    [activeTab, defaultTab, tabs]
+  );
 
   const onToggle = useCallback(() => {
     toggleExpanded(id);
@@ -43,13 +51,9 @@ function ScheduleNode({ id, data, selected }) {
         handleClassName="react-flow__resize-control handle"
       />
       <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''}`}>
-        <div className="node-title-bar">
+        <div className="node-title-bar drag-handle">
           <div className="node-type-icon schedule">S</div>
-          <input
-            className="node-title nodrag"
-            value={data.title}
-            onChange={onTitleChange}
-          />
+          <div className="node-title">{data.title}</div>
           {isUnsaved && (
             <span className={`node-status-badge ${isSaving ? 'running' : 'editing'}`}>
               {isSaving ? 'saving' : 'unsaved'}
@@ -71,77 +75,94 @@ function ScheduleNode({ id, data, selected }) {
         <div className="node-body">
           {expanded ? (
             <div className="node-body-expanded">
-              <div className="schedule-form">
-                <div className="schedule-form-field">
-                  <label>Task</label>
-                  <textarea
-                    className="nodrag schedule-task-input"
-                    value={data.instruction || ''}
-                    onChange={onFieldChange('instruction')}
-                    placeholder="What should Progenitor do when this schedule fires?"
-                    rows={4}
-                  />
-                </div>
-
-                <div className="schedule-form-field">
-                  <label>Type</label>
-                  <select
-                    className="nodrag"
-                    value={data.scheduleType || 'cron'}
-                    onChange={onFieldChange('scheduleType')}
-                  >
-                    <option value="once">One-off</option>
-                    <option value="cron">Cron</option>
-                    <option value="interval">Interval</option>
-                  </select>
-                </div>
-
-                <div className="schedule-form-field">
-                  <label>Expression</label>
-                  <input
-                    className="nodrag"
-                    value={data.expression || ''}
-                    onChange={onFieldChange('expression')}
-                    placeholder={data.scheduleType === 'cron' ? '*/5 * * * *' : data.scheduleType === 'interval' ? '300s' : '2025-01-01T00:00:00Z'}
-                  />
-                </div>
-
-                <div className="schedule-form-field">
-                  <label>Timezone</label>
-                  <input
-                    className="nodrag"
-                    value={data.timezone || ''}
-                    onChange={onFieldChange('timezone')}
-                    placeholder="UTC"
-                  />
-                </div>
-
-                <div className="schedule-toggle" onClick={onToggleEnabled}>
-                  <div className={`schedule-toggle-switch ${data.enabled ? 'enabled' : ''}`} />
-                  <span style={{ fontSize: 'var(--font-size-sm)' }}>
-                    {data.enabled ? 'Enabled' : 'Disabled'}
-                  </span>
-                </div>
-
-                <div className="schedule-info">
-                  {data.saveError && (
-                    <div className="schedule-save-error">{data.saveError}</div>
-                  )}
-                  {isUnsaved && (
-                    <div className="schedule-unsaved-note">
-                      This schedule stays local to the workspace until you save it.
+              <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
+              {resolvedActiveTab === 'output' ? (
+                <div className="node-output-stack">
+                  <div className="node-output-panel">{data.summaryState || 'No output yet.'}</div>
+                  <div className="schedule-info">
+                    <div className="schedule-row">
+                      <span className="schedule-row-label">Last run</span>
+                      <span className="schedule-row-value">{formatTime(data.lastRunAt)}</span>
                     </div>
-                  )}
-                  <div className="schedule-row">
-                    <span className="schedule-row-label">Next run</span>
-                    <span className="schedule-row-value">{formatTime(data.nextRunAt)}</span>
-                  </div>
-                  <div className="schedule-row">
-                    <span className="schedule-row-label">Last run</span>
-                    <span className="schedule-row-value">{formatTime(data.lastRunAt)}</span>
+                    <div className="schedule-row">
+                      <span className="schedule-row-label">Status</span>
+                      <span className="schedule-row-value">{data.lastRunStatus || 'idle'}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="schedule-form">
+                  <div className="schedule-form-field">
+                    <label>Task</label>
+                    <textarea
+                      className="nodrag schedule-task-input"
+                      value={data.instruction || ''}
+                      onChange={onFieldChange('instruction')}
+                      placeholder="What should Progenitor do when this schedule fires?"
+                      rows={4}
+                    />
+                  </div>
+
+                  <div className="schedule-form-field">
+                    <label>Type</label>
+                    <select
+                      className="nodrag"
+                      value={data.scheduleType || 'cron'}
+                      onChange={onFieldChange('scheduleType')}
+                    >
+                      <option value="once">One-off</option>
+                      <option value="cron">Cron</option>
+                      <option value="interval">Interval</option>
+                    </select>
+                  </div>
+
+                  <div className="schedule-form-field">
+                    <label>Expression</label>
+                    <input
+                      className="nodrag"
+                      value={data.expression || ''}
+                      onChange={onFieldChange('expression')}
+                      placeholder={data.scheduleType === 'cron' ? '*/5 * * * *' : data.scheduleType === 'interval' ? '300s' : '2025-01-01T00:00:00Z'}
+                    />
+                  </div>
+
+                  <div className="schedule-form-field">
+                    <label>Timezone</label>
+                    <input
+                      className="nodrag"
+                      value={data.timezone || ''}
+                      onChange={onFieldChange('timezone')}
+                      placeholder="UTC"
+                    />
+                  </div>
+
+                  <div className="schedule-toggle" onClick={onToggleEnabled}>
+                    <div className={`schedule-toggle-switch ${data.enabled ? 'enabled' : ''}`} />
+                    <span style={{ fontSize: 'var(--font-size-sm)' }}>
+                      {data.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+
+                  <div className="schedule-info">
+                    {data.saveError && (
+                      <div className="schedule-save-error">{data.saveError}</div>
+                    )}
+                    {isUnsaved && (
+                      <div className="schedule-unsaved-note">
+                        This schedule stays local to the workspace until you save it.
+                      </div>
+                    )}
+                    <div className="schedule-row">
+                      <span className="schedule-row-label">Next run</span>
+                      <span className="schedule-row-value">{formatTime(data.nextRunAt)}</span>
+                    </div>
+                    <div className="schedule-row">
+                      <span className="schedule-row-label">Last run</span>
+                      <span className="schedule-row-value">{formatTime(data.lastRunAt)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="node-body-compact">
