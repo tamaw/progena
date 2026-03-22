@@ -56,21 +56,17 @@ async def add_scheduled_task(
     """
     Add a scheduled task that will execute an instruction at the specified time.
 
-    Args:
-        user_request: The original user request for context
-        time_expression: Natural language time (e.g., "at 9am", "in 30 minutes", "every day at 9am")
-        instruction: The processed instruction to run at the scheduled time
-        description: Human-readable description
-
-    Returns:
-        Tuple of (ScheduleResult with the schedule ID and status, entry_data dict or None on failure)
+    Supports either a cron-like/natural-language time expression or an explicit
+    ISO8601 timestamp (scheduled_at). One-off timestamps are stored as
+    'scheduled_at' on the entry to avoid imprecise cron fallbacks.
     """
     scheduler = Scheduler()
 
     # Parse the time expression
     parsed = scheduler.parse_time_expression(time_expression)
 
-    if not parsed or not parsed.get("cron_expression"):
+    # Require either a cron_expression (recurring) or scheduled_at (one-off)
+    if not parsed or not (parsed.get("cron_expression") or parsed.get("scheduled_at")):
         return ScheduleResult(
             success=False,
             message=f"Could not parse time expression: {time_expression}",
@@ -83,37 +79,45 @@ async def add_scheduled_task(
     if description:
         task_message = f"{description.strip()} — {task_message}"
     created_at = utcnow().isoformat()
-    next_run = scheduler.next_run_for_entry(
-        {
-            "cron_expression": parsed["cron_expression"],
-            "last_run": None,
-            "created_at": created_at,
-        }
-    )
 
-    # Build the simplified schedule entry
-    entry_data = {
+    # Prepare entry dict depending on whether this is a one-off or recurring
+    entry = {
         "id": schedule_id,
         "message": task_message,
         "user_request": user_request,
-        "cron_expression": parsed["cron_expression"],
         "last_run": None,
         "created_at": created_at,
     }
 
-    logger.info(
-        "Created schedule entry %s: %s (%s)",
-        schedule_id,
-        task_message,
-        parsed["cron_expression"],
-    )
+    if parsed.get("scheduled_at"):
+        entry["scheduled_at"] = parsed["scheduled_at"]
+        next_run = scheduler.next_run_for_entry(entry)
+        logger.info(
+            "Created one-off schedule entry %s: %s (at %s)",
+            schedule_id,
+            task_message,
+            parsed["scheduled_at"],
+        )
+    else:
+        entry["cron_expression"] = parsed["cron_expression"]
+        next_run = scheduler.next_run_for_entry({
+            "cron_expression": parsed["cron_expression"],
+            "last_run": None,
+            "created_at": created_at,
+        })
+        logger.info(
+            "Created schedule entry %s: %s (%s)",
+            schedule_id,
+            task_message,
+            parsed["cron_expression"],
+        )
 
     return ScheduleResult(
         success=True,
         schedule_id=schedule_id,
         message=f"Scheduled task created: {task_message}",
         next_run=next_run.isoformat() if next_run else None,
-    ), entry_data
+    ), entry
 
 
 async def remove_scheduled_task(schedule_id: str) -> ScheduleResult:
