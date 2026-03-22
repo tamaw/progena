@@ -5,18 +5,43 @@ Note: The backend is now API-only and does not serve static files.
 The frontend runs separately via npm/Vite.
 """
 
-import pytest
-from fastapi.testclient import TestClient
+import json
 from unittest.mock import AsyncMock
 
+import pytest
+from fastapi.testclient import TestClient
+
 from app.backend.main import app
-from app.backend.state_reader import get_state_reader
+from app.backend.state_reader import StateReader, get_state_reader
 
 
 @pytest.fixture
 def client():
     """Create a test client."""
     return TestClient(app)
+
+
+@pytest.fixture
+def kanban_state_reader(tmp_path, monkeypatch):
+    """Provide an isolated state reader for kanban persistence tests."""
+    state_dir = tmp_path / "data" / "state"
+    config_dir = tmp_path / "data" / "config"
+    sessions_dir = tmp_path / "data" / "sessions"
+    logs_dir = tmp_path / "logs"
+
+    state_dir.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    sessions_dir.mkdir(parents=True)
+    logs_dir.mkdir(parents=True)
+
+    state_reader = StateReader(
+        state_dir=state_dir,
+        config_dir=config_dir,
+        sessions_dir=sessions_dir,
+        logs_dir=logs_dir,
+    )
+    monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+    yield state_reader
 
 
 class TestUIRoutes:
@@ -111,6 +136,141 @@ class TestUIRoutes:
         assert response.status_code == 200
         assert response.json()["content"] == "after"
         assert prompt_path.read_text(encoding="utf-8") == "after"
+
+    def test_kanban_endpoint_returns_default_board(self, client, kanban_state_reader):
+        response = client.get("/api/ui/kanban")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Delivery Kanban"
+        assert [column["id"] for column in data["columns"]] == [
+            "backlog",
+            "plan",
+            "build",
+            "validate",
+            "done",
+        ]
+        assert data["cards"] == []
+        assert {status["id"] for status in data["card_schema"]["statuses"]} == {
+            "idle",
+            "running",
+            "complete",
+            "failed",
+            "blocked",
+        }
+
+    def test_kanban_card_create_and_patch_persist(self, client, kanban_state_reader):
+        create_response = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Build kanban board", "summary": "Server first"},
+        )
+
+        assert create_response.status_code == 200
+        created = create_response.json()
+        assert created["column_id"] == "backlog"
+        assert created["status"] == "idle"
+        assert (kanban_state_reader.config_dir / "kanban.json").exists()
+
+        patch_response = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={
+                "column_id": "build",
+                "status": "running",
+                "agent_name": "builder_progenitor",
+                "branch_name": "feat/kanban-board",
+                "labels": ["frontend", "live-first"],
+            },
+        )
+
+        assert patch_response.status_code == 200
+        updated = patch_response.json()
+        assert updated["column_id"] == "build"
+        assert updated["status"] == "running"
+        assert updated["agent_name"] == "builder_progenitor"
+        assert updated["branch_name"] == "feat/kanban-board"
+        assert updated["labels"] == ["frontend", "live-first"]
+        assert updated["started_at"] is not None
+        assert updated["position"] == 0
+
+        board_response = client.get("/api/ui/kanban")
+        board = board_response.json()
+        assert board["cards"][0]["id"] == created["id"]
+        assert board["cards"][0]["column_id"] == "build"
+
+    def test_kanban_card_reorder_persists_positions(self, client, kanban_state_reader):
+        first = client.post("/api/ui/kanban/cards", json={"title": "First card"}).json()
+        client.post("/api/ui/kanban/cards", json={"title": "Second card"})
+        third = client.post("/api/ui/kanban/cards", json={"title": "Third card"}).json()
+
+        reorder_response = client.patch(
+            f"/api/ui/kanban/cards/{third['id']}",
+            json={"position": 1},
+        )
+
+        assert reorder_response.status_code == 200
+        reordered = reorder_response.json()
+        assert reordered["position"] == 1
+
+        move_response = client.patch(
+            f"/api/ui/kanban/cards/{first['id']}",
+            json={"column_id": "build", "position": 0},
+        )
+
+        assert move_response.status_code == 200
+        moved = move_response.json()
+        assert moved["column_id"] == "build"
+        assert moved["position"] == 0
+
+        board = client.get("/api/ui/kanban").json()
+        backlog_cards = [card for card in board["cards"] if card["column_id"] == "backlog"]
+        build_cards = [card for card in board["cards"] if card["column_id"] == "build"]
+
+        assert [card["title"] for card in backlog_cards] == ["Third card", "Second card"]
+        assert [card["position"] for card in backlog_cards] == [0, 1]
+        assert [card["title"] for card in build_cards] == ["First card"]
+        assert build_cards[0]["position"] == 0
+
+    def test_kanban_normalizes_legacy_columns(self, client, kanban_state_reader):
+        legacy_board = {
+            "id": "progenitor-kanban",
+            "title": "Delivery Kanban",
+            "updated_at": "2026-03-22T00:00:00+00:00",
+            "columns": [],
+            "cards": [
+                {"id": "legacy-research", "title": "Legacy research", "column_id": "research"},
+                {"id": "legacy-test", "title": "Legacy test", "column_id": "test"},
+                {"id": "legacy-review", "title": "Legacy review", "column_id": "review"},
+            ],
+        }
+        (kanban_state_reader.config_dir / "kanban.json").write_text(
+            json.dumps(legacy_board),
+            encoding="utf-8",
+        )
+        kanban_state_reader.invalidate(kanban_state_reader.config_dir / "kanban.json")
+
+        board = client.get("/api/ui/kanban").json()
+
+        assert [column["id"] for column in board["columns"]] == [
+            "backlog",
+            "plan",
+            "build",
+            "validate",
+            "done",
+        ]
+        assert {card["id"]: card["column_id"] for card in board["cards"]} == {
+            "legacy-research": "plan",
+            "legacy-test": "validate",
+            "legacy-review": "validate",
+        }
+
+    def test_kanban_card_delete_persists(self, client, kanban_state_reader):
+        created = client.post("/api/ui/kanban/cards", json={"title": "Disposable card"}).json()
+
+        delete_response = client.delete(f"/api/ui/kanban/cards/{created['id']}")
+
+        assert delete_response.status_code == 204
+        board = client.get("/api/ui/kanban").json()
+        assert all(card["id"] != created["id"] for card in board["cards"])
 
     def test_schedules_alias_endpoint(self, client):
         response = client.get("/api/ui/schedules")

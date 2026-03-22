@@ -33,7 +33,7 @@ from app.progenitor.runtime.scheduler import Scheduler
 from app.progenitor.runtime.time_utils import utcnow
 
 from .prompt_service import PromptService
-from .state_reader import get_state_reader
+from .state_reader import StateReader, get_state_reader
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +260,100 @@ class ScheduleCreateRequest(BaseModel):
     expression: str
     timezone: str | None = None
     enabled: bool = True
+
+
+class KanbanColumnResponse(BaseModel):
+    """Kanban column metadata."""
+    id: str
+    label: str
+    description: str
+    agent_name: str
+    allows_create: bool = False
+    stage_kind: str | None = None
+
+
+class KanbanStatusOptionResponse(BaseModel):
+    """Allowed kanban card status."""
+    id: str
+    label: str
+    tone: str = "neutral"
+
+
+class KanbanFieldSchemaResponse(BaseModel):
+    """Schema for an editable kanban card field."""
+    key: str
+    label: str
+    control: str = "text"
+    editable: bool = True
+    options: list[WidgetFieldOptionResponse] = Field(default_factory=list)
+
+
+class KanbanCardSchemaResponse(BaseModel):
+    """Schema describing editable kanban card state."""
+    statuses: list[KanbanStatusOptionResponse] = Field(default_factory=list)
+    fields: list[KanbanFieldSchemaResponse] = Field(default_factory=list)
+
+
+class KanbanCardResponse(BaseModel):
+    """Single kanban card entry."""
+    id: str
+    title: str
+    summary: str = ""
+    description: str = ""
+    column_id: str
+    status: str
+    agent_name: str
+    owner: str = "user"
+    labels: list[str] = Field(default_factory=list)
+    spec_path: str | None = None
+    branch_name: str | None = None
+    pr_url: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    last_error: str | None = None
+    created_at: str
+    updated_at: str
+    position: int = 0
+    metadata: dict = Field(default_factory=dict)
+
+
+class KanbanBoardResponse(BaseModel):
+    """Kanban board payload for the frontend."""
+    id: str
+    title: str
+    updated_at: str
+    columns: list[KanbanColumnResponse] = Field(default_factory=list)
+    cards: list[KanbanCardResponse] = Field(default_factory=list)
+    card_schema: KanbanCardSchemaResponse
+
+
+class KanbanCardCreateRequest(BaseModel):
+    """Create a new kanban card."""
+    title: str
+    summary: str = ""
+    description: str = ""
+    owner: str = "user"
+    labels: list[str] = Field(default_factory=list)
+
+
+class KanbanCardPatchRequest(BaseModel):
+    """Update mutable kanban card fields."""
+    title: str | None = None
+    summary: str | None = None
+    description: str | None = None
+    column_id: str | None = None
+    status: str | None = None
+    agent_name: str | None = None
+    owner: str | None = None
+    labels: list[str] | None = None
+    spec_path: str | None = None
+    branch_name: str | None = None
+    pr_url: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    last_error: str | None = None
+    position: int | None = None
+    metadata: dict | None = None
 
 
 class ActionRunRequest(BaseModel):
@@ -837,6 +931,277 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
     ]
 
 
+def _kanban_default_columns() -> list[dict]:
+    """Return the default kanban workflow columns."""
+    return [
+        {
+            "id": "backlog",
+            "label": "Backlog",
+            "description": "New user requests waiting to be shaped into delivery work.",
+            "agent_name": "user",
+            "allows_create": True,
+            "stage_kind": "intake",
+        },
+        {
+            "id": "plan",
+            "label": "Plan",
+            "description": "Turn the chosen approach into specs and implementation notes.",
+            "agent_name": "planner_agent",
+            "allows_create": False,
+            "stage_kind": "planning",
+        },
+        {
+            "id": "build",
+            "label": "Build",
+            "description": "Implement the change, create code, and prepare a pull request.",
+            "agent_name": "builder_progenitor",
+            "allows_create": False,
+            "stage_kind": "build",
+        },
+        {
+            "id": "validate",
+            "label": "Validate",
+            "description": "User-facing validation and final approval before the work is considered done.",
+            "agent_name": "validate_agent",
+            "allows_create": False,
+            "stage_kind": "validate",
+        },
+        {
+            "id": "done",
+            "label": "Done",
+            "description": "Merged and deployed work that no longer needs active handling.",
+            "agent_name": "release_agent",
+            "allows_create": False,
+            "stage_kind": "done",
+        },
+    ]
+
+
+def _canonical_kanban_column_id(column_id: object) -> str:
+    """Map legacy kanban columns onto the current workflow."""
+    normalized = str(column_id or "backlog").strip().lower()
+    return {
+        "research": "plan",
+        "review": "validate",
+        "test": "validate",
+    }.get(normalized, normalized or "backlog")
+
+
+def _kanban_status_options() -> list[KanbanStatusOptionResponse]:
+    """Return allowed kanban card statuses."""
+    return [
+        KanbanStatusOptionResponse(id="idle", label="Idle", tone="neutral"),
+        KanbanStatusOptionResponse(id="running", label="Running", tone="info"),
+        KanbanStatusOptionResponse(id="complete", label="Complete", tone="success"),
+        KanbanStatusOptionResponse(id="failed", label="Failed", tone="error"),
+        KanbanStatusOptionResponse(id="blocked", label="Blocked", tone="warning"),
+    ]
+
+
+def _kanban_card_schema(columns: list[dict]) -> KanbanCardSchemaResponse:
+    """Return field schema for kanban cards."""
+    status_options = _kanban_status_options()
+    return KanbanCardSchemaResponse(
+        statuses=status_options,
+        fields=[
+            KanbanFieldSchemaResponse(key="title", label="Title"),
+            KanbanFieldSchemaResponse(key="summary", label="Summary"),
+            KanbanFieldSchemaResponse(key="description", label="Description", control="textarea"),
+            KanbanFieldSchemaResponse(
+                key="column_id",
+                label="Column",
+                control="select",
+                options=[
+                    WidgetFieldOptionResponse(value=column["id"], label=column["label"])
+                    for column in columns
+                ],
+            ),
+            KanbanFieldSchemaResponse(
+                key="status",
+                label="Status",
+                control="select",
+                options=[
+                    WidgetFieldOptionResponse(value=status.id, label=status.label)
+                    for status in status_options
+                ],
+            ),
+            KanbanFieldSchemaResponse(key="agent_name", label="Assigned Agent"),
+            KanbanFieldSchemaResponse(key="owner", label="Owner"),
+            KanbanFieldSchemaResponse(key="spec_path", label="Spec File"),
+            KanbanFieldSchemaResponse(key="branch_name", label="Branch"),
+            KanbanFieldSchemaResponse(key="pr_url", label="Pull Request URL"),
+            KanbanFieldSchemaResponse(key="last_error", label="Last Error", control="textarea"),
+        ],
+    )
+
+
+def _kanban_default_board() -> dict:
+    """Return a default kanban board payload."""
+    return {
+        "id": "progenitor-kanban",
+        "title": "Delivery Kanban",
+        "updated_at": utcnow().isoformat(),
+        "columns": _kanban_default_columns(),
+        "cards": [],
+    }
+
+
+def _normalize_string_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+
+    normalized: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _normalize_non_negative_int(value: object) -> int:
+    """Normalize persisted integer fields that should never be negative."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(parsed, 0)
+
+
+def _normalize_kanban_card(card: dict, columns: dict[str, dict]) -> dict:
+    """Normalize raw kanban card data into a stable API shape."""
+    now = utcnow().isoformat()
+    column_id = _canonical_kanban_column_id(card.get("column_id"))
+    if column_id not in columns:
+        column_id = "backlog"
+
+    allowed_statuses = {status.id for status in _kanban_status_options()}
+    status = str(card.get("status") or "idle").strip().lower()
+    if status not in allowed_statuses:
+        status = "idle"
+
+    title = str(card.get("title") or "").strip() or "Untitled card"
+    metadata = card.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    return {
+        "id": str(card.get("id") or f"card_{uuid.uuid4().hex[:12]}"),
+        "title": title,
+        "summary": str(card.get("summary") or "").strip(),
+        "description": str(card.get("description") or ""),
+        "column_id": column_id,
+        "status": status,
+        "agent_name": str(card.get("agent_name") or columns[column_id]["agent_name"]),
+        "owner": str(card.get("owner") or "user"),
+        "labels": _normalize_string_list(card.get("labels")),
+        "spec_path": str(card.get("spec_path") or "").strip() or None,
+        "branch_name": str(card.get("branch_name") or "").strip() or None,
+        "pr_url": str(card.get("pr_url") or "").strip() or None,
+        "started_at": str(card.get("started_at") or "").strip() or None,
+        "completed_at": str(card.get("completed_at") or "").strip() or None,
+        "last_error": str(card.get("last_error") or "").strip() or None,
+        "created_at": str(card.get("created_at") or now),
+        "updated_at": str(card.get("updated_at") or now),
+        "position": _normalize_non_negative_int(card.get("position")),
+        "metadata": metadata,
+    }
+
+
+def _resequence_kanban_cards(cards: list[dict], columns: list[dict]) -> list[dict]:
+    """Sort cards into column order and assign dense per-column positions."""
+    column_order = {column["id"]: index for index, column in enumerate(columns)}
+    grouped_cards: dict[str, list[dict]] = {column["id"]: [] for column in columns}
+
+    ordered_cards = sorted(
+        cards,
+        key=lambda card: (
+            column_order.get(card["column_id"], len(columns)),
+            _normalize_non_negative_int(card.get("position")),
+            str(card.get("created_at") or ""),
+            card["id"],
+        ),
+    )
+    for card in ordered_cards:
+        grouped_cards.setdefault(card["column_id"], []).append(dict(card))
+
+    normalized_cards: list[dict] = []
+    for column in columns:
+        for index, card in enumerate(grouped_cards.get(column["id"], [])):
+            card["position"] = index
+            normalized_cards.append(card)
+    return normalized_cards
+
+
+def _reorder_kanban_cards(cards: list[dict], columns: list[dict], card_id: str, target_column_id: str, target_position: int) -> list[dict]:
+    """Move a card to a specific position within a target column."""
+    grouped_cards: dict[str, list[dict]] = {column["id"]: [] for column in columns}
+    moving_card: dict | None = None
+
+    for card in _resequence_kanban_cards(cards, columns):
+        if card["id"] == card_id:
+            moving_card = dict(card)
+            continue
+        grouped_cards.setdefault(card["column_id"], []).append(dict(card))
+
+    if moving_card is None:
+        raise HTTPException(status_code=404, detail="Kanban card not found")
+
+    moving_card["column_id"] = target_column_id
+    target_cards = grouped_cards.setdefault(target_column_id, [])
+    insert_at = max(0, min(target_position, len(target_cards)))
+    target_cards.insert(insert_at, moving_card)
+
+    normalized_cards: list[dict] = []
+    for column in columns:
+        for index, card in enumerate(grouped_cards.get(column["id"], [])):
+            card["position"] = index
+            normalized_cards.append(card)
+    return normalized_cards
+
+
+def _normalize_kanban_board(data: object) -> dict:
+    """Normalize persisted kanban board data."""
+    defaults = _kanban_default_board()
+    raw = data if isinstance(data, dict) else {}
+    columns = _kanban_default_columns()
+    column_map = {column["id"]: column for column in columns}
+    cards = [
+        _normalize_kanban_card(card, column_map)
+        for card in raw.get("cards", [])
+        if isinstance(card, dict)
+    ]
+    cards = _resequence_kanban_cards(cards, columns)
+    return {
+        "id": str(raw.get("id") or defaults["id"]),
+        "title": str(raw.get("title") or defaults["title"]),
+        "updated_at": str(raw.get("updated_at") or defaults["updated_at"]),
+        "columns": columns,
+        "cards": cards,
+    }
+
+
+def _kanban_board_path(state_reader: StateReader) -> Path:
+    """Return the persisted kanban board path."""
+    return state_reader.config_dir / "kanban.json"
+
+
+def _read_kanban_board(state_reader: StateReader) -> dict:
+    """Read the kanban board from persisted config state."""
+    board_path = _kanban_board_path(state_reader)
+    raw = state_reader._read_json_from_path(board_path)  # noqa: SLF001 - shared helper
+    return _normalize_kanban_board(raw)
+
+
+def _write_kanban_board(state_reader: StateReader, board: dict) -> dict:
+    """Persist the normalized kanban board."""
+    board_path = _kanban_board_path(state_reader)
+    normalized = _normalize_kanban_board(board)
+    normalized["updated_at"] = utcnow().isoformat()
+    _atomic_write_json(board_path, normalized)
+    state_reader.invalidate(board_path)
+    return normalized
+
+
 def _atomic_write_json(filepath: Path, data: object) -> None:
     """Atomically write JSON for backend-backed state updates."""
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -1111,6 +1476,149 @@ async def create_schedule(body: ScheduleCreateRequest):
 
     _broadcast_widget_refresh(state_reader)
     return _widget_to_response(refreshed)
+
+
+@router.get("/kanban", response_model=KanbanBoardResponse)
+async def get_kanban_board():
+    """Get the persisted kanban board used by the frontend."""
+    state_reader = get_state_reader()
+    board = _read_kanban_board(state_reader)
+    return KanbanBoardResponse(
+        id=board["id"],
+        title=board["title"],
+        updated_at=board["updated_at"],
+        columns=[KanbanColumnResponse(**column) for column in board["columns"]],
+        cards=[KanbanCardResponse(**card) for card in board["cards"]],
+        card_schema=_kanban_card_schema(board["columns"]),
+    )
+
+
+@router.post("/kanban/cards", response_model=KanbanCardResponse)
+async def create_kanban_card(body: KanbanCardCreateRequest):
+    """Create a new kanban card in the backlog column."""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Card title is required")
+
+    state_reader = get_state_reader()
+    board = _read_kanban_board(state_reader)
+    column_map = {column["id"]: column for column in board["columns"]}
+    now = utcnow().isoformat()
+    card = _normalize_kanban_card(
+        {
+            "id": f"card_{uuid.uuid4().hex[:12]}",
+            "title": title,
+            "summary": body.summary,
+            "description": body.description,
+            "column_id": "backlog",
+            "status": "idle",
+            "agent_name": column_map["backlog"]["agent_name"],
+            "owner": body.owner,
+            "labels": body.labels,
+            "created_at": now,
+            "updated_at": now,
+            "position": sum(1 for item in board["cards"] if item["column_id"] == "backlog"),
+        },
+        column_map,
+    )
+    board["cards"].append(card)
+    board = _write_kanban_board(state_reader, board)
+    created = next((item for item in board["cards"] if item["id"] == card["id"]), card)
+    return KanbanCardResponse(**created)
+
+
+@router.patch("/kanban/cards/{card_id}", response_model=KanbanCardResponse)
+async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
+    """Patch an existing kanban card."""
+    state_reader = get_state_reader()
+    board = _read_kanban_board(state_reader)
+    column_map = {column["id"]: column for column in board["columns"]}
+    allowed_statuses = {status.id for status in _kanban_status_options()}
+    now = utcnow().isoformat()
+
+    updated_card = None
+    for card in board["cards"]:
+        if card["id"] != card_id:
+            continue
+
+        if body.title is not None:
+            title = body.title.strip()
+            if not title:
+                raise HTTPException(status_code=400, detail="Card title is required")
+            card["title"] = title
+        if body.summary is not None:
+            card["summary"] = body.summary.strip()
+        if body.description is not None:
+            card["description"] = body.description
+        if body.column_id is not None:
+            if body.column_id not in column_map:
+                raise HTTPException(status_code=400, detail=f"Unknown kanban column: {body.column_id}")
+            card["column_id"] = body.column_id
+            if body.agent_name is None:
+                card["agent_name"] = column_map[body.column_id]["agent_name"]
+        if body.status is not None:
+            status = body.status.strip().lower()
+            if status not in allowed_statuses:
+                raise HTTPException(status_code=400, detail=f"Unknown kanban status: {body.status}")
+            card["status"] = status
+            if status == "running" and not card.get("started_at"):
+                card["started_at"] = now
+            if status == "complete":
+                card["completed_at"] = body.completed_at or card.get("completed_at") or now
+        if body.agent_name is not None:
+            card["agent_name"] = body.agent_name.strip()
+        if body.owner is not None:
+            card["owner"] = body.owner.strip() or "user"
+        if body.labels is not None:
+            card["labels"] = _normalize_string_list(body.labels)
+        if body.spec_path is not None:
+            card["spec_path"] = body.spec_path.strip() or None
+        if body.branch_name is not None:
+            card["branch_name"] = body.branch_name.strip() or None
+        if body.pr_url is not None:
+            card["pr_url"] = body.pr_url.strip() or None
+        if body.started_at is not None:
+            card["started_at"] = body.started_at.strip() or None
+        if body.completed_at is not None:
+            card["completed_at"] = body.completed_at.strip() or None
+        if body.last_error is not None:
+            card["last_error"] = body.last_error.strip() or None
+        if body.metadata is not None:
+            card["metadata"] = body.metadata if isinstance(body.metadata, dict) else {}
+
+        card["updated_at"] = now
+        updated_card = _normalize_kanban_card(card, column_map)
+        card.update(updated_card)
+        break
+
+    if updated_card is None:
+        raise HTTPException(status_code=404, detail="Kanban card not found")
+
+    target_position = body.position if body.position is not None else updated_card["position"]
+    board["cards"] = _reorder_kanban_cards(
+        board["cards"],
+        board["columns"],
+        card_id,
+        updated_card["column_id"],
+        target_position,
+    )
+    board = _write_kanban_board(state_reader, board)
+    refreshed = next((item for item in board["cards"] if item["id"] == card_id), updated_card)
+    return KanbanCardResponse(**refreshed)
+
+
+@router.delete("/kanban/cards/{card_id}", status_code=204)
+async def delete_kanban_card(card_id: str):
+    """Delete an existing kanban card."""
+    state_reader = get_state_reader()
+    board = _read_kanban_board(state_reader)
+    original_count = len(board["cards"])
+    board["cards"] = [card for card in board["cards"] if card["id"] != card_id]
+    if len(board["cards"]) == original_count:
+        raise HTTPException(status_code=404, detail="Kanban card not found")
+
+    board = _write_kanban_board(state_reader, board)
+    return None
 
 
 @router.post("/actions/run", response_model=ActionResponse)
