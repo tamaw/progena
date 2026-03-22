@@ -106,6 +106,33 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const getKanbanBoard = useCallback(async () => {
+    const response = await fetchWithRetry('kanban');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const createKanbanCard = useCallback(async (payload) => {
+    const response = await fetchWithRetry('/api/ui/kanban/cards', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const updateKanbanCard = useCallback(async (cardId, payload) => {
+    const response = await fetchWithRetry(`/api/ui/kanban/cards/${cardId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const deleteKanbanCard = useCallback(async (cardId) => {
+    await fetchWithRetry(`/api/ui/kanban/cards/${cardId}`, {
+      method: 'DELETE',
+    });
+  }, [fetchWithRetry]);
+
   const getPrompts = useCallback(async (agent = null) => {
     const search = agent ? `?${new URLSearchParams({ agent }).toString()}` : '';
     const response = await fetchWithRetry(`prompts${search}`);
@@ -294,6 +321,10 @@ export function useApi() {
     getWorkspace,
     getWidgets,
     getWidgetSchemas,
+    getKanbanBoard,
+    createKanbanCard,
+    updateKanbanCard,
+    deleteKanbanCard,
     getPrompts,
     getPromptContent,
     updatePromptContent,
