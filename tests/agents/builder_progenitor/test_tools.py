@@ -10,18 +10,7 @@ from app.agents.builder_progenitor.config import (
     LLMConfig,
     StorageConfig,
 )
-from app.agents.builder_progenitor.tools import _derive_work_item_suffix, create_builder_tools
-
-
-def test_derive_work_item_suffix_prefers_a2a_task_id() -> None:
-    context = {"a2a_task_id": "9e286e23-0264-4dad-a43f-7619c41053d3"}
-    suffix = _derive_work_item_suffix(json.dumps(context))
-    assert suffix.startswith("9e286e2302644dad")
-
-
-def test_derive_work_item_suffix_without_context_is_manual() -> None:
-    suffix = _derive_work_item_suffix(None)
-    assert suffix == "manual"
+from app.agents.builder_progenitor.tools import create_builder_tools
 
 
 def _test_config(tmp_path: Path) -> BuilderConfig:
@@ -69,3 +58,28 @@ async def test_create_pull_request_accepts_existing_pr_update(tmp_path: Path) ->
     assert result["pushed"] is True
     assert result["existing_pr"] is True
     assert result["url"] == "https://github.com/org/repo/pull/42"
+
+
+@pytest.mark.asyncio
+async def test_render_copilot_prompt_uses_structured_metadata(tmp_path: Path) -> None:
+    tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
+    tool = next(tool for tool in tools if tool.name == "render_copilot_prompt")
+
+    result = await tool.coroutine(
+        request_text="Fix the scheduler",
+        task_name="Scheduler Fix",
+        work_item_id="scheduler-fix",
+        branch_name="progenitor/scheduler-fix",
+        description="Fix ISO timestamp parsing",
+        planned_at_utc="2026-03-23T16:00:00Z",
+        context_json=json.dumps({"a2a_task_id": "123"}),
+        copilot_goal="Update parser and tests",
+        success_criteria="- ISO timestamps survive\n- Tests cover the bug",
+        validation_targets="- pytest\n- pyright\n- ruff",
+    )
+
+    prompt = result["prompt"]
+    assert "Scheduler Fix" in prompt
+    assert "progenitor/scheduler-fix" in prompt
+    assert "Update parser and tests" in prompt
+    assert "Fix the scheduler" in prompt

@@ -40,9 +40,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
 
-from .client import BuilderClient, ReasonedPlan
+from .client import BuilderClient, PlannedBuild
 from .config import BuilderConfig, get_config, setup_logging
-from .prompts import load_prompt
+from .hooks import HookContext, HookManager, create_default_hook_manager
+from .prompts import load_prompt, load_skill_context
 from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
 
@@ -126,7 +127,8 @@ STEP_SKILLS = [
     ("pr", "Commit, push, and create a pull request."),
 ]
 
-SYSTEM_PROMPT = load_prompt("system.md").strip()
+BUILDER_SYSTEM_PROMPT = load_prompt("system.md").strip()
+HOOK_SYSTEM_PROMPT = load_prompt("hook_system.md").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +194,7 @@ class LoggingChatOpenAI(ChatOpenAI):
 def _create_model(config: BuilderConfig, log_dir: Path | None = None) -> ChatOpenAI:
     """Create a ChatOpenAI pointed at Azure Responses API."""
     llm = config.llm
-    model_name = llm.get_model_for_role("builder")
+    model_name = llm.get_model()
     base_url = llm.base_url
 
     # Strip /responses suffix for LangChain compatibility
@@ -226,6 +228,9 @@ def _create_graph(
     config: BuilderConfig,
     project_root: Path,
     log_dir: Path,
+    *,
+    name: str,
+    system_prompt: str,
 ) -> CompiledStateGraph:
     """Create the DeepAgent graph with tools and shell backend."""
     model = _create_model(config, log_dir=log_dir)
@@ -243,9 +248,9 @@ def _create_graph(
         skills = [skills_dir.relative_to(project_root).as_posix()]
 
     return create_deep_agent(
-        name="builder",
+        name=name,
         model=model,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         tools=tools,
         skills=skills,
         backend=backend,
@@ -264,8 +269,11 @@ class BuilderService:
 
     def __init__(self) -> None:
         self._graph: CompiledStateGraph | None = None
+        self._hook_graph: CompiledStateGraph | None = None
         self._config: BuilderConfig | None = None
         self._planner: BuilderClient | None = None
+        self._hook_manager: HookManager | None = None
+        self._log_dir: Path | None = None
         self._initialized = False
         self._shutting_down = False
         self._start_time = time.time()
@@ -285,22 +293,41 @@ class BuilderService:
             p.mkdir(parents=True, exist_ok=True)
 
         log_dir = config.storage.log_dir / agent_log_name
-        self._graph = _create_graph(config, repo_root, log_dir)
+        self._graph = _create_graph(
+            config,
+            repo_root,
+            log_dir,
+            name="builder",
+            system_prompt=BUILDER_SYSTEM_PROMPT,
+        )
+        self._hook_graph = _create_graph(
+            config,
+            repo_root,
+            log_dir,
+            name="builder_hook",
+            system_prompt=HOOK_SYSTEM_PROMPT,
+        )
         self._config = config
         self._planner = BuilderClient(config.llm, role="planner", log_dir=log_dir)
+        self._hook_manager = create_default_hook_manager(self._invoke_hook)
+        self._log_dir = log_dir
         self._initialized = True
         logger.info("Builder initialized (root=%s)", repo_root)
 
-    async def process(self, request_text: str, context: dict[str, Any]) -> str:
+    async def plan_task(self, request_text: str, context: dict[str, Any]) -> PlannedBuild:
+        if self._shutting_down:
+            raise RuntimeError("Builder is shutting down")
+        await self.initialize()
+        assert self._planner is not None
+        return await self._planner.plan_build(request_text, context)
+
+    async def process(self, request_text: str, context: dict[str, Any], planned_build: PlannedBuild) -> str:
         if self._shutting_down:
             raise RuntimeError("Builder is shutting down")
         await self.initialize()
         assert self._graph is not None
-        assert self._planner is not None
 
-        plan = await self._planner.plan_step(request_text, context)
-        _assert_plan_contains_pr_step(plan)
-        prompt = _build_prompt(request_text, context, plan)
+        prompt = _build_execution_prompt(request_text, context, planned_build)
         thread_id = f"builder_{uuid.uuid4().hex[:12]}"
         logger.info("Builder: invoking graph (thread=%s)", thread_id)
 
@@ -312,8 +339,14 @@ class BuilderService:
         logger.info("Builder: graph complete (thread=%s)", thread_id)
         return _extract_result(result)
 
-    async def run_task(self, task_id: str, request_text: str, context: dict[str, Any]) -> str:
-        task = asyncio.create_task(self.process(request_text, context))
+    async def run_task(
+        self,
+        task_id: str,
+        request_text: str,
+        context: dict[str, Any],
+        planned_build: PlannedBuild,
+    ) -> str:
+        task = asyncio.create_task(self.process(request_text, context, planned_build))
         async with self._task_lock:
             self._active_tasks[task_id] = task
         try:
@@ -321,6 +354,48 @@ class BuilderService:
         finally:
             async with self._task_lock:
                 self._active_tasks.pop(task_id, None)
+
+    async def emit_hook(self, event: str, context: HookContext) -> None:
+        await self.initialize()
+        assert self._hook_manager is not None
+        await self._hook_manager.emit(event, context)
+
+    async def _invoke_hook(self, context: HookContext) -> None:
+        assert self._hook_graph is not None
+        planned_build_json = "{}"
+        if context.planned_build is not None:
+            planned_build_json = json.dumps(
+                {
+                    **context.planned_build.plan.model_dump(),
+                    "planned_at_utc": context.planned_build.planned_at_utc,
+                    "reasoning": context.planned_build.reasoning,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        prompt = load_prompt(
+            f"{context.event}.md",
+            task_id=context.task_id,
+            request_text=context.request_text.strip(),
+            request_context_json=json.dumps(context.request_context, indent=2, sort_keys=True),
+            planned_build_json=planned_build_json,
+            result_text=(context.result_text or "").strip(),
+            metadata_json=json.dumps(context.metadata, indent=2, sort_keys=True),
+            error=(context.error or "").strip(),
+        ).strip()
+        thread_id = f"hook_{context.event}_{uuid.uuid4().hex[:12]}"
+        logger.info("Builder hook: invoking %s (thread=%s task_id=%s)", context.event, thread_id, context.task_id)
+        result = await self._hook_graph.ainvoke(
+            {"messages": [{"role": "user", "content": prompt}]},
+            {"configurable": {"thread_id": thread_id}},
+        )
+        hook_result = _extract_result(result)
+        logger.info(
+            "Builder hook complete: event=%s task_id=%s summary=%s",
+            context.event,
+            context.task_id,
+            hook_result[:240],
+        )
 
     async def cancel_task(self, task_id: str) -> bool:
         async with self._task_lock:
@@ -365,6 +440,9 @@ class BuilderService:
             self._planner = None
 
         await shutdown_builder_tool_runtimes()
+        self._hook_graph = None
+        self._hook_manager = None
+        self._log_dir = None
         self._initialized = False
 
 
@@ -403,40 +481,35 @@ def _extract_result(result: dict[str, Any]) -> str:
     return "Builder completed but produced no text response."
 
 
-def _build_prompt(
+def _as_bullets(items: list[str], fallback: str) -> str:
+    if not items:
+        return fallback
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _build_execution_prompt(
     request_text: str,
     context: dict[str, Any],
-    plan: ReasonedPlan,
+    planned_build: PlannedBuild,
 ) -> str:
-    """Build the execution prompt with the preflight plan."""
+    """Build the execution prompt from prompt files and structured metadata."""
     ctx = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
-    steps = "\n".join(
-        f"- {s.step}: {s.objective}"
-        + (f" (commands: {', '.join(s.commands)})" if s.commands else "")
-        for s in plan.plan.steps
-    ) or "- (none)"
-    risks = "\n".join(f"- {r}" for r in (plan.plan.risks or ["none"]))
-
-    return (
-        f"User request:\n{request_text.strip()}\n\n"
-        f"Execution context:\n{ctx}\n\n"
-        f"Plan summary: {plan.plan.summary or 'N/A'}\n"
-        f"Steps:\n{steps}\n"
-        f"Risks:\n{risks}\n"
-        f"Reasoning: {plan.reasoning or 'N/A'}\n\n"
-        "Execution requirements:\n"
-        "- Follow the workflow order: plan -> build -> validate -> pr.\n"
-        "- If commit_changes returns committed=true, you must call create_pull_request(title, body, base).\n"
-        "- Do not finish until create_pull_request succeeds and yields a PR URL.\n"
-        "- The final report must include the PR URL when changes were committed.\n\n"
-        "Execute the plan using the available tools and return a concise final report."
-    )
-
-
-def _assert_plan_contains_pr_step(plan: ReasonedPlan) -> None:
-    has_pr = any(step.step.strip().lower() == "pr" for step in plan.plan.steps)
-    if not has_pr:
-        raise RuntimeError("Builder planning output is invalid: missing required 'pr' step.")
+    plan = planned_build.plan
+    return load_prompt(
+        "execution_template.md",
+        request_text=request_text.strip(),
+        context_json=ctx,
+        task_name=plan.task_name,
+        work_item_id=plan.work_item_id,
+        branch_name=plan.branch_name,
+        description=plan.description,
+        copilot_goal=plan.copilot_goal or "Implement the requested change safely.",
+        success_criteria=_as_bullets(plan.success_criteria, "- none provided"),
+        validation_targets=_as_bullets(plan.validation_targets, "- pytest\n- pyright\n- ruff"),
+        reasoning=planned_build.reasoning or "No reasoning returned.",
+        planned_at_utc=planned_build.planned_at_utc,
+        skill_context=load_skill_context() or "- No repository skills were found.",
+    ).strip()
 
 
 def _iter_tool_payloads(result: dict[str, Any], tool_name: str) -> list[dict[str, Any]]:
@@ -564,22 +637,29 @@ class BuilderExecutor(AgentExecutor):
             return
 
         # Enqueue for background execution — do not await the result here.
-        queued = _task_queue is not None
-        if queued:
-            await _task_queue.enqueue(  # type: ignore[union-attr]
-                _QueuedTask(
+        if _task_queue is None:
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
                     task_id=task_id,
                     context_id=ctx_id,
-                    request_text=request_text,
-                    request_ctx=request_ctx,
+                    final=True,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=_text_msg("Builder task queue is not initialised."),
+                        timestamp=_utc_now(),
+                    ),
                 )
             )
-        else:
-            logger.warning(
-                "BuilderExecutor: task queue not initialised, falling back to inline execution"
-                " (task_id=%s)",
-                task_id,
+            return
+
+        await _task_queue.enqueue(
+            _QueuedTask(
+                task_id=task_id,
+                context_id=ctx_id,
+                request_text=request_text,
+                request_ctx=request_ctx,
             )
+        )
 
         # Immediately respond — HTTP connection is released, task runs async.
         await event_queue.enqueue_event(

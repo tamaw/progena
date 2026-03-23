@@ -63,6 +63,16 @@ class PromptTemplates:
         """Initialize with optional custom prompts directory."""
         self.prompts_dir = resolve_prompts_dir(prompts_dir)
 
+    @staticmethod
+    def _strip_frontmatter(content: str) -> str:
+        """Remove SKILL.md frontmatter when present."""
+        if not content.startswith("---"):
+            return content.strip()
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            return content.strip()
+        return parts[2].strip()
+
     def _load_prompt(self, filename: str) -> str:
         """Load a prompt from file.
 
@@ -116,12 +126,37 @@ class PromptTemplates:
 
     def get_planner_prompt(self) -> str:
         """Get the planning prompt for work item generation."""
-        return self._load_prompt("builder_agent/planner.md")
+        prompt = self._load_prompt("builder_agent/planner.md")
+        skill_context = self.get_builder_skill_context()
+        if not skill_context:
+            return prompt
+        return f"{prompt}\n\n## Repository Skills\n\n{skill_context}"
 
     def get_build_prompt(self, item_type: str) -> str:
         """Get the build specification prompt."""
         template = self._load_prompt("builder_agent/build.md")
         return template.replace("{item_type}", item_type)
+
+    def get_builder_skill_context(self, skill_names: list[str] | None = None) -> str:
+        """Load repo-level builder skills for prompt grounding.
+
+        The builder aligns to the same `prompts/skills` convention as Progenitor
+        rather than maintaining a private skills directory.
+        """
+        selected = skill_names or ["build-agent", "git-workflow"]
+        skills_dir = self.prompts_dir / "skills"
+        if not skills_dir.is_dir():
+            return ""
+
+        sections: list[str] = []
+        for skill_name in selected:
+            skill_file = skills_dir / skill_name / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+            body = self._strip_frontmatter(skill_file.read_text(encoding="utf-8"))
+            if body:
+                sections.append(body)
+        return "\n\n".join(sections)
 
     def get_copilot_task_prompt(self, spec: dict) -> str:
         """Generate a task prompt for Copilot CLI.
@@ -163,7 +198,7 @@ The following specification has evolved through planning iterations and should g
             structure_guidance = spec_doc_section + structure_guidance
 
         template = self._load_prompt("builder_agent/copilot_task.md")
-        return template.replace(
+        prompt = template.replace(
             "{agent_name}", agent_name
         ).replace(
             "{kind}", kind
@@ -176,6 +211,10 @@ The following specification has evolved through planning iterations and should g
         ).replace(
             "{structure_guidance}", structure_guidance
         )
+        skill_context = self.get_builder_skill_context()
+        if not skill_context:
+            return prompt
+        return f"{prompt}\n\n## Repository Skills\n\n{skill_context}"
 
     # ================================================================
     # Ideal State prompts

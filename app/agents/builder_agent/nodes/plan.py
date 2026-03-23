@@ -890,6 +890,9 @@ This is iteration {iteration} of the build. Focus on addressing these gaps:
         iteration_context=iteration_context,
         action_details=action_details,
     )
+    skill_context = _prompts.get_builder_skill_context()
+    if skill_context:
+        base_prompt = f"{base_prompt}\n\n## Repository Skills\n\n{skill_context}"
 
     # Optionally use LLM to enhance the prompt with task-specific guidance
     if llm_client and iteration == 0 and item_type != WorkItemType.BUILD_PROGENITOR:
