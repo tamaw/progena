@@ -365,6 +365,12 @@ class BuilderAgentExecutor(AgentExecutor):
 
         await _ensure_initialized()
         task_queue = _get_or_create_task_queue()
+        logger.info(
+            "A2A execute accepted: task_id=%s context_id=%s request=%.120r",
+            task_id,
+            ctx_id,
+            request_text,
+        )
         await task_queue.enqueue(
             _QueuedTask(
                 task_id=task_id,

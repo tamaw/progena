@@ -12,6 +12,7 @@ deploy the agent/mcp to its own Docker container.
 """
 
 import logging
+import re
 from collections.abc import Callable, Coroutine, Mapping
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from ..tools.gh import gh_create_pr_from_worktree
 from ..tools.git import GitWorktreeManager
 
 logger = logging.getLogger(__name__)
+PR_URL_RE = re.compile(r"^https://github\.com/.+/pull/\d+$")
 
 
 def create_node(
@@ -91,6 +93,24 @@ def create_node(
             )
             logger.info("PUBLISH: Commit result: %s", commit_result)
 
+            if not commit_result:
+                logger.info("PUBLISH: No changes committed, skipping PR")
+                await state_manager.log_decision({
+                    "event": "pr_skipped_no_changes",
+                    "work_item_id": item_id,
+                    "branch": branch_name,
+                    "timestamp": utcnow_isoformat(),
+                })
+                return {
+                    "build_messages": state.get("build_messages", []) + [{
+                        "phase": "publish",
+                        "timestamp": utcnow_isoformat(),
+                        "commit_hash": None,
+                        "pr_status": "skipped",
+                        "reason": "no_changes_to_commit",
+                    }],
+                }
+
             # Step 2: Push and create PR
             pr_title = f"feat({project_name}): {description[:60]}"
             pr_body = _build_pr_body(
@@ -116,6 +136,15 @@ def create_node(
                 "error": pr_url_or_error if not success else None,
             }
 
+            if not success:
+                raise RuntimeError(
+                    f"PR creation failed after commit {commit_result}: {pr_url_or_error}"
+                )
+            if not isinstance(pr_url_or_error, str) or not PR_URL_RE.match(pr_url_or_error.strip()):
+                raise RuntimeError(
+                    f"PR creation returned an invalid URL after commit {commit_result}: {pr_url_or_error}"
+                )
+
             logger.info("PUBLISH: PR result: %s, URL: %s", pr_result["status"], pr_result.get("url"))
 
             # Log the PR creation
@@ -123,6 +152,7 @@ def create_node(
                 "event": "pr_created",
                 "work_item_id": item_id,
                 "branch": branch_name,
+                "commit_hash": commit_result,
                 "pr_url": pr_result.get("url"),
                 "pr_status": pr_result.get("status"),
                 "timestamp": utcnow_isoformat(),
@@ -131,10 +161,12 @@ def create_node(
             # Update work item with PR info
             if isinstance(current_item, dict):
                 current_item["context"] = current_item.get("context", {})
+                current_item["context"]["commit_hash"] = commit_result
                 current_item["context"]["pr_url"] = pr_result.get("url")
                 current_item["context"]["pr_status"] = pr_result.get("status")
                 current_item["context"]["pr_branch"] = branch_name
             else:
+                current_item.context["commit_hash"] = commit_result
                 current_item.context["pr_url"] = pr_result.get("url")
                 current_item.context["pr_status"] = pr_result.get("status")
                 current_item.context["pr_branch"] = branch_name
@@ -144,6 +176,7 @@ def create_node(
                 "build_messages": state.get("build_messages", []) + [{
                     "phase": "publish",
                     "timestamp": utcnow_isoformat(),
+                    "commit_hash": commit_result,
                     "pr_url": pr_result.get("url"),
                     "pr_status": pr_result.get("status"),
                 }],

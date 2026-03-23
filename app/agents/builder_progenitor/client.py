@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -54,34 +55,51 @@ def _close_object_schemas(node: Any) -> None:
             _close_object_schemas(item)
 
 
-class PlanStep(BaseModel):
-    """A single execution step in the preflight plan."""
+class BuildPlan(BaseModel):
+    """Structured task metadata produced before execution starts."""
 
-    step: str = Field(description="Short step name (for example: plan, build, test, lint, pr)")
-    objective: str = Field(description="What this step accomplishes")
-    commands: list[str] = Field(default_factory=list, description="Suggested commands")
-
-
-class PlanResponse(BaseModel):
-    """Structured planning response."""
-
-    summary: str = Field(default="", description="High-level plan summary")
-    steps: list[PlanStep] = Field(default_factory=list, description="Ordered execution steps")
-    risks: list[str] = Field(default_factory=list, description="Known risks or open questions")
+    task_name: str = Field(description="Short human-readable task name")
+    work_item_id: str = Field(description="Stable work item identifier for logs and worktrees")
+    branch_name: str = Field(description="Git branch name to use for the build")
+    description: str = Field(description="Concise build description")
+    copilot_goal: str = Field(default="", description="Primary implementation goal for Copilot ACP")
+    success_criteria: list[str] = Field(
+        default_factory=list,
+        description="Expected outcomes or checks the build should satisfy",
+    )
+    validation_targets: list[str] = Field(
+        default_factory=list,
+        description="Validation commands or checks the build should care about",
+    )
 
     @model_validator(mode="after")
-    def _require_pr_step(self) -> PlanResponse:
-        if not any(step.step.strip().lower() == "pr" for step in self.steps):
-            raise ValueError("Plan must include a 'pr' step.")
+    def _require_core_fields(self) -> BuildPlan:
+        self.task_name = self.task_name.strip()
+        self.work_item_id = self.work_item_id.strip()
+        self.branch_name = self.branch_name.strip()
+        self.description = self.description.strip()
+        self.copilot_goal = self.copilot_goal.strip()
+        self.success_criteria = [item.strip() for item in self.success_criteria if item.strip()]
+        self.validation_targets = [item.strip() for item in self.validation_targets if item.strip()]
+
+        if not self.task_name:
+            raise ValueError("Plan must include a non-empty task_name.")
+        if not self.work_item_id:
+            raise ValueError("Plan must include a non-empty work_item_id.")
+        if not self.branch_name:
+            raise ValueError("Plan must include a non-empty branch_name.")
+        if not self.description:
+            raise ValueError("Plan must include a non-empty description.")
         return self
 
 
 @dataclass
-class ReasonedPlan:
-    """Validated planning output plus the model's reasoning summary."""
+class PlannedBuild:
+    """Validated planning metadata plus the model's reasoning summary."""
 
-    plan: PlanResponse
+    plan: BuildPlan
     reasoning: str
+    planned_at_utc: str
 
 
 def _build_json_schema_format(response_model: type[BaseModel], schema_name: str) -> dict[str, Any]:
@@ -122,7 +140,7 @@ class BuilderClient:
     def __init__(self, config: LLMConfig | None = None, role: str | None = None, log_dir: Path | None = None) -> None:
         self.config = config or LLMConfig.from_env()
         self.role = role
-        self.model = self.config.get_model_for_role(role)
+        self.model = self.config.get_model()
         self.endpoint_url = _build_responses_endpoint(self.config.base_url)
         self.log_dir = Path(log_dir) if log_dir else None
         api_key = self.config.api_key or ""
@@ -358,21 +376,28 @@ class BuilderClient:
         parsed = response_model.model_validate(json.loads(response_text))
         return parsed, reasoning
 
-    async def plan_step(self, request_text: str, context: dict[str, Any]) -> ReasonedPlan:
-        """Run the dedicated reasoning-backed planning call."""
+    async def plan_build(self, request_text: str, context: dict[str, Any]) -> PlannedBuild:
+        """Run the structured build-metadata planning call."""
         context_json = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
+        planned_at_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         system_prompt = load_prompt("planner_system.md").strip()
-        user_message = (
-            f"User request:\n{request_text.strip()}\n\n"
-            f"Execution context (JSON):\n{context_json}\n\n"
-            "Create a practical plan with the minimum useful steps."
-        )
+        user_message = load_prompt(
+            "plan_request.md",
+            request_text=request_text.strip(),
+            context_json=context_json,
+            current_datetime_utc=planned_at_utc,
+        ).strip()
         plan, reasoning = await self.chat_structured_with_reasoning(
             [{"role": "user", "content": user_message}],
-            response_model=PlanResponse,
-            schema_name="builder_plan",
+            response_model=BuildPlan,
+            schema_name="builder_build_plan",
             system_prompt=system_prompt,
             max_tokens=8192,
         )
-        logger.info("Built reasoning-backed plan with %d step(s)", len(plan.steps))
-        return ReasonedPlan(plan=plan, reasoning=reasoning)
+        logger.info(
+            "Built build metadata task_name=%s branch=%s work_item_id=%s",
+            plan.task_name,
+            plan.branch_name,
+            plan.work_item_id,
+        )
+        return PlannedBuild(plan=plan, reasoning=reasoning, planned_at_utc=planned_at_utc)

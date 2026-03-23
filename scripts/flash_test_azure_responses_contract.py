@@ -75,24 +75,24 @@ def _build_responses_endpoint(base_url: str) -> str:
 
 
 async def _run_builder_structured_plan(request_text: str, model: str) -> int:
-    previous_override = os.getenv("OVERRIDE_AGENT_PLANNER_MODEL")
-    os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = model
+    previous_default = os.getenv("AGENT_MODEL_DEFAULT")
+    os.environ["AGENT_MODEL_DEFAULT"] = model
     try:
         async with BuilderClient(role="planner") as client:
-            result = await client.plan_step(request_text, {})
+            result = await client.plan_build(request_text, {})
     except Exception as exc:
         print(f"STRUCTURED_REQUEST_FAILED: {exc}", file=sys.stderr)
         return 1
     finally:
-        if previous_override is None:
-            os.environ.pop("OVERRIDE_AGENT_PLANNER_MODEL", None)
+        if previous_default is None:
+            os.environ.pop("AGENT_MODEL_DEFAULT", None)
         else:
-            os.environ["OVERRIDE_AGENT_PLANNER_MODEL"] = previous_override
+            os.environ["AGENT_MODEL_DEFAULT"] = previous_default
 
     print("STRUCTURED_PLAN_OK")
     print(f"model={client.model}")
-    print(f"summary={result.plan.summary}")
-    print(f"steps={len(result.plan.steps)}")
+    print(f"task_name={result.plan.task_name}")
+    print(f"branch_name={result.plan.branch_name}")
     print(f"has_reasoning={bool(result.reasoning)}")
     return 0
 
@@ -165,7 +165,7 @@ def main() -> int:
     parser.add_argument(
         "--structured-builder-plan",
         action="store_true",
-        help="Exercise the same structured planning path BuilderClient.plan_step() uses.",
+        help="Exercise the same structured planning path BuilderClient.plan_build() uses.",
     )
     parser.add_argument(
         "--structured-builder-agent-think",

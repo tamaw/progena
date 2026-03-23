@@ -23,6 +23,7 @@ import pytest
 
 os.environ.setdefault("AGENT_NAME", "builder_progenitor")
 
+from app.agents.builder_progenitor.client import BuildPlan, PlannedBuild
 from app.agents.builder_progenitor.queue_worker import (
     BuilderTaskQueue,
     TaskRecord,
@@ -50,8 +51,23 @@ def _make_task(task_id: str | None = None) -> _QueuedTask:
 
 def _make_mock_service(response: str = "Done. PR: https://github.com/org/repo/pull/42") -> Any:
     svc = AsyncMock()
+    planned_build = PlannedBuild(
+        plan=BuildPlan(
+            task_name="Fire And Forget Test",
+            work_item_id="fire-and-forget-test",
+            branch_name="progenitor/fire-and-forget-test",
+            description="Exercise queue worker behavior",
+            copilot_goal="Return a canned response",
+            success_criteria=["Task completes"],
+            validation_targets=["pytest"],
+        ),
+        reasoning="Mock planning result.",
+        planned_at_utc="2026-01-01T00:00:00Z",
+    )
     svc.process = AsyncMock(return_value=response)
+    svc.plan_task = AsyncMock(return_value=planned_build)
     svc.run_task = AsyncMock(return_value=response)
+    svc.emit_hook = AsyncMock(return_value=None)
     svc.cancel_task = AsyncMock(return_value=False)
     return svc
 

@@ -231,6 +231,11 @@ class BuilderTaskQueue:
             )
 
             try:
+                logger.info(
+                    "BuilderTaskQueue: starting task task_id=%s text=%.80r",
+                    task.task_id,
+                    task.request_text,
+                )
                 result = await self._handler(
                     task.task_id,
                     task.context_id,
@@ -243,6 +248,12 @@ class BuilderTaskQueue:
                 record.build_id = result.build_id
                 record.pr_url = result.pr_url
                 record.error_message = result.error_message
+                logger.info(
+                    "BuilderTaskQueue: task completed task_id=%s status=%s pr_url=%s",
+                    task.task_id,
+                    record.status,
+                    record.pr_url,
+                )
             except asyncio.CancelledError:
                 record.status = "cancelled"
                 record.phase_completed = "cancelled"

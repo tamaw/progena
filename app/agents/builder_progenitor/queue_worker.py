@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     from .agent import BuilderService
 
+from .hooks import HookContext
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -294,6 +296,7 @@ class BuilderTaskQueue:
             phase_completed: str = "accepted"
             commit_hash: str | None = None
             pr_url: str | None = None
+            planned_build = None
 
             logger.info(
                 "BuilderTaskQueue: starting task task_id=%s text=%.80r",
@@ -302,7 +305,36 @@ class BuilderTaskQueue:
             )
 
             try:
-                response = await self._service.run_task(task.task_id, task.request_text, task.request_ctx)
+                planned_build = await self._service.plan_task(task.request_text, task.request_ctx)
+                logger.info(
+                    "BuilderTaskQueue: planned task task_id=%s work_item_id=%s branch=%s task_name=%s",
+                    task.task_id,
+                    planned_build.plan.work_item_id,
+                    planned_build.plan.branch_name,
+                    planned_build.plan.task_name,
+                )
+                await self._service.emit_hook(
+                    "build_started",
+                    HookContext(
+                        event="build_started",
+                        task_id=task.task_id,
+                        request_text=task.request_text,
+                        request_context=task.request_ctx,
+                        planned_build=planned_build,
+                        metadata={
+                            "branch_name": planned_build.plan.branch_name,
+                            "work_item_id": planned_build.plan.work_item_id,
+                            "task_name": planned_build.plan.task_name,
+                            "planned_at_utc": planned_build.planned_at_utc,
+                        },
+                    ),
+                )
+                response = await self._service.run_task(
+                    task.task_id,
+                    task.request_text,
+                    task.request_ctx,
+                    planned_build,
+                )
                 status = "success"
                 phase_completed = "pr"
 
@@ -319,11 +351,38 @@ class BuilderTaskQueue:
                     task.task_id,
                     pr_url,
                 )
+                await self._service.emit_hook(
+                    "build_completed",
+                    HookContext(
+                        event="build_completed",
+                        task_id=task.task_id,
+                        request_text=task.request_text,
+                        request_context=task.request_ctx,
+                        planned_build=planned_build,
+                        result_text=response,
+                        metadata={
+                            "pr_url": pr_url,
+                            "commit_hash": commit_hash,
+                            "phase_completed": phase_completed,
+                        },
+                    ),
+                )
 
             except asyncio.CancelledError:
                 status = "cancelled"
                 phase_completed = "cancelled"
                 logger.info("BuilderTaskQueue: task cancelled task_id=%s", task.task_id)
+                await self._service.emit_hook(
+                    "build_cancelled",
+                    HookContext(
+                        event="build_cancelled",
+                        task_id=task.task_id,
+                        request_text=task.request_text,
+                        request_context=task.request_ctx,
+                        planned_build=planned_build,
+                        error="Build was cancelled.",
+                    ),
+                )
             except Exception as exc:
                 status = "failure"
                 phase_completed = "failed"
@@ -331,6 +390,18 @@ class BuilderTaskQueue:
                     "BuilderTaskQueue: task failed task_id=%s error=%s",
                     task.task_id,
                     exc,
+                )
+                await self._service.emit_hook(
+                    "build_failed",
+                    HookContext(
+                        event="build_failed",
+                        task_id=task.task_id,
+                        request_text=task.request_text,
+                        request_context=task.request_ctx,
+                        planned_build=planned_build,
+                        metadata={"error_type": type(exc).__name__},
+                        error=str(exc),
+                    ),
                 )
 
             finally:
