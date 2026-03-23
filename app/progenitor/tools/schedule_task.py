@@ -119,9 +119,12 @@ class ScheduleTaskTool(BaseSystemTool):
                 "message": entry_data.get("message") if entry_data else instruction,
                 "next_run": result.next_run,
                 "recurring": (
-                    not scheduler.is_one_shot_expression(str(entry_data.get("cron_expression", "")))
-                    if entry_data
-                    else True
+                    False if entry_data and entry_data.get("scheduled_at")
+                    else (
+                        not scheduler.is_one_shot_expression(str(entry_data.get("cron_expression", "")))
+                        if entry_data
+                        else True
+                    )
                 ),
             }
 
