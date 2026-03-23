@@ -43,6 +43,36 @@ class TestAddScheduledTask:
         assert "Could not parse" in result.message
         assert entry_data is None
 
+    @pytest.mark.asyncio
+    async def test_add_task_iso_timestamp(self):
+        # Ensure explicit ISO timestamps are stored as 'scheduled_at' (one-off)
+        ts = "2026-03-20T09:42:27Z"
+        result, entry_data = await add_scheduled_task(
+            user_request="remind me",
+            time_expression=f"at {ts}",
+            instruction="Say hello",
+        )
+
+        assert result.success is True
+        assert entry_data is not None
+        assert "scheduled_at" in entry_data
+        assert entry_data.get("scheduled_at") == ts.replace("Z", "+00:00") or entry_data.get("scheduled_at") == ts
+        assert "cron_expression" not in entry_data
+        assert result.next_run is not None
+
+    @pytest.mark.asyncio
+    async def test_add_task_iso_malformed_returns_error(self):
+        # Malformed ISO should return a clear parse failure (not a silent fallback)
+        bad_ts = "2026-03-20T99:99:99Z"
+        result, entry_data = await add_scheduled_task(
+            user_request="remind me",
+            time_expression=f"at {bad_ts}",
+            instruction="Say hello",
+        )
+
+        assert result.success is False
+        assert entry_data is None
+
 
 class TestRemoveScheduledTask:
     @pytest.mark.asyncio

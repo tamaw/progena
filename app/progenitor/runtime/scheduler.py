@@ -41,11 +41,30 @@ class Scheduler:
 
         Returns dict with:
         - cron_expression: cron expression used for scheduling
+        - scheduled_at: ISO datetime for one-off events (preferred if provided)
         - description: Human-readable description
         """
-        expression = expression.lower().strip()
+        original = expression.strip()
+        expression = original.lower()
         result: dict[str, Any] = {}
         now = utcnow()
+
+        # If the expression is (or contains) an ISO8601 datetime, prefer that
+        # to avoid mis-parsing numeric date parts with the "at" regex.
+        iso_try = original
+        if iso_try.lower().startswith("at "):
+            iso_try = iso_try[3:].strip()
+        parsed_dt = self._parse_datetime(iso_try)
+        # If the input looks like an ISO datetime but doesn't parse, treat it as a hard
+        # parse failure to avoid falling back to ambiguous natural-language rules.
+        if re.search(r"\d{4}-\d{2}-\d{2}T", original) and not parsed_dt:
+            return result
+
+        if parsed_dt:
+            # Normalize to UTC-aware ISO string
+            result["scheduled_at"] = parsed_dt.isoformat()
+            result["description"] = f"One-off at {parsed_dt.strftime('%Y-%m-%d %H:%M:%S %Z') or parsed_dt.isoformat()}"
+            return result
 
         # "every day at 9am"
         match = re.search(r"every day at (\d{1,2})(:\d{2})?\s*(am|pm)?", expression)
@@ -164,11 +183,27 @@ class Scheduler:
         return schedule
 
     def next_run_for_entry(self, item: dict[str, Any]) -> datetime | None:
-        """Compute next run for an entry from cron_expression and reference time."""
+        """Compute next run for an entry.
+
+        Prefer explicit 'scheduled_at' for one-off events. Fallback to cron_expression
+        for recurring or unspecified schedules.
+        """
+        # One-off explicit timestamp takes precedence
+        scheduled_at = item.get("scheduled_at")
+        last_run = self._parse_datetime(item.get("last_run"))
+        if scheduled_at:
+            scheduled_dt = self._parse_datetime(scheduled_at)
+            if not scheduled_dt:
+                return None
+            # If the task hasn't run yet, return the scheduled time; otherwise no next run
+            if not last_run:
+                return scheduled_dt
+            return None
+
+        # Otherwise use cron_expression
         cron_expression = item.get("cron_expression")
         if not isinstance(cron_expression, str):
             return None
-        last_run = self._parse_datetime(item.get("last_run"))
         created_at = self._parse_datetime(item.get("created_at"))
         reference = last_run or created_at or utcnow()
         try:
@@ -177,10 +212,13 @@ class Scheduler:
             return None
 
     def is_one_shot_expression(self, cron_expression: str) -> bool:
-        """Infer one-shot intent from cron shape.
+        """Infer one-shot intent from cron shape or explicit scheduled_at.
 
-        Expressions with fixed day and month are treated as one-shot.
+        Expressions with fixed day and month are treated as one-shot. If a
+        scheduled_at value exists the entry is one-shot.
         """
+        if not cron_expression:
+            return False
         parts = cron_expression.split()
         if len(parts) != 5:
             return False
