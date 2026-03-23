@@ -8,16 +8,52 @@ import pytest
 os.environ.setdefault("AGENT_NAME", "builder_progenitor")
 
 from app.agents.builder_progenitor import queue_worker
+from app.agents.builder_progenitor.client import BuildPlan, PlannedBuild
 from app.agents.builder_progenitor.queue_worker import BuilderTaskQueue, _QueuedTask
 
 
 class _FakeService:
     def __init__(self) -> None:
         self.cancelled: list[str] = []
+        self.planned = PlannedBuild(
+            plan=BuildPlan(
+                task_name="Queued Task",
+                work_item_id="queued-task",
+                branch_name="progenitor/queued-task",
+                description="Queue test",
+                copilot_goal="Queue behavior",
+                success_criteria=["Task queues"],
+                validation_targets=["pytest"],
+            ),
+            reasoning="Queue test plan.",
+            planned_at_utc="2026-01-01T00:00:00Z",
+        )
 
     async def cancel_task(self, task_id: str) -> bool:
         self.cancelled.append(task_id)
         return task_id == "running-task"
+
+    async def plan_task(self, request_text: str, context: dict[str, object]) -> PlannedBuild:
+        del request_text
+        del context
+        return self.planned
+
+    async def emit_hook(self, event: str, context: object) -> None:
+        del event
+        del context
+
+    async def run_task(
+        self,
+        task_id: str,
+        request_text: str,
+        context: dict[str, object],
+        planned_build: PlannedBuild,
+    ) -> str:
+        del task_id
+        del request_text
+        del context
+        del planned_build
+        return "Done. PR: https://github.com/org/repo/pull/1"
 
 
 @pytest.mark.asyncio

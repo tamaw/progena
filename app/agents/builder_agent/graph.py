@@ -13,7 +13,7 @@ is supplied we fall back to MemorySaver.
 """
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -22,6 +22,7 @@ from .routing import (
     route_after_verify,
     should_continue_inner_loop,
 )
+from .runtime.hooks import HookContext, create_default_hook_manager, extract_build_id
 from .state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def create_inner_loop_graph(
     config,
     worktrees_dir,
     copilot_acp_manager=None,
+    hook_manager=None,
     checkpoint_db_path: Path | str | None = None,
 ) -> Any:
     """Create the inner loop graph for build operations.
@@ -103,16 +105,66 @@ def create_inner_loop_graph(
         project_root = candidate if (candidate / ".git").exists() else Path.cwd()
     git_manager = GitWorktreeManager(worktrees_dir, repo_path=project_root)
 
+    hook_registrations = getattr(getattr(config, "runtime", None), "hook_registrations", None)
+    hook_manager = hook_manager or create_default_hook_manager(
+        state_manager,
+        registrations=hook_registrations,
+    )
+
+    def _wrap_node(name: str, node_fn: Any) -> Any:
+        async def _wrapped(state: ProgenitorState) -> ProgenitorState:
+            build_id = extract_build_id(state)
+            await hook_manager.emit(
+                f"before_{name}",
+                HookContext(
+                    event=f"before_{name}",
+                    build_id=build_id,
+                    node_name=name,
+                    state=state if isinstance(state, dict) else None,
+                    metadata={"phase": name},
+                ),
+            )
+            try:
+                result = cast(ProgenitorState, await node_fn(state))
+            except Exception as exc:
+                await hook_manager.emit(
+                    "node_error",
+                    HookContext(
+                        event="node_error",
+                        build_id=build_id,
+                        node_name=name,
+                        state=state if isinstance(state, dict) else None,
+                        metadata={"phase": name, "error_type": type(exc).__name__},
+                        error=str(exc),
+                    ),
+                )
+                raise
+
+            await hook_manager.emit(
+                f"after_{name}",
+                HookContext(
+                    event=f"after_{name}",
+                    build_id=build_id,
+                    node_name=name,
+                    state=state if isinstance(state, dict) else None,
+                    result=result if isinstance(result, dict) else None,
+                    metadata={"phase": name},
+                ),
+            )
+            return result
+
+        return _wrapped
+
     nodes = {
-        "observe": observe.create_node(llm_client, state_manager, config),
-        "think": think.create_node(llm_client, state_manager),
-        "plan": plan.create_node(llm_client, state_manager),
-        "build": build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager, git_manager),
-        "merge": merge.create_node(llm_client, git_manager, state_manager),
-        "execute": execute.create_node(tool_registry, state_manager, project_root),
-        "verify": verify.create_node(llm_client, state_manager),
-        "publish": publish.create_node(state_manager, worktrees_dir),
-        "learn": learn.create_node(llm_client, state_manager),
+        "observe": _wrap_node("observe", observe.create_node(llm_client, state_manager, config)),
+        "think": _wrap_node("think", think.create_node(llm_client, state_manager)),
+        "plan": _wrap_node("plan", plan.create_node(llm_client, state_manager)),
+        "build": _wrap_node("build", build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager, git_manager)),
+        "merge": _wrap_node("merge", merge.create_node(llm_client, git_manager, state_manager)),
+        "execute": _wrap_node("execute", execute.create_node(tool_registry, state_manager, project_root)),
+        "verify": _wrap_node("verify", verify.create_node(llm_client, state_manager)),
+        "publish": _wrap_node("publish", publish.create_node(state_manager, worktrees_dir)),
+        "learn": _wrap_node("learn", learn.create_node(llm_client, state_manager)),
     }
 
     builder = StateGraph(ProgenitorState)

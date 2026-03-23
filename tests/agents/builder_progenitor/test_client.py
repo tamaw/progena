@@ -4,12 +4,11 @@ import pytest
 
 from app.agents.builder_progenitor.client import (
     BuilderClient,
-    PlanResponse,
+    BuildPlan,
     _build_json_schema_format,
     _build_responses_endpoint,
 )
 from app.agents.builder_progenitor.config import LLMConfig
-from app.agents.builder_progenitor.prompts import load_prompt
 
 
 def test_build_responses_endpoint_keeps_existing_query_and_path():
@@ -46,16 +45,22 @@ def test_build_payload_includes_reasoning_and_structured_output():
 
 
 def test_schema_format_closes_nested_object_defs():
-    response_format = _build_json_schema_format(PlanResponse, "builder_plan")
+    response_format = _build_json_schema_format(BuildPlan, "builder_plan")
     schema = response_format["json_schema"]["schema"]
     assert schema["additionalProperties"] is False
-    assert set(schema["required"]) == {"summary", "steps", "risks"}
-    assert schema["$defs"]["PlanStep"]["additionalProperties"] is False
-    assert set(schema["$defs"]["PlanStep"]["required"]) == {"step", "objective", "commands"}
+    assert set(schema["required"]) == {
+        "task_name",
+        "work_item_id",
+        "branch_name",
+        "description",
+        "copilot_goal",
+        "success_criteria",
+        "validation_targets",
+    }
 
 
 @pytest.mark.asyncio
-async def test_plan_step_parses_structured_response_and_reasoning():
+async def test_plan_build_parses_structured_response_and_reasoning():
     client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
 
     async def fake_post_response(*args, **kwargs):
@@ -63,27 +68,33 @@ async def test_plan_step_parses_structured_response_and_reasoning():
         del kwargs
         return {
             "output_text": (
-                '{"summary":"Implement and validate the change.",'
-                '"steps":['
-                '{"step":"plan","objective":"Inspect the request","commands":["rg -n"]},'
-                '{"step":"pr","objective":"Open PR","commands":["gh pr create"]}'
-                '],'
-                '"risks":["Unknown test coverage"]}'
+                "{"
+                '"task_name":"Scheduler ISO timestamp fix",'
+                '"work_item_id":"scheduler-iso-fix",'
+                '"branch_name":"progenitor/scheduler-iso-fix",'
+                '"description":"Fix ISO timestamp parsing in scheduler.",'
+                '"copilot_goal":"Update scheduler parsing and tests.",'
+                '"success_criteria":["ISO timestamps stay intact"],'
+                '"validation_targets":["pytest","ruff"]'
+                "}"
             ),
-            "reasoning": {"summary": "Inspect first, then make the smallest safe change."},
+            "reasoning": {"summary": "Extract stable metadata first."},
         }
 
     client._post_response = fake_post_response  # type: ignore[method-assign]
 
-    result = await client.plan_step("fix the bug", {"branch": "main"})
+    result = await client.plan_build("fix the scheduler", {"branch": "main"})
 
-    assert isinstance(result.plan, PlanResponse)
-    assert result.plan.steps[0].step == "plan"
-    assert "smallest safe change" in result.reasoning
+    assert isinstance(result.plan, BuildPlan)
+    assert result.plan.task_name == "Scheduler ISO timestamp fix"
+    assert result.plan.branch_name == "progenitor/scheduler-iso-fix"
+    assert result.plan.success_criteria == ["ISO timestamps stay intact"]
+    assert result.planned_at_utc.endswith("Z")
+    assert "stable metadata" in result.reasoning
 
 
 @pytest.mark.asyncio
-async def test_plan_step_parses_multipart_output_text_without_retry():
+async def test_plan_build_parses_multipart_output_text_without_retry():
     client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
 
     async def fake_post_response(*args, **kwargs):
@@ -96,11 +107,12 @@ async def test_plan_step_parses_multipart_output_text_without_retry():
                     "content": [
                         {
                             "type": "output_text",
-                            "text": '{"summary":"s","steps":[{"step":"plan",',
+                            "text": '{"task_name":"Scheduler","work_item_id":"scheduler-fix",',
                         },
                         {
                             "type": "output_text",
-                            "text": '"objective":"o","commands":["echo ok"]},{"step":"pr","objective":"Open PR","commands":["gh pr create"]}],"risks":[]}',
+                            "text": '"branch_name":"progenitor/scheduler-fix","description":"Fix it",'
+                            '"copilot_goal":"Finish it","success_criteria":[],"validation_targets":["pytest"]}',
                         },
                     ],
                 }
@@ -109,15 +121,15 @@ async def test_plan_step_parses_multipart_output_text_without_retry():
 
     client._post_response = fake_post_response  # type: ignore[method-assign]
 
-    result = await client.plan_step("fix the bug", {"branch": "main"})
+    result = await client.plan_build("fix the bug", {"branch": "main"})
 
-    assert isinstance(result.plan, PlanResponse)
-    assert result.plan.summary == "s"
-    assert result.plan.steps[0].commands == ["echo ok"]
+    assert isinstance(result.plan, BuildPlan)
+    assert result.plan.work_item_id == "scheduler-fix"
+    assert result.plan.validation_targets == ["pytest"]
 
 
 @pytest.mark.asyncio
-async def test_plan_step_requires_pr_step():
+async def test_plan_build_requires_core_fields():
     client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
 
     async def fake_post_response(*args, **kwargs):
@@ -125,38 +137,44 @@ async def test_plan_step_requires_pr_step():
         del kwargs
         return {
             "output_text": (
-                '{"summary":"Implement only","steps":[{"step":"plan","objective":"Inspect","commands":[]}],"risks":[]}'
+                '{"task_name":"",'
+                '"work_item_id":"scheduler-fix",'
+                '"branch_name":"progenitor/scheduler-fix",'
+                '"description":"Fix it",'
+                '"copilot_goal":"Finish it",'
+                '"success_criteria":[],'
+                '"validation_targets":[]}'
             )
         }
 
     client._post_response = fake_post_response  # type: ignore[method-assign]
 
-    with pytest.raises(ValueError, match="Plan must include a 'pr' step"):
-        await client.plan_step("fix the bug", {"branch": "main"})
+    with pytest.raises(ValueError, match="task_name"):
+        await client.plan_build("fix the bug", {"branch": "main"})
 
 
 @pytest.mark.asyncio
-async def test_plan_step_requests_reasoning():
+async def test_plan_build_requests_reasoning():
     client = BuilderClient(LLMConfig(base_url="http://localhost:4000"), role="planner")
 
     async def fake_post_response(*args, **kwargs):
         del args
         assert kwargs["include_reasoning"] is True
-        assert kwargs["system_prompt"] == load_prompt("planner_system.md").strip()
         return {
             "output_text": (
-                '{"summary":"Implement and validate the change.",'
-                '"steps":['
-                '{"step":"plan","objective":"Inspect the request","commands":[]},'
-                '{"step":"pr","objective":"Open PR","commands":["gh pr create"]}'
-                '],'
-                '"risks":[]}'
+                '{"task_name":"Scheduler",'
+                '"work_item_id":"scheduler-fix",'
+                '"branch_name":"progenitor/scheduler-fix",'
+                '"description":"Fix it",'
+                '"copilot_goal":"Finish it",'
+                '"success_criteria":[],'
+                '"validation_targets":["pytest","pyright","ruff"]}'
             ),
             "reasoning": {"summary": "Think first."},
         }
 
     client._post_response = fake_post_response  # type: ignore[method-assign]
 
-    result = await client.plan_step("fix the bug", {"branch": "main"})
+    result = await client.plan_build("fix the bug", {"branch": "main"})
 
     assert result.reasoning == "Think first."
