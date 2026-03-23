@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,8 +26,8 @@ class HookContext:
     event: str
     build_id: str | None = None
     node_name: str | None = None
-    state: dict[str, Any] | None = None
-    result: dict[str, Any] | None = None
+    state: Mapping[str, Any] | None = None
+    result: Mapping[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
 
@@ -60,11 +61,11 @@ class HookManager:
                 logger.exception("Hook handler failed for event=%s", event)
 
 
-def _extract_request_id(state: dict[str, Any] | None, build_id: str | None) -> str | None:
-    if not isinstance(state, dict):
+def _extract_request_id(state: Mapping[str, Any] | None, build_id: str | None) -> str | None:
+    if state is None:
         return build_id
     build_settings = state.get("build_settings")
-    if isinstance(build_settings, dict):
+    if isinstance(build_settings, Mapping):
         for key in ("build_id", "a2a_task_id", "task_id"):
             value = build_settings.get(key)
             if isinstance(value, str) and value.strip():
@@ -164,12 +165,12 @@ def create_default_hook_manager(
     )
 
 
-def extract_build_id(state: dict[str, Any] | None) -> str | None:
+def extract_build_id(state: Mapping[str, Any] | None) -> str | None:
     """Extract the canonical build_id from a graph/build state if present."""
-    if not isinstance(state, dict):
+    if state is None:
         return None
     build_settings = state.get("build_settings")
-    if isinstance(build_settings, dict):
+    if isinstance(build_settings, Mapping):
         build_id = build_settings.get("build_id")
         if isinstance(build_id, str) and build_id.strip():
             return build_id

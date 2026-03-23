@@ -12,9 +12,9 @@ deploy the agent/mcp to its own Docker container.
 """
 
 import logging
+import re
 from collections.abc import Callable, Coroutine, Mapping
 from pathlib import Path
-import re
 from typing import Any
 
 from ..runtime.time_utils import utcnow_isoformat
