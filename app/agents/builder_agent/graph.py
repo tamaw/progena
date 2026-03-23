@@ -13,16 +13,16 @@ is supplied we fall back to MemorySaver.
 """
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from .runtime.hooks import HookContext, create_default_hook_manager, extract_build_id
 from .routing import (
     route_after_verify,
     should_continue_inner_loop,
 )
+from .runtime.hooks import HookContext, create_default_hook_manager, extract_build_id
 from .state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
@@ -125,7 +125,7 @@ def create_inner_loop_graph(
                 ),
             )
             try:
-                result = await node_fn(state)
+                result = cast(ProgenitorState, await node_fn(state))
             except Exception as exc:
                 await hook_manager.emit(
                     "node_error",

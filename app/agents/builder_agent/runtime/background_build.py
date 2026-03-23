@@ -24,8 +24,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from .time_utils import utcnow, utcnow_isoformat
 from .hooks import HookContext, create_default_hook_manager
+from .time_utils import utcnow, utcnow_isoformat
 
 
 def deep_merge(base: dict, updates: dict) -> dict:
