@@ -4,29 +4,32 @@ import pytest
 
 from app.agents.builder_progenitor.agent import (
     _assert_result_has_pr_when_committed,
-    _build_prompt,
+    _build_execution_prompt,
 )
-from app.agents.builder_progenitor.client import PlanResponse, PlanStep, ReasonedPlan
+from app.agents.builder_progenitor.client import BuildPlan, PlannedBuild
 
 
-def _reasoned_plan() -> ReasonedPlan:
-    return ReasonedPlan(
-        plan=PlanResponse(
-            summary="s",
-            steps=[
-                PlanStep(step="plan", objective="inspect", commands=[]),
-                PlanStep(step="pr", objective="open pr", commands=["gh pr create"]),
-            ],
-            risks=[],
+def _planned_build() -> PlannedBuild:
+    return PlannedBuild(
+        plan=BuildPlan(
+            task_name="Scheduler Fix",
+            work_item_id="scheduler-fix",
+            branch_name="progenitor/scheduler-fix",
+            description="Fix scheduler timestamp parsing",
+            copilot_goal="Update parser and tests",
+            success_criteria=["ISO timestamps are preserved"],
+            validation_targets=["pytest", "pyright", "ruff"],
         ),
-        reasoning="r",
+        reasoning="Use the smallest safe change.",
+        planned_at_utc="2026-03-23T16:00:00Z",
     )
 
 
-def test_build_prompt_contains_explicit_pr_requirements():
-    prompt = _build_prompt("request", {}, _reasoned_plan())
+def test_execution_prompt_contains_explicit_pr_requirements():
+    prompt = _build_execution_prompt("request", {}, _planned_build())
     assert "create_pull_request" in prompt
-    assert "Do not finish until create_pull_request succeeds" in prompt
+    assert "render_copilot_prompt" in prompt
+    assert "Before finishing, check your own work" in prompt
 
 
 def test_assert_result_raises_when_commit_without_pr_url():

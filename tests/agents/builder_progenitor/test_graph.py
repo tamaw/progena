@@ -19,7 +19,13 @@ def test_graph_factory_creates_agent_without_middleware():
         from app.agents.builder_progenitor.prompts import load_prompt
 
         config = BuilderConfig()
-        _create_graph(config, Path.cwd(), Path.cwd() / "logs")
+        _create_graph(
+            config,
+            Path.cwd(),
+            Path.cwd() / "logs",
+            name="builder",
+            system_prompt=load_prompt("system.md").strip(),
+        )
 
         call_kwargs = mock_create.call_args.kwargs
         assert call_kwargs["name"] == "builder"
