@@ -1,32 +1,33 @@
-# Builder Execution Prompt Template
+Task metadata:
+- Task name: {task_name}
+- Work item id: {work_item_id}
+- Branch name: {branch_name}
+- Planned at (UTC): {planned_at_utc}
+- Description: {description}
+- Copilot goal: {copilot_goal}
 
-This file defines the execution prompt template used during task execution.
+Success criteria:
+{success_criteria}
 
-The actual prompt is built dynamically with:
-- User request (the original task)
-- Execution context (metadata, repository state)
-- Plan summary (high-level objectives)
-- Steps (detailed plan steps with commands)
-- Risks (identified risks to mitigate)
-- Reasoning (analysis of why this plan was chosen)
+Validation targets:
+{validation_targets}
 
-## Prompt Format
+Planner reasoning:
+{reasoning}
 
-```
 User request:
 {request_text}
 
-Execution context:
+Execution context (JSON):
 {context_json}
 
-Plan summary: {plan_summary}
-Steps:
-{steps}
-Risks:
-{risks}
-Reasoning: {reasoning}
+Repository skills:
+{skill_context}
 
-Execute the plan using the available tools and return a concise final report.
-```
-
-The template is assembled in code and sent to the LLM for execution.
+Execution requirements:
+- Create the requested worktree using the provided metadata.
+- Use `render_copilot_prompt` before `copilot_build` so the ACP prompt is assembled from prompt files instead of inline text.
+- Keep the work aligned with the task metadata above.
+- Validate the work before committing.
+- If `commit_changes` reports `committed=true`, you must call `create_pull_request`.
+- Before finishing, check your own work against the task metadata, validation output, and PR result.

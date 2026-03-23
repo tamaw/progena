@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -17,33 +16,12 @@ from langchain_core.tools import StructuredTool
 from .config import BuilderConfig
 from .copilot_acp import CopilotCLI
 from .git import GitWorktreeManager
+from .prompts import load_prompt, load_skill_context
 
 logger = logging.getLogger(__name__)
 
 _ACTIVE_TOOL_RUNTIMES: list[ToolRuntime] = []
 PR_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
-
-
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
-
-def _derive_work_item_suffix(context_json: str | None) -> str:
-    """Extract a stable identifier from context JSON for branch naming."""
-    if not context_json:
-        return "manual"
-    try:
-        ctx = json.loads(context_json)
-    except json.JSONDecodeError:
-        return "manual"
-    if not isinstance(ctx, dict):
-        return "manual"
-    for key in ("a2a_task_id", "task_id", "run_id"):
-        val = ctx.get(key)
-        if isinstance(val, str) and val.strip():
-            return "".join(c for c in val.lower() if c.isalnum())[:16]
-    return "manual"
 
 
 def _extract_pr_url(text: str) -> str:
@@ -505,6 +483,35 @@ def create_builder_tools(
             "diff": str(result.get("diff", ""))[-12000:],
         }
 
+    async def render_copilot_prompt(
+        request_text: str,
+        task_name: str,
+        work_item_id: str,
+        branch_name: str,
+        description: str,
+        planned_at_utc: str,
+        context_json: str = "{}",
+        copilot_goal: str = "",
+        success_criteria: str = "- none provided",
+        validation_targets: str = "- pytest\n- pyright\n- ruff",
+    ) -> dict[str, str]:
+        """Render the Copilot ACP prompt from mounted prompt files."""
+        prompt = load_prompt(
+            "copilot_build.md",
+            request_text=request_text.strip(),
+            task_name=task_name.strip(),
+            work_item_id=work_item_id.strip(),
+            branch_name=branch_name.strip(),
+            description=description.strip(),
+            planned_at_utc=planned_at_utc.strip(),
+            context_json=context_json.strip() or "{}",
+            copilot_goal=copilot_goal.strip(),
+            success_criteria=success_criteria.strip() or "- none provided",
+            validation_targets=validation_targets.strip() or "- pytest\n- pyright\n- ruff",
+            skill_context=load_skill_context() or "- No repository skills were found.",
+        )
+        return {"prompt": prompt}
+
     # --- Validation ---
 
     async def validate_code(
@@ -658,18 +665,6 @@ def create_builder_tools(
             return {"success": False, "returncode": -1, "stdout": "", "stderr": "No gh args provided"}
         return await rt.run_gh(worktree_path, parsed, timeout=timeout_seconds)
 
-    # --- Request normalization ---
-
-    async def summarize_request(request: str, context_json: str | None = None) -> dict[str, Any]:
-        """Generate a stable work item ID and branch name for planning."""
-        suffix = _derive_work_item_suffix(context_json)
-        slug = "".join(c if c.isalnum() else "-" for c in request.lower())[:24].strip("-") or "builder"
-        return {
-            "work_item_id": f"{slug}-{suffix}",
-            "branch_name": f"progenitor/{slug}-{suffix}",
-            "request": request.strip() + (f"\n\nContext:\n{context_json}" if context_json else ""),
-        }
-
     # --- Tool registration ---
 
     return [
@@ -791,6 +786,10 @@ def create_builder_tools(
         ),
         # --- Build & Validation ---
         StructuredTool.from_function(
+            coroutine=render_copilot_prompt, name="render_copilot_prompt",
+            description="Render the Copilot ACP prompt from structured task metadata and mounted prompt files.",
+        ),
+        StructuredTool.from_function(
             coroutine=copilot_build, name="copilot_build",
             description="Run Copilot ACP to implement changes in a worktree.",
         ),
@@ -814,10 +813,5 @@ def create_builder_tools(
         StructuredTool.from_function(
             coroutine=create_pull_request, name="create_pull_request",
             description="Push branch and create a GitHub pull request.",
-        ),
-        # --- Planning ---
-        StructuredTool.from_function(
-            coroutine=summarize_request, name="summarize_request",
-            description="Generate work item ID and branch name before planning.",
         ),
     ]

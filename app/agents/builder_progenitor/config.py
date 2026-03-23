@@ -51,8 +51,6 @@ class LLMConfig:
     base_url: str = ""
     api_key: str | None = None
     model_default: str = "gpt-5-mini"
-    model_planner_override: str | None = None
-    model_builder_override: str | None = None
 
     @classmethod
     def from_env(cls) -> LLMConfig:
@@ -63,15 +61,9 @@ class LLMConfig:
                 "AGENT_MODEL_DEFAULT",
                 default="gpt-5-mini",
             ) or "gpt-5-mini",
-            model_planner_override=os.getenv("OVERRIDE_AGENT_PLANNER_MODEL"),
-            model_builder_override=os.getenv("OVERRIDE_AGENT_BUILDER_MODEL"),
         )
 
-    def get_model_for_role(self, role: str | None = None) -> str:
-        if role == "planner" and self.model_planner_override:
-            return self.model_planner_override
-        if role == "builder" and self.model_builder_override:
-            return self.model_builder_override
+    def get_model(self) -> str:
         return self.model_default
 
 

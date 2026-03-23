@@ -249,6 +249,7 @@ class ACPLogCapture:
 
     def write_log(self, work_item_id: str, result: dict[str, Any]) -> Path:
         ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         base = self.log_dir / f"{ts}_{work_item_id}"
 
         with open(base.with_suffix(".log"), "w", encoding="utf-8") as f:

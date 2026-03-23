@@ -123,6 +123,9 @@ class RuntimeConfig:
     # Build concurrency settings
     max_build_concurrency: int = 3  # Max concurrent builds (adaptive to backlog size)
 
+    # Lifecycle hook registrations: "<event>=<handler>" or "<handler>" for wildcard
+    hook_registrations: list[str] = field(default_factory=lambda: ["*=decision_log"])
+
     @classmethod
     def from_env(cls, file_config: dict[str, Any] | None = None) -> "RuntimeConfig":
         """Load runtime config from environment with file fallbacks."""
@@ -193,6 +196,10 @@ class RuntimeConfig:
             # Build concurrency settings
             max_build_concurrency=env_int(
                 "PROGENITOR_MAX_BUILD_CONCURRENCY", fc.get("max_build_concurrency", 3)
+            ),
+            hook_registrations=env_list(
+                "PROGENITOR_BUILD_HOOKS",
+                fc.get("hook_registrations", ["*=decision_log"]),
             ),
         )
 
