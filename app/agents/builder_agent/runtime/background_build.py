@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from .time_utils import utcnow, utcnow_isoformat
+from .hooks import HookContext, create_default_hook_manager
 
 
 def deep_merge(base: dict, updates: dict) -> dict:
@@ -298,12 +299,18 @@ class BackgroundBuildRunner:
         llm_client: "LLMClient",
         worktrees_dir: Path | None = None,
         copilot_acp_manager=None,
+        hook_manager=None,
     ):
         self.state_manager = state_manager
         self.config = config
         self.llm_client = llm_client
         self.worktrees_dir = worktrees_dir or Path("worktrees")
         self.copilot_acp_manager = copilot_acp_manager
+        hook_registrations = getattr(getattr(config, "runtime", None), "hook_registrations", None)
+        self.hook_manager = hook_manager or create_default_hook_manager(
+            state_manager,
+            registrations=hook_registrations,
+        )
 
         # Inner loop graph - created lazily
         self._inner_loop_graph = None
@@ -326,6 +333,7 @@ class BackgroundBuildRunner:
                 config=self.config,
                 worktrees_dir=self.worktrees_dir,
                 copilot_acp_manager=self.copilot_acp_manager,
+                hook_manager=self.hook_manager,
             )
             logger.info("Created inner loop graph for builds")
         return self._inner_loop_graph
@@ -570,6 +578,19 @@ class BackgroundBuildRunner:
                  "integration_base_branch": base_branch,
              }
 
+            await self.hook_manager.emit(
+                "build_started",
+                HookContext(
+                    event="build_started",
+                    build_id=build_id,
+                    state=build_state,
+                    metadata={
+                        "task_description": current_build.task_description,
+                        "target_capabilities": current_build.target_capabilities,
+                    },
+                ),
+            )
+
             # Prepare integration branch before the inner loop starts (MERGE checks out target branch).
             base_ref = await _prepare_integration_branch(
                 repo_path=repo_path,
@@ -659,12 +680,34 @@ class BackgroundBuildRunner:
                 build_id,
                 result.output_summary,
             )
+            await self.hook_manager.emit(
+                "build_completed",
+                HookContext(
+                    event="build_completed",
+                    build_id=build_id,
+                    state=build_state,
+                    metadata={
+                        "iterations": result.iterations,
+                        "verification_score": result.verification_score,
+                        "pr_url": result.pr_url,
+                    },
+                ),
+            )
 
         except asyncio.CancelledError:
             result.status = BuildStatus.CANCELLED
             result.completed_at = utcnow()
             result.error_message = "Build was cancelled"
             logger.info("Build %s was cancelled", build_id)
+            await self.hook_manager.emit(
+                "build_cancelled",
+                HookContext(
+                    event="build_cancelled",
+                    build_id=build_id,
+                    state=build_state,
+                    error=result.error_message,
+                ),
+            )
 
             # Minimal update for suspension - only set flags, don't overwrite state
             try:
@@ -698,6 +741,16 @@ class BackgroundBuildRunner:
             result.completed_at = utcnow()
             result.error_message = str(e)
             logger.error("Build %s failed: %s", build_id, e, exc_info=True)
+            await self.hook_manager.emit(
+                "build_failed",
+                HookContext(
+                    event="build_failed",
+                    build_id=build_id,
+                    state=build_state,
+                    metadata={"error_type": type(e).__name__},
+                    error=str(e),
+                ),
+            )
 
             # Update build_settings status to failed
             try:
