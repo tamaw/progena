@@ -21,12 +21,12 @@ import tempfile
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from croniter import croniter  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.progenitor.runtime.scheduler import Scheduler
@@ -1949,8 +1949,12 @@ async def get_logs(
     level: str | None = None,
     search: str | None = None,
     source: str | None = None,
+    folder: str | None = None,
+    file_path: str | None = Query(default=None, alias="file"),
+    after: str | None = None,
     limit: int = 500,
     format: str = "text",
+    search_mode: str = "plain",
 ):
     """
     Get agent logs with optional filtering.
@@ -1964,13 +1968,37 @@ async def get_logs(
     Returns recent logs from the agent.
     """
     state_reader = get_state_reader()
-    entries = state_reader.get_logs(level=level, search=search, source=source, limit=limit)
+    if search_mode not in {"plain", "regex"}:
+        raise HTTPException(status_code=400, detail="search_mode must be 'plain' or 'regex'")
+
+    try:
+        result = state_reader.query_logs(
+            level=level,
+            search=search,
+            source=source,
+            folder=folder,
+            file_path=file_path,
+            after=after,
+            limit=limit,
+            search_mode=search_mode,
+        )
+    except re.error as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
+
+    entries = result["entries"]
+    source_groups = state_reader.get_log_sources()
+    folders = state_reader.get_log_folders()
 
     if format == "json":
         return {
             "entries": entries,
-            "total": len(entries),
-            "filtered": level is not None or search is not None or source is not None,
+            "total": result["total"],
+            "returned": result["returned"],
+            "filtered": any(value is not None for value in (level, search, source, folder, file_path)),
+            "source_groups": source_groups,
+            "folders": folders,
+            "newest_cursor": result["newest_cursor"],
+            "cursor_found": result["cursor_found"],
         }
 
     content = "\n".join(
@@ -1978,6 +2006,65 @@ async def get_logs(
         for entry in entries
     )
     return {"logs": content, "total": len(entries)}
+
+
+@router.get("/logs/export")
+async def export_logs(
+    level: str | None = None,
+    search: str | None = None,
+    source: str | None = None,
+    folder: str | None = None,
+    file_path: str | None = Query(default=None, alias="file"),
+    search_mode: str = "plain",
+    format: str = "text",
+):
+    """Export logs using the current filters."""
+    state_reader = get_state_reader()
+    if search_mode not in {"plain", "regex"}:
+        raise HTTPException(status_code=400, detail="search_mode must be 'plain' or 'regex'")
+
+    try:
+        result = state_reader.query_logs(
+            level=level,
+            search=search,
+            source=source,
+            folder=folder,
+            file_path=file_path,
+            limit=0,
+            search_mode=search_mode,
+        )
+    except re.error as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
+
+    entries = result["entries"]
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    base_name = f"progenitor_logs_{timestamp}"
+
+    if format == "json":
+        return Response(
+            content=json.dumps(entries, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{base_name}.json"'},
+        )
+
+    if format == "jsonl":
+        content = "\n".join(json.dumps(entry) for entry in entries)
+        return Response(
+            content=content,
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{base_name}.jsonl"'},
+        )
+
+    content = "\n".join(
+        f"[{entry.get('time') or '--'}] [{str(entry.get('level', 'info')).upper()}] "
+        f"[{entry.get('relative_path') or entry.get('source') or 'system'}] {entry.get('message', '')}"
+        for entry in entries
+    )
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{base_name}.log"'},
+    )
 
 
 def create_alert(

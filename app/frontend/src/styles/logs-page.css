@@ -29,6 +29,10 @@
     flex-wrap: wrap;
 }
 
+.logs-toolbar-grid {
+    align-items: stretch;
+}
+
 .toolbar-right {
     display: flex;
     align-items: center;
@@ -46,6 +50,10 @@
     font-size: var(--font-size-sm);
     cursor: pointer;
     transition: all var(--transition-fast);
+}
+
+.export-select {
+    min-width: 150px;
 }
 
 .filter-select:focus {
@@ -179,31 +187,29 @@
     font-size: var(--font-size-xs);
     line-height: 1.6;
     padding-bottom: var(--spacing-sm);
+    position: relative;
 }
 
 /* Log Entry */
 .log-entry-full {
-    display: grid;
-    grid-template-columns: auto auto 1fr auto;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-xs) var(--spacing-md);
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    padding: 10px var(--spacing-md);
     border-bottom: 1px solid var(--color-border-light);
     transition: background var(--transition-fast);
-    cursor: pointer;
-    align-items: start;
+    overflow: hidden;
 }
 
 .log-entry-full:hover {
     background: var(--color-bg-hover);
 }
 
-.log-entry-full:last-child {
-    border-bottom: none;
-}
-
-.log-entry-full.selected {
-    background: rgba(88, 166, 255, 0.1);
-    border-left: 3px solid var(--color-accent);
+.log-entry-full.expanded {
+    background: rgba(88, 166, 255, 0.04);
 }
 
 .log-timestamp {
@@ -244,7 +250,11 @@
 .log-message-full {
     color: var(--color-text-primary);
     word-break: break-word;
-    white-space: pre-wrap;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 .log-message-full .highlight {
@@ -262,14 +272,38 @@
     white-space: nowrap;
 }
 
+.log-row-header {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    gap: var(--spacing-sm);
+    align-items: start;
+}
+
+.log-expand-btn {
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-primary);
+    color: var(--color-text-secondary);
+    border-radius: var(--border-radius-sm);
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.log-expand-btn:hover {
+    color: var(--color-text-primary);
+    border-color: var(--color-accent);
+}
+
+.log-expand-spacer {
+    width: 76px;
+}
+
 /* Log Entry Expanded Data */
 .log-data-preview {
-    grid-column: 1 / -1;
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border);
     border-radius: var(--border-radius-sm);
     padding: var(--spacing-sm);
-    margin-top: var(--spacing-xs);
     font-size: 11px;
     max-height: 150px;
     overflow-y: auto;
@@ -375,6 +409,35 @@
     position: relative;
 }
 
+.logs-header-copy,
+.logs-header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.new-logs-pill {
+    padding: 6px 10px;
+}
+
+.tail-status {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
+.tail-status.following {
+    color: var(--color-success);
+}
+
+.tail-status.paused {
+    color: var(--color-warning);
+}
+
+.active-toggle {
+    border-color: var(--color-success);
+    color: var(--color-success);
+}
+
 .scroll-indicator {
     position: absolute;
     bottom: var(--spacing-md);
@@ -466,10 +529,16 @@
         flex-wrap: wrap;
     }
     
-    .log-entry-full {
-        grid-template-columns: auto 1fr;
+    .log-row-header {
+        grid-template-columns: auto auto minmax(0, 1fr);
     }
-    
+
+    .log-expand-btn,
+    .log-expand-spacer {
+        grid-column: 1 / -1;
+        width: fit-content;
+    }
+
     .log-source {
         display: none;
     }
