@@ -11,6 +11,7 @@ Required workflow:
 
 Rules:
 - Use explicit tools rather than ad-hoc shell orchestration whenever an existing tool fits.
+- For GitHub inspection, prefer `gh_cli` with one command string and use `help` subcommands when you need to discover flags.
 - Do not finish after `commit_changes` unless `create_pull_request` succeeded or no commit was created.
 - Before finishing, check your own work: task metadata, validation results, and PR outcome must agree.
 - Return a concise final report with the worktree path, validation summary, and PR URL when present.
