@@ -28,6 +28,8 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from app.log_paths import resolve_agent_log_dir
+
 from .config import ProgenitorConfig, get_config
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
@@ -92,11 +94,16 @@ class ProgenitorService:
 
             logger.info("Initializing Progenitor service...")
 
+            agent_logs_dir = resolve_agent_log_dir(
+                self.config.storage.log_dir,
+                fallback_agent_name="progenitor",
+            )
+
             # Ensure directories exist
             for dir_path in [
                 self.config.storage.state_dir,
                 self.config.storage.state_dir.parent / "config",
-                self.config.storage.log_dir,
+                agent_logs_dir,
                 self.config.storage.worktree_dir,
             ]:
                 dir_path.mkdir(parents=True, exist_ok=True)
@@ -104,7 +111,7 @@ class ProgenitorService:
             # Initialize state manager
             self.state_manager = StateManager(
                 self.config.storage.state_dir,
-                self.config.storage.log_dir,
+                agent_logs_dir,
                 lock_timeout=self.config.storage.state_lock_timeout_seconds,
             )
             await self.state_manager.initialize()
@@ -135,7 +142,7 @@ class ProgenitorService:
                 llm_client=self.llm_client,
                 state_manager=self.state_manager,
                 project_root=str(self.project_root),
-                log_dir=self.config.storage.log_dir,
+                log_dir=agent_logs_dir,
             )
 
             # Generate session ID

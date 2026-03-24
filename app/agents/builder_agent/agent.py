@@ -40,6 +40,8 @@ from a2a.types import (
     TextPart,
 )
 
+from app.log_paths import resolve_agent_log_dir
+
 from .config import get_config, setup_logging
 from .llm.mock_client import create_llm_client
 from .queue_worker import BuilderTaskQueue, _QueuedTask
@@ -171,7 +173,12 @@ async def _ensure_initialized() -> None:
 
     project_root = Path(__file__).resolve().parent
     config = get_config(project_root, project_root / "config", validate=False)
-    setup_logging(config, _agent_log_name())
+    agent_log_name = _agent_log_name()
+    agent_logs_dir = resolve_agent_log_dir(
+        config.storage.log_dir,
+        fallback_agent_name=agent_log_name,
+    )
+    setup_logging(config, agent_log_name)
     _config = config
 
     await _ensure_workspace()
@@ -186,7 +193,7 @@ async def _ensure_initialized() -> None:
 
     _state_manager = StateManager(
         config.storage.state_dir,
-        config.storage.log_dir,
+        agent_logs_dir,
         lock_timeout=config.storage.state_lock_timeout_seconds,
     )
     await _state_manager.initialize()

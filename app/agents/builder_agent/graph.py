@@ -18,6 +18,8 @@ from typing import Any, cast
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
+from app.log_paths import resolve_agent_log_dir
+
 from .routing import (
     route_after_verify,
     should_continue_inner_loop,
@@ -79,6 +81,11 @@ def create_inner_loop_graph(
     from .tools.git import GitWorktreeManager
     from .tools.registry import ToolRegistry
 
+    agent_logs_dir = resolve_agent_log_dir(
+        config.storage.log_dir,
+        fallback_agent_name="builder_agent",
+    )
+
     # Initialize tools needed for build
     copilot_cli = CopilotCLI(
         copilot_cmd=config.copilot.bin_path,
@@ -87,7 +94,7 @@ def create_inner_loop_graph(
         allowed_dirs=config.copilot.acp_allowed_dirs,
         acp_manager=copilot_acp_manager,
         timeout=config.copilot.timeout_seconds,
-        logs_dir=config.storage.log_dir,
+        logs_dir=agent_logs_dir,
     )
 
     registry_path = config.storage.state_dir.parent / "config" / "agents.json"
@@ -169,7 +176,7 @@ def create_inner_loop_graph(
 
     builder = StateGraph(ProgenitorState)
     for name, node_fn in nodes.items():
-        builder.add_node(name, node_fn)  # type: ignore[call-overload]
+        builder.add_node(name, node_fn)
 
     builder.set_entry_point("observe")
 

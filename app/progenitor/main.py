@@ -19,6 +19,8 @@ import signal
 from pathlib import Path
 from typing import Any
 
+from app.log_paths import resolve_agent_log_dir
+
 from .config import ProgenitorConfig, get_config, setup_logging
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
@@ -44,7 +46,10 @@ class Progenitor:
         # Use paths from configuration
         self.state_dir = self.config.storage.state_dir
         self.config_dir = self.state_dir.parent / "config"
-        self.logs_dir = self.config.storage.log_dir
+        self.logs_dir = resolve_agent_log_dir(
+            self.config.storage.log_dir,
+            fallback_agent_name="progenitor",
+        )
 
         self.state_manager = StateManager(
             self.state_dir,
