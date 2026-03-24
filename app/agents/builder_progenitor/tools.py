@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import BuilderConfig
 from .copilot_acp import CopilotCLI
@@ -27,6 +28,62 @@ PR_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pul
 def _extract_pr_url(text: str) -> str:
     match = PR_URL_RE.search(text or "")
     return match.group(0) if match else ""
+
+
+def _normalize_gh_args(
+    *,
+    command: str = "",
+    args: str | list[str] | None = None,
+    variadic_args: list[str] | None = None,
+) -> list[str]:
+    """Normalize multiple GH argument shapes into a single argv list."""
+    tokens: list[str] = []
+    if command.strip():
+        tokens.extend(shlex.split(command))
+    if isinstance(args, str) and args.strip():
+        tokens.extend(shlex.split(args))
+    elif isinstance(args, list):
+        tokens.extend(str(item).strip() for item in args if str(item).strip())
+    if variadic_args:
+        tokens.extend(str(item).strip() for item in variadic_args if str(item).strip())
+    return tokens
+
+
+class GhCliInput(BaseModel):
+    """Input schema for the builder gh_cli tool."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    worktree_path: str
+    command: str = Field(
+        default="",
+        description=(
+            "GH subcommand and arguments as one string, without the leading 'gh'. "
+            "Example: 'pr view 123 --comments' or 'help pr create'."
+        ),
+    )
+    timeout_seconds: int = Field(default=120, ge=1, le=1800)
+    args: str | list[str] | None = Field(
+        default=None,
+        description="Legacy alias for command. Accepts a single string or a tokenized list.",
+    )
+    variadic_args: list[str] | None = Field(
+        default=None,
+        alias="v__args",
+        description="Legacy variadic argument payload accepted for compatibility.",
+    )
+
+    @model_validator(mode="after")
+    def _ensure_command(self) -> GhCliInput:
+        tokens = _normalize_gh_args(
+            command=self.command,
+            args=self.args,
+            variadic_args=self.variadic_args,
+        )
+        if not tokens:
+            raise ValueError("Provide a GH command, for example 'pr view 123' or 'help pr create'.")
+        self.command = " ".join(shlex.quote(token) for token in tokens)
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -351,40 +408,6 @@ def create_builder_tools(
         """Configure git to use GitHub CLI for authentication."""
         return await rt.run_gh(str(rt.repo_path), ["auth", "setup-git"], timeout=30)
 
-    async def gh_repo_view(worktree_path: str) -> dict[str, Any]:
-        """View repository information."""
-        return await rt.run_gh(worktree_path, ["repo", "view"], timeout=30)
-
-    async def gh_pr_list(worktree_path: str, state: str = "open") -> dict[str, Any]:
-        """List pull requests. state: open, closed, merged, all."""
-        return await rt.run_gh(
-            worktree_path, ["pr", "list", "--state", state], timeout=60
-        )
-
-    async def gh_pr_view(worktree_path: str, pr_number: int | None = None) -> dict[str, Any]:
-        """View a pull request. If pr_number is None, views the PR for current branch."""
-        args = ["pr", "view"]
-        if pr_number:
-            args.append(str(pr_number))
-        return await rt.run_gh(worktree_path, args, timeout=30)
-
-    async def gh_pr_checks(worktree_path: str, pr_number: int | None = None) -> dict[str, Any]:
-        """View CI checks for a pull request."""
-        args = ["pr", "checks"]
-        if pr_number:
-            args.append(str(pr_number))
-        return await rt.run_gh(worktree_path, args, timeout=60)
-
-    async def gh_issue_list(
-        worktree_path: str, state: str = "open", limit: int = 30
-    ) -> dict[str, Any]:
-        """List issues. state: open, closed, all."""
-        return await rt.run_gh(
-            worktree_path,
-            ["issue", "list", "--state", state, "--limit", str(limit)],
-            timeout=60,
-        )
-
     # --- Git Configuration ---
 
     async def configure_git(
@@ -656,13 +679,13 @@ def create_builder_tools(
 
     async def gh_cli(
         worktree_path: str,
-        args: str,
+        command: str,
         timeout_seconds: int = 120,
+        args: str | list[str] | None = None,
+        variadic_args: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Run a raw gh CLI command in the worktree (without the leading 'gh')."""
-        parsed = shlex.split(args)
-        if not parsed:
-            return {"success": False, "returncode": -1, "stdout": "", "stderr": "No gh args provided"}
+        """Run any gh CLI command in the worktree (without the leading 'gh')."""
+        parsed = shlex.split(command)
         return await rt.run_gh(worktree_path, parsed, timeout=timeout_seconds)
 
     # --- Tool registration ---
@@ -761,28 +784,14 @@ def create_builder_tools(
             description="Configure git to use GitHub CLI for authentication.",
         ),
         StructuredTool.from_function(
-            coroutine=gh_repo_view, name="gh_repo_view",
-            description="View repository information.",
-        ),
-        StructuredTool.from_function(
-            coroutine=gh_pr_list, name="gh_pr_list",
-            description="List pull requests. state: open, closed, merged, all.",
-        ),
-        StructuredTool.from_function(
-            coroutine=gh_pr_view, name="gh_pr_view",
-            description="View a pull request details.",
-        ),
-        StructuredTool.from_function(
-            coroutine=gh_pr_checks, name="gh_pr_checks",
-            description="View CI checks for a pull request.",
-        ),
-        StructuredTool.from_function(
-            coroutine=gh_issue_list, name="gh_issue_list",
-            description="List issues. state: open, closed, all.",
-        ),
-        StructuredTool.from_function(
-            coroutine=gh_cli, name="gh_cli",
-            description="Run any gh CLI command (pass args only, no leading 'gh').",
+            coroutine=gh_cli,
+            args_schema=GhCliInput,
+            name="gh_cli",
+            description=(
+                "Run any GitHub CLI command. Prefer this over narrow GH-specific tools. "
+                "Pass one command string without the leading 'gh', for example "
+                "'pr view 123 --comments' or 'help pr create'."
+            ),
         ),
         # --- Build & Validation ---
         StructuredTool.from_function(
