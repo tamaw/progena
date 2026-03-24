@@ -578,9 +578,8 @@ class StateReader:
         group = str(entry.get("group", "")).lower()
         entry_source = str(entry.get("source", "")).lower()
         return (
-            source == relative_path
+            source in (relative_path, group)
             or (source != "root" and relative_path.startswith(f"{source}/"))
-            or source == group
             or source in entry_source
         )
 

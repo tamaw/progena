@@ -1061,7 +1061,7 @@ def _normalize_string_list(values: object) -> list[str]:
 def _normalize_non_negative_int(value: object) -> int:
     """Normalize persisted integer fields that should never be negative."""
     try:
-        parsed = int(value)
+        parsed = int(str(value))
     except (TypeError, ValueError):
         return 0
     return max(parsed, 0)
