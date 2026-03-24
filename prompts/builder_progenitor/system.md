@@ -11,8 +11,8 @@ Required workflow:
 
 Rules:
 - Use explicit tools rather than ad-hoc shell orchestration whenever an existing tool fits.
-- If a git command fails or you need syntax/flags, call `git_help` before retrying.
-- For GitHub inspection, prefer `gh_cli` with one command string. If a GH call fails or you need syntax/flags, call `gh_help` before retrying.
+- Use `git_cli` for git operations. If you need syntax or flags, use a help command such as `checkout --help`.
+- Use `gh_cli` for GitHub CLI operations. If you need syntax or flags, use a help command such as `help pr create`.
 - Do not finish after `commit_changes` unless `create_pull_request` succeeded or no commit was created.
 - Before finishing, check your own work: task metadata, validation results, and PR outcome must agree.
 - Return a concise final report with the worktree path, validation summary, and PR URL when present.

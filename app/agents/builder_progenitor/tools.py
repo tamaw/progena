@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from .config import BuilderConfig
 from .copilot_acp import CopilotCLI
@@ -30,47 +30,24 @@ def _extract_pr_url(text: str) -> str:
     return match.group(0) if match else ""
 
 
-def _normalize_gh_args(
-    *,
-    command: str = "",
-    args: str | list[str] | None = None,
-    variadic_args: list[str] | None = None,
-) -> list[str]:
-    """Normalize multiple GH argument shapes into a single argv list."""
-    tokens: list[str] = []
-    if command.strip():
-        tokens.extend(shlex.split(command))
-    if isinstance(args, str) and args.strip():
-        tokens.extend(shlex.split(args))
-    elif isinstance(args, list):
-        tokens.extend(str(item).strip() for item in args if str(item).strip())
-    if variadic_args:
-        tokens.extend(str(item).strip() for item in variadic_args if str(item).strip())
-    return tokens
-
-
 class GhCliInput(BaseModel):
     """Minimal schema for the generic builder gh tool."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(extra="forbid")
 
     worktree_path: str
-    command: str = ""
+    command: str
     timeout_seconds: int = 120
-    args: str | list[str] | None = None
-    variadic_args: list[str] | None = Field(default=None, alias="v__args")
 
-    @model_validator(mode="after")
-    def _normalize(self) -> GhCliInput:
-        tokens = _normalize_gh_args(
-            command=self.command,
-            args=self.args,
-            variadic_args=self.variadic_args,
-        )
-        if not tokens:
-            raise ValueError("No gh command provided")
-        self.command = " ".join(shlex.quote(token) for token in tokens)
-        return self
+
+class GitCliInput(BaseModel):
+    """Minimal schema for the generic builder git tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    worktree_path: str
+    command: str
+    timeout_seconds: int = 120
 
 
 # ---------------------------------------------------------------------------
@@ -385,10 +362,17 @@ def create_builder_tools(
             worktree_path, ["git", "remote", "set-url", remote, url], timeout=30
         )
 
-    async def git_help(worktree_path: str, topic: str = "", timeout_seconds: int = 30) -> dict[str, Any]:
-        """Show git help for discovery and error recovery."""
-        args = ["git", *shlex.split(topic), "--help"] if topic.strip() else ["git", "help"]
-        return await rt.run_command_args(worktree_path, args, timeout=timeout_seconds)
+    async def git_cli(
+        worktree_path: str,
+        command: str,
+        timeout_seconds: int = 120,
+    ) -> dict[str, Any]:
+        """Run any git CLI command in the worktree without the leading 'git'."""
+        return await rt.run_command_args(
+            worktree_path,
+            ["git", *shlex.split(command)],
+            timeout=timeout_seconds,
+        )
 
     # --- GitHub CLI ---
 
@@ -399,11 +383,6 @@ def create_builder_tools(
     async def gh_auth_setup_git() -> dict[str, Any]:
         """Configure git to use GitHub CLI for authentication."""
         return await rt.run_gh(str(rt.repo_path), ["auth", "setup-git"], timeout=30)
-
-    async def gh_help(topic: str = "", timeout_seconds: int = 30) -> dict[str, Any]:
-        """Show GitHub CLI help for discovery and error recovery."""
-        args = ["help", *shlex.split(topic)] if topic.strip() else ["help"]
-        return await rt.run_gh(str(rt.repo_path), args, timeout=timeout_seconds)
 
     # --- Git Configuration ---
 
@@ -678,8 +657,6 @@ def create_builder_tools(
         worktree_path: str,
         command: str,
         timeout_seconds: int = 120,
-        args: str | list[str] | None = None,
-        variadic_args: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run any gh CLI command in the worktree (without the leading 'gh')."""
         return await rt.run_gh(worktree_path, shlex.split(command), timeout=timeout_seconds)
@@ -762,10 +739,12 @@ def create_builder_tools(
             description="Set the URL for a git remote.",
         ),
         StructuredTool.from_function(
-            coroutine=git_help, name="git_help",
+            coroutine=git_cli,
+            args_schema=GitCliInput,
+            name="git_cli",
             description=(
-                "Show git help. Use this when a git command fails or when you need to "
-                "discover the right subcommand or flags before retrying."
+                "Run any git command without the leading 'git'. "
+                "Use command='status', 'checkout my-branch', or 'checkout --help' for discovery."
             ),
         ),
         # --- Git Config ---
@@ -787,20 +766,12 @@ def create_builder_tools(
             description="Configure git to use GitHub CLI for authentication.",
         ),
         StructuredTool.from_function(
-            coroutine=gh_help,
-            name="gh_help",
-            description=(
-                "Show GitHub CLI help. Use this when a gh command fails or when you need to "
-                "discover the right subcommand or flags before retrying gh_cli."
-            ),
-        ),
-        StructuredTool.from_function(
             coroutine=gh_cli,
             args_schema=GhCliInput,
             name="gh_cli",
             description=(
                 "Run any GitHub CLI command without the leading 'gh'. "
-                "Prefer command='pr view 123'. Legacy args and v__args are still accepted."
+                "Use command='pr view 123' or command='help pr create' for discovery."
             ),
         ),
         # --- Build & Validation ---
