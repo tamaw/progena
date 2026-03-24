@@ -45,6 +45,8 @@ Agents communicate via HTTP:
 - Task: `POST /a2a` with `{"message": "...", "context": {...}}`
 - Port range: 8100-8199
 
+For the full agent implementation contract (identity, config, logging, lifecycle, task queue, Docker, security, env vars), see **`docs/AGENT_SPEC.md`**.
+
 ## Key Directories
 - `app/progenitor/`: Core agent logic
 - `app/progenitor/nodes/`: LangGraph node implementations
