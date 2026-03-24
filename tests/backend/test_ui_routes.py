@@ -334,6 +334,7 @@ class TestLogsEndpoint:
 
         assert "entries" in data
         assert "total" in data
+        assert "source_groups" in data
         assert isinstance(data["entries"], list)
 
     def test_logs_with_limit(self, client):
@@ -351,6 +352,70 @@ class TestLogsEndpoint:
         """Test that /api/ui/logs accepts search parameter."""
         response = client.get("/api/ui/logs?search=test")
         assert response.status_code == 200
+
+    def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(self, client, kanban_state_reader):
+        """Test grouped source metadata and parsed timestamps from plain-text logs."""
+        builder_dir = kanban_state_reader.logs_dir / "builder"
+        builder_dir.mkdir(parents=True, exist_ok=True)
+
+        (kanban_state_reader.logs_dir / "progenitor.log").write_text(
+            "2026-03-11 21:59:52 - __main__ - INFO - Progenitor starting...\n",
+            encoding="utf-8",
+        )
+        (builder_dir / "builder.log").write_text(
+            "2026-03-08 00:33:35 - app.agents.builder_progenitor.agent - INFO - Builder ready\n",
+            encoding="utf-8",
+        )
+
+        response = client.get("/api/ui/logs?format=json&limit=0")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        groups = {group["id"]: group for group in data["source_groups"]}
+        assert "root" in groups
+        assert "builder" in groups
+        assert any(option["id"] == "progenitor.log" for option in groups["root"]["options"])
+        assert any(option["id"] == "builder/builder.log" for option in groups["builder"]["options"])
+
+        builder_entry = next(entry for entry in data["entries"] if entry["relative_path"] == "builder/builder.log")
+        assert builder_entry["timestamp"] == "2026-03-08 00:33:35"
+        assert builder_entry["source"] == "app.agents.builder_progenitor.agent"
+
+    def test_logs_json_supports_incremental_cursor_and_regex_search(self, client, kanban_state_reader):
+        """Test cursor-based incremental fetches and regex search."""
+        (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
+            "\n".join([
+                json.dumps({"message": "alpha ready", "timestamp": "2026-03-24T10:00:00Z", "level": "info"}),
+                json.dumps({"message": "beta failed", "timestamp": "2026-03-24T10:01:00Z", "level": "error"}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+
+        full_response = client.get("/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0")
+        assert full_response.status_code == 200
+        full_data = full_response.json()
+        assert full_data["total"] == 2
+        assert full_data["newest_cursor"]
+
+        top_entry = full_data["entries"][0]
+        incremental_response = client.get(f"/api/ui/logs?format=json&after={top_entry['id']}")
+        assert incremental_response.status_code == 200
+        incremental_data = incremental_response.json()
+        assert incremental_data["cursor_found"] is True
+        assert all(entry["id"] != top_entry["id"] for entry in incremental_data["entries"])
+
+    def test_logs_export_returns_downloadable_payload(self, client, kanban_state_reader):
+        """Test export endpoint returns attachment headers."""
+        (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
+            json.dumps({"message": "decision made", "timestamp": "2026-03-24T10:00:00Z", "level": "info"}) + "\n",
+            encoding="utf-8",
+        )
+
+        response = client.get("/api/ui/logs/export?format=jsonl")
+        assert response.status_code == 200
+        assert "attachment;" in response.headers["content-disposition"]
+        assert "decision made" in response.text
 
 
 class TestAgentDetailEndpoint:

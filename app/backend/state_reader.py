@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import re
@@ -21,6 +22,11 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+PLAIN_LOG_LINE_RE = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
+    r"\s+-\s+(?P<logger>.*?)\s+-\s+(?P<level>[A-Z]+)\s+-\s+(?P<message>.*)$"
+)
+FILENAME_TIMESTAMP_RE = re.compile(r"(?P<timestamp>\d{8}_\d{6})")
 
 
 def _iso_now() -> str:
@@ -29,6 +35,48 @@ def _iso_now() -> str:
 
 def _normalize_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    candidate = text.replace("Z", "+00:00")
+    for attempt in (candidate, candidate.replace(",", ".")):
+        try:
+            return datetime.fromisoformat(attempt)
+        except ValueError:
+            continue
+
+    match = FILENAME_TIMESTAMP_RE.search(text)
+    if match:
+        try:
+            return datetime.strptime(match.group("timestamp"), "%Y%m%d_%H%M%S")
+        except ValueError:
+            return None
+
+    return None
+
+
+def _iso_from_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        return value.isoformat(sep=" ")
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _entry_identity(entry: dict[str, Any]) -> str:
+    payload = "|".join([
+        str(entry.get("relative_path", "")),
+        str(entry.get("timestamp", "")),
+        str(entry.get("level", "")),
+        str(entry.get("source", "")),
+        str(entry.get("message", "")),
+    ])
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
@@ -307,12 +355,15 @@ class StateReader:
             logger.debug("Failed to read %s: %s", filepath, e)
             return None
 
-    def _read_text_lines(self, filepath: Path, limit: int = 200) -> list[str]:
+    def _read_text_lines(self, filepath: Path, limit: int | None = 200) -> list[str]:
         try:
             if not filepath.exists():
                 return []
             content = filepath.read_text(encoding="utf-8", errors="ignore")
-            return content.splitlines()[-limit:]
+            lines = content.splitlines()
+            if limit is None or limit <= 0:
+                return lines
+            return lines[-limit:]
         except Exception as e:
             logger.debug("Failed to read lines from %s: %s", filepath, e)
             return []
@@ -497,40 +548,147 @@ class StateReader:
         files.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
         return files
 
+    def _relative_log_path(self, path: Path) -> str:
+        if path.is_relative_to(self.logs_dir):
+            return str(path.relative_to(self.logs_dir)).replace("\\", "/")
+        return str(path).replace("\\", "/")
+
+    def _log_group(self, path: Path) -> str:
+        relative = Path(self._relative_log_path(path))
+        parent = relative.parent
+        return parent.as_posix() if parent != Path(".") else "root"
+
+    def _path_fallback_timestamp(self, path: Path) -> str:
+        relative_path = self._relative_log_path(path)
+        parsed = _parse_timestamp(relative_path)
+        if parsed is not None:
+            return _iso_from_datetime(parsed)
+        return ""
+
+    def _sort_key_for_timestamp(self, value: Any) -> tuple[int, str]:
+        parsed = _parse_timestamp(value)
+        if parsed is None:
+            return (0, str(value or ""))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return (1, parsed.astimezone(UTC).isoformat())
+
+    def _entry_matches_source(self, entry: dict[str, Any], source: str) -> bool:
+        relative_path = str(entry.get("relative_path", "")).lower()
+        group = str(entry.get("group", "")).lower()
+        entry_source = str(entry.get("source", "")).lower()
+        return (
+            source == relative_path
+            or (source != "root" and relative_path.startswith(f"{source}/"))
+            or source == group
+            or source in entry_source
+        )
+
+    def get_log_sources(self) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+
+        for path in self._iter_log_files():
+            group = self._log_group(path)
+            relative_path = self._relative_log_path(path)
+            grouped.setdefault(group, []).append(
+                {
+                    "id": relative_path,
+                    "label": path.name,
+                    "path": relative_path,
+                    "group": group,
+                    "source": self._path_source(path),
+                    "updated_at": self._path_fallback_timestamp(path),
+                }
+            )
+
+        source_groups: list[dict[str, Any]] = []
+        for group, options in sorted(grouped.items(), key=lambda item: item[0].lower()):
+            options.sort(key=lambda item: item["label"].lower())
+            source_groups.append(
+                {
+                    "id": group,
+                    "label": group,
+                    "options": options,
+                }
+            )
+
+        return source_groups
+
+    def get_log_folders(self) -> list[dict[str, Any]]:
+        folders = []
+        for group in self.get_log_sources():
+            folders.append(
+                {
+                    "id": group["id"],
+                    "label": group["label"],
+                    "file_count": len(group.get("options", [])),
+                }
+            )
+        return folders
+
     def _line_to_entry(self, line: str, source: str, path: Path) -> dict[str, Any] | None:
         if not line.strip():
             return None
 
+        relative_path = self._relative_log_path(path)
+        group = self._log_group(path)
+
         try:
             payload = json.loads(line)
             if not isinstance(payload, dict):
-                return {
-                    "timestamp": _iso_now(),
-                    "time": _iso_now(),
+                fallback_timestamp = self._path_fallback_timestamp(path)
+                entry = {
+                    "timestamp": fallback_timestamp,
+                    "time": fallback_timestamp,
                     "level": "info",
                     "source": source,
                     "message": str(payload),
                     "path": str(path),
+                    "relative_path": relative_path,
+                    "group": group,
                     "data": payload,
                 }
+                entry["id"] = _entry_identity(entry)
+                return entry
             timestamp = (
                 payload.get("timestamp")
                 or payload.get("time")
                 or payload.get("created_at")
-                or _iso_now()
+                or self._path_fallback_timestamp(path)
             )
             message = payload.get("message") or payload.get("msg") or payload.get("content") or json.dumps(payload)
-            return {
+            entry = {
                 "timestamp": str(timestamp),
                 "time": str(timestamp),
                 "level": str(payload.get("level", "info")).lower(),
                 "source": payload.get("source") or source,
                 "message": str(message),
                 "path": str(path),
+                "relative_path": relative_path,
+                "group": group,
                 "data": payload,
             }
+            entry["id"] = _entry_identity(entry)
+            return entry
         except json.JSONDecodeError:
             pass
+
+        matched = PLAIN_LOG_LINE_RE.match(line.strip())
+        if matched:
+            timestamp = matched.group("timestamp")
+            entry = {
+                "timestamp": timestamp,
+                "time": timestamp,
+                "level": matched.group("level").lower(),
+                "source": matched.group("logger") or source,
+                "message": matched.group("message").strip(),
+                "path": str(path),
+                "relative_path": relative_path,
+                "group": group,
+                "data": None,
+            }
+            entry["id"] = _entry_identity(entry)
+            return entry
 
         level = "info"
         lowered = line.lower()
@@ -541,15 +699,20 @@ class StateReader:
         elif "debug" in lowered:
             level = "debug"
 
-        return {
-            "timestamp": _iso_now(),
-            "time": _iso_now(),
+        fallback_timestamp = self._path_fallback_timestamp(path)
+        entry = {
+            "timestamp": fallback_timestamp,
+            "time": fallback_timestamp,
             "level": level,
             "source": source,
             "message": line.strip(),
             "path": str(path),
+            "relative_path": relative_path,
+            "group": group,
             "data": None,
         }
+        entry["id"] = _entry_identity(entry)
+        return entry
 
     def _path_source(self, path: Path) -> str:
         relative_parts = path.relative_to(self.logs_dir).parts if path.is_relative_to(self.logs_dir) else path.parts
@@ -558,19 +721,38 @@ class StateReader:
                 return part
         return path.stem
 
-    def get_logs(
+    def _entry_search_text(self, entry: dict[str, Any]) -> str:
+        fields = [
+            entry.get("message", ""),
+            entry.get("source", ""),
+            entry.get("relative_path", ""),
+            entry.get("group", ""),
+            entry.get("level", ""),
+        ]
+        return " ".join(str(field) for field in fields if field).lower()
+
+    def _filter_log_entries(
         self,
+        *,
         level: str | None = None,
         search: str | None = None,
-        limit: int = 500,
         source: str | None = None,
+        folder: str | None = None,
+        file_path: str | None = None,
+        search_mode: str = "plain",
     ) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
         search_lc = search.lower() if search else None
         source_lc = source.lower() if source else None
+        folder_lc = folder.lower() if folder else None
+        file_path_lc = file_path.lower() if file_path else None
+        regex = None
+
+        if search and search_mode == "regex":
+            regex = re.compile(search, re.IGNORECASE)
 
         for path in self._iter_log_files():
-            lines = self._read_text_lines(path, limit=min(limit, 200))
+            lines = self._read_text_lines(path, limit=None)
             path_source = self._path_source(path)
             for line in reversed(lines):
                 entry = self._line_to_entry(line, path_source, path)
@@ -578,18 +760,73 @@ class StateReader:
                     continue
                 if level and entry["level"] != level.lower():
                     continue
-                if source_lc and source_lc not in str(entry["source"]).lower():
+                if folder_lc and entry["group"].lower() != folder_lc:
                     continue
-                if search_lc and search_lc not in entry["message"].lower():
+                if file_path_lc and entry["relative_path"].lower() != file_path_lc:
                     continue
+                if source_lc and not self._entry_matches_source(entry, source_lc):
+                    continue
+                if search:
+                    searchable = self._entry_search_text(entry)
+                    if regex and not regex.search(searchable):
+                        continue
+                    if not regex and search_lc and search_lc not in searchable:
+                        continue
                 entries.append(entry)
-                if len(entries) >= limit:
-                    break
-            if len(entries) >= limit:
-                break
 
-        entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
-        return entries[:limit]
+        entries.sort(key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True)
+        return entries
+
+    def query_logs(
+        self,
+        *,
+        level: str | None = None,
+        search: str | None = None,
+        limit: int = 500,
+        source: str | None = None,
+        folder: str | None = None,
+        file_path: str | None = None,
+        after: str | None = None,
+        search_mode: str = "plain",
+    ) -> dict[str, Any]:
+        entries = self._filter_log_entries(
+            level=level,
+            search=search,
+            source=source,
+            folder=folder,
+            file_path=file_path,
+            search_mode=search_mode,
+        )
+        newest_cursor = entries[0]["id"] if entries else ""
+        cursor_found = True
+        returned_entries = entries
+
+        if after:
+            cursor_index = next((index for index, entry in enumerate(entries) if entry.get("id") == after), None)
+            if cursor_index is None:
+                cursor_found = False
+            else:
+                returned_entries = entries[:cursor_index]
+
+        if limit > 0:
+            returned_entries = returned_entries[:limit]
+
+        return {
+            "entries": returned_entries,
+            "total": len(entries),
+            "returned": len(returned_entries),
+            "newest_cursor": newest_cursor,
+            "cursor_found": cursor_found,
+        }
+
+    def get_logs(
+        self,
+        level: str | None = None,
+        search: str | None = None,
+        limit: int = 500,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.query_logs(level=level, search=search, limit=limit, source=source)["entries"]
 
     def get_logs_for_widget(self, widget_name: str, limit: int = 40) -> list[dict[str, Any]]:
         normalized = _normalize_name(widget_name)
@@ -601,13 +838,13 @@ class StateReader:
             relative = str(path.relative_to(self.logs_dir)) if path.is_relative_to(self.logs_dir) else str(path)
             if normalized not in _normalize_name(relative):
                 continue
-            lines = self._read_text_lines(path, limit=min(limit, 80))
+            lines = self._read_text_lines(path, limit=limit)
             source = self._path_source(path)
             for line in lines:
                 entry = self._line_to_entry(line, source, path)
                 if entry:
                     matches.append(entry)
-        matches.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+        matches.sort(key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True)
         return matches[:limit]
 
     def get_widgets(self) -> list[dict[str, Any]]:
