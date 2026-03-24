@@ -123,3 +123,38 @@ async def test_gh_cli_accepts_legacy_variadic_args_payload(tmp_path: Path) -> No
 
     assert result["success"] is True
     run_gh.assert_awaited_once_with(str(tmp_path), ["pr", "view", "123"], timeout=120)
+
+
+@pytest.mark.asyncio
+async def test_gh_help_runs_help_for_topic(tmp_path: Path) -> None:
+    tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
+    tool = next(tool for tool in tools if tool.name == "gh_help")
+
+    with patch(
+        "app.agents.builder_progenitor.tools.ToolRuntime.run_gh",
+        new=AsyncMock(return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}),
+    ) as run_gh:
+        result = await tool.ainvoke({"topic": "pr create"})
+
+    assert result["success"] is True
+    run_gh.assert_awaited_once_with(str(tmp_path), ["help", "pr", "create"], timeout=30)
+
+
+@pytest.mark.asyncio
+async def test_git_help_runs_help_for_topic(tmp_path: Path) -> None:
+    tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
+    tool = next(tool for tool in tools if tool.name == "git_help")
+
+    with patch(
+        "app.agents.builder_progenitor.tools.ToolRuntime.run_command_args",
+        new=AsyncMock(return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}),
+    ) as run_command_args:
+        result = await tool.ainvoke(
+            {
+                "worktree_path": str(tmp_path),
+                "topic": "checkout",
+            }
+        )
+
+    assert result["success"] is True
+    run_command_args.assert_awaited_once_with(str(tmp_path), ["git", "checkout", "--help"], timeout=30)

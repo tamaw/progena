@@ -385,6 +385,11 @@ def create_builder_tools(
             worktree_path, ["git", "remote", "set-url", remote, url], timeout=30
         )
 
+    async def git_help(worktree_path: str, topic: str = "", timeout_seconds: int = 30) -> dict[str, Any]:
+        """Show git help for discovery and error recovery."""
+        args = ["git", *shlex.split(topic), "--help"] if topic.strip() else ["git", "help"]
+        return await rt.run_command_args(worktree_path, args, timeout=timeout_seconds)
+
     # --- GitHub CLI ---
 
     async def gh_auth_status() -> dict[str, Any]:
@@ -394,6 +399,11 @@ def create_builder_tools(
     async def gh_auth_setup_git() -> dict[str, Any]:
         """Configure git to use GitHub CLI for authentication."""
         return await rt.run_gh(str(rt.repo_path), ["auth", "setup-git"], timeout=30)
+
+    async def gh_help(topic: str = "", timeout_seconds: int = 30) -> dict[str, Any]:
+        """Show GitHub CLI help for discovery and error recovery."""
+        args = ["help", *shlex.split(topic)] if topic.strip() else ["help"]
+        return await rt.run_gh(str(rt.repo_path), args, timeout=timeout_seconds)
 
     # --- Git Configuration ---
 
@@ -751,6 +761,13 @@ def create_builder_tools(
             coroutine=git_set_remote_url, name="git_set_remote_url",
             description="Set the URL for a git remote.",
         ),
+        StructuredTool.from_function(
+            coroutine=git_help, name="git_help",
+            description=(
+                "Show git help. Use this when a git command fails or when you need to "
+                "discover the right subcommand or flags before retrying."
+            ),
+        ),
         # --- Git Config ---
         StructuredTool.from_function(
             coroutine=configure_git, name="configure_git",
@@ -768,6 +785,14 @@ def create_builder_tools(
         StructuredTool.from_function(
             coroutine=gh_auth_setup_git, name="gh_auth_setup_git",
             description="Configure git to use GitHub CLI for authentication.",
+        ),
+        StructuredTool.from_function(
+            coroutine=gh_help,
+            name="gh_help",
+            description=(
+                "Show GitHub CLI help. Use this when a gh command fails or when you need to "
+                "discover the right subcommand or flags before retrying gh_cli."
+            ),
         ),
         StructuredTool.from_function(
             coroutine=gh_cli,
