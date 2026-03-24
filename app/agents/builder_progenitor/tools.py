@@ -50,38 +50,25 @@ def _normalize_gh_args(
 
 
 class GhCliInput(BaseModel):
-    """Input schema for the builder gh_cli tool."""
+    """Minimal schema for the generic builder gh tool."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     worktree_path: str
-    command: str = Field(
-        default="",
-        description=(
-            "GH subcommand and arguments as one string, without the leading 'gh'. "
-            "Example: 'pr view 123 --comments' or 'help pr create'."
-        ),
-    )
-    timeout_seconds: int = Field(default=120, ge=1, le=1800)
-    args: str | list[str] | None = Field(
-        default=None,
-        description="Legacy alias for command. Accepts a single string or a tokenized list.",
-    )
-    variadic_args: list[str] | None = Field(
-        default=None,
-        alias="v__args",
-        description="Legacy variadic argument payload accepted for compatibility.",
-    )
+    command: str = ""
+    timeout_seconds: int = 120
+    args: str | list[str] | None = None
+    variadic_args: list[str] | None = Field(default=None, alias="v__args")
 
     @model_validator(mode="after")
-    def _ensure_command(self) -> GhCliInput:
+    def _normalize(self) -> GhCliInput:
         tokens = _normalize_gh_args(
             command=self.command,
             args=self.args,
             variadic_args=self.variadic_args,
         )
         if not tokens:
-            raise ValueError("Provide a GH command, for example 'pr view 123' or 'help pr create'.")
+            raise ValueError("No gh command provided")
         self.command = " ".join(shlex.quote(token) for token in tokens)
         return self
 
@@ -685,8 +672,7 @@ def create_builder_tools(
         variadic_args: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run any gh CLI command in the worktree (without the leading 'gh')."""
-        parsed = shlex.split(command)
-        return await rt.run_gh(worktree_path, parsed, timeout=timeout_seconds)
+        return await rt.run_gh(worktree_path, shlex.split(command), timeout=timeout_seconds)
 
     # --- Tool registration ---
 
@@ -788,9 +774,8 @@ def create_builder_tools(
             args_schema=GhCliInput,
             name="gh_cli",
             description=(
-                "Run any GitHub CLI command. Prefer this over narrow GH-specific tools. "
-                "Pass one command string without the leading 'gh', for example "
-                "'pr view 123 --comments' or 'help pr create'."
+                "Run any GitHub CLI command without the leading 'gh'. "
+                "Prefer command='pr view 123'. Legacy args and v__args are still accepted."
             ),
         ),
         # --- Build & Validation ---
