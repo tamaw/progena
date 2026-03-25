@@ -12,8 +12,8 @@ Reads real state data from data/state/ and data/config/:
 """
 
 import asyncio
-import csv
 import contextlib
+import csv
 import json
 import logging
 import os
@@ -23,8 +23,8 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from io import StringIO
+from pathlib import Path
 
 from croniter import croniter  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query

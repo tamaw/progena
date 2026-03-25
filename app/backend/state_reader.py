@@ -85,13 +85,9 @@ def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> date
         parsed = datetime.fromisoformat(value.strip())
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    else:
-        parsed = parsed.astimezone(UTC)
-    if len(value.strip()) <= 10:
-        if end_of_day:
-            parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
+    parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    if len(value.strip()) <= 10 and end_of_day:
+        parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
     return parsed
 
 
