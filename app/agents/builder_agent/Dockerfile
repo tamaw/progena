@@ -23,7 +23,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PROGENITOR_PROJECT_ROOT=/app/worktrees \
     PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
     PROGENITOR_STATE_DIR=/app/data/state \
-    PROGENITOR_LOG_DIR=/app/logs
+    PROGENITOR_LOG_DIR=/app/logs \
+    PROGENITOR_PROMPTS_DIR=/app/prompts
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 
@@ -66,7 +67,7 @@ RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp
 
 # Named volume mount-points — Docker Compose overrides these with named volumes.
-VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
+VOLUME ["/app/data", "/app/logs", "/app/worktrees", "/app/prompts"]
 
 COPY app/agents/builder_agent/docker-entrypoint.sh /usr/local/bin/builder-entrypoint.sh
 RUN chmod +x /usr/local/bin/builder-entrypoint.sh

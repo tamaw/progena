@@ -507,7 +507,7 @@ def create_builder_tools(
             copilot_goal=copilot_goal.strip(),
             success_criteria=success_criteria.strip() or "- none provided",
             validation_targets=validation_targets.strip() or "- pytest\n- pyright\n- ruff",
-            skill_context=load_skill_context() or "- No repository skills were found.",
+            skill_context=load_skill_context(),
         )
         return {"prompt": prompt}
 

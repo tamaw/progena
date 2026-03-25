@@ -226,6 +226,7 @@ jobs:
           GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
+          PROGENITOR_PROMPTS_DIR: /app/prompts
         run: python .github/scripts/get_agent_runtime_config.py
 
       - name: Docker login (GHCR)
@@ -253,6 +254,7 @@ jobs:
           GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
+          PROGENITOR_PROMPTS_DIR: /app/prompts
         run: |
           CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
           PORT=${{ steps.runtime.outputs.port }}
@@ -278,6 +280,21 @@ jobs:
               fi
             fi
           done
+
+          PROMPTS_HOST_DIR="/var/lib/progenitor/prompts"
+          if command -v sudo >/dev/null 2>&1; then
+            sudo mkdir -p "${PROMPTS_HOST_DIR}" || mkdir -p "${PROMPTS_HOST_DIR}"
+            sudo rm -rf "${PROMPTS_HOST_DIR:?}/"*
+            sudo cp -a prompts/. "${PROMPTS_HOST_DIR}/"
+            sudo chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}" || chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}"
+            sudo chmod -R u+rwX "${PROMPTS_HOST_DIR}" || chmod -R u+rwX "${PROMPTS_HOST_DIR}"
+          else
+            mkdir -p "${PROMPTS_HOST_DIR}"
+            rm -rf "${PROMPTS_HOST_DIR:?}/"*
+            cp -a prompts/. "${PROMPTS_HOST_DIR}/"
+            chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}"
+            chmod -R u+rwX "${PROMPTS_HOST_DIR}"
+          fi
 
           if [ -n "${CHOWN_PATHS}" ]; then
             if command -v sudo >/dev/null 2>&1; then
@@ -316,6 +333,7 @@ jobs:
             -e PROGENITOR_PROJECT_ROOT=/app/worktrees \
             -e PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
             -e PROGENITOR_WORKTREES_ROOT=/app/worktrees \
+            -e PROGENITOR_PROMPTS_DIR=/app/prompts \
             -e GH_TOKEN="${GH_TOKEN}" \
             -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
             ${VOLUME_ARGS} \
