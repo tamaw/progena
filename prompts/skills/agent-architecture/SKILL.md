@@ -47,6 +47,8 @@ Agents communicate via HTTP:
 
 For the full agent implementation contract (identity, config, logging, lifecycle, task queue, Docker, security, env vars), see **`docs/AGENT_SPEC.md`**.
 
+For advanced features (scheduling, skills, virtual filesystem, sub-agents, human-in-the-loop, memory), see **`docs/AGENT_FEATURES.md`**.
+
 ## Key Directories
 - `app/progenitor/`: Core agent logic
 - `app/progenitor/nodes/`: LangGraph node implementations
