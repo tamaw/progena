@@ -1,3 +1,5 @@
+import pytest
+
 from app.agents.builder_agent.llm.prompts import PromptTemplates
 
 
@@ -18,3 +20,10 @@ def test_planner_prompt_includes_repo_skill_context():
 
     assert "## Repository Skills" in planner_prompt
     assert "Build Agent Skill" in planner_prompt
+
+
+def test_builder_skill_context_missing_skill_raises():
+    prompts = PromptTemplates()
+
+    with pytest.raises(FileNotFoundError, match="prompts/skills/does-not-exist/SKILL.md"):
+        prompts.get_builder_skill_context(["does-not-exist"])

@@ -1,3 +1,5 @@
+import pytest
+
 from app.agents.builder_progenitor.prompts import load_prompt, load_skill_context
 
 
@@ -26,3 +28,8 @@ def test_load_skill_context_reads_repo_skills():
     skill_context = load_skill_context()
 
     assert "Build Agent Skill" in skill_context
+
+
+def test_load_skill_context_missing_skill_raises():
+    with pytest.raises(FileNotFoundError, match="prompts/skills/does-not-exist/SKILL.md"):
+        load_skill_context(["does-not-exist"])

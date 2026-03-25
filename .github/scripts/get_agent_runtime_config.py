@@ -166,6 +166,23 @@ def main() -> int:
         unique_env_keys.append(key)
     runtime_env_keys = [key for key in unique_env_keys if key in os.environ]
 
+    required_targets: list[str] = []
+    if "PROGENITOR_STATE_DIR" in unique_env_keys:
+        required_targets.append("/app/data")
+    if "PROGENITOR_LOG_DIR" in unique_env_keys:
+        required_targets.append("/app/logs")
+    if any(
+        key in unique_env_keys
+        for key in ("PROGENITOR_WORKTREE_DIR", "PROGENITOR_WORKTREES_ROOT", "PROGENITOR_PROJECT_ROOT")
+    ):
+        required_targets.append("/app/worktrees")
+    if "PROGENITOR_PROMPTS_DIR" in unique_env_keys:
+        required_targets.append("/app/prompts")
+
+    for target in required_targets:
+        if target not in unique_volumes:
+            unique_volumes.append(target)
+
     progenitor_mounts = _load_progenitor_mounts()
     volume_args: list[str] = []
     chown_paths: list[str] = []
