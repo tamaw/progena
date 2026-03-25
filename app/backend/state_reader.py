@@ -13,11 +13,12 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,32 @@ def _iso_from_datetime(value: datetime) -> str:
     if value.tzinfo is None:
         return value.isoformat(sep=" ")
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _normalize_log_level(value: Any) -> str:
+    level = str(value or "info").strip().lower()
+    if level == "warning":
+        return "warn"
+    if level == "fatal":
+        return "error"
+    return level or "info"
+
+
+def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    if len(value.strip()) <= 10:
+        if end_of_day:
+            parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
+    return parsed
 
 
 def _entry_identity(entry: dict[str, Any]) -> str:
@@ -313,12 +340,15 @@ class StateReader:
         self.state_dir = state_dir or Path("data/state")
         self.config_dir = config_dir or self.state_dir.parent / "config"
         self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
-        self.logs_dir = logs_dir or Path("logs")
+        self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", "logs"))
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
         self._watch_task: asyncio.Task | None = None
         self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
+
+    def _resolved_logs_dir(self) -> Path:
+        return self.logs_dir.resolve()
 
     def invalidate(self, *paths: Path) -> None:
         """Invalidate cached file contents."""
@@ -549,8 +579,10 @@ class StateReader:
         return files
 
     def _relative_log_path(self, path: Path) -> str:
-        if path.is_relative_to(self.logs_dir):
-            return str(path.relative_to(self.logs_dir)).replace("\\", "/")
+        resolved_logs_dir = self._resolved_logs_dir()
+        resolved_path = path.resolve()
+        if resolved_path.is_relative_to(resolved_logs_dir):
+            return str(resolved_path.relative_to(resolved_logs_dir)).replace("\\", "/")
         return str(path).replace("\\", "/")
 
     def _log_group(self, path: Path) -> str:
@@ -659,7 +691,7 @@ class StateReader:
             entry = {
                 "timestamp": str(timestamp),
                 "time": str(timestamp),
-                "level": str(payload.get("level", "info")).lower(),
+                "level": _normalize_log_level(payload.get("level", "info")),
                 "source": payload.get("source") or source,
                 "message": str(message),
                 "path": str(path),
@@ -678,7 +710,7 @@ class StateReader:
             entry = {
                 "timestamp": timestamp,
                 "time": timestamp,
-                "level": matched.group("level").lower(),
+                "level": _normalize_log_level(matched.group("level")),
                 "source": matched.group("logger") or source,
                 "message": matched.group("message").strip(),
                 "path": str(path),
@@ -714,7 +746,13 @@ class StateReader:
         return entry
 
     def _path_source(self, path: Path) -> str:
-        relative_parts = path.relative_to(self.logs_dir).parts if path.is_relative_to(self.logs_dir) else path.parts
+        resolved_logs_dir = self._resolved_logs_dir()
+        resolved_path = path.resolve()
+        relative_parts = (
+            resolved_path.relative_to(resolved_logs_dir).parts
+            if resolved_path.is_relative_to(resolved_logs_dir)
+            else resolved_path.parts
+        )
         for part in reversed(relative_parts[:-1]):
             if part not in {"logs", "builder", "progenitor"}:
                 return part
@@ -730,6 +768,55 @@ class StateReader:
         ]
         return " ".join(str(field) for field in fields if field).lower()
 
+    def _candidate_log_files(
+        self,
+        *,
+        source: str | None = None,
+        folder: str | None = None,
+        file_path: str | None = None,
+    ) -> list[Path]:
+        if not self.logs_dir.exists():
+            return []
+
+        resolved_logs_dir = self._resolved_logs_dir()
+
+        if file_path:
+            candidate = (resolved_logs_dir / file_path).resolve()
+            with contextlib.suppress(ValueError):
+                candidate.relative_to(resolved_logs_dir)
+                if candidate.exists() and candidate.is_file():
+                    return [candidate]
+            return []
+
+        if folder:
+            folder_path = (resolved_logs_dir / folder).resolve()
+            with contextlib.suppress(ValueError):
+                folder_path.relative_to(resolved_logs_dir)
+                if folder_path.exists():
+                    if folder_path.is_file():
+                        return [folder_path]
+                    files = [path for path in folder_path.rglob("*") if path.is_file()]
+                    files.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+                    return files
+            return []
+
+        files = self._iter_log_files()
+        if not source:
+            return files
+
+        source_lc = source.lower()
+        return [
+            path for path in files
+            if self._entry_matches_source(
+                {
+                    "relative_path": self._relative_log_path(path),
+                    "group": self._log_group(path),
+                    "source": self._path_source(path),
+                },
+                source_lc,
+            )
+        ]
+
     def _filter_log_entries(
         self,
         *,
@@ -738,6 +825,8 @@ class StateReader:
         source: str | None = None,
         folder: str | None = None,
         file_path: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         search_mode: str = "plain",
     ) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
@@ -746,17 +835,33 @@ class StateReader:
         folder_lc = folder.lower() if folder else None
         file_path_lc = file_path.lower() if file_path else None
         regex = None
+        start_boundary = _parse_date_boundary(start_date, end_of_day=False)
+        end_boundary = _parse_date_boundary(end_date, end_of_day=True)
 
         if search and search_mode == "regex":
             regex = re.compile(search, re.IGNORECASE)
 
-        for path in self._iter_log_files():
+        candidate_files = self._candidate_log_files(source=source, folder=folder, file_path=file_path)
+
+        for path in candidate_files:
             lines = self._read_text_lines(path, limit=None)
             path_source = self._path_source(path)
             for line in reversed(lines):
                 entry = self._line_to_entry(line, path_source, path)
                 if not entry:
                     continue
+                entry_timestamp = _parse_timestamp(entry.get("timestamp"))
+                if start_boundary or end_boundary:
+                    if entry_timestamp is None:
+                        continue
+                    if entry_timestamp.tzinfo is None:
+                        entry_timestamp = entry_timestamp.replace(tzinfo=UTC)
+                    else:
+                        entry_timestamp = entry_timestamp.astimezone(UTC)
+                    if start_boundary and entry_timestamp < start_boundary:
+                        break
+                    if end_boundary and entry_timestamp > end_boundary:
+                        continue
                 if level and entry["level"] != level.lower():
                     continue
                 if folder_lc and entry["group"].lower() != folder_lc:
@@ -785,6 +890,8 @@ class StateReader:
         source: str | None = None,
         folder: str | None = None,
         file_path: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         after: str | None = None,
         search_mode: str = "plain",
     ) -> dict[str, Any]:
@@ -794,6 +901,8 @@ class StateReader:
             source=source,
             folder=folder,
             file_path=file_path,
+            start_date=start_date,
+            end_date=end_date,
             search_mode=search_mode,
         )
         newest_cursor = entries[0]["id"] if entries else ""
@@ -807,7 +916,9 @@ class StateReader:
             else:
                 returned_entries = entries[:cursor_index]
 
-        if limit > 0:
+        if limit < 0:
+            returned_entries = []
+        elif limit > 0:
             returned_entries = returned_entries[:limit]
 
         return {
@@ -834,7 +945,7 @@ class StateReader:
 
         matches: list[dict[str, Any]] = []
         for path in self._iter_log_files():
-            relative = str(path.relative_to(self.logs_dir)) if path.is_relative_to(self.logs_dir) else str(path)
+            relative = self._relative_log_path(path)
             if normalized not in _normalize_name(relative):
                 continue
             lines = self._read_text_lines(path, limit=limit)
