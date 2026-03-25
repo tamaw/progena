@@ -260,6 +260,7 @@ jobs:
           CHOWN_PATHS="${{ steps.runtime.outputs.chown_paths }}"
           ENV_ARGS="${{ steps.runtime.outputs.env_args }}"
           TMPFS_ARGS="${{ steps.runtime.outputs.tmpfs_args }}"
+          PROMPTS_HOST_PATH="${{ steps.runtime.outputs.prompts_host_path }}"
 
           PROGENITOR_REPO_URL="https://github.com/tamaw/progenitor.git"
           if [ -n "${GH_TOKEN}" ]; then
@@ -278,6 +279,20 @@ jobs:
               fi
             fi
           done
+
+          if [ -n "${PROMPTS_HOST_PATH}" ]; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo mkdir -p "${PROMPTS_HOST_PATH}"
+              sudo cp -a prompts/. "${PROMPTS_HOST_PATH}/"
+              sudo chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_PATH}" || true
+              sudo chmod -R u+rwX "${PROMPTS_HOST_PATH}" || true
+            else
+              mkdir -p "${PROMPTS_HOST_PATH}"
+              cp -a prompts/. "${PROMPTS_HOST_PATH}/"
+              chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_PATH}" || true
+              chmod -R u+rwX "${PROMPTS_HOST_PATH}" || true
+            fi
+          fi
 
           if [ -n "${CHOWN_PATHS}" ]; then
             if command -v sudo >/dev/null 2>&1; then

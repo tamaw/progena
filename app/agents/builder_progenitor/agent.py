@@ -127,8 +127,13 @@ STEP_SKILLS = [
     ("pr", "Commit, push, and create a pull request."),
 ]
 
-BUILDER_SYSTEM_PROMPT = load_prompt("system.md").strip()
-HOOK_SYSTEM_PROMPT = load_prompt("hook_system.md").strip()
+
+def _load_builder_system_prompt() -> str:
+    return load_prompt("system.md").strip()
+
+
+def _load_hook_system_prompt() -> str:
+    return load_prompt("hook_system.md", fallback_filename="system.md").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -298,14 +303,14 @@ class BuilderService:
             repo_root,
             log_dir,
             name="builder",
-            system_prompt=BUILDER_SYSTEM_PROMPT,
+            system_prompt=_load_builder_system_prompt(),
         )
         self._hook_graph = _create_graph(
             config,
             repo_root,
             log_dir,
             name="builder_hook",
-            system_prompt=HOOK_SYSTEM_PROMPT,
+            system_prompt=_load_hook_system_prompt(),
         )
         self._config = config
         self._planner = BuilderClient(config.llm, role="planner", log_dir=log_dir)
@@ -375,6 +380,7 @@ class BuilderService:
             )
         prompt = load_prompt(
             f"{context.event}.md",
+            optional=True,
             task_id=context.task_id,
             request_text=context.request_text.strip(),
             request_context_json=json.dumps(context.request_context, indent=2, sort_keys=True),
@@ -383,6 +389,13 @@ class BuilderService:
             metadata_json=json.dumps(context.metadata, indent=2, sort_keys=True),
             error=(context.error or "").strip(),
         ).strip()
+        if not prompt:
+            logger.warning(
+                "Builder hook prompt missing for event=%s task_id=%s; skipping hook execution",
+                context.event,
+                context.task_id,
+            )
+            return
         thread_id = f"hook_{context.event}_{uuid.uuid4().hex[:12]}"
         logger.info("Builder hook: invoking %s (thread=%s task_id=%s)", context.event, thread_id, context.task_id)
         result = await self._hook_graph.ainvoke(

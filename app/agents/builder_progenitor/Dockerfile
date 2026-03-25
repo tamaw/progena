@@ -19,7 +19,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEFAULT_COPILOT_MODEL= \
     PROGENITOR_COPILOT_ADDITIONAL_FLAGS= \
     PROGENITOR_WORKTREES_ROOT=/app/worktrees \
-    PROGENITOR_PROMPTS_DIR=/app/prompts
+    PROGENITOR_PROMPTS_DIR=/app/prompts \
+    PROGENITOR_BUNDLED_PROMPTS_DIR=/opt/progenitor/prompts
 
 RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
 
@@ -56,6 +57,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY app/ /app/app/
 COPY prompts/ /app/prompts/
+COPY prompts/ /opt/progenitor/prompts/
 COPY scripts/ /app/scripts/
 
 RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \

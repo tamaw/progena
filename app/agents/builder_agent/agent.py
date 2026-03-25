@@ -47,10 +47,16 @@ from .runtime.background_build import BackgroundBuildRunner, BuildResult, BuildS
 from .runtime.copilot_acp import CopilotACPManager
 from .runtime.time_utils import utcnow_isoformat
 from .state.manager import StateManager
+from .state.models import redact_secrets
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 _start_time = time.time()
+
+
+def _safe_log_text(text: str) -> str:
+    """Redact secrets before writing dynamic text to logs."""
+    return redact_secrets(text)
 
 
 def _agent_log_name() -> str:
@@ -128,10 +134,10 @@ async def _ensure_workspace() -> None:
         is_empty = False
 
     if is_empty:
-        logger.info("Cloning %s into %s …", repo_url, workspace)
+        logger.info("Cloning %s into %s …", _safe_log_text(repo_url), workspace)
         rc, _out, err = await _run_git("clone", repo_url, str(workspace))
         if rc != 0:
-            logger.error("Failed to clone repo: %s", err[:500])
+            logger.error("Failed to clone repo: %s", _safe_log_text(err)[:500])
         else:
             logger.info("Workspace ready at %s", workspace)
         return
@@ -139,7 +145,7 @@ async def _ensure_workspace() -> None:
     logger.info("Initialising git workspace at %s …", workspace)
     rc, _out, err = await _run_git("-C", str(workspace), "init")
     if rc != 0:
-        logger.error("Failed to init git repo: %s", err[:500])
+        logger.error("Failed to init git repo: %s", _safe_log_text(err)[:500])
         return
 
     # Remote add can fail if it already exists (e.g. previous partial init).
@@ -149,7 +155,7 @@ async def _ensure_workspace() -> None:
 
     rc, _out, err = await _run_git("-C", str(workspace), "fetch", "--prune", "origin")
     if rc != 0:
-        logger.error("Failed to fetch origin: %s", err[:500])
+        logger.error("Failed to fetch origin: %s", _safe_log_text(err)[:500])
         return
 
     # Prefer origin/main, fall back to origin/master if needed.
@@ -157,7 +163,7 @@ async def _ensure_workspace() -> None:
     if rc != 0:
         rc, _out, err = await _run_git("-C", str(workspace), "checkout", "-B", "main", "origin/master")
         if rc != 0:
-            logger.error("Failed to checkout default branch: %s", err[:500])
+            logger.error("Failed to checkout default branch: %s", _safe_log_text(err)[:500])
             return
 
     logger.info("Workspace ready at %s", workspace)

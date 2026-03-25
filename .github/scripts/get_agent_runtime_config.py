@@ -170,12 +170,15 @@ def main() -> int:
     volume_args: list[str] = []
     chown_paths: list[str] = []
     seen_paths: set[str] = set()
+    prompts_host_path = ""
 
     for target in unique_volumes:
         host_path = _map_target_to_host(target, progenitor_mounts)
         if not host_path:
             continue
         volume_args.append(f"-v {host_path}:{target}")
+        if target == "/app/prompts":
+            prompts_host_path = host_path
         if host_path not in seen_paths:
             seen_paths.add(host_path)
             chown_paths.append(host_path)
@@ -193,12 +196,14 @@ def main() -> int:
             f.write(f"chown_paths={chown_paths_str}\n")
             f.write(f"env_args={env_args_str}\n")
             f.write(f"tmpfs_args={tmpfs_args_str}\n")
+            f.write(f"prompts_host_path={prompts_host_path}\n")
     else:
         print(f"port={port}")
         print(f"volume_args={volume_args_str}")
         print(f"chown_paths={chown_paths_str}")
         print(f"env_args={env_args_str}")
         print(f"tmpfs_args={tmpfs_args_str}")
+        print(f"prompts_host_path={prompts_host_path}")
     return 0
 
 
