@@ -508,7 +508,7 @@ def _build_execution_prompt(
         validation_targets=_as_bullets(plan.validation_targets, "- pytest\n- pyright\n- ruff"),
         reasoning=planned_build.reasoning or "No reasoning returned.",
         planned_at_utc=planned_build.planned_at_utc,
-        skill_context=load_skill_context() or "- No repository skills were found.",
+        skill_context=load_skill_context(),
     ).strip()
 
 
