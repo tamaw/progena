@@ -43,14 +43,20 @@ def load_skill_context(skill_names: list[str] | None = None) -> str:
     prompts_dir = get_prompts_dir().parent
     skills_dir = prompts_dir / "skills"
     if not skills_dir.is_dir():
-        return ""
+        raise FileNotFoundError(
+            f"Skills directory not found: {skills_dir}. "
+            "Ensure prompts/skills is mounted and populated."
+        )
 
     selected = skill_names or ["build-agent", "git-workflow"]
     sections: list[str] = []
     for skill_name in selected:
         skill_file = skills_dir / skill_name / "SKILL.md"
         if not skill_file.is_file():
-            continue
+            raise FileNotFoundError(
+                f"Skill file not found: {skill_file}. "
+                f"Ensure prompts/skills/{skill_name}/SKILL.md exists."
+            )
         body = _strip_frontmatter(skill_file.read_text(encoding="utf-8"))
         if body:
             sections.append(body)
