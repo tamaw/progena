@@ -367,7 +367,9 @@ class TestLogsEndpoint:
             encoding="utf-8",
         )
 
-        response = client.get("/api/ui/logs?format=json&start=2026-03-01&end=2026-03-12&limit=0")
+        response = client.get(
+            "/api/ui/logs?format=json&folder=builder&file=builder/builder.log&start=2026-03-01&end=2026-03-12&limit=0"
+        )
 
         assert response.status_code == 200
         data = response.json()
