@@ -1,4 +1,3 @@
-fastapi
-uvicorn[standard]
-httpx
-langgraph==1.0.9
+# Observe agent dependencies
+
+a2a-sdk[http-server]>=0.3.24
