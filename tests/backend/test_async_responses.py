@@ -500,6 +500,57 @@ class TestGracefulShutdown:
         assert data["status"] == "alive"
 
 
+class TestHealthEndpointContract:
+    """Tests for the GET /health contract defined in specs/runtime_lifecycle.spec.md.
+
+    The spec mandates exactly four fields: status, name, version, uptime_seconds.
+    HTTP 200 when status is "ok"; HTTP 503 when "draining".
+    """
+
+    def test_health_returns_required_fields(self, client):
+        """GET /health must return status, name, version, and uptime_seconds."""
+        response = client.get("/health")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "status" in data, "health response must contain 'status'"
+        assert "name" in data, "health response must contain 'name'"
+        assert "version" in data, "health response must contain 'version'"
+        assert "uptime_seconds" in data, "health response must contain 'uptime_seconds'"
+
+    def test_health_status_is_ok_when_healthy(self, client):
+        """GET /health must return status='ok' (not 'healthy') for HTTP 200."""
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    def test_health_name_is_progenitor(self, client):
+        """GET /health must return name='progenitor'."""
+        response = client.get("/health")
+        data = response.json()
+        assert data["name"] == "progenitor"
+
+    def test_health_version_is_string(self, client):
+        """GET /health must return a non-empty version string."""
+        response = client.get("/health")
+        data = response.json()
+        assert isinstance(data["version"], str)
+        assert data["version"]  # non-empty
+
+    def test_health_uptime_is_non_negative_float(self, client):
+        """GET /health must return uptime_seconds as a non-negative number."""
+        response = client.get("/health")
+        data = response.json()
+        assert isinstance(data["uptime_seconds"], (int, float))
+        assert data["uptime_seconds"] >= 0
+
+    def test_health_uptime_advances_over_time(self, client):
+        """uptime_seconds must increase between two calls."""
+        r1 = client.get("/health").json()
+        time.sleep(0.1)
+        r2 = client.get("/health").json()
+        assert r2["uptime_seconds"] > r1["uptime_seconds"]
+
 class TestRateLimitingAsync:
     """Tests for rate limiting with async requests."""
 

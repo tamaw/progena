@@ -794,13 +794,24 @@ def _update_activity():
 @app.get("/health")
 async def health_check():
     """
-    Simple health check endpoint.
+    Simple health check endpoint for container probes and operators.
 
-    Returns minimal status - use SSE /api/ui/events for detailed status.
+    Returns exactly: status, name, version, uptime_seconds.
+    HTTP 200 when status is "ok"; HTTP 503 when status is "draining".
+
+    Use GET /health/detailed for the full operator payload.
     """
-    return {
-        "status": "healthy" if not shutdown_manager.is_shutting_down else "draining",
+    from fastapi.responses import JSONResponse
+
+    is_draining = shutdown_manager.is_shutting_down
+    status = "draining" if is_draining else "ok"
+    body = {
+        "status": status,
+        "name": "progenitor",
+        "version": config.api_version,
+        "uptime_seconds": round(time.time() - _server_start_time, 1),
     }
+    return JSONResponse(content=body, status_code=503 if is_draining else 200)
 
 
 @app.get("/health/detailed")
