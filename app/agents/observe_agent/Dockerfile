@@ -2,29 +2,50 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HOME=/home/runner \
+    PYTHONPATH=/app \
     AZURE_OPENAI_BASE_URL= \
     AZURE_OPENAI_API_KEY= \
-    AGENT_NAME=observe_agent \
-    PROGENITOR_MODEL_DEFAULT= \
     GH_TOKEN= \
+    COPILOT_GITHUB_TOKEN= \
+    AGENT_NAME=observe_agent \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
-    TEST_MODE=false \
+    PROGENITOR_LOG_DIR=/app/logs \
     PROGENITOR_STATE_DIR=/app/data/state \
-    PROGENITOR_LOG_DIR=/app/logs
+    AGENT_MODEL_DEFAULT= \
+    PROGENITOR_MODEL_DEFAULT= \
+    PROGENITOR_WORKTREES_ROOT=/app/worktrees \
+    PROGENITOR_PROMPTS_DIR=/app/prompts
 
-RUN addgroup --system agent && adduser --system --ingroup agent runner
+RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
 
-WORKDIR /app/agent
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    ca-certificates \
+    ripgrep \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY app/agents/observe_agent/ /app/agent/
+WORKDIR /app
 
+COPY requirements.lock.txt /app/requirements.lock.txt
+COPY app/agents/observe_agent/requirements.txt /app/requirements.observe.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r /app/requirements.lock.txt && \
+    pip install --no-cache-dir -r /app/requirements.observe.txt
 
-RUN mkdir -p /app/data/state /app/logs && \
-    chown -R runner:agent /app/data /app/logs
+COPY app/ /app/app/
+COPY prompts/ /app/prompts/
+COPY scripts/ /app/scripts/
 
-VOLUME ["/app/data", "/app/logs"]
+RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \
+    chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
+
+VOLUME ["/app/data", "/app/logs", "/app/worktrees", "/app/prompts"]
+
+COPY app/agents/observe_agent/docker-entrypoint.sh /usr/local/bin/observe-entrypoint.sh
+RUN chmod +x /usr/local/bin/observe-entrypoint.sh
 
 USER runner
 
@@ -33,4 +54,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
 
-ENTRYPOINT ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8080"]
+ENTRYPOINT ["/usr/local/bin/observe-entrypoint.sh"]
+
+CMD ["python", "-m", "uvicorn", "app.agents.observe_agent.agent:app", "--host", "0.0.0.0", "--port", "8080"]
