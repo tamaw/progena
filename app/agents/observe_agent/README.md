@@ -1,18 +1,25 @@
 # Observe Agent
 
-Monitoring A2A agent that reads Progenitor's mounted state + logs (read-only) and reports status.
+Monitoring A2A agent that reads mounted Progenitor state and logs in read-only fashion and reports diagnostic status.
 
-Expected mounts (defaults):
-- State: `/app/data/state` (read-only)
-- Logs: `/app/logs` (read-only)
+Expected mounts:
+
+- State: `/app/data/state`
+- Logs: `/app/logs`
+- Prompts: `/app/prompts`
+- Worktrees: `/app/worktrees`
 
 Local build/run example:
+
 ```bash
-docker build -t observe-agent -f app/agents/observe_agent/Dockerfile app/agents/observe_agent
+docker build -t observe-agent -f app/agents/observe_agent/Dockerfile .
 docker run --rm -p 8080:8080 \
-  -v "$(pwd)/data/state:/app/data/state:ro" \
-  -v "$(pwd)/logs:/app/logs:ro" \
+  -e AGENT_NAME=observe_agent \
+  -e AZURE_OPENAI_BASE_URL=... \
+  -e AZURE_OPENAI_API_KEY=... \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/logs:/app/logs" \
+  -v "$(pwd)/prompts:/app/prompts" \
+  -v "$(pwd)/worktrees:/app/worktrees" \
   observe-agent
 ```
-
-

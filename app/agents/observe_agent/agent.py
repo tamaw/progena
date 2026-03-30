@@ -1,71 +1,98 @@
-"""Observe agent (A2A).
+"""Observe agent A2A entry point and monitoring service."""
 
-Receives a user request, uses the same /responses flow as Progenitor,
-invokes local tools to read mounted state/logs, and returns plain-text insights.
-"""
+from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from fastapi import FastAPI, Request
+from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.apps import A2AFastAPIApplication
+from a2a.server.events import EventQueue
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Message,
+    Part,
+    Role,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+)
 from fastapi.responses import JSONResponse
 from langgraph.graph import END, StateGraph
+
+from .config import ObserveConfig, get_config, setup_logging
+from .prompts import load_prompt
+from .queue_worker import ObserveTaskQueue, _QueuedTask
+
+logger = logging.getLogger(__name__)
+
+AGENT_ID = "observe_agent"
+AGENT_NAME = "Observe Agent"
+AGENT_VERSION = "0.2.0"
+DEFAULT_PORT = 8080
+CAPABILITIES = [
+    "progenitor_health_report",
+    "diagnose_last_error",
+    "tail_state_and_logs",
+]
+
+
+class ObserveGraphState(TypedDict, total=False):
+    request: str
+    context: dict[str, Any]
+    payload: dict[str, Any]
+    tool_round: int
+    max_tool_rounds: int
+    last_data: dict[str, Any]
+    tool_calls: list[dict[str, Any]]
+    seen_tool_sigs: set[str]
+    final_text: str
 
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _runtime_agent_name() -> str:
+    return os.getenv("AGENT_NAME", AGENT_ID).strip() or AGENT_ID
+
+
 def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
-    """Read up to max_bytes from end of file (best-effort) without holding locks."""
+    """Read up to *max_bytes* from the end of *path*."""
     try:
         if not path.exists() or not path.is_file():
             return ""
         size = path.stat().st_size
         if size <= max_bytes:
             return path.read_text(encoding="utf-8", errors="replace")
-        with path.open("rb") as f:
-            f.seek(max(0, size - max_bytes))
-            data = f.read(max_bytes)
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - max_bytes))
+            data = handle.read(max_bytes)
         return data.decode("utf-8", errors="replace")
-    except Exception:
+    except OSError:
         return ""
-
-
-def _build_responses_endpoint(base_url: str) -> str:
-    """Build a valid /responses endpoint from either base URL or full endpoint URL."""
-    raw = (base_url or "").strip()
-    if not raw:
-        return "/responses"
-
-    parsed = urlsplit(raw)
-    path = (parsed.path or "").rstrip("/")
-    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
-
-    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
-
-
-def _require_agent_name() -> str:
-    agent_name = os.getenv("AGENT_NAME", "").strip()
-    if not agent_name:
-        raise RuntimeError("AGENT_NAME must be set for observe_agent")
-    return agent_name
 
 
 def _safe_read_json(path: Path) -> Any:
     try:
         if not path.exists() or not path.is_file():
             return None
-        content = path.read_text(encoding="utf-8", errors="replace")
-        return json.loads(content)
-    except Exception:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -80,37 +107,95 @@ def _read_jsonl_tail(path: Path, limit: int = 50) -> list[dict[str, Any]]:
             continue
         try:
             obj = json.loads(line)
-            if isinstance(obj, dict):
-                entries.append(obj)
-        except Exception:
+        except json.JSONDecodeError:
             continue
+        if isinstance(obj, dict):
+            entries.append(obj)
     return entries[-limit:]
 
 
+def _build_responses_endpoint(base_url: str) -> str:
+    raw = (base_url or "").strip()
+    if not raw:
+        raise RuntimeError("AZURE_OPENAI_BASE_URL must be set for observe_agent")
+
+    parsed = urlsplit(raw)
+    path = (parsed.path or "").rstrip("/")
+    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
+    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
+
+
+def _text_msg(text: str) -> Message:
+    return Message(
+        message_id=str(uuid.uuid4()),
+        role=Role.agent,
+        parts=[Part(root=TextPart(text=text))],
+    )
+
+
+def _extract_request_text(message: Message | None) -> str:
+    if not message:
+        return ""
+    return "".join(
+        getattr(getattr(part, "root", part), "text", "")
+        for part in (message.parts or [])
+        if isinstance(getattr(getattr(part, "root", part), "text", None), str)
+    ).strip()
+
+
+def _extract_context(message: Message | None) -> dict[str, Any]:
+    if not message:
+        return {}
+    meta = getattr(message, "metadata", None)
+    return meta if isinstance(meta, dict) else {}
+
+
 class ObserveAgent:
-    AGENT_ID = "observe_agent"
-    AGENT_NAME = "Observe Agent"
-    DESCRIPTION = "Monitors Progenitor by reading mounted state/logs and generating diagnostic insights."
-    CAPABILITIES = [
-        "progenitor_health_report",
-        "diagnose_last_error",
-        "tail_state_and_logs",
-    ]
+    """Monitoring service for mounted Progenitor state and logs."""
+
+    AGENT_ID = AGENT_ID
+    AGENT_NAME = AGENT_NAME
+    DESCRIPTION = "Monitors Progenitor by reading mounted state/logs and producing diagnostic insights."
+    CAPABILITIES = CAPABILITIES
 
     def __init__(
         self,
+        config: ObserveConfig | None = None,
+        *,
         state_dir: Path | None = None,
         logs_dir: Path | None = None,
-    ):
-        agent_name = _require_agent_name()
-        base_logs_dir = Path(os.getenv("PROGENITOR_LOG_DIR", "/app/logs"))
-        self.state_dir = state_dir or Path(os.getenv("PROGENITOR_STATE_DIR", "/app/data/state"))
-        self.logs_dir = logs_dir or (base_logs_dir / agent_name)
+        source_logs_dir: Path | None = None,
+    ) -> None:
+        self.config = config or ObserveConfig.load()
+        self.runtime_agent_name = _runtime_agent_name()
+        self.state_dir = state_dir or self.config.storage.state_dir
+        self.source_logs_dir = source_logs_dir or logs_dir or self.config.storage.log_dir
+        self.agent_log_dir = self.config.storage.log_dir / self.runtime_agent_name
+        self._system_prompt = load_prompt("system.md").strip()
         self._graph = self._build_graph()
 
-    # -------------------------------------------------------------------------
-    # Tooling (local, read-only)
-    # -------------------------------------------------------------------------
+    async def initialize(self) -> None:
+        self.agent_log_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Observe agent initialised state_dir=%s source_logs_dir=%s agent_log_dir=%s",
+            self.state_dir,
+            self.source_logs_dir,
+            self.agent_log_dir,
+        )
+
+    async def shutdown(self) -> None:
+        logger.info("Observe agent shutdown complete")
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "status": "healthy",
+            "name": self.AGENT_NAME,
+            "version": AGENT_VERSION,
+            "timestamp": _utc_now_iso(),
+            "state_dir": str(self.state_dir),
+            "source_logs_dir": str(self.source_logs_dir),
+        }
+
     def _resolve_under(self, base_dir: Path, relative_path: str) -> Path:
         base = base_dir.resolve()
         candidate = (base_dir / relative_path).resolve()
@@ -118,51 +203,61 @@ class ObserveAgent:
             return candidate
         raise ValueError("Path escapes base directory")
 
+    @staticmethod
+    def _list_files(base_dir: Path, limit: int = 200) -> list[str]:
+        if not base_dir.exists():
+            return []
+        results = [str(path.relative_to(base_dir)) for path in base_dir.rglob("*") if path.is_file()]
+        return sorted(results)[:limit]
+
     def tool_list_state_files(self) -> dict[str, Any]:
         try:
-            files = sorted([p.name for p in self.state_dir.iterdir() if p.is_file()]) if self.state_dir.exists() else []
-            return {"state_dir": str(self.state_dir), "files": files}
-        except Exception as e:
-            return {"error": str(e)}
+            return {"state_dir": str(self.state_dir), "files": self._list_files(self.state_dir)}
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def tool_list_log_files(self) -> dict[str, Any]:
         try:
-            files = sorted([p.name for p in self.logs_dir.iterdir() if p.is_file()]) if self.logs_dir.exists() else []
-            return {"logs_dir": str(self.logs_dir), "files": files}
-        except Exception as e:
-            return {"error": str(e)}
+            return {"logs_dir": str(self.source_logs_dir), "files": self._list_files(self.source_logs_dir)}
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def tool_read_state_json(self, filename: str) -> dict[str, Any]:
         try:
             path = self._resolve_under(self.state_dir, filename)
-            data = _safe_read_json(path)
-            return {"path": str(path), "json": data}
-        except Exception as e:
-            return {"error": str(e)}
+            return {"path": str(path), "json": _safe_read_json(path)}
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def tool_read_state_text_tail(self, filename: str, max_bytes: int = 131072) -> dict[str, Any]:
         try:
             path = self._resolve_under(self.state_dir, filename)
-            text = _safe_read_text(path, max_bytes=max(1024, int(max_bytes)))
-            return {"path": str(path), "text": text}
-        except Exception as e:
-            return {"error": str(e)}
+            return {
+                "path": str(path),
+                "text": _safe_read_text(path, max_bytes=max(1024, int(max_bytes))),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def tool_read_log_jsonl_tail(self, filename: str, limit: int = 50) -> dict[str, Any]:
         try:
-            path = self._resolve_under(self.logs_dir, filename)
-            entries = _read_jsonl_tail(path, limit=max(1, min(int(limit), 500)))
-            return {"path": str(path), "entries": entries}
-        except Exception as e:
-            return {"error": str(e)}
+            path = self._resolve_under(self.source_logs_dir, filename)
+            return {
+                "path": str(path),
+                "entries": _read_jsonl_tail(path, limit=max(1, min(int(limit), 500))),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def tool_read_log_text_tail(self, filename: str, max_bytes: int = 262144) -> dict[str, Any]:
         try:
-            path = self._resolve_under(self.logs_dir, filename)
-            text = _safe_read_text(path, max_bytes=max(1024, int(max_bytes)))
-            return {"path": str(path), "text": text}
-        except Exception as e:
-            return {"error": str(e)}
+            path = self._resolve_under(self.source_logs_dir, filename)
+            return {
+                "path": str(path),
+                "text": _safe_read_text(path, max_bytes=max(1024, int(max_bytes))),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def _tool_defs(self) -> list[dict[str, Any]]:
         return [
@@ -178,7 +273,7 @@ class ObserveAgent:
                 "type": "function",
                 "function": {
                     "name": "list_log_files",
-                    "description": "List files under the mounted logs directory.",
+                    "description": "List files under the mounted logs directory. Paths may include nested directories.",
                     "parameters": {"type": "object", "properties": {}, "required": []},
                 },
             },
@@ -186,7 +281,7 @@ class ObserveAgent:
                 "type": "function",
                 "function": {
                     "name": "read_state_json",
-                    "description": "Read a JSON file from the mounted state directory (e.g. health.json, current_state.json).",
+                    "description": "Read a JSON file from the mounted state directory.",
                     "parameters": {
                         "type": "object",
                         "properties": {"filename": {"type": "string"}},
@@ -198,7 +293,7 @@ class ObserveAgent:
                 "type": "function",
                 "function": {
                     "name": "read_state_text_tail",
-                    "description": "Read the tail of a state file as text (for malformed JSON or debugging).",
+                    "description": "Read the tail of a state file as text.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -213,7 +308,7 @@ class ObserveAgent:
                 "type": "function",
                 "function": {
                     "name": "read_log_jsonl_tail",
-                    "description": "Read the tail of a JSONL log file as parsed JSON objects (e.g. decisions.jsonl).",
+                    "description": "Read the tail of a JSONL log file from the mounted logs directory.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -228,7 +323,7 @@ class ObserveAgent:
                 "type": "function",
                 "function": {
                     "name": "read_log_text_tail",
-                    "description": "Read the tail of a log file as text (e.g. progenitor.client.stderr.log).",
+                    "description": "Read the tail of a log file from the mounted logs directory.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -265,77 +360,48 @@ class ObserveAgent:
             )
         return {"error": f"Unknown tool: {name}"}
 
-    # -------------------------------------------------------------------------
-    # /responses (tool loop)
-    # -------------------------------------------------------------------------
-    def _responses_endpoint(self) -> str:
-        return _build_responses_endpoint(os.getenv("AZURE_OPENAI_BASE_URL", ""))
-
     def _responses_headers(self) -> dict[str, str]:
-        key = (os.getenv("AZURE_OPENAI_API_KEY") or "").strip()
-        return {"Content-Type": "application/json", "api-key": key}
+        api_key = (self.config.llm.api_key or "").strip()
+        if not api_key:
+            raise RuntimeError("AZURE_OPENAI_API_KEY must be set for observe_agent")
+        return {"Content-Type": "application/json", "api-key": api_key}
+
+    def _responses_endpoint(self) -> str:
+        return _build_responses_endpoint(self.config.llm.base_url)
 
     def _build_graph(self):
-        """LangGraph tool-loop: prepare -> LLM -> tools -> LLM -> finalize.
-
-        This is intentionally a small graph so we can extend it later with nodes like:
-        - prefetch (read common files upfront)
-        - classify (route to different diagnostics strategies)
-        - memory (persist last-seen snapshots)
-        """
-
-        class ObserveGraphState(TypedDict, total=False):
-            request: str
-            context: dict[str, Any]
-            model: str
-            system_prompt: str
-            payload: dict[str, Any]
-            tool_round: int
-            max_tool_rounds: int
-            last_data: dict[str, Any]
-            tool_calls: list[dict[str, Any]]
-            seen_tool_sigs: set[str]
-            final_text: str
-
         async def prepare(state: ObserveGraphState) -> dict[str, Any]:
-            request = (state.get("request") or "").strip() or "Summarize current Progenitor health and explain any recent errors."
+            request = (state.get("request") or "").strip() or (
+                "Summarize current Progenitor health and explain any recent errors."
+            )
             context = state.get("context") or {}
-            model = (state.get("model") or "").strip() or os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1-codex-max").strip() or "gpt-5.1-codex-max"
-            system_prompt = state.get("system_prompt")
-            if not system_prompt:
-                system_prompt = (
-                    "You are Observe Agent, a monitoring assistant for the Progenitor runtime.\n"
-                    "You have read-only tool access to Progenitor state/log mounts.\n"
-                    "Use tools as needed to answer the user's question.\n"
-                    "Return plain text only. Do not output JSON.\n"
-                    "If you cite log/state evidence, quote small relevant snippets.\n"
-                )
-
             input_messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": request},
             ]
             if context:
                 input_messages.append({"role": "user", "content": f"Context keys: {sorted(context.keys())}"})
 
             payload: dict[str, Any] = {
-                "model": model,
+                "model": self.config.llm.get_model(),
                 "input": input_messages,
                 "tools": self._tool_defs(),
                 "tool_choice": "auto",
                 "max_output_tokens": 2048,
             }
-            return {"payload": payload, "tool_round": 0, "max_tool_rounds": int(state.get("max_tool_rounds") or 12)}
+            return {
+                "payload": payload,
+                "tool_round": 0,
+                "max_tool_rounds": max(1, min(self.config.max_tool_rounds, 30)),
+            }
 
         async def llm_call(state: ObserveGraphState) -> dict[str, Any]:
-            payload = state.get("payload") or {}
-            data = await self._post_responses(payload)
-            tool_calls = self._extract_tool_calls(data)
-            return {"last_data": data, "tool_calls": tool_calls}
+            data = await self._post_responses(state.get("payload") or {})
+            return {"last_data": data, "tool_calls": self._extract_tool_calls(data)}
 
         async def run_tools(state: ObserveGraphState) -> dict[str, Any]:
             tool_calls = state.get("tool_calls") or []
-            if not isinstance(tool_calls, list) or not tool_calls:
+            if not tool_calls:
                 return {}
 
             input_messages = (state.get("payload") or {}).get("input") or []
@@ -343,29 +409,35 @@ class ObserveAgent:
             if not isinstance(seen, set):
                 seen = set()
                 state["seen_tool_sigs"] = seen
-            tool_result_messages: list[dict[str, Any]] = []
 
+            tool_result_messages: list[dict[str, Any]] = []
             for call in tool_calls:
                 if not isinstance(call, dict):
                     continue
                 call_id = call.get("call_id") or call.get("id") or call.get("tool_call_id") or ""
                 name = call.get("name") or call.get("tool_name") or call.get("function", {}).get("name") or ""
-                raw_args = call.get("arguments") or call.get("input") or call.get("params") or call.get("function", {}).get("arguments") or {}
+                raw_args = (
+                    call.get("arguments")
+                    or call.get("input")
+                    or call.get("params")
+                    or call.get("function", {}).get("arguments")
+                    or {}
+                )
                 if isinstance(raw_args, str):
                     try:
                         args = json.loads(raw_args)
-                    except Exception:
+                    except json.JSONDecodeError:
                         args = {"raw": raw_args}
                 elif isinstance(raw_args, dict):
                     args = raw_args
                 else:
                     args = {"raw": raw_args}
 
-                sig = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
-                if sig in seen:
+                signature = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                if signature in seen:
                     result = {"error": f"Repeated tool call detected: {name}"}
                 else:
-                    seen.add(sig)
+                    seen.add(signature)
                     result = self._execute_tool(str(name), args)
 
                 tool_result_messages.append(
@@ -378,12 +450,11 @@ class ObserveAgent:
             input_messages.extend(tool_result_messages)
             current_payload = state.get("payload") or {}
             current_payload["input"] = input_messages
-            state["tool_round"] = int(state.get("tool_round", 0)) + 1
-            return {"payload": current_payload, "tool_round": state["tool_round"]}
+            next_round = int(state.get("tool_round", 0)) + 1
+            return {"payload": current_payload, "tool_round": next_round}
 
         async def finalize(state: ObserveGraphState) -> dict[str, Any]:
-            data = state.get("last_data") or {}
-            text = self._extract_text(data)
+            text = self._extract_text(state.get("last_data") or {})
             if not text:
                 text = "No response text returned from responses API."
             return {"final_text": text}
@@ -411,16 +482,23 @@ class ObserveAgent:
         return graph.compile()
 
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
+        endpoint = self._responses_endpoint()
+        start = time.monotonic()
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._responses_headers()) as client:
-            resp = await client.post(self._responses_endpoint(), json=payload)
-            resp.raise_for_status()
-            return cast(dict[str, Any], resp.json())
+            response = await client.post(endpoint, json=payload)
+            response.raise_for_status()
+            data = cast(dict[str, Any], response.json())
+        logger.info(
+            "Observe responses call succeeded model=%s duration_ms=%.1f",
+            payload.get("model"),
+            (time.monotonic() - start) * 1000,
+        )
+        return data
 
     @staticmethod
     def _extract_tool_calls(data: dict[str, Any]) -> list[dict[str, Any]]:
         tool_calls: list[dict[str, Any]] = []
         tool_call_types = {"tool_call", "function_call"}
-
         for item in data.get("output", []) if isinstance(data.get("output"), list) else []:
             if isinstance(item, dict) and item.get("type") in tool_call_types:
                 tool_calls.append(item)
@@ -431,19 +509,15 @@ class ObserveAgent:
                     for part in content:
                         if isinstance(part, dict) and part.get("type") in tool_call_types:
                             tool_calls.append(part)
-
         if isinstance(data.get("tool_calls"), list):
-            tool_calls.extend([c for c in data["tool_calls"] if isinstance(c, dict)])
-
+            tool_calls.extend([call for call in data["tool_calls"] if isinstance(call, dict)])
         return tool_calls
 
     @staticmethod
     def _extract_text(data: dict[str, Any]) -> str:
-        text = data.get("output_text")
-        if isinstance(text, str) and text.strip():
-            return text.strip()
-
-        # Fallback: walk output messages
+        output_text = data.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
         for item in data.get("output", []) if isinstance(data.get("output"), list) else []:
             if not isinstance(item, dict) or item.get("type") != "message":
                 continue
@@ -456,191 +530,167 @@ class ObserveAgent:
                             return candidate.strip()
         return ""
 
-    async def _chat_with_tools(self, *, request: str, context: dict[str, Any]) -> str:
-        max_rounds = int(os.getenv("OBSERVE_MAX_TOOL_ROUNDS", "12"))
-        max_rounds = max(1, min(max_rounds, 30))
-        init_state = {"request": request, "context": context, "max_tool_rounds": max_rounds}
-        result = await self._graph.ainvoke(init_state, {"configurable": {"thread_id": f"observe_{int(time.time())}"}})  # pyright: ignore[reportArgumentType]
-        return str(result.get("final_text") or "").strip() or "No response text returned from Observe graph."
-
     async def process(self, request: str, context: dict[str, Any]) -> str:
         req = (request or "").strip() or "Summarize current Progenitor health and explain any recent errors."
-        return await self._chat_with_tools(request=req, context=context if isinstance(context, dict) else {})
-
-
-app = FastAPI()
-agent = ObserveAgent()
-_start_time = time.time()
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
-    port = int(os.environ.get("PORT", "8080"))
-    print("STATUS:starting:Initializing Observe Agent", flush=True)
-    print(f"STATUS:running:Server started on port {port}", flush=True)
-    print("STATUS:waiting:Idle, waiting for requests", flush=True)
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    print("STATUS:stopping:Shutting down", flush=True)
-    print("STATUS:stopped:Agent terminated", flush=True)
-
-
-@app.get("/.well-known/agent-card.json")
-@app.get("/.well-known/agent.json")
-async def agent_card() -> JSONResponse:
-    port = int(os.environ.get("PORT", "8080"))
-    public_host = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
-    skills = [
-        {
-            "id": capability,
-            "name": capability.replace("_", " ").title(),
-            "description": f"Observe capability: {capability}",
-            "tags": ["observe", "diagnostics"],
-            "examples": [f"Run {capability}"],
+        initial_state: ObserveGraphState = {
+            "request": req,
+            "context": context if isinstance(context, dict) else {},
         }
-        for capability in agent.CAPABILITIES
-    ]
-    payload = {
-        "protocolVersion": "1.0",
-        "name": agent.AGENT_NAME,
-        "description": agent.DESCRIPTION,
-        "url": f"http://{public_host}:{port}/",
-        "version": "0.1.0",
-        "defaultInputModes": ["text"],
-        "defaultOutputModes": ["text"],
-        "capabilities": {"streaming": True},
-        "skills": skills,
-    }
-    return JSONResponse(content=payload)
+        result = await self._graph.ainvoke(
+            initial_state,
+            {"configurable": {"thread_id": f"observe_{int(time.time())}"}},
+        )
+        text = str(result.get("final_text") or "").strip()
+        return text or "No response text returned from Observe graph."
 
 
-@app.get("/health")
-async def health() -> JSONResponse:
-    uptime = time.time() - _start_time
-    payload = {
-        "status": "healthy",
-        "name": agent.AGENT_NAME,
-        "version": "0.1.0",
-        "uptime_seconds": float(uptime),
-        "timestamp": _utc_now_iso(),
-    }
-    return JSONResponse(content=payload)
+class ObserveExecutor(AgentExecutor):
+    """A2A executor that immediately accepts tasks and runs them in the background."""
 
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        task_id = context.task_id or str(uuid.uuid4())
+        ctx_id = context.context_id or str(uuid.uuid4())
+        request_text = _extract_request_text(context.message)
+        request_ctx = _extract_context(context.message)
+        request_ctx.setdefault("a2a_task_id", task_id)
+        request_ctx.setdefault("a2a_context_id", ctx_id)
 
-@app.post("/")
-async def handle(req: Request) -> JSONResponse:
-    try:
-        body = await req.json()
-    except Exception:
-        body = {}
-
-    # A2A JSON-RPC: support message/send so Progenitor can call us without fallbacks.
-    if isinstance(body, dict) and body.get("jsonrpc") == "2.0" and body.get("method") == "message/send":
-        params_raw = body.get("params")
-        params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
-        message_raw = params.get("message")
-        msg: dict[str, Any] = message_raw if isinstance(message_raw, dict) else {}
-        parts_raw = msg.get("parts")
-        parts: list[Any] = parts_raw if isinstance(parts_raw, list) else []
-        req_str = ""
-        for part in parts:
-            if isinstance(part, dict) and part.get("kind") == "text" and isinstance(part.get("text"), str):
-                req_str += part["text"]
-        req_str = req_str.strip()
-        metadata_raw = params.get("metadata")
-        ctx: dict[str, Any] = metadata_raw if isinstance(metadata_raw, dict) else {}
-
-        print("STATUS:executing:Calling responses API with tool access", flush=True)
-        try:
-            text = await agent.process(req_str, ctx)
-            response = {
-                "jsonrpc": "2.0",
-                "id": body.get("id"),
-                "result": {
-                    "message": {
-                        "kind": "message",
-                        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
-                        "role": "agent",
-                        "parts": [{"kind": "text", "text": text}],
-                    },
-                    "metadata": {},
-                },
-            }
-            print("STATUS:waiting:Idle, waiting for requests", flush=True)
-            return JSONResponse(content=response)
-        except Exception as e:
-            print(f"STATUS:failed:{e}", flush=True)
-            return JSONResponse(
-                content={
-                    "jsonrpc": "2.0",
-                    "id": body.get("id"),
-                    "error": {"code": -32000, "message": str(e)},
-                },
-                status_code=500,
+        if not request_text:
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    final=True,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=_text_msg("Empty request."),
+                        timestamp=_utc_now_iso(),
+                    ),
+                )
             )
+            return
 
-    req_str = body.get("request", "") if isinstance(body, dict) else ""
-    context_raw = body.get("context") if isinstance(body, dict) else {}
-    request_context: dict[str, Any] = context_raw if isinstance(context_raw, dict) else {}
+        if _task_queue is None:
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    final=True,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=_text_msg("Observe task queue is not initialised."),
+                        timestamp=_utc_now_iso(),
+                    ),
+                )
+            )
+            return
 
-    print("STATUS:executing:Calling responses API with tool access", flush=True)
+        await _task_queue.enqueue(
+            _QueuedTask(
+                task_id=task_id,
+                context_id=ctx_id,
+                request_text=request_text,
+                request_ctx=request_ctx,
+            )
+        )
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=ctx_id,
+                final=True,
+                status=TaskStatus(
+                    state=TaskState.submitted,
+                    message=_text_msg(f"Task accepted (id={task_id}): {request_text[:120]}"),
+                    timestamp=_utc_now_iso(),
+                ),
+            )
+        )
+
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        task_id = context.task_id or ""
+        cancelled = False
+        if _task_queue is not None and task_id:
+            cancelled = await _task_queue.cancel(task_id)
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=context.context_id or "",
+                final=True,
+                status=TaskStatus(
+                    state=TaskState.canceled,
+                    message=_text_msg("Cancelled." if cancelled else "No active task to cancel."),
+                    timestamp=_utc_now_iso(),
+                ),
+            )
+        )
+
+
+agent = ObserveAgent()
+_PORT = int(os.environ.get("PORT", str(DEFAULT_PORT)))
+_HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
+_task_queue: ObserveTaskQueue | None = None
+
+AGENT_CARD = AgentCard(
+    name=AGENT_NAME,
+    description=agent.DESCRIPTION,
+    version=AGENT_VERSION,
+    url=f"http://{_HOST}:{_PORT}",
+    capabilities=AgentCapabilities(streaming=False, state_transition_history=True),
+    default_input_modes=["text/plain"],
+    default_output_modes=["text/plain"],
+    skills=[
+        AgentSkill(
+            id=capability,
+            name=capability.replace("_", " ").title(),
+            description=f"Observe capability: {capability}",
+            tags=["observe", "diagnostics"],
+            examples=[f"Run {capability}"],
+        )
+        for capability in CAPABILITIES
+    ],
+)
+
+_executor = ObserveExecutor()
+_task_store = InMemoryTaskStore()
+_handler = DefaultRequestHandler(agent_executor=_executor, task_store=_task_store)
+_a2a_app = A2AFastAPIApplication(agent_card=AGENT_CARD, http_handler=_handler)
+app = _a2a_app.build()
+
+
+def _agent_card_payload() -> dict[str, Any]:
+    return cast(dict[str, Any], AGENT_CARD.model_dump(mode="json", exclude_none=True))
+
+
+async def agent_card() -> JSONResponse:
+    return JSONResponse(content=_agent_card_payload())
+
+
+async def _health(request: Any) -> JSONResponse:
+    del request
+    return JSONResponse(content=agent.health())
+
+
+app.add_route("/health", _health, methods=["GET"])
+
+
+@asynccontextmanager
+async def _lifespan(_app: Any):
+    global _task_queue
+    runtime_config = get_config()
+    setup_logging(runtime_config, _runtime_agent_name())
+    logger.info("Observe agent starting on port %d", _PORT)
+    await agent.initialize()
+    _task_queue = ObserveTaskQueue(agent)
+    _task_queue.start()
+    logger.info("Observe agent ready")
     try:
-        text = await agent.process(req_str, request_context)
-        response = {
-            "success": True,
-            "response": text,
-            "error": None,
-            "metadata": {},
-        }
-        print("STATUS:waiting:Idle, waiting for requests", flush=True)
-        return JSONResponse(content=response)
-    except Exception as e:
-        print(f"STATUS:failed:{e}", flush=True)
-        err: dict[str, Any] = {
-            "success": False,
-            "response": None,
-            "error": "Observe agent failed to generate report",
-            "metadata": {"detail": str(e)},
-        }
-        return JSONResponse(content=err, status_code=500)
+        yield
+    finally:
+        logger.info("Observe agent shutting down")
+        if _task_queue is not None:
+            await _task_queue.stop()
+            _task_queue = None
+        await agent.shutdown()
 
 
-@app.post("/v1/responses")
-async def responses_api(req: Request) -> JSONResponse:
-    """Responses API endpoint."""
-    try:
-        body = await req.json()
-    except Exception:
-        body = {}
-
-    request_input = (body or {}).get("input")
-    request_text = ""
-    if isinstance(request_input, str):
-        request_text = request_input.strip()
-    elif isinstance(request_input, list):
-        for item in reversed(request_input):
-            if isinstance(item, dict) and str(item.get("role") or "") == "user":
-                request_text = str(item.get("content") or "").strip()
-                if request_text:
-                    break
-    content = await agent.process(request_text, {}) if request_text else "Empty request."
-    payload = {
-        "id": f"resp-{uuid.uuid4().hex[:8]}",
-        "object": "response",
-        "created": int(time.time()),
-        "model": str((body or {}).get("model") or "agent/observe_agent"),
-        "output": [
-            {
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": content}],
-            }
-        ],
-        "usage": {
-            "prompt_tokens": len(request_text.split()),
-            "completion_tokens": len(content.split()),
-            "total_tokens": len(request_text.split()) + len(content.split()),
-        },
-    }
-    return JSONResponse(payload)
+app.router.lifespan_context = _lifespan

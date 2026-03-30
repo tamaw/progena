@@ -1,4 +1,5 @@
-"""Observe agent - monitors Progenitor via mounted state/logs."""
+"""Observe agent package."""
 
-from .agent import ObserveAgent  # noqa: F401
+from .agent import ObserveAgent
 
+__all__ = ["ObserveAgent"]
