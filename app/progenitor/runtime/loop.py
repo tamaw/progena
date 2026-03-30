@@ -21,7 +21,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
 
 from ..state.models import redact_secrets
 from .scheduler import Scheduler
@@ -35,6 +35,17 @@ logger = logging.getLogger(__name__)
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
+
+
+class QueuedInput(NamedTuple):
+    """Input message bundled with the time it was enqueued.
+
+    Wrapping inputs in this NamedTuple lets the loop measure how long a
+    message waited in the queue before processing began – useful context
+    for the LLM when a user sends several messages in quick succession.
+    """
+    content: str
+    enqueue_time: float  # time.monotonic() at enqueue
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -63,7 +74,7 @@ class ProgenitorLoop:
 
         # Bounded queues to prevent memory exhaustion
         runtime = config.runtime
-        self._input_queue: asyncio.Queue = asyncio.Queue(
+        self._input_queue: asyncio.Queue[QueuedInput] = asyncio.Queue(
             maxsize=runtime.max_input_queue_size
         )
         self._output_queue: asyncio.Queue = asyncio.Queue(
@@ -97,6 +108,14 @@ class ProgenitorLoop:
 
         # Lock to prevent concurrent graph cycles
         self._graph_lock = asyncio.Lock()
+
+        # Timing metadata captured at dequeue time; consumed once per input cycle.
+        # _current_input_wait_seconds: how long the message sat in the input queue.
+        # _current_input_pending_count: how many further messages remain after dequeue.
+        # Both are written into ProgenitorState before the graph cycle runs so that
+        # the intake node (and the LLM) can see them.
+        self._current_input_wait_seconds: float = 0.0
+        self._current_input_pending_count: int = 0
 
         # Shared state for the loop (protected by _graph_lock)
         self._state: dict[str, Any] = {}
@@ -219,6 +238,11 @@ class ProgenitorLoop:
                     self._state["current_input"] = user_input
                     self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
                     self._state["actions_this_cycle"] = 0
+
+                    # Expose queue timing to the graph so the intake node and LLM
+                    # can see how long this message waited and whether more are queued.
+                    self._state["input_wait_seconds"] = self._current_input_wait_seconds
+                    self._state["pending_messages_in_queue"] = self._current_input_pending_count
 
                     # Enable streaming mode
                     self._streaming_enabled = True
@@ -532,14 +556,22 @@ class ProgenitorLoop:
         """Get user input with timeout.
 
         Caps timeout at 30 seconds to ensure health updates happen frequently.
+        Unwraps the QueuedInput envelope and records queue-timing metadata so
+        that _input_handler_loop can expose it to the graph state.
         """
         # Cap timeout to ensure health gets updated frequently
         effective_timeout = min(timeout, 30.0)
         try:
-            return await asyncio.wait_for(
+            queued = await asyncio.wait_for(
                 self._input_queue.get(),
                 timeout=effective_timeout
             )
+            # Record how long this message sat in the queue and how many
+            # more messages are still waiting.  Both are surfaced to nodes via
+            # input_wait_seconds / pending_messages_in_queue in ProgenitorState.
+            self._current_input_wait_seconds = time.monotonic() - queued.enqueue_time
+            self._current_input_pending_count = self._input_queue.qsize()
+            return queued.content
         except TimeoutError:
             return None
 
@@ -866,6 +898,11 @@ class ProgenitorLoop:
     async def enqueue_input(self, message: str, timeout: float | None = 30.0) -> bool:
         """Add a message to the input queue.
 
+        The message is wrapped in a QueuedInput tuple that captures the current
+        monotonic clock value.  When the message is later dequeued by _get_input(),
+        the wait time is computed and stored in _current_input_wait_seconds so the
+        LangGraph cycle can surface it to nodes via the input_wait_seconds state field.
+
         Args:
             message: The message to enqueue.
             timeout: Max seconds to wait if queue is full. None = wait forever.
@@ -876,17 +913,18 @@ class ProgenitorLoop:
         Raises:
             asyncio.QueueFull: If timeout is 0 and queue is full (non-blocking mode).
         """
+        queued = QueuedInput(content=message, enqueue_time=time.monotonic())
         try:
             if timeout == 0:
                 # Non-blocking mode
-                self._input_queue.put_nowait(message)
+                self._input_queue.put_nowait(queued)
             elif timeout is None:
                 # Wait forever
-                await self._input_queue.put(message)
+                await self._input_queue.put(queued)
             else:
                 # Wait with timeout
                 await asyncio.wait_for(
-                    self._input_queue.put(message),
+                    self._input_queue.put(queued),
                     timeout=timeout
                 )
             return True

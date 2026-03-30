@@ -5,6 +5,7 @@ Tests end-to-end communication between the IPC client and server.
 """
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -19,6 +20,7 @@ class MockLoopRunner:
         self._input_queue = asyncio.Queue()
         self._output_queue = asyncio.Queue()
         self._stream_queue = asyncio.Queue()
+        self._event_queue = asyncio.Queue()
         self._response = "Mock response"
         self._cycle_complete_event = asyncio.Event()
         # Auto-set event for mocking
@@ -86,6 +88,19 @@ class MockLoopRunner:
         if timeout:
             await asyncio.sleep(timeout)
         return None
+
+    async def _push_event(
+        self,
+        event_type: str,
+        content: str = "",
+        metadata: dict | None = None,
+    ) -> None:
+        """Record an event pushed by the IPC server (e.g. message_queued)."""
+        self._event_queue.put_nowait({
+            "event_type": event_type,
+            "content": content,
+            "metadata": metadata or {},
+        })
 
 
 @pytest.fixture
@@ -455,3 +470,49 @@ class TestIPCConcurrency:
             for client in clients:
                 await client.disconnect()
             await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_message_queued_event_emitted_when_lock_contended(
+        self, ipc_server, mock_loop_runner
+    ):
+        """Test that a message_queued event is pushed when a request arrives while another is in-flight.
+
+        The IPC server must call loop_runner._push_event('message_queued', ...) before
+        blocking on _request_lock so that SSE clients receive immediate feedback.
+        """
+        # Manually hold the request lock to simulate an in-flight request.
+        await ipc_server._request_lock.acquire()
+        try:
+            client = IPCClient(
+                host="127.0.0.1",
+                port=ipc_server.port,
+                timeout=5.0,
+                auto_reconnect=False,
+            )
+            await client.connect()
+
+            # Send a message while the lock is held; the server handler will
+            # detect lock contention and push the event before blocking.
+            send_task = asyncio.create_task(
+                client.send_message("second message while busy", request_id="req_queued")
+            )
+
+            # Give the server enough time to reach the lock-contention check.
+            await asyncio.sleep(0.3)
+
+            # The message_queued event should already be in the mock's event queue.
+            assert not mock_loop_runner._event_queue.empty(), (
+                "Expected a message_queued event to be pushed before the lock was acquired"
+            )
+            event = mock_loop_runner._event_queue.get_nowait()
+            assert event["event_type"] == "message_queued"
+            assert event["metadata"].get("request_id") == "req_queued"
+
+        finally:
+            ipc_server._request_lock.release()
+            # Wait briefly for the server to process the request now that the lock is free.
+            await asyncio.sleep(0.3)
+            send_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await send_task
+            await client.disconnect()

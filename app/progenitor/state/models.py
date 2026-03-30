@@ -344,6 +344,12 @@ class ConversationState(TypedDict, total=False):
     last_reasoning_trace: str | None
     attachments: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
+    # Queue timing – set once per input cycle by the loop before the graph runs.
+    # input_wait_seconds: how long this message sat in the input queue before processing.
+    # pending_messages_in_queue: how many further messages are still waiting after this one.
+    # Both are exposed to nodes so the LLM can acknowledge delayed or batched messages.
+    input_wait_seconds: float | None
+    pending_messages_in_queue: int
 
 
 class WorkState(TypedDict, total=False):

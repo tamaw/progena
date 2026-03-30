@@ -14,6 +14,12 @@ from typing import Any, cast
 from ..runtime.time_utils import utcnow
 from ..state.models import ConversationMessage, ProgenitorState
 
+# If a message waited in the input queue for longer than this many seconds before
+# being processed, its metadata will include 'queued_wait_seconds' so the LLM
+# can acknowledge the delay (e.g. "I see you sent this a few minutes ago while I
+# was working on your previous request").
+QUEUE_WAIT_THRESHOLD_SECONDS = 30.0
+
 
 def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the intake node function."""
@@ -49,6 +55,15 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         if awaiting_clarification:
             metadata["type"] = "clarification_response"
             metadata["clarification_context"] = state.get("clarification_context")
+
+        # Annotate when this message was queued behind a running request so the
+        # LLM can acknowledge the delay in its response.
+        wait_secs = float(state.get("input_wait_seconds", 0.0))
+        pending_count = int(state.get("pending_messages_in_queue", 0))
+        if wait_secs >= QUEUE_WAIT_THRESHOLD_SECONDS:
+            metadata["queued_wait_seconds"] = round(wait_secs, 1)
+        if pending_count > 0:
+            metadata["pending_messages_in_queue"] = pending_count
 
         role = state.get("current_input_role") or "user"
 

@@ -89,6 +89,52 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert result is True
         assert self.loop._input_queue.qsize() == 1
 
+    async def test_enqueue_input_stores_queued_input_wrapper(self):
+        """Enqueued items must be QueuedInput wrappers, not plain strings."""
+        from app.progenitor.runtime.loop import QueuedInput
+
+        await self.loop.enqueue_input("wrapped message")
+        item = self.loop._input_queue.get_nowait()
+        assert isinstance(item, QueuedInput)
+        assert item.content == "wrapped message"
+        assert item.enqueue_time > 0
+
+    async def test_get_input_records_wait_time(self):
+        """_get_input records how long the message sat in the queue."""
+        import time
+
+        await self.loop.enqueue_input("timed message")
+
+        # Small artificial delay so wait time is non-zero
+        await asyncio.sleep(0.05)
+
+        result = await self.loop._get_input(timeout=1.0)
+
+        assert result == "timed message"
+        # Wait time must be recorded and be a plausible value
+        assert self.loop._current_input_wait_seconds >= 0.0
+        assert self.loop._current_input_wait_seconds < 10.0  # sanity upper bound
+
+    async def test_get_input_records_pending_count(self):
+        """_get_input records how many messages remain after dequeue."""
+        for i in range(3):
+            await self.loop.enqueue_input(f"message {i}")
+
+        # Dequeue first – 2 should remain
+        result = await self.loop._get_input(timeout=1.0)
+        assert result == "message 0"
+        assert self.loop._current_input_pending_count == 2
+
+        # Dequeue second – 1 should remain
+        result = await self.loop._get_input(timeout=1.0)
+        assert result == "message 1"
+        assert self.loop._current_input_pending_count == 1
+
+        # Dequeue last – 0 should remain
+        result = await self.loop._get_input(timeout=1.0)
+        assert result == "message 2"
+        assert self.loop._current_input_pending_count == 0
+
     async def test_enqueue_input_with_timeout(self):
         """Test enqueue with timeout when queue is full."""
         # Fill the queue

@@ -278,6 +278,17 @@ class IPCServer:
             request_id: Request identifier.
             writer: Client stream writer.
         """
+        # If another request is already being processed, immediately let all
+        # connected clients know this one is queued.  This gives the frontend
+        # (and any SSE listeners) real-time feedback instead of silent blocking.
+        if self._request_lock.locked():
+            logger.info("Request %s queued behind active request", request_id)
+            await self.loop_runner._push_event(
+                "message_queued",
+                "A previous message is being processed; this message will be handled next",
+                {"request_id": request_id},
+            )
+
         # Serialize requests to prevent output queue race conditions.
         # The loop doesn't track request IDs, so we must ensure only
         # one request is processed at a time.
@@ -344,6 +355,17 @@ class IPCServer:
             request_id: Request identifier.
             writer: Client stream writer.
         """
+        # If another request is already being processed, immediately let all
+        # connected clients know this one is queued.  This gives the frontend
+        # (and any SSE listeners) real-time feedback instead of silent blocking.
+        if self._request_lock.locked():
+            logger.info("Streaming request %s queued behind active request", request_id)
+            await self.loop_runner._push_event(
+                "message_queued",
+                "A previous message is being processed; this message will be handled next",
+                {"request_id": request_id},
+            )
+
         # Serialize requests to prevent output queue race conditions.
         # The loop doesn't track request IDs, so we must ensure only
         # one request is processed at a time.
