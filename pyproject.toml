@@ -56,7 +56,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["app*", "src*"]
 
 # Ruff configuration (linting + formatting)
 [tool.ruff]

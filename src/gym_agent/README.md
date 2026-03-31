@@ -18,6 +18,9 @@ pip install fastapi "uvicorn[standard]" pydantic python-dateutil
 uvicorn src.gym_agent.main:app --reload --port 8001
 ```
 
+If you install the project from a built wheel or sdist, the `src` package is
+included, so the same module path works after installation.
+
 ## Agent Card
 
 ```bash
