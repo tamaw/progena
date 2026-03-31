@@ -14,8 +14,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PROGENITOR_STATE_DIR=/app/data/state \
     AGENT_MODEL_DEFAULT= \
     PROGENITOR_MODEL_DEFAULT= \
-    PROGENITOR_WORKTREES_ROOT=/app/worktrees \
-    PROGENITOR_PROMPTS_DIR=/app/prompts
+    PROGENITOR_WORKTREES_ROOT=/app/worktrees
 
 RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
 
@@ -42,7 +41,7 @@ COPY scripts/ /app/scripts/
 RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
 
-VOLUME ["/app/data", "/app/logs", "/app/worktrees", "/app/prompts"]
+VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
 COPY app/agents/observe_agent/docker-entrypoint.sh /usr/local/bin/observe-entrypoint.sh
 RUN chmod +x /usr/local/bin/observe-entrypoint.sh
