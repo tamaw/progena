@@ -6,6 +6,7 @@ The frontend runs separately via npm/Vite.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -386,10 +387,11 @@ class TestLogsEndpoint:
 
     def test_logs_json_supports_incremental_cursor_and_regex_search(self, client, kanban_state_reader):
         """Test cursor-based incremental fetches and regex search."""
+        base_time = datetime.now(UTC).replace(microsecond=0)
         (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
             "\n".join([
-                json.dumps({"message": "alpha ready", "timestamp": "2026-03-24T10:00:00Z", "level": "info"}),
-                json.dumps({"message": "beta failed", "timestamp": "2026-03-24T10:01:00Z", "level": "error"}),
+                json.dumps({"message": "alpha ready", "timestamp": (base_time - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"), "level": "info"}),
+                json.dumps({"message": "beta failed", "timestamp": base_time.isoformat().replace("+00:00", "Z"), "level": "error"}),
             ]) + "\n",
             encoding="utf-8",
         )
@@ -409,27 +411,33 @@ class TestLogsEndpoint:
 
     def test_logs_json_supports_date_range_filter(self, client, kanban_state_reader):
         """Test inclusive start/end date filtering."""
+        range_end = datetime.now(UTC).date()
+        range_start = range_end - timedelta(days=1)
+        old_date = range_start - timedelta(days=1)
         (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
             "\n".join([
-                json.dumps({"message": "old entry", "timestamp": "2026-03-20T10:00:00Z", "level": "info"}),
-                json.dumps({"message": "in range", "timestamp": "2026-03-24T10:00:00Z", "level": "warning"}),
-                json.dumps({"message": "boundary end", "timestamp": "2026-03-25T23:59:00Z", "level": "error"}),
+                json.dumps({"message": "old entry", "timestamp": f"{old_date.isoformat()}T10:00:00Z", "level": "info"}),
+                json.dumps({"message": "in range", "timestamp": f"{range_start.isoformat()}T10:00:00Z", "level": "warning"}),
+                json.dumps({"message": "boundary end", "timestamp": f"{range_end.isoformat()}T23:59:00Z", "level": "error"}),
             ]) + "\n",
             encoding="utf-8",
         )
 
-        response = client.get("/api/ui/logs?format=json&start=2026-03-24&end=2026-03-25&limit=0")
+        response = client.get(
+            f"/api/ui/logs?format=json&start={range_start.isoformat()}&end={range_end.isoformat()}&limit=0"
+        )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["date_range"] == {"start": "2026-03-24", "end": "2026-03-25"}
+        assert data["date_range"] == {"start": range_start.isoformat(), "end": range_end.isoformat()}
         assert [entry["message"] for entry in data["entries"]] == ["boundary end", "in range"]
         assert {entry["level"] for entry in data["entries"]} == {"warn", "error"}
 
     def test_logs_export_returns_downloadable_payload(self, client, kanban_state_reader):
         """Test export endpoint returns attachment headers."""
+        timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
-            json.dumps({"message": "decision made", "timestamp": "2026-03-24T10:00:00Z", "level": "info"}) + "\n",
+            json.dumps({"message": "decision made", "timestamp": timestamp, "level": "info"}) + "\n",
             encoding="utf-8",
         )
 
@@ -440,8 +448,9 @@ class TestLogsEndpoint:
 
     def test_logs_export_supports_csv(self, client, kanban_state_reader):
         """Test CSV export output."""
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         (kanban_state_reader.logs_dir / "progenitor.log").write_text(
-            "2026-03-24 10:00:00 - __main__ - INFO - Started\n",
+            f"{timestamp} - __main__ - INFO - Started\n",
             encoding="utf-8",
         )
 
