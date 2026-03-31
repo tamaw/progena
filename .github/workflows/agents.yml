@@ -83,16 +83,31 @@ jobs:
 
       - name: Install Python deps
         run: |
+          retry() {
+            local attempts="$1"
+            shift
+            local delay=5
+            local try=1
+            until "$@"; do
+              if [ "$try" -ge "$attempts" ]; then
+                return 1
+              fi
+              echo "Command failed (attempt $try/$attempts): $*"
+              echo "Retrying in ${delay}s..."
+              sleep "$delay"
+              try=$((try + 1))
+            done
+          }
           mkdir -p "$PIP_CACHE_DIR"
           python -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.lock.txt
+          retry 5 python -m pip install --upgrade pip
+          retry 5 pip install -r requirements.lock.txt
           if [ -f "app/agents/${{ matrix.agent }}/requirements.txt" ]; then
-            pip install -r "app/agents/${{ matrix.agent }}/requirements.txt"
+            retry 5 pip install -r "app/agents/${{ matrix.agent }}/requirements.txt"
           fi
-          pip install ruff pyright
-          pip install -e . --no-deps
+          retry 5 pip install ruff pyright
+          retry 5 pip install -e . --no-deps
 
       - uses: actions/setup-node@v4
         with:
