@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -12,9 +12,9 @@ class Workout(BaseModel):
     """A single workout entry."""
 
     type: str = Field(..., description="Type of workout, e.g. 'running', 'cycling'")
-    duration_min: Optional[int] = Field(None, ge=0, description="Duration in minutes")
-    distance_km: Optional[float] = Field(None, ge=0, description="Distance in kilometres")
-    notes: Optional[str] = Field(None, description="Free-text notes")
+    duration_min: int | None = Field(None, ge=0, description="Duration in minutes")
+    distance_km: float | None = Field(None, ge=0, description="Distance in kilometres")
+    notes: str | None = Field(None, description="Free-text notes")
 
 
 class LogWorkoutPayload(BaseModel):
@@ -42,8 +42,8 @@ class GetHistoryPayload(BaseModel):
     """Payload for the get_history capability."""
 
     user_id: str
-    start_date: Optional[str] = Field(None, description="ISO date string (inclusive)")
-    end_date: Optional[str] = Field(None, description="ISO date string (inclusive)")
+    start_date: str | None = Field(None, description="ISO date string (inclusive)")
+    end_date: str | None = Field(None, description="ISO date string (inclusive)")
     limit: int = Field(100, ge=1, le=1000)
 
 

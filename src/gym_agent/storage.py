@@ -282,10 +282,7 @@ def _compute_streaks(dates: list[str], min_days: int) -> dict[str, int]:
         longest = max(longest, run)
 
     # Check if streak is still active (last workout within min_days of today)
-    if (today - parsed[-1]).days <= min_days:
-        current = run
-    else:
-        current = 0
+    current = run if (today - parsed[-1]).days <= min_days else 0
 
     return {"current_streak": current, "longest_streak": longest}
 

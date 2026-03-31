@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
+from . import storage
 from .schemas import (
     A2ARequest,
     GetHistoryPayload,
@@ -16,7 +18,6 @@ from .schemas import (
     LogWorkoutPayload,
     SummarizePayload,
 )
-from . import storage
 
 logger = logging.getLogger(__name__)
 
