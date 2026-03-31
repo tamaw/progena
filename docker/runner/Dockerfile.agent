@@ -5,6 +5,8 @@ FROM python:3.12-slim
 # Pass --build-arg AGENT_NAME=<name> to select which agent to package.
 
 ARG AGENT_NAME
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     AGENT_NAME=${AGENT_NAME}
@@ -17,8 +19,13 @@ WORKDIR /app
 COPY app/agents/${AGENT_NAME}/ /app/agent/
 
 # Install agent-specific requirements
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /app/agent/requirements.txt
+RUN set -eux; \
+    install_args="--index-url ${PIP_INDEX_URL}"; \
+    if [ -n "${PIP_TRUSTED_HOST:-}" ]; then \
+      install_args="$install_args --trusted-host ${PIP_TRUSTED_HOST}"; \
+    fi; \
+    pip install --no-cache-dir --upgrade pip $install_args && \
+    pip install --no-cache-dir $install_args -r /app/agent/requirements.txt
 
 USER runner
 

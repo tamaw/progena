@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST
+
 # Install system dependencies (curl for healthchecks, ca-certs for TLS)
 RUN apt-get update && apt-get install -y \
     curl \
@@ -14,7 +17,12 @@ WORKDIR /app
 
 # Copy requirements first for better caching
 COPY requirements.lock.txt .
-RUN pip install --no-cache-dir -r requirements.lock.txt
+RUN set -eux; \
+    install_args="--index-url ${PIP_INDEX_URL}"; \
+    if [ -n "${PIP_TRUSTED_HOST:-}" ]; then \
+      install_args="$install_args --trusted-host ${PIP_TRUSTED_HOST}"; \
+    fi; \
+    pip install --no-cache-dir $install_args -r requirements.lock.txt
 
 # Copy application code (including app.chat_server and app.progenitor)
 COPY app/ ./app/

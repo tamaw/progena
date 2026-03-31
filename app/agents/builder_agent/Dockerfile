@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST
+
 # Builder Agent - self-contained A2A agent for inner-loop build operations.
 # Requires git and GitHub CLI (gh) for PR management.
 # Copilot ACP is accessed via the copilot_acp container over TCP.
@@ -51,8 +54,13 @@ WORKDIR /app
 
 # Install Python dependencies before copying code (better layer caching)
 COPY app/agents/builder_agent/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.txt
+RUN set -eux; \
+    install_args="--index-url ${PIP_INDEX_URL}"; \
+    if [ -n "${PIP_TRUSTED_HOST:-}" ]; then \
+      install_args="$install_args --trusted-host ${PIP_TRUSTED_HOST}"; \
+    fi; \
+    pip install --no-cache-dir --upgrade pip $install_args && \
+    pip install --no-cache-dir $install_args -r /app/requirements.txt
 
 # Copy the builder agent package
 COPY app/agents/builder_agent/ /app/agent/

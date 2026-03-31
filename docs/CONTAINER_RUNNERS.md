@@ -14,6 +14,36 @@ docker build -f docker/runner/Dockerfile.agent -t progenitor-agent-runner:latest
 docker build -f docker/runner/Dockerfile.mcp -t progenitor-mcp-runner:latest .
 ```
 
+## Local PyPI cache for self-hosted builds
+
+Self-hosted GitHub Actions workflows can bootstrap a persistent local PyPI cache
+container with `.github/scripts/ensure_local_pypi_cache.py`. That script starts
+or reuses a `devpi` container on the runner host, then emits `PIP_INDEX_URL`
+and `PIP_TRUSTED_HOST` values for both workflow `pip install` steps and Docker
+image builds.
+
+Manual Docker builds can opt into the same cache with build args:
+
+```bash
+docker build \
+  -f docker/runner/Dockerfile.agent \
+  --build-arg PIP_INDEX_URL=http://<runner-host>:3141/root/pypi/+simple/ \
+  --build-arg PIP_TRUSTED_HOST=<runner-host> \
+  --build-arg AGENT_NAME=<agent_name> \
+  -t progenitor-agent-runner:latest .
+```
+
+The workflow bootstrap step also supports these overrides via GitHub Actions
+variables or secrets:
+
+- `PYPI_CACHE_IMAGE`
+- `PYPI_CACHE_BIND_ADDRESS`
+- `PYPI_CACHE_HOST`
+- `PYPI_CACHE_PORT`
+- `PYPI_CACHE_CONTAINER_NAME`
+- `PYPI_CACHE_VOLUME_NAME`
+- `PYPI_CACHE_ROOT_PASSWORD` (secret)
+
 ## Runner Contract
 
 Container entrypoint:

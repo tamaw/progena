@@ -43,6 +43,29 @@ jobs:
           echo "uid=${RUN_UID}" >> "$GITHUB_OUTPUT"
           echo "gid=${RUN_GID}" >> "$GITHUB_OUTPUT"
 
+  python-package-cache:
+    needs: runner-context
+    runs-on: self-hosted
+    outputs:
+      index_url: ${{ steps.cache.outputs.index_url }}
+      trusted_host: ${{ steps.cache.outputs.trusted_host }}
+      cache_enabled: ${{ steps.cache.outputs.cache_enabled }}
+      cache_host: ${{ steps.cache.outputs.cache_host }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure local Python package cache
+        id: cache
+        env:
+          PYPI_CACHE_IMAGE: ${{ vars.PYPI_CACHE_IMAGE }}
+          PYPI_CACHE_BIND_ADDRESS: ${{ vars.PYPI_CACHE_BIND_ADDRESS }}
+          PYPI_CACHE_HOST: ${{ vars.PYPI_CACHE_HOST }}
+          PYPI_CACHE_PORT: ${{ vars.PYPI_CACHE_PORT }}
+          PYPI_CACHE_CONTAINER_NAME: ${{ vars.PYPI_CACHE_CONTAINER_NAME }}
+          PYPI_CACHE_VOLUME_NAME: ${{ vars.PYPI_CACHE_VOLUME_NAME }}
+          PYPI_CACHE_ROOT_PASSWORD: ${{ secrets.PYPI_CACHE_ROOT_PASSWORD }}
+        run: python .github/scripts/ensure_local_pypi_cache.py
+
   # ------------------------------------------------------------------ discover
   discover-agents:
     needs: runner-context
@@ -64,7 +87,7 @@ jobs:
 
   # ------------------------------------------------------------------ test
   test-agent:
-    needs: [runner-context, discover-agents]
+    needs: [runner-context, discover-agents, python-package-cache]
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
@@ -72,6 +95,8 @@ jobs:
     env:
       AGENT_NAME: ${{ matrix.agent }}
       PIP_CACHE_DIR: /tmp/pip-cache
+      PIP_INDEX_URL: ${{ needs.python-package-cache.outputs.index_url }}
+      PIP_TRUSTED_HOST: ${{ needs.python-package-cache.outputs.trusted_host }}
       PROGENITOR_LOG_DIR: /app/logs
       PROGENITOR_STATE_DIR: /app/data/state
     strategy:
@@ -83,16 +108,23 @@ jobs:
 
       - name: Install Python deps
         run: |
+          pip_install() {
+            if [ -n "${PIP_TRUSTED_HOST:-}" ]; then
+              python -m pip install --index-url "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" "$@"
+            else
+              python -m pip install --index-url "$PIP_INDEX_URL" "$@"
+            fi
+          }
           mkdir -p "$PIP_CACHE_DIR"
           python -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.lock.txt
+          pip_install --upgrade pip
+          pip_install -r requirements.lock.txt
           if [ -f "app/agents/${{ matrix.agent }}/requirements.txt" ]; then
-            pip install -r "app/agents/${{ matrix.agent }}/requirements.txt"
+            pip_install -r "app/agents/${{ matrix.agent }}/requirements.txt"
           fi
-          pip install ruff pyright
-          pip install -e . --no-deps
+          pip_install ruff pyright
+          pip_install -e . --no-deps
 
       - uses: actions/setup-node@v4
         with:
@@ -143,7 +175,7 @@ jobs:
 
   # ------------------------------------------------------------------ build + push agents
   build-agent:
-    needs: [test-agent, detect-changes]
+    needs: [test-agent, detect-changes, python-package-cache]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
     runs-on: self-hosted
     strategy:
@@ -177,6 +209,8 @@ jobs:
           file: ${{ steps.dockerfile.outputs.file }}
           build-args: |
             AGENT_NAME=${{ matrix.agent }}
+            PIP_INDEX_URL=${{ needs.python-package-cache.outputs.index_url }}
+            PIP_TRUSTED_HOST=${{ needs.python-package-cache.outputs.trusted_host }}
           push: true
           labels: |
             com.progenitor.managed=true
@@ -388,7 +422,7 @@ jobs:
 
   # ------------------------------------------------------------------ build + push mcps
   build-mcp:
-    needs: detect-changes
+    needs: [detect-changes, python-package-cache]
     if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
     runs-on: self-hosted
     strategy:
@@ -413,6 +447,8 @@ jobs:
           file: docker/runner/Dockerfile.mcp
           build-args: |
             MCP_NAME=${{ matrix.mcp }}
+            PIP_INDEX_URL=${{ needs.python-package-cache.outputs.index_url }}
+            PIP_TRUSTED_HOST=${{ needs.python-package-cache.outputs.trusted_host }}
           push: true
           labels: |
             com.progenitor.managed=true

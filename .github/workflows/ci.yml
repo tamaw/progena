@@ -32,26 +32,58 @@ jobs:
           echo "uid=${RUN_UID}" >> "$GITHUB_OUTPUT"
           echo "gid=${RUN_GID}" >> "$GITHUB_OUTPUT"
 
-  backend:
+  python-package-cache:
     needs: runner-context
+    runs-on: self-hosted
+    outputs:
+      index_url: ${{ steps.cache.outputs.index_url }}
+      trusted_host: ${{ steps.cache.outputs.trusted_host }}
+      cache_enabled: ${{ steps.cache.outputs.cache_enabled }}
+      cache_host: ${{ steps.cache.outputs.cache_host }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure local Python package cache
+        id: cache
+        env:
+          PYPI_CACHE_IMAGE: ${{ vars.PYPI_CACHE_IMAGE }}
+          PYPI_CACHE_BIND_ADDRESS: ${{ vars.PYPI_CACHE_BIND_ADDRESS }}
+          PYPI_CACHE_HOST: ${{ vars.PYPI_CACHE_HOST }}
+          PYPI_CACHE_PORT: ${{ vars.PYPI_CACHE_PORT }}
+          PYPI_CACHE_CONTAINER_NAME: ${{ vars.PYPI_CACHE_CONTAINER_NAME }}
+          PYPI_CACHE_VOLUME_NAME: ${{ vars.PYPI_CACHE_VOLUME_NAME }}
+          PYPI_CACHE_ROOT_PASSWORD: ${{ secrets.PYPI_CACHE_ROOT_PASSWORD }}
+        run: python .github/scripts/ensure_local_pypi_cache.py
+
+  backend:
+    needs: [runner-context, python-package-cache]
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
     env:
       PIP_CACHE_DIR: /tmp/pip-cache
+      PIP_INDEX_URL: ${{ needs.python-package-cache.outputs.index_url }}
+      PIP_TRUSTED_HOST: ${{ needs.python-package-cache.outputs.trusted_host }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Python deps
         run: |
+          pip_install() {
+            if [ -n "${PIP_TRUSTED_HOST:-}" ]; then
+              python -m pip install --index-url "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" "$@"
+            else
+              python -m pip install --index-url "$PIP_INDEX_URL" "$@"
+            fi
+          }
           mkdir -p "$PIP_CACHE_DIR"
           python -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.lock.txt
-          pip install ruff
-          pip install -e . --no-deps
+          pip_install --upgrade pip
+          pip_install -r requirements.lock.txt
+          pip_install ruff
+          pip_install -e . --no-deps
 
       - name: Lint backend (ruff)
         continue-on-error: true
@@ -65,25 +97,34 @@ jobs:
           pytest tests/backend
 
   progenitor:
-    needs: runner-context
+    needs: [runner-context, python-package-cache]
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
     env:
       PIP_CACHE_DIR: /tmp/pip-cache
+      PIP_INDEX_URL: ${{ needs.python-package-cache.outputs.index_url }}
+      PIP_TRUSTED_HOST: ${{ needs.python-package-cache.outputs.trusted_host }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Python deps
         run: |
+          pip_install() {
+            if [ -n "${PIP_TRUSTED_HOST:-}" ]; then
+              python -m pip install --index-url "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" "$@"
+            else
+              python -m pip install --index-url "$PIP_INDEX_URL" "$@"
+            fi
+          }
           mkdir -p "$PIP_CACHE_DIR"
           python -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.lock.txt
-          pip install ruff pyright
-          pip install -e . --no-deps
+          pip_install --upgrade pip
+          pip_install -r requirements.lock.txt
+          pip_install ruff pyright
+          pip_install -e . --no-deps
 
       - uses: actions/setup-node@v4
         with:
@@ -136,7 +177,7 @@ jobs:
 
   build-and-push:
     runs-on: self-hosted
-    needs: [backend, progenitor, frontend]
+    needs: [backend, progenitor, frontend, python-package-cache]
     if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     steps:
       - uses: actions/checkout@v4
@@ -154,6 +195,9 @@ jobs:
         with:
           context: .
           file: docker/progenitor/Dockerfile
+          build-args: |
+            PIP_INDEX_URL=${{ needs.python-package-cache.outputs.index_url }}
+            PIP_TRUSTED_HOST=${{ needs.python-package-cache.outputs.trusted_host }}
           push: true
           labels: |
             com.progenitor.managed=true
@@ -169,6 +213,9 @@ jobs:
         with:
           context: .
           file: docker/backend/Dockerfile
+          build-args: |
+            PIP_INDEX_URL=${{ needs.python-package-cache.outputs.index_url }}
+            PIP_TRUSTED_HOST=${{ needs.python-package-cache.outputs.trusted_host }}
           push: true
           labels: |
             com.progenitor.managed=true

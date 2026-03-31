@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/home/runner \
@@ -50,9 +53,14 @@ WORKDIR /app
 
 COPY requirements.lock.txt /app/requirements.lock.txt
 COPY app/agents/builder_progenitor/requirements.txt /app/requirements.builder.txt
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.lock.txt && \
-    pip install --no-cache-dir -r /app/requirements.builder.txt
+RUN set -eux; \
+    install_args="--index-url ${PIP_INDEX_URL}"; \
+    if [ -n "${PIP_TRUSTED_HOST:-}" ]; then \
+      install_args="$install_args --trusted-host ${PIP_TRUSTED_HOST}"; \
+    fi; \
+    pip install --no-cache-dir --upgrade pip $install_args && \
+    pip install --no-cache-dir $install_args -r /app/requirements.lock.txt && \
+    pip install --no-cache-dir $install_args -r /app/requirements.builder.txt
 
 COPY app/ /app/app/
 COPY prompts/ /app/prompts/
