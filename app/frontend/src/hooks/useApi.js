@@ -186,6 +186,11 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const getLogSources = useCallback(async () => {
+    const response = await fetchWithRetry('/api/ui/logs/sources');
+    return response.json();
+  }, [fetchWithRetry]);
+
   const runAction = useCallback(async (payload) => {
     const response = await fetchWithRetry('actionRun', {
       method: 'POST',
@@ -332,6 +337,7 @@ export function useApi() {
     getSchedules,
     createSchedule,
     getLogs,
+    getLogSources,
     runAction,
     generateAction,
     getSession,

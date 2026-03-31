@@ -367,7 +367,9 @@ class TestLogsEndpoint:
             encoding="utf-8",
         )
 
-        response = client.get("/api/ui/logs?format=json&limit=0")
+        response = client.get(
+            "/api/ui/logs?format=json&folder=builder&file=builder/builder.log&start=2026-03-01&end=2026-03-12&limit=0"
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -405,6 +407,25 @@ class TestLogsEndpoint:
         assert incremental_data["cursor_found"] is True
         assert all(entry["id"] != top_entry["id"] for entry in incremental_data["entries"])
 
+    def test_logs_json_supports_date_range_filter(self, client, kanban_state_reader):
+        """Test inclusive start/end date filtering."""
+        (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
+            "\n".join([
+                json.dumps({"message": "old entry", "timestamp": "2026-03-20T10:00:00Z", "level": "info"}),
+                json.dumps({"message": "in range", "timestamp": "2026-03-24T10:00:00Z", "level": "warning"}),
+                json.dumps({"message": "boundary end", "timestamp": "2026-03-25T23:59:00Z", "level": "error"}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+
+        response = client.get("/api/ui/logs?format=json&start=2026-03-24&end=2026-03-25&limit=0")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["date_range"] == {"start": "2026-03-24", "end": "2026-03-25"}
+        assert [entry["message"] for entry in data["entries"]] == ["boundary end", "in range"]
+        assert {entry["level"] for entry in data["entries"]} == {"warn", "error"}
+
     def test_logs_export_returns_downloadable_payload(self, client, kanban_state_reader):
         """Test export endpoint returns attachment headers."""
         (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
@@ -416,6 +437,20 @@ class TestLogsEndpoint:
         assert response.status_code == 200
         assert "attachment;" in response.headers["content-disposition"]
         assert "decision made" in response.text
+
+    def test_logs_export_supports_csv(self, client, kanban_state_reader):
+        """Test CSV export output."""
+        (kanban_state_reader.logs_dir / "progenitor.log").write_text(
+            "2026-03-24 10:00:00 - __main__ - INFO - Started\n",
+            encoding="utf-8",
+        )
+
+        response = client.get("/api/ui/logs/export?format=csv")
+
+        assert response.status_code == 200
+        assert "text/csv" in response.headers["content-type"]
+        assert "timestamp,level,source,relative_path,message" in response.text
+        assert "Started" in response.text
 
 
 class TestAgentDetailEndpoint:

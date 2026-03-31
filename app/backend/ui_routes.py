@@ -13,6 +13,7 @@ Reads real state data from data/state/ and data/config/:
 
 import asyncio
 import contextlib
+import csv
 import json
 import logging
 import os
@@ -21,7 +22,8 @@ import tempfile
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from io import StringIO
 from pathlib import Path
 
 from croniter import croniter  # type: ignore[import-untyped]
@@ -1951,6 +1953,8 @@ async def get_logs(
     source: str | None = None,
     folder: str | None = None,
     file_path: str | None = Query(default=None, alias="file"),
+    start_date: str | None = Query(default=None, alias="start"),
+    end_date: str | None = Query(default=None, alias="end"),
     after: str | None = None,
     limit: int = 500,
     format: str = "text",
@@ -1971,6 +1975,39 @@ async def get_logs(
     if search_mode not in {"plain", "regex"}:
         raise HTTPException(status_code=400, detail="search_mode must be 'plain' or 'regex'")
 
+    source_groups = state_reader.get_log_sources()
+    default_end = datetime.now(UTC).date()
+    default_start = default_end - timedelta(days=6)
+    start_date = start_date or default_start.isoformat()
+    end_date = end_date or default_end.isoformat()
+    if not any(value is not None for value in (level, search, source, folder, file_path)):
+        candidate_path = None
+        for log_path in state_reader._iter_log_files():
+            candidate_result = state_reader.query_logs(
+                folder=state_reader._log_group(log_path),
+                file_path=state_reader._relative_log_path(log_path),
+                start_date=start_date,
+                end_date=end_date,
+                limit=1,
+            )
+            if candidate_result["entries"]:
+                candidate_path = log_path
+                break
+
+        if candidate_path is None:
+            candidate_path = next(iter(state_reader._iter_log_files()), None)
+
+        if candidate_path is not None:
+            folder = state_reader._log_group(candidate_path)
+            file_path = state_reader._relative_log_path(candidate_path)
+        else:
+            for group in source_groups:
+                options = group.get("options", [])
+                if options:
+                    folder = str(group.get("id") or "")
+                    file_path = str(options[0].get("id") or "")
+                    break
+
     try:
         result = state_reader.query_logs(
             level=level,
@@ -1978,6 +2015,8 @@ async def get_logs(
             source=source,
             folder=folder,
             file_path=file_path,
+            start_date=start_date,
+            end_date=end_date,
             after=after,
             limit=limit,
             search_mode=search_mode,
@@ -1986,7 +2025,6 @@ async def get_logs(
         raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
 
     entries = result["entries"]
-    source_groups = state_reader.get_log_sources()
     folders = state_reader.get_log_folders()
 
     if format == "json":
@@ -1994,11 +2032,16 @@ async def get_logs(
             "entries": entries,
             "total": result["total"],
             "returned": result["returned"],
-            "filtered": any(value is not None for value in (level, search, source, folder, file_path)),
+            "filtered": any(value is not None for value in (level, search, source, folder, file_path, start_date, end_date)),
             "source_groups": source_groups,
             "folders": folders,
             "newest_cursor": result["newest_cursor"],
             "cursor_found": result["cursor_found"],
+            "date_range": {"start": start_date, "end": end_date},
+            "active_selection": {
+                "group": folder,
+                "file": file_path,
+            },
         }
 
     content = "\n".join(
@@ -2008,6 +2051,16 @@ async def get_logs(
     return {"logs": content, "total": len(entries)}
 
 
+@router.get("/logs/sources")
+async def get_log_sources():
+    """Return available log groups/files without loading log entries."""
+    state_reader = get_state_reader()
+    return {
+        "source_groups": state_reader.get_log_sources(),
+        "folders": state_reader.get_log_folders(),
+    }
+
+
 @router.get("/logs/export")
 async def export_logs(
     level: str | None = None,
@@ -2015,6 +2068,8 @@ async def export_logs(
     source: str | None = None,
     folder: str | None = None,
     file_path: str | None = Query(default=None, alias="file"),
+    start_date: str | None = Query(default=None, alias="start"),
+    end_date: str | None = Query(default=None, alias="end"),
     search_mode: str = "plain",
     format: str = "text",
 ):
@@ -2023,6 +2078,11 @@ async def export_logs(
     if search_mode not in {"plain", "regex"}:
         raise HTTPException(status_code=400, detail="search_mode must be 'plain' or 'regex'")
 
+    default_end = datetime.now(UTC).date()
+    default_start = default_end - timedelta(days=6)
+    start_date = start_date or default_start.isoformat()
+    end_date = end_date or default_end.isoformat()
+
     try:
         result = state_reader.query_logs(
             level=level,
@@ -2030,6 +2090,8 @@ async def export_logs(
             source=source,
             folder=folder,
             file_path=file_path,
+            start_date=start_date,
+            end_date=end_date,
             limit=0,
             search_mode=search_mode,
         )
@@ -2053,6 +2115,30 @@ async def export_logs(
             content=content,
             media_type="application/x-ndjson",
             headers={"Content-Disposition": f'attachment; filename="{base_name}.jsonl"'},
+        )
+
+    if format == "csv":
+        output = StringIO()
+        writer = csv.DictWriter(
+            output,
+            fieldnames=["timestamp", "level", "source", "relative_path", "message"],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow(
+                {
+                    "timestamp": entry.get("time") or entry.get("timestamp") or "",
+                    "level": entry.get("level") or "",
+                    "source": entry.get("source") or "",
+                    "relative_path": entry.get("relative_path") or "",
+                    "message": entry.get("message") or "",
+                }
+            )
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{base_name}.csv"'},
         )
 
     content = "\n".join(

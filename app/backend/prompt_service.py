@@ -118,9 +118,7 @@ class PromptService:
         parts = relative_path.parts
         category = parts[0] if parts else None
         if category:
-            if category == "skills":
-                agents.add("progenitor")
-            elif category == "progenitor":
+            if category == "skills" or category == "progenitor":
                 agents.add("progenitor")
             else:
                 agents.add(self._known_agents.get(_normalize_name(category), category))
