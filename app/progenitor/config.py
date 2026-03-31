@@ -7,7 +7,6 @@ Configuration is read from environment variables. Per SPEC.md.
 import logging
 import logging.handlers
 import os
-import sys
 from dataclasses import dataclass, field
 from datetime import UTC
 from pathlib import Path
@@ -17,9 +16,18 @@ from dotenv import load_dotenv
 
 from .utils import env_bool, env_float, env_int, env_list
 
-# Auto-load .env file from project root
-# load_dotenv()  # Disabled: loading .env at import-time causes test side-effects. Call explicitly where needed.
 logger = logging.getLogger(__name__)
+
+
+def load_env_file(project_root: Path | None = None) -> None:
+    """Load .env lazily to avoid import-time side effects."""
+    if project_root is None:
+        load_dotenv(override=False)
+        return
+
+    dotenv_path = project_root / ".env"
+    if dotenv_path.is_file():
+        load_dotenv(dotenv_path=dotenv_path, override=False)
 
 # ---------------------------------------------------------------------------
 # Backward-compatible default constants
@@ -39,11 +47,12 @@ DEFAULT_MAX_CONVERSATION_HISTORY = 10
 class LLMConfig:
     """LLM provider configuration.
 
-    All LLM calls are routed directly to Azure OpenAI Responses API.
+    All LLM calls are routed through a LiteLLM proxy (OpenAI-compatible).
+    The proxy handles provider routing, auth, and observability (Langfuse).
     """
 
-    # Azure OpenAI base URL (without trailing /responses)
-    base_url: str = ""
+    # LiteLLM proxy
+    base_url: str = "http://localhost:4000"
     api_key: str | None = None
 
     # Model selection
@@ -53,6 +62,8 @@ class LLMConfig:
     model_planner: str | None = None
     model_builder: str | None = None
     model_summary: str | None = None
+    model_fallbacks: list[str] = field(default_factory=list)
+
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = False
     reasoning_budget_tokens: int | None = None
@@ -60,16 +71,18 @@ class LLMConfig:
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
+        load_env_file()
         budget_tokens_str = os.getenv("PROGENITOR_REASONING_BUDGET_TOKENS", "").strip()
         budget_tokens = int(budget_tokens_str) if budget_tokens_str else None
 
         return cls(
-            base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
+            api_key=os.getenv("LITELLM_API_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
+            model_fallbacks=env_list("PROGENITOR_MODEL_FALLBACKS", []),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", False),
             reasoning_budget_tokens=budget_tokens,
         )
@@ -126,6 +139,7 @@ class RuntimeConfig:
     @classmethod
     def from_env(cls, file_config: dict[str, Any] | None = None) -> "RuntimeConfig":
         """Load runtime config from environment with file fallbacks."""
+        load_env_file()
         fc = file_config or {}
         return cls(
             timezone=os.getenv("PROGENITOR_TIMEZONE", fc.get("timezone", "Australia/Melbourne")),
@@ -210,24 +224,12 @@ class StorageConfig:
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
         """Load storage config from environment."""
+        load_env_file(project_root)
         # Default to project-relative paths if not in container
         default_state = "/data/state" if project_root is None else str(project_root / "data" / "state")
         default_logs = "/logs" if project_root is None else str(project_root / "logs")
         default_worktrees = "/worktrees" if project_root is None else str(project_root / "worktrees")
         default_prompts = "/prompts" if project_root is None else str(project_root / "prompts")
-
-        # If a project_root is provided, prefer project-relative defaults and
-        # do not allow process environment variables to override them. This
-        # makes configuration deterministic in tests that pass an explicit
-        # project_root.
-        if project_root is not None:
-            return cls(
-                state_dir=Path(default_state),
-                log_dir=Path(default_logs),
-                worktree_dir=Path(default_worktrees),
-                prompts_dir=Path(default_prompts),
-                state_lock_timeout_seconds=env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
-            )
 
         return cls(
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", default_state)),
@@ -245,7 +247,7 @@ class CopilotConfig:
     bin_path: str = "copilot"
     timeout_seconds: int = 1200  # 20 minutes per ACP request
     default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
-    model: str = "gpt-5.3-codex"
+    model: str = "claude-haiku-4.5"
     max_tokens: int = 8192
 
     # ACP (Agent Client Protocol) settings
@@ -255,11 +257,12 @@ class CopilotConfig:
     @classmethod
     def from_env(cls) -> "CopilotConfig":
         """Load Copilot config from environment variables."""
+        load_env_file()
         return cls(
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
-            model=os.getenv("PROGENITOR_COPILOT_MODEL", "gpt-5.3-codex"),
+            model=os.getenv("PROGENITOR_COPILOT_MODEL", "claude-haiku-4.5"),
             max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", 8192),
             # ACP settings
             acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
@@ -293,6 +296,7 @@ class ValidationConfig:
     @classmethod
     def from_env(cls) -> "ValidationConfig":
         """Load validation config from environment variables."""
+        load_env_file()
         return cls(
             execution_warning_ms=env_int("PROGENITOR_VALIDATION_EXECUTION_WARNING_MS", 60000),
             response_warning_ms=env_int("PROGENITOR_VALIDATION_RESPONSE_WARNING_MS", 10000),
@@ -320,6 +324,7 @@ class SchedulerConfig:
     @classmethod
     def from_env(cls) -> "SchedulerConfig":
         """Load scheduler config from environment."""
+        load_env_file()
         return cls(
             enabled=env_bool("PROGENITOR_SCHEDULER_ENABLED", True),
             poll_seconds=env_int("PROGENITOR_SCHEDULER_POLL_SECONDS", 30),
@@ -331,14 +336,27 @@ class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
     enabled: bool = True
-    base_url: str = "http://localhost:8080/mcp/"
+    base_url: str = "http://localhost:4000/mcp"
     api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "MCPConfig":
         """Load MCP config from environment."""
-        base_url = os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:8080/mcp/").strip()
+        load_env_file()
+        # If PROGENITOR_MCP_BASE_URL is not set, default to LiteLLM base URL + /mcp/
+        # because Progenitor routes all model/tool calls through LiteLLM in docker.
+        base_url = os.getenv("PROGENITOR_MCP_BASE_URL", "").strip()
+        if not base_url:
+            litellm_base = os.getenv("LITELLM_BASE_URL", "").strip().rstrip("/")
+            if litellm_base:
+                base_url = f"{litellm_base}/mcp/"
+
+        if not base_url:
+            base_url = "http://localhost:4000/mcp/"  # Note trailing slash
+
         api_key = os.getenv("PROGENITOR_MCP_API_KEY")
+        if not api_key:
+            api_key = os.getenv("LITELLM_API_KEY")
 
         return cls(
             enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
@@ -365,6 +383,7 @@ class ProgenitorConfig:
 
         Configuration is sourced from environment variables.
         """
+        load_env_file(project_root)
         storage_config = StorageConfig.from_env(project_root)
 
         config = cls(
@@ -392,7 +411,7 @@ class ProgenitorConfig:
 
         # Validate LLM configuration
         if not self.llm.base_url:
-            errors.append("AZURE_OPENAI_BASE_URL must be set")
+            errors.append("LITELLM_BASE_URL must be set")
 
         # Validate storage paths are sensible
         for name, path in [
@@ -421,6 +440,7 @@ class ProgenitorConfig:
                 "model_default": self.llm.model_default,
                 "model_planner": self.llm.model_planner,
                 "model_builder": self.llm.model_builder,
+                "model_summary": self.llm.model_summary,
             },
             "runtime": {
                 "timezone": self.runtime.timezone,
@@ -536,12 +556,8 @@ def setup_logging(config: ProgenitorConfig, agent_name: str = "progenitor") -> N
     - "text": Human-readable format (default)
     - "json": Structured JSON format for production/log aggregation
 
-    Writes split rotating log files under {log_dir}/{agent_name}/:
-    - {log_dir}/{agent_name}/{agent_name}.stdout.log for records below ERROR
-    - {log_dir}/{agent_name}/{agent_name}.stderr.log for ERROR and above
-
-    Also emits non-error logs to stdout and errors to stderr so container logs
-    preserve the same split for mounted inspection and diagnostics.
+    Always writes to {log_dir}/{agent_name}.log with rotation (10 MB × 5 backups)
+    in addition to stdout.
     """
     log_levels = {
         "debug": logging.DEBUG,
@@ -556,72 +572,44 @@ def setup_logging(config: ProgenitorConfig, agent_name: str = "progenitor") -> N
     if config.runtime.log_format.lower() == "json":
         # JSON structured logging for production
         formatter: logging.Formatter = JsonLogFormatter()
+        handler: logging.Handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logging.root.handlers = [handler]
+        logging.root.setLevel(level)
     else:
         # Standard text format
         formatter = logging.Formatter(
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
 
-    root_logger = logging.getLogger()
-    for existing_handler in root_logger.handlers[:]:
-        existing_handler.close()
-        root_logger.removeHandler(existing_handler)
-    root_logger.setLevel(level)
-
-    stdout_handler = logging.StreamHandler(stream=sys.stdout)
-    stdout_handler.setLevel(level)
-    stdout_handler.addFilter(_BelowErrorFilter())
-    stdout_handler.setFormatter(formatter)
-    root_logger.addHandler(stdout_handler)
-
-    stderr_handler = logging.StreamHandler(stream=sys.stderr)
-    stderr_handler.setLevel(logging.ERROR)
-    stderr_handler.setFormatter(formatter)
-    root_logger.addHandler(stderr_handler)
-
-    # Add rotating file handlers with the same split as stdout/stderr.
+    # Add rotating file handler → {log_dir}/{agent_name}.log
     try:
-        log_dir = config.storage.log_dir / agent_name
+        log_dir = config.storage.log_dir
         log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_log_file = log_dir / f"{agent_name}.stdout.log"
-        stdout_file_handler = logging.handlers.RotatingFileHandler(
-            stdout_log_file,
+        log_file = log_dir / f"{agent_name}.log"
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
             maxBytes=10 * 1024 * 1024,  # 10 MB per file
             backupCount=5,
             encoding="utf-8",
         )
-        stdout_file_handler.setLevel(level)
-        stdout_file_handler.addFilter(_BelowErrorFilter())
-        stdout_file_handler.setFormatter(formatter)
-        root_logger.addHandler(stdout_file_handler)
-
-        stderr_log_file = log_dir / f"{agent_name}.stderr.log"
-        stderr_file_handler = logging.handlers.RotatingFileHandler(
-            stderr_log_file,
-            maxBytes=10 * 1024 * 1024,  # 10 MB per file
-            backupCount=5,
-            encoding="utf-8",
-        )
-        stderr_file_handler.setLevel(logging.ERROR)
-        stderr_file_handler.setFormatter(formatter)
-        root_logger.addHandler(stderr_file_handler)
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        logging.root.addHandler(file_handler)
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning(
-            "Could not create split log files for %s: %s", agent_name, exc
+            "Could not create log file for %s: %s", agent_name, exc
         )
 
     # Reduce noise from httpx and openai
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
-
-
-class _BelowErrorFilter(logging.Filter):
-    """Allow only records below ERROR."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        """Return True for records that should stay on stdout."""
-        return record.levelno < logging.ERROR
 
 
 class JsonLogFormatter(logging.Formatter):

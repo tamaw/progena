@@ -2,7 +2,6 @@
 Tests for the centralized configuration module.
 """
 
-import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +14,6 @@ from app.progenitor.config import (
     StorageConfig,
     get_config,
     reload_config,
-    setup_logging,
 )
 from app.progenitor.utils import env_bool, env_float, env_int, env_list
 
@@ -89,20 +87,20 @@ class TestLLMConfig:
     def test_from_env(self):
         """Test loading LLM config from environment."""
         env = {
-            "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
-            "AZURE_OPENAI_API_KEY": "sk-test-key",
+            "LITELLM_BASE_URL": "http://localhost:5000",
+            "LITELLM_API_KEY": "sk-test-key",
             "PROGENITOR_MODEL_DEFAULT": "gpt-4o",
         }
         with patch.dict(os.environ, env, clear=False):
             config = LLMConfig.from_env()
-            assert config.base_url == "https://example.openai.azure.com/openai/v1"
+            assert config.base_url == "http://localhost:5000"
             assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
 
     def test_defaults(self):
         """Test default values."""
         config = LLMConfig()
-        assert config.base_url == ""
+        assert config.base_url == "http://localhost:4000"
         assert config.model_default == "gpt-5.1-codex-max"
 
     def test_get_model_for_role(self):
@@ -190,6 +188,22 @@ class TestStorageConfig:
             assert config.worktree_dir == Path("/custom/worktrees")
             assert config.state_lock_timeout_seconds == 30
 
+    def test_env_overrides_with_project_root(self):
+        """Test env vars still override project-relative defaults."""
+        env = {
+            "PROGENITOR_STATE_DIR": "/custom/state",
+            "PROGENITOR_LOG_DIR": "/custom/logs",
+            "PROGENITOR_WORKTREE_DIR": "/custom/worktrees",
+            "PROGENITOR_PROMPTS_DIR": "/custom/prompts",
+        }
+        project_root = Path("/test/project")
+        with patch.dict(os.environ, env, clear=False):
+            config = StorageConfig.from_env(project_root)
+            assert config.state_dir == Path("/custom/state")
+            assert config.log_dir == Path("/custom/logs")
+            assert config.worktree_dir == Path("/custom/worktrees")
+            assert config.prompts_dir == Path("/custom/prompts")
+
 
 class TestSchedulerConfig:
     """Tests for scheduler configuration."""
@@ -218,7 +232,6 @@ class TestProgenitorConfig:
     def test_load_from_env(self):
         """Test loading config from environment variables."""
         env = {
-            "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "PROGENITOR_TIMEZONE": "Asia/Tokyo",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "15",
             "PROGENITOR_COPILOT_MODEL": "gpt-5",
@@ -232,6 +245,15 @@ class TestProgenitorConfig:
             assert config.runtime.idle_backoff_seconds == 15
             assert config.copilot.model == "gpt-5"
             assert config.copilot.timeout_seconds == 600
+
+    def test_load_reads_dotenv_from_project_root(self, tmp_path, monkeypatch):
+        """Test .env is loaded lazily from the requested project root."""
+        (tmp_path / ".env").write_text("PROGENITOR_TIMEZONE=Europe/Paris\n", encoding="utf-8")
+        monkeypatch.delenv("PROGENITOR_TIMEZONE", raising=False)
+
+        config = ProgenitorConfig.load(tmp_path, tmp_path / "config")
+
+        assert config.runtime.timezone == "Europe/Paris"
 
     def test_to_dict_redacts_secrets(self):
         """Test secrets are redacted in dict output."""
@@ -267,13 +289,8 @@ class TestGlobalConfig:
         import app.progenitor.config as config_module
         config_module._config = None
 
-        with patch.dict(
-            os.environ,
-            {"AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1"},
-            clear=False,
-        ):
-            config1 = get_config()
-            config2 = get_config()
+        config1 = get_config()
+        config2 = get_config()
 
         assert config1 is config2
 
@@ -282,51 +299,7 @@ class TestGlobalConfig:
         import app.progenitor.config as config_module
         config_module._config = None
 
-        with patch.dict(
-            os.environ,
-            {"AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1"},
-            clear=False,
-        ):
-            config1 = get_config()
-            config2 = reload_config()
+        config1 = get_config()
+        config2 = reload_config()
 
         assert config1 is not config2
-
-
-class TestLoggingSetup:
-    """Tests for logger setup."""
-
-    def test_setup_logging_splits_stdout_and_stderr_files(self, tmp_path):
-        original_handlers = logging.root.handlers[:]
-        original_level = logging.root.level
-        logger = logging.getLogger("tests.progenitor.logging")
-
-        config = ProgenitorConfig(
-            storage=StorageConfig(
-                state_dir=tmp_path / "state",
-                log_dir=tmp_path,
-                worktree_dir=tmp_path / "worktrees",
-                prompts_dir=tmp_path / "prompts",
-            )
-        )
-
-        try:
-            setup_logging(config, "progenitor")
-            logger.info("info line")
-            logger.error("error line")
-
-            for handler in logging.root.handlers:
-                handler.flush()
-
-            stdout_log = (tmp_path / "progenitor" / "progenitor.stdout.log").read_text(encoding="utf-8")
-            stderr_log = (tmp_path / "progenitor" / "progenitor.stderr.log").read_text(encoding="utf-8")
-
-            assert "info line" in stdout_log
-            assert "error line" not in stdout_log
-            assert "error line" in stderr_log
-        finally:
-            for handler in logging.root.handlers[:]:
-                handler.close()
-                logging.root.removeHandler(handler)
-            logging.root.handlers = original_handlers
-            logging.root.setLevel(original_level)
