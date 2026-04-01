@@ -16,12 +16,15 @@ Controls:
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Optional, cast
+
+from langchain_core.messages import AIMessageChunk
 
 from ..state.models import redact_secrets
 from .scheduler import Scheduler
@@ -396,10 +399,29 @@ class ProgenitorLoop:
             graph_input = {}
 
         try:
-            async for event in self.graph.astream(
+            astream_kwargs: dict[str, Any] = {
+                "config": {"configurable": {"thread_id": thread_id}},
+            }
+            if self._graph_accepts_stream_mode():
+                astream_kwargs["stream_mode"] = ["messages", "updates"]
+
+            async for stream_item in self.graph.astream(
                 graph_input,
-                config={"configurable": {"thread_id": thread_id}},
+                **astream_kwargs,
             ):
+                mode = "updates"
+                event = stream_item
+                if isinstance(stream_item, tuple) and len(stream_item) == 2:
+                    mode, event = stream_item
+
+                if mode == "messages":
+                    await self._handle_message_stream_event(event)
+                    continue
+
+                if mode != "updates" or not isinstance(event, dict):
+                    logger.debug("Ignoring graph stream item for mode=%s", mode)
+                    continue
+
                 # Process graph events
                 for node_name, node_output in event.items():
                     output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
@@ -420,9 +442,14 @@ class ProgenitorLoop:
                     self._last_cycle_response = pending_text
                     self._state["last_cycle_response"] = pending_text
                     if self._streaming_enabled:
-                        await self._stream_response(pending_text)
-                        # _stream_response sends an is_final chunk, so mark stream closed for this cycle.
-                        self._stream_final_sent = True
+                        if self._response_was_streamed and pending_text == self._streamed_response_content:
+                            if not self._stream_final_sent:
+                                await self.stream_final()
+                                self._stream_final_sent = True
+                        else:
+                            await self._stream_response(pending_text)
+                            # _stream_response sends an is_final chunk, so mark stream closed for this cycle.
+                            self._stream_final_sent = True
                     self._state["pending_response"] = None
                 elif self._response_was_streamed and not self._stream_final_sent:
                     # Response was already streamed by a node, just send final marker ONCE
@@ -617,7 +644,38 @@ class ProgenitorLoop:
             token: A single token/chunk from the LLM.
         """
         if token:
+            self._response_was_streamed = True
+            self._streamed_response_content += token
             await self._send_stream_chunk(token, is_final=False)
+
+    async def _handle_message_stream_event(self, event: Any) -> None:
+        """Handle LangGraph `messages` stream events for token-level output."""
+        if not isinstance(event, tuple) or len(event) != 2:
+            logger.debug("Ignoring unexpected messages stream payload: %r", event)
+            return
+
+        message_chunk, _metadata = event
+        if not isinstance(message_chunk, AIMessageChunk):
+            return
+
+        chunk_text = self._extract_stream_chunk_text(message_chunk)
+        if chunk_text:
+            await self.stream_token(chunk_text)
+
+    def _graph_accepts_stream_mode(self) -> bool:
+        """Return True when the graph's astream accepts the stream_mode kwarg."""
+        astream = getattr(self.graph, "astream", None)
+        if not callable(astream):
+            return False
+        try:
+            parameters = inspect.signature(astream).parameters.values()
+            return any(
+                parameter.name == "stream_mode"
+                or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            return False
 
     async def stream_final(self) -> None:
         """Mark the end of a streaming response."""
@@ -836,6 +894,29 @@ class ProgenitorLoop:
                 return "\n".join(parts)
 
         return None
+
+    def _extract_stream_chunk_text(self, msg: Any) -> str:
+        """Extract token text while preserving streaming whitespace."""
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "")).lower()
+                if part_type in {"text", "output_text", "message"}:
+                    candidate = part.get("text") or part.get("content")
+                    if isinstance(candidate, str):
+                        parts.append(candidate)
+            return "".join(parts)
+
+        return ""
 
     def _summarize_message_schema(self, msg: Any) -> dict[str, Any]:
         """Return a compact schema summary for assistant messages."""
