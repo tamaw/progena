@@ -1,22 +1,27 @@
 # Gym Agent
 
-A lightweight, **A2A-compatible** FastAPI service for logging and analysing gym workouts.
+A lightweight, **A2A-compatible** FastAPI service for **gym sessions and bodyweight tracking**.
 
 ## Features
 
-- Log workouts (type, duration, distance, notes)
-- Query history with optional date filters
-- Summarise progress over a rolling window
-- Calculate habit streaks per workout type
-- SQLite persistence with JSON fallback
+- Log structured gym sessions with exercises and sets
+- Query lifting history with date and exercise filters
+- Summarize gym progress with set, rep, and volume totals
+- Track personal-best records by exercise
+- Log bodyweight entries over time
+- Summarize bodyweight change over a rolling window
+- SQLite-backed storage
 - Full Progenitor A2A protocol support (`X-A2A-Context-ID` header echo)
 
 ## Running
 
 ```bash
-pip install fastapi "uvicorn[standard]" pydantic python-dateutil
+pip install fastapi "uvicorn[standard]" pydantic
 uvicorn src.gym_agent.main:app --reload --port 8001
 ```
+
+If you install the project from a built wheel or sdist, the `src` package is
+included, so the same module path works after installation.
 
 ## Agent Card
 
@@ -26,67 +31,123 @@ curl http://localhost:8001/agent/card
 
 ## A2A Capabilities
 
-### log_workout
+### log_lifting_session
 
 ```bash
 curl -X POST http://localhost:8001/a2a \
   -H "Content-Type: application/json" \
   -d '{
-    "capability": "log_workout",
+    "capability": "log_lifting_session",
     "payload": {
       "user_id": "alice",
       "date": "2024-06-01",
-      "workout": {
-        "type": "running",
-        "duration_min": 45,
-        "distance_km": 8.5,
-        "notes": "Morning run in the park"
-      }
+      "workout_name": "Upper A",
+      "notes": "Bench felt strong today",
+      "exercises": [
+        {
+          "name": "Bench Press",
+          "sets": [
+            {"reps": 5, "weight_kg": 80, "set_type": "working"},
+            {"reps": 5, "weight_kg": 82.5, "set_type": "working"}
+          ]
+        },
+        {
+          "name": "Barbell Row",
+          "sets": [
+            {"reps": 8, "weight_kg": 70, "set_type": "working"}
+          ]
+        }
+      ]
     }
   }'
 ```
 
-### get_history
+### get_lifting_history
 
 ```bash
 curl -X POST http://localhost:8001/a2a \
   -H "Content-Type: application/json" \
   -d '{
-    "capability": "get_history",
+    "capability": "get_lifting_history",
+    "payload": {
+      "user_id": "alice",
+      "exercise_name": "Bench Press",
+      "start_date": "2024-06-01",
+      "end_date": "2024-06-30",
+      "limit": 25
+    }
+  }'
+```
+
+### summarize_strength_progress
+
+```bash
+curl -X POST http://localhost:8001/a2a \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capability": "summarize_strength_progress",
+    "payload": {
+      "user_id": "alice",
+      "days": 30,
+      "exercise_name": "Bench Press"
+    }
+  }'
+```
+
+### get_personal_records
+
+```bash
+curl -X POST http://localhost:8001/a2a \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capability": "get_personal_records",
+    "payload": {
+      "user_id": "alice"
+    }
+  }'
+```
+
+### log_bodyweight
+
+```bash
+curl -X POST http://localhost:8001/a2a \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capability": "log_bodyweight",
+    "payload": {
+      "user_id": "alice",
+      "date": "2024-06-01",
+      "weight_kg": 79.8,
+      "notes": "Morning weigh-in"
+    }
+  }'
+```
+
+### get_bodyweight_history
+
+```bash
+curl -X POST http://localhost:8001/a2a \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capability": "get_bodyweight_history",
     "payload": {
       "user_id": "alice",
       "start_date": "2024-06-01",
-      "end_date": "2024-06-30",
-      "limit": 50
+      "end_date": "2024-06-30"
     }
   }'
 ```
 
-### summarize_progress
+### summarize_bodyweight_progress
 
 ```bash
 curl -X POST http://localhost:8001/a2a \
   -H "Content-Type: application/json" \
   -d '{
-    "capability": "summarize_progress",
+    "capability": "summarize_bodyweight_progress",
     "payload": {
       "user_id": "alice",
       "days": 30
-    }
-  }'
-```
-
-### habit_streak
-
-```bash
-curl -X POST http://localhost:8001/a2a \
-  -H "Content-Type: application/json" \
-  -d '{
-    "capability": "habit_streak",
-    "payload": {
-      "user_id": "alice",
-      "habit": "running",
-      "min_days": 1
     }
   }'
 ```
@@ -99,7 +160,7 @@ Pass `X-A2A-Context-ID` to correlate requests; the header value is echoed back i
 curl -X POST http://localhost:8001/a2a \
   -H "Content-Type: application/json" \
   -H "X-A2A-Context-ID: my-context-123" \
-  -d '{"capability":"get_history","payload":{"user_id":"alice"}}'
+  -d '{"capability":"get_bodyweight_history","payload":{"user_id":"alice"}}'
 ```
 
 ## Testing
