@@ -19,8 +19,9 @@ import contextlib
 import logging
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from itertools import count
 from typing import Any
 
 import aiohttp
@@ -115,6 +116,21 @@ class TelegramRateLimiter:
 MessageHandler = Callable[[str, str, dict], Awaitable[str | None]]
 
 
+class TelegramDraftStreamingError(RuntimeError):
+    """Raised when Telegram native draft streaming cannot proceed."""
+
+
+@dataclass
+class TelegramDraftSession:
+    """Tracks a native Telegram draft streaming session."""
+
+    chat_id: str
+    draft_id: int
+    message_thread_id: int | None = None
+    segment_text: str = ""
+    segment_index: int = 0
+
+
 class TelegramClient:
     """Async Telegram Bot API client with retry logic and rate limiting.
 
@@ -139,6 +155,7 @@ class TelegramClient:
         self._last_update_id: int = 0
         self._message_handler: MessageHandler | None = None
         self._processing_messages: set[int] = set()  # Track messages being processed
+        self._draft_id_counter = count(start=max(1, int(time.time() * 1000)))
 
     def set_message_handler(self, handler: MessageHandler | None) -> None:
         """Set the handler for incoming messages.
@@ -336,6 +353,7 @@ class TelegramClient:
         chat = message.get("chat", {})
         chat_id = str(chat.get("id", ""))
         chat_type = chat.get("type", "private")
+        message_thread_id = message.get("message_thread_id")
 
         from_user = message.get("from", {})
         user_id = str(from_user.get("id", ""))
@@ -378,7 +396,7 @@ class TelegramClient:
             try:
                 # Start a background task to keep typing indicator active
                 typing_task = asyncio.create_task(
-                    self._keep_typing(chat_id)
+                    self._keep_typing(chat_id, message_thread_id=message_thread_id)
                 )
 
                 metadata = {
@@ -388,18 +406,24 @@ class TelegramClient:
                     "username": username,
                     "first_name": first_name,
                     "message_id": message_id,
+                    "message_thread_id": message_thread_id,
                 }
 
                 response = await self._message_handler(chat_id, text, metadata)
 
                 if response:
-                    await self.send_message_to_chat(chat_id, response)
+                    await self.send_message_to_chat(
+                        chat_id,
+                        response,
+                        message_thread_id=message_thread_id,
+                    )
 
             except Exception as e:
                 logger.error("Error handling message: %s", e)
                 await self.send_message_to_chat(
                     chat_id,
-                    "❌ Sorry, an error occurred while processing your message."
+                    "❌ Sorry, an error occurred while processing your message.",
+                    message_thread_id=message_thread_id,
                 )
             finally:
                 # Stop the typing indicator task
@@ -420,6 +444,7 @@ class TelegramClient:
             message: Full message object.
         """
         command = text.split()[0].lower()
+        message_thread_id = _message.get("message_thread_id")
 
         if command == "/start":
             await self.send_message_to_chat(
@@ -431,7 +456,8 @@ class TelegramClient:
                 "/help - Show help information\n"
                 "/status - Check connection status\n"
                 "/ping - Test responsiveness",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                message_thread_id=message_thread_id,
             )
         elif command == "/help":
             await self.send_message_to_chat(
@@ -446,7 +472,8 @@ class TelegramClient:
                 "*Commands:*\n"
                 "/status - Check if the agent is connected\n"
                 "/ping - Quick connectivity test",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                message_thread_id=message_thread_id,
             )
         elif command == "/status":
             status = "✅ Connected" if self._message_handler else "⚠️ No handler configured"
@@ -456,29 +483,48 @@ class TelegramClient:
                 f"Bot: ✅ Running\n"
                 f"Agent: {status}\n"
                 f"Polling: {'✅ Active' if self._polling_task else '❌ Inactive'}",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                message_thread_id=message_thread_id,
             )
         elif command == "/ping":
-            await self.send_message_to_chat(chat_id, "🏓 Pong!")
+            await self.send_message_to_chat(
+                chat_id,
+                "🏓 Pong!",
+                message_thread_id=message_thread_id,
+            )
         else:
             await self.send_message_to_chat(
                 chat_id,
-                f"Unknown command: {command}\nUse /help to see available commands."
+                f"Unknown command: {command}\nUse /help to see available commands.",
+                message_thread_id=message_thread_id,
             )
 
-    async def _send_chat_action(self, chat_id: str, action: str = "typing") -> None:
+    async def _send_chat_action(
+        self,
+        chat_id: str,
+        action: str = "typing",
+        message_thread_id: int | None = None,
+    ) -> None:
         """Send a chat action (e.g., typing indicator).
 
         Args:
             chat_id: The chat ID.
             action: The action ('typing', 'upload_photo', etc.)
         """
-        await self._api_call("sendChatAction", {
+        params: dict[str, Any] = {
             "chat_id": chat_id,
             "action": action,
-        }, retry=False)
+        }
+        if message_thread_id is not None:
+            params["message_thread_id"] = message_thread_id
+        await self._api_call("sendChatAction", params, retry=False)
 
-    async def _keep_typing(self, chat_id: str, interval: float = 4.0) -> None:
+    async def _keep_typing(
+        self,
+        chat_id: str,
+        interval: float = 4.0,
+        message_thread_id: int | None = None,
+    ) -> None:
         """Keep sending typing indicator while processing.
 
         Telegram's typing indicator expires after ~5 seconds, so we refresh
@@ -490,7 +536,11 @@ class TelegramClient:
         """
         try:
             while True:
-                await self._send_chat_action(chat_id, "typing")
+                await self._send_chat_action(
+                    chat_id,
+                    "typing",
+                    message_thread_id=message_thread_id,
+                )
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
             # Normal cancellation when processing completes
@@ -505,6 +555,8 @@ class TelegramClient:
         text: str,
         parse_mode: str | None = None,
         disable_notification: bool = False,
+        message_thread_id: int | None = None,
+        reply_to_message_id: int | None = None,
     ) -> bool:
         """Send a message to a specific chat.
 
@@ -529,28 +581,216 @@ class TelegramClient:
         success = True
 
         for i, chunk in enumerate(chunks):
-            # Apply rate limiting
-            wait_time = await self._rate_limiter.acquire()
-            if wait_time > 0:
-                logger.debug("Rate limit: waiting %.1f seconds", wait_time)
-                await asyncio.sleep(wait_time)
-
-            params: dict[str, Any] = {
-                "chat_id": chat_id,
-                "text": chunk,
-            }
-            if parse_mode:
-                params["parse_mode"] = parse_mode
-            if disable_notification:
-                params["disable_notification"] = True
-
-            result = await self._api_call("sendMessage", params)
-            if result is None:
+            if not await self._send_message_chunk_to_chat(
+                chat_id,
+                chunk,
+                parse_mode=parse_mode,
+                disable_notification=disable_notification,
+                message_thread_id=message_thread_id,
+                reply_to_message_id=reply_to_message_id,
+            ):
                 logger.warning("Failed to send message chunk %d/%d to %s",
                              i + 1, len(chunks), chat_id)
                 success = False
 
         return success
+
+    def _next_draft_id(self) -> int:
+        """Return a unique non-zero draft ID for Telegram draft streaming."""
+        return next(self._draft_id_counter)
+
+    def _stream_message_header(self, segment_index: int) -> str:
+        """Return the header for a streamed Telegram agent response."""
+        return "🤖 Progenitor Agent:\n\n" if segment_index == 0 else ""
+
+    def _stream_segment_limit(self, segment_index: int) -> int:
+        """Return the max raw content length for a streamed segment."""
+        limit = self.config.max_message_length - len(
+            self._stream_message_header(segment_index)
+        )
+        if limit <= 0:
+            raise TelegramDraftStreamingError(
+                "Telegram max_message_length is too small for streamed agent headers"
+            )
+        return limit
+
+    def _build_stream_segment(self, session: TelegramDraftSession) -> str:
+        """Build the visible Telegram text for the current streamed segment."""
+        return f"{self._stream_message_header(session.segment_index)}{session.segment_text}"
+
+    def _split_stream_segment(self, text: str, max_len: int) -> tuple[str, str]:
+        """Split streamed content into a Telegram-safe committed segment."""
+        if len(text) <= max_len:
+            return text, ""
+
+        chunk = text[:max_len]
+        newline_pos = chunk.rfind("\n")
+        if newline_pos > max_len // 2:
+            split_at = newline_pos + 1
+        else:
+            space_pos = chunk.rfind(" ")
+            split_at = space_pos + 1 if space_pos > max_len // 2 else max_len
+
+        committed = text[:split_at].rstrip()
+        if not committed:
+            split_at = max_len
+            committed = text[:split_at]
+            remainder = text[split_at:]
+        else:
+            remainder = text[split_at:]
+
+        return committed, remainder.lstrip()
+
+    async def _send_message_chunk_to_chat(
+        self,
+        chat_id: str,
+        text: str,
+        parse_mode: str | None = None,
+        disable_notification: bool = False,
+        message_thread_id: int | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> bool:
+        """Send a single Telegram message chunk without further splitting."""
+        wait_time = await self._rate_limiter.acquire()
+        if wait_time > 0:
+            logger.debug("Rate limit: waiting %.1f seconds", wait_time)
+            await asyncio.sleep(wait_time)
+
+        params: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+        }
+        if parse_mode:
+            params["parse_mode"] = parse_mode
+        if disable_notification:
+            params["disable_notification"] = True
+        if message_thread_id is not None:
+            params["message_thread_id"] = message_thread_id
+        if reply_to_message_id is not None:
+            params["reply_to_message_id"] = reply_to_message_id
+
+        result = await self._api_call("sendMessage", params)
+        return result is not None
+
+    async def _send_message_draft(
+        self,
+        chat_id: str,
+        draft_id: int,
+        text: str,
+        message_thread_id: int | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
+        """Send or update a Telegram native draft message."""
+        if not self._started or not self._session:
+            raise TelegramDraftStreamingError("Telegram client not started")
+
+        if not text:
+            raise TelegramDraftStreamingError("Cannot send an empty Telegram draft")
+
+        wait_time = await self._rate_limiter.acquire()
+        if wait_time > 0:
+            logger.debug("Rate limit: waiting %.1f seconds", wait_time)
+            await asyncio.sleep(wait_time)
+
+        params: dict[str, Any] = {
+            "chat_id": chat_id,
+            "draft_id": draft_id,
+            "text": text,
+        }
+        if message_thread_id is not None:
+            params["message_thread_id"] = message_thread_id
+        if parse_mode:
+            params["parse_mode"] = parse_mode
+
+        result = await self._api_call("sendMessageDraft", params)
+        if result is None:
+            raise TelegramDraftStreamingError("Telegram sendMessageDraft call failed")
+
+    async def stream_agent_response_to_chat(
+        self,
+        chat_id: str,
+        chunks: AsyncIterator[str],
+        message_thread_id: int | None = None,
+    ) -> int:
+        """Stream an agent response to Telegram using native message drafts.
+
+        Telegram drafts are used for progressive updates, then each completed
+        segment is committed with sendMessage so it appears in chat history.
+
+        Returns:
+            Number of raw response characters streamed to Telegram.
+        """
+        if not self._started or not self._session:
+            raise TelegramDraftStreamingError("Telegram client not started")
+
+        session = TelegramDraftSession(
+            chat_id=chat_id,
+            draft_id=self._next_draft_id(),
+            message_thread_id=message_thread_id,
+        )
+        streamed_chars = 0
+
+        async for chunk in chunks:
+            if not chunk:
+                continue
+
+            streamed_chars += len(chunk)
+            session.segment_text += chunk
+
+            while session.segment_text:
+                segment_limit = self._stream_segment_limit(session.segment_index)
+                if len(session.segment_text) <= segment_limit:
+                    await self._send_message_draft(
+                        chat_id=session.chat_id,
+                        draft_id=session.draft_id,
+                        text=self._build_stream_segment(session),
+                        message_thread_id=session.message_thread_id,
+                    )
+                    break
+
+                committed_segment, remainder = self._split_stream_segment(
+                    session.segment_text,
+                    segment_limit,
+                )
+                session.segment_text = committed_segment
+                visible_text = self._build_stream_segment(session)
+
+                await self._send_message_draft(
+                    chat_id=session.chat_id,
+                    draft_id=session.draft_id,
+                    text=visible_text,
+                    message_thread_id=session.message_thread_id,
+                )
+                if not await self._send_message_chunk_to_chat(
+                    chat_id=session.chat_id,
+                    text=visible_text,
+                    message_thread_id=session.message_thread_id,
+                ):
+                    raise TelegramDraftStreamingError(
+                        "Failed to commit a streamed Telegram message segment"
+                    )
+
+                session.segment_index += 1
+                session.draft_id = self._next_draft_id()
+                session.segment_text = remainder
+
+        if streamed_chars == 0:
+            return 0
+
+        if not session.segment_text:
+            return streamed_chars
+
+        final_text = self._build_stream_segment(session)
+        if not await self._send_message_chunk_to_chat(
+            chat_id=session.chat_id,
+            text=final_text,
+            message_thread_id=session.message_thread_id,
+        ):
+            raise TelegramDraftStreamingError(
+                "Failed to commit the final streamed Telegram message"
+            )
+
+        return streamed_chars
 
     async def _api_call_with_error_type(
         self,
