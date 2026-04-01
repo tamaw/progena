@@ -41,6 +41,7 @@ class TelegramConfig:
     retry_delay: float
     max_message_length: int
     rate_limit_per_minute: int
+    draft_update_interval_ms: int = 200
     # Polling settings
     polling_enabled: bool = True
     polling_interval: float = 1.0
@@ -72,6 +73,7 @@ class TelegramConfig:
             retry_delay=config.telegram_retry_delay,
             max_message_length=config.telegram_max_message_length,
             rate_limit_per_minute=config.telegram_rate_limit_per_minute,
+            draft_update_interval_ms=config.telegram_draft_update_interval_ms,
             polling_enabled=config.telegram_polling_enabled,
             polling_interval=config.telegram_polling_interval,
             polling_timeout=config.telegram_polling_timeout,
@@ -129,6 +131,9 @@ class TelegramDraftSession:
     message_thread_id: int | None = None
     segment_text: str = ""
     segment_index: int = 0
+    draft_sent: bool = False
+    last_draft_text: str = ""
+    last_draft_update_at: float = 0.0
 
 
 class TelegramClient:
@@ -641,6 +646,26 @@ class TelegramClient:
 
         return committed, remainder.lstrip()
 
+    def _draft_update_interval_seconds(self) -> float:
+        """Return the Telegram draft throttling interval in seconds."""
+        return max(0.0, self.config.draft_update_interval_ms / 1000.0)
+
+    def _should_flush_draft(
+        self,
+        session: TelegramDraftSession,
+        visible_text: str,
+        now: float,
+    ) -> bool:
+        """Return whether the current draft should be sent to Telegram now."""
+        if visible_text == session.last_draft_text:
+            return False
+        if not session.draft_sent:
+            return True
+        interval = self._draft_update_interval_seconds()
+        if interval <= 0:
+            return True
+        return (now - session.last_draft_update_at) >= interval
+
     async def _send_message_chunk_to_chat(
         self,
         chat_id: str,
@@ -740,12 +765,18 @@ class TelegramClient:
             while session.segment_text:
                 segment_limit = self._stream_segment_limit(session.segment_index)
                 if len(session.segment_text) <= segment_limit:
-                    await self._send_message_draft(
-                        chat_id=session.chat_id,
-                        draft_id=session.draft_id,
-                        text=self._build_stream_segment(session),
-                        message_thread_id=session.message_thread_id,
-                    )
+                    visible_text = self._build_stream_segment(session)
+                    now = time.monotonic()
+                    if self._should_flush_draft(session, visible_text, now):
+                        await self._send_message_draft(
+                            chat_id=session.chat_id,
+                            draft_id=session.draft_id,
+                            text=visible_text,
+                            message_thread_id=session.message_thread_id,
+                        )
+                        session.draft_sent = True
+                        session.last_draft_text = visible_text
+                        session.last_draft_update_at = now
                     break
 
                 committed_segment, remainder = self._split_stream_segment(
@@ -754,13 +785,6 @@ class TelegramClient:
                 )
                 session.segment_text = committed_segment
                 visible_text = self._build_stream_segment(session)
-
-                await self._send_message_draft(
-                    chat_id=session.chat_id,
-                    draft_id=session.draft_id,
-                    text=visible_text,
-                    message_thread_id=session.message_thread_id,
-                )
                 if not await self._send_message_chunk_to_chat(
                     chat_id=session.chat_id,
                     text=visible_text,
@@ -773,6 +797,9 @@ class TelegramClient:
                 session.segment_index += 1
                 session.draft_id = self._next_draft_id()
                 session.segment_text = remainder
+                session.draft_sent = False
+                session.last_draft_text = ""
+                session.last_draft_update_at = 0.0
 
         if streamed_chars == 0:
             return 0

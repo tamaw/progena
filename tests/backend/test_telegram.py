@@ -53,6 +53,7 @@ class TestTelegramConfig:
         assert tg_config.retry_delay == 2.0
         assert tg_config.max_message_length == 2048
         assert tg_config.rate_limit_per_minute == 20
+        assert tg_config.draft_update_interval_ms == 200
 
 
 class TestTelegramRateLimiter:
@@ -109,6 +110,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=100,  # Small for testing chunking
             rate_limit_per_minute=30,
+            draft_update_interval_ms=200,
         )
 
     @pytest.fixture
@@ -149,6 +151,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=4096,
             rate_limit_per_minute=30,
+            draft_update_interval_ms=200,
         )
         client = TelegramClient(config)
         await client.start()
@@ -240,7 +243,7 @@ class TestTelegramClient:
 
     @pytest.mark.asyncio
     async def test_stream_agent_response_to_chat_uses_drafts_then_commits(self, client):
-        """Test native Telegram draft streaming followed by final commit."""
+        """Test throttled draft streaming followed by final commit."""
         client._started = True
         client._session = MagicMock()
 
@@ -257,12 +260,7 @@ class TestTelegramClient:
             )
 
         assert streamed_chars == len("Hello world")
-        assert [method for method, _ in calls] == [
-            "sendMessageDraft",
-            "sendMessageDraft",
-            "sendMessage",
-        ]
-        assert calls[0][1]["draft_id"] == calls[1][1]["draft_id"]
+        assert [method for method, _ in calls] == ["sendMessageDraft", "sendMessage"]
         assert calls[-1][1]["text"] == "🤖 Progenitor Agent:\n\nHello world"
 
     @pytest.mark.asyncio
@@ -286,8 +284,34 @@ class TestTelegramClient:
 
         assert streamed_chars == len(long_text)
         send_methods = [method for method, _ in calls]
-        assert send_methods.count("sendMessageDraft") >= 2
+        assert send_methods.count("sendMessageDraft") <= 1
         assert send_methods.count("sendMessage") == 2
+
+    @pytest.mark.asyncio
+    async def test_stream_agent_response_to_chat_can_disable_draft_throttle(self, client):
+        """Test draft updates can be emitted for each chunk when interval is disabled."""
+        client._started = True
+        client._session = MagicMock()
+        client.config.draft_update_interval_ms = 0
+
+        calls: list[tuple[str, dict]] = []
+
+        async def mock_api(method, params=None, retry=True):
+            calls.append((method, params or {}))
+            return {"ok": True}
+
+        with patch.object(client, "_api_call", side_effect=mock_api):
+            streamed_chars = await client.stream_agent_response_to_chat(
+                "111222333",
+                _async_iter("Hello", " world"),
+            )
+
+        assert streamed_chars == len("Hello world")
+        assert [method for method, _ in calls] == [
+            "sendMessageDraft",
+            "sendMessageDraft",
+            "sendMessage",
+        ]
 
     @pytest.mark.asyncio
     async def test_stream_agent_response_to_chat_raises_on_draft_failure(self, client):
