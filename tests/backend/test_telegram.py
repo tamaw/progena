@@ -14,11 +14,18 @@ from app.backend.config import ChatServerConfig
 from app.backend.telegram_client import (
     TelegramClient,
     TelegramConfig,
+    TelegramDraftStreamingError,
     TelegramRateLimiter,
     get_telegram_client,
     init_telegram_client,
     stop_telegram_client,
 )
+
+
+async def _async_iter(*chunks: str):
+    """Yield test chunks as an async iterator."""
+    for chunk in chunks:
+        yield chunk
 
 
 class TestTelegramConfig:
@@ -230,6 +237,77 @@ class TestTelegramClient:
         result = await client._api_call("sendMessage", {"chat_id": "123", "text": "Hello"})
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_stream_agent_response_to_chat_uses_drafts_then_commits(self, client):
+        """Test native Telegram draft streaming followed by final commit."""
+        client._started = True
+        client._session = MagicMock()
+
+        calls: list[tuple[str, dict]] = []
+
+        async def mock_api(method, params=None, retry=True):
+            calls.append((method, params or {}))
+            return {"ok": True}
+
+        with patch.object(client, "_api_call", side_effect=mock_api):
+            streamed_chars = await client.stream_agent_response_to_chat(
+                "111222333",
+                _async_iter("Hello", " world"),
+            )
+
+        assert streamed_chars == len("Hello world")
+        assert [method for method, _ in calls] == [
+            "sendMessageDraft",
+            "sendMessageDraft",
+            "sendMessage",
+        ]
+        assert calls[0][1]["draft_id"] == calls[1][1]["draft_id"]
+        assert calls[-1][1]["text"] == "🤖 Progenitor Agent:\n\nHello world"
+
+    @pytest.mark.asyncio
+    async def test_stream_agent_response_to_chat_splits_long_output(self, client):
+        """Test that long streamed output rolls into multiple committed messages."""
+        client._started = True
+        client._session = MagicMock()
+
+        calls: list[tuple[str, dict]] = []
+
+        async def mock_api(method, params=None, retry=True):
+            calls.append((method, params or {}))
+            return {"ok": True}
+
+        long_text = "A" * 160
+        with patch.object(client, "_api_call", side_effect=mock_api):
+            streamed_chars = await client.stream_agent_response_to_chat(
+                "111222333",
+                _async_iter(long_text),
+            )
+
+        assert streamed_chars == len(long_text)
+        send_methods = [method for method, _ in calls]
+        assert send_methods.count("sendMessageDraft") >= 2
+        assert send_methods.count("sendMessage") == 2
+
+    @pytest.mark.asyncio
+    async def test_stream_agent_response_to_chat_raises_on_draft_failure(self, client):
+        """Test that draft streaming failures are surfaced explicitly."""
+        client._started = True
+        client._session = MagicMock()
+
+        async def mock_api(method, params=None, retry=True):
+            if method == "sendMessageDraft":
+                return None
+            return {"ok": True}
+
+        with (
+            patch.object(client, "_api_call", side_effect=mock_api),
+            pytest.raises(TelegramDraftStreamingError),
+        ):
+            await client.stream_agent_response_to_chat(
+                "111222333",
+                _async_iter("Hello"),
+            )
 
 
 class TestTelegramClientIntegration:
@@ -697,3 +775,56 @@ class TestTelegramConnectedMessage:
         telegram.send_message.assert_awaited_once()
         sent_text = telegram.send_message.call_args.args[0]
         assert "failed" in sent_text.lower()
+
+
+class TestTelegramBackendStreaming:
+    """Tests for backend Telegram streaming wiring."""
+
+    @pytest.mark.asyncio
+    async def test_handle_telegram_agent_message_streams_to_telegram(self):
+        from app.backend import main as backend_main
+
+        telegram = AsyncMock()
+        telegram.stream_agent_response_to_chat.return_value = len("Hello world")
+
+        progenitor = AsyncMock()
+        progenitor.is_running = True
+        progenitor.send_message_stream = MagicMock(
+            return_value=_async_iter("Hello", " world")
+        )
+
+        result = await backend_main._handle_telegram_agent_message(
+            telegram,
+            progenitor,
+            "987654321",
+            "Hi",
+            {"username": "owner", "message_thread_id": 123},
+        )
+
+        assert result is None
+        telegram.stream_agent_response_to_chat.assert_awaited_once()
+        assert telegram.stream_agent_response_to_chat.await_args.kwargs["message_thread_id"] == 123
+
+    @pytest.mark.asyncio
+    async def test_handle_telegram_agent_message_surfaces_draft_failures(self):
+        from app.backend import main as backend_main
+
+        telegram = AsyncMock()
+        telegram.stream_agent_response_to_chat.side_effect = TelegramDraftStreamingError(
+            "draft unavailable"
+        )
+
+        progenitor = AsyncMock()
+        progenitor.is_running = True
+        progenitor.send_message_stream = MagicMock(return_value=_async_iter("Hello"))
+
+        result = await backend_main._handle_telegram_agent_message(
+            telegram,
+            progenitor,
+            "987654321",
+            "Hi",
+            {"username": "owner"},
+        )
+
+        assert result is not None
+        assert "draft streaming failed" in result.lower()
