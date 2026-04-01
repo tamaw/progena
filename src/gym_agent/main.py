@@ -1,4 +1,4 @@
-"""FastAPI application for the Gym Agent A2A service."""
+"""FastAPI application for the lifting-first Gym Agent A2A service."""
 
 from __future__ import annotations
 
@@ -13,10 +13,13 @@ from pydantic import ValidationError
 from . import storage
 from .schemas import (
     A2ARequest,
-    GetHistoryPayload,
-    HabitStreakPayload,
-    LogWorkoutPayload,
-    SummarizePayload,
+    GetBodyweightHistoryPayload,
+    GetLiftingHistoryPayload,
+    GetPersonalRecordsPayload,
+    LogBodyweightPayload,
+    LogLiftingSessionPayload,
+    SummarizeBodyweightProgressPayload,
+    SummarizeStrengthProgressPayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,46 +31,53 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:  # pragma: no 
     yield
 
 
-app = FastAPI(title="Gym Agent", version="1.0.0", lifespan=_lifespan)
-
-# ---------------------------------------------------------------------------
-# Dependencies
-# ---------------------------------------------------------------------------
+app = FastAPI(title="Gym Agent", version="2.0.0", lifespan=_lifespan)
 
 
 def get_storage() -> None:
-    """Dependency that ensures the DB is ready (no-op after startup)."""
+    """Dependency hook to ensure storage startup runs before requests."""
     return None
 
 
-# ---------------------------------------------------------------------------
-# Agent card
-# ---------------------------------------------------------------------------
-
 AGENT_CARD: dict[str, Any] = {
     "name": "gym_agent",
-    "version": "1.0.0",
-    "description": "A2A-compatible agent for logging and analysing gym workouts.",
+    "version": "2.0.0",
+    "description": "A2A-compatible agent for weight lifting and bodyweight tracking.",
     "capabilities": [
         {
-            "name": "log_workout",
-            "description": "Log a workout for a user on a given date.",
-            "payload_schema": "LogWorkoutPayload",
+            "name": "log_lifting_session",
+            "description": "Log a structured lifting session with exercises and sets.",
+            "payload_schema": "LogLiftingSessionPayload",
         },
         {
-            "name": "get_history",
-            "description": "Retrieve workout history for a user with optional date filters.",
-            "payload_schema": "GetHistoryPayload",
+            "name": "get_lifting_history",
+            "description": "Retrieve lifting-session history with optional date or exercise filters.",
+            "payload_schema": "GetLiftingHistoryPayload",
         },
         {
-            "name": "summarize_progress",
-            "description": "Return aggregate statistics (totals, averages) over a rolling window.",
-            "payload_schema": "SummarizePayload",
+            "name": "summarize_strength_progress",
+            "description": "Summarize lifting volume, reps, sets, and session trends.",
+            "payload_schema": "SummarizeStrengthProgressPayload",
         },
         {
-            "name": "habit_streak",
-            "description": "Calculate current and longest streak for a given workout habit.",
-            "payload_schema": "HabitStreakPayload",
+            "name": "get_personal_records",
+            "description": "Return heaviest and highest-volume set records by exercise.",
+            "payload_schema": "GetPersonalRecordsPayload",
+        },
+        {
+            "name": "log_bodyweight",
+            "description": "Log a bodyweight measurement for a user.",
+            "payload_schema": "LogBodyweightPayload",
+        },
+        {
+            "name": "get_bodyweight_history",
+            "description": "Retrieve bodyweight history with optional date filters.",
+            "payload_schema": "GetBodyweightHistoryPayload",
+        },
+        {
+            "name": "summarize_bodyweight_progress",
+            "description": "Summarize bodyweight change over a rolling window.",
+            "payload_schema": "SummarizeBodyweightProgressPayload",
         },
     ],
 }
@@ -79,23 +89,18 @@ def agent_card() -> dict[str, Any]:
     return AGENT_CARD
 
 
-# ---------------------------------------------------------------------------
-# A2A endpoint
-# ---------------------------------------------------------------------------
-
-
 def _make_response(result: Any, context_id: str | None) -> dict[str, Any]:
-    resp: dict[str, Any] = {"status": "ok", "result": result}
+    response: dict[str, Any] = {"status": "ok", "result": result}
     if context_id:
-        resp["context_id"] = context_id
-    return resp
+        response["context_id"] = context_id
+    return response
 
 
 def _make_error(message: str, context_id: str | None) -> dict[str, Any]:
-    resp: dict[str, Any] = {"status": "error", "message": message}
+    response: dict[str, Any] = {"status": "error", "message": message}
     if context_id:
-        resp["context_id"] = context_id
-    return resp
+        response["context_id"] = context_id
+    return response
 
 
 @app.post("/a2a")
@@ -104,14 +109,7 @@ def a2a(
     body: A2ARequest,
     _storage: None = Depends(get_storage),
 ) -> dict[str, Any]:
-    """A2A dispatch endpoint.
-
-    Accepts an :class:`A2ARequest` envelope, validates the payload against the
-    capability-specific schema, executes the requested operation, and returns a
-    structured JSON response.
-
-    Optional header ``X-A2A-Context-ID`` is echoed back in the response.
-    """
+    """Dispatch A2A requests to lifting/bodyweight capability handlers."""
     context_id: str | None = request.headers.get("X-A2A-Context-ID")
 
     try:
@@ -131,42 +129,112 @@ def a2a(
     return _make_response(result, context_id)
 
 
-# ---------------------------------------------------------------------------
-# Capability handlers
-# ---------------------------------------------------------------------------
-
-
 def _dispatch(capability: str, payload: Any) -> Any:
-    """Route a validated payload to the appropriate storage call."""
-    if capability == "log_workout":
-        return _handle_log_workout(payload)
-    if capability == "get_history":
-        return _handle_get_history(payload)
-    if capability == "summarize_progress":
-        return _handle_summarize(payload)
-    if capability == "habit_streak":
-        return _handle_habit_streak(payload)
+    """Route a validated payload to the correct handler."""
+    if capability == "log_lifting_session":
+        return _handle_log_lifting_session(payload)
+    if capability == "get_lifting_history":
+        return _handle_get_lifting_history(payload)
+    if capability == "summarize_strength_progress":
+        return _handle_summarize_strength_progress(payload)
+    if capability == "get_personal_records":
+        return _handle_get_personal_records(payload)
+    if capability == "log_bodyweight":
+        return _handle_log_bodyweight(payload)
+    if capability == "get_bodyweight_history":
+        return _handle_get_bodyweight_history(payload)
+    if capability == "summarize_bodyweight_progress":
+        return _handle_summarize_bodyweight_progress(payload)
     raise ValueError(f"Unknown capability: {capability}")  # pragma: no cover
 
 
-def _handle_log_workout(payload: LogWorkoutPayload) -> dict[str, Any]:
-    workout_dict = payload.workout.model_dump(exclude_none=True)
-    record_id = storage.save_workout(payload.user_id, payload.date_str(), workout_dict)
-    return {"id": record_id, "user_id": payload.user_id, "date": payload.date_str()}
+def _handle_log_lifting_session(payload: LogLiftingSessionPayload) -> dict[str, Any]:
+    session_id = storage.save_lifting_session(
+        user_id=payload.user_id,
+        session_date=payload.date,
+        workout_name=payload.workout_name,
+        exercises=[exercise.model_dump(exclude_none=True) for exercise in payload.exercises],
+        notes=payload.notes,
+    )
+    total_sets = sum(len(exercise.sets) for exercise in payload.exercises)
+    total_reps = sum(lifting_set.reps for exercise in payload.exercises for lifting_set in exercise.sets)
+    total_volume_kg = round(
+        sum(
+            lifting_set.reps * lifting_set.weight_kg
+            for exercise in payload.exercises
+            for lifting_set in exercise.sets
+        ),
+        2,
+    )
+    return {
+        "session_id": session_id,
+        "user_id": payload.user_id,
+        "date": payload.date,
+        "workout_name": payload.workout_name,
+        "exercise_count": len(payload.exercises),
+        "total_sets": total_sets,
+        "total_reps": total_reps,
+        "total_volume_kg": total_volume_kg,
+    }
 
 
-def _handle_get_history(payload: GetHistoryPayload) -> list[dict[str, Any]]:
-    return storage.get_history(
-        payload.user_id,
+def _handle_get_lifting_history(payload: GetLiftingHistoryPayload) -> list[dict[str, Any]]:
+    return storage.get_lifting_history(
+        user_id=payload.user_id,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        exercise_name=payload.exercise_name,
+        limit=payload.limit,
+    )
+
+
+def _handle_summarize_strength_progress(
+    payload: SummarizeStrengthProgressPayload,
+) -> dict[str, Any]:
+    return storage.summarize_strength_progress(
+        user_id=payload.user_id,
+        days=payload.days,
+        exercise_name=payload.exercise_name,
+    )
+
+
+def _handle_get_personal_records(payload: GetPersonalRecordsPayload) -> dict[str, Any]:
+    return storage.get_personal_records(
+        user_id=payload.user_id,
+        exercise_name=payload.exercise_name,
+    )
+
+
+def _handle_log_bodyweight(payload: LogBodyweightPayload) -> dict[str, Any]:
+    entry_id = storage.save_bodyweight(
+        user_id=payload.user_id,
+        entry_date=payload.date,
+        weight_kg=payload.weight_kg,
+        notes=payload.notes,
+    )
+    return {
+        "id": entry_id,
+        "user_id": payload.user_id,
+        "date": payload.date,
+        "weight_kg": round(payload.weight_kg, 2),
+    }
+
+
+def _handle_get_bodyweight_history(
+    payload: GetBodyweightHistoryPayload,
+) -> list[dict[str, Any]]:
+    return storage.get_bodyweight_history(
+        user_id=payload.user_id,
         start_date=payload.start_date,
         end_date=payload.end_date,
         limit=payload.limit,
     )
 
 
-def _handle_summarize(payload: SummarizePayload) -> dict[str, Any]:
-    return storage.get_summary(payload.user_id, payload.days)
-
-
-def _handle_habit_streak(payload: HabitStreakPayload) -> dict[str, int]:
-    return storage.get_habit_streak(payload.user_id, payload.habit, payload.min_days)
+def _handle_summarize_bodyweight_progress(
+    payload: SummarizeBodyweightProgressPayload,
+) -> dict[str, Any]:
+    return storage.summarize_bodyweight_progress(
+        user_id=payload.user_id,
+        days=payload.days,
+    )
