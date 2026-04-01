@@ -1,6 +1,6 @@
 # Gym Agent
 
-A lightweight, **A2A-compatible** FastAPI service for **weight lifting and bodyweight tracking**.
+A lightweight, **A2A-compatible** FastAPI service for **structured gym sessions and bodyweight tracking**.
 
 ## Features
 

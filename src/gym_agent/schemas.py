@@ -1,4 +1,4 @@
-"""Pydantic schemas for the lifting-first Gym Agent service."""
+"""Pydantic schemas for the Gym Agent service."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ class GetLiftingHistoryPayload(BaseModel):
 
 
 class SummarizeStrengthProgressPayload(BaseModel):
-    """Payload for strength/lifting summaries."""
+    """Payload for training summaries."""
 
     user_id: str
     days: int = Field(30, ge=1, le=3650)

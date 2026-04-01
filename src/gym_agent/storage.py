@@ -1,4 +1,4 @@
-"""SQLite storage layer for the lifting-first Gym Agent."""
+"""SQLite storage layer for the Gym Agent."""
 
 from __future__ import annotations
 
