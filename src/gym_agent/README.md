@@ -1,13 +1,13 @@
 # Gym Agent
 
-A lightweight, **A2A-compatible** FastAPI service for **structured gym sessions and bodyweight tracking**.
+A lightweight, **A2A-compatible** FastAPI service for **gym sessions and bodyweight tracking**.
 
 ## Features
 
-- Log structured lifting sessions with exercises and sets
+- Log structured gym sessions with exercises and sets
 - Query lifting history with date and exercise filters
-- Summarize strength progress with set, rep, and volume totals
-- Track personal records by exercise
+- Summarize gym progress with set, rep, and volume totals
+- Track personal-best records by exercise
 - Log bodyweight entries over time
 - Summarize bodyweight change over a rolling window
 - SQLite-backed storage

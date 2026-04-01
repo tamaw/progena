@@ -42,7 +42,7 @@ def get_storage() -> None:
 AGENT_CARD: dict[str, Any] = {
     "name": "gym_agent",
     "version": "2.0.0",
-    "description": "A2A-compatible gym agent for structured training and bodyweight tracking.",
+    "description": "A2A-compatible gym agent for gym sessions and bodyweight tracking.",
     "capabilities": [
         {
             "name": "log_lifting_session",
@@ -56,12 +56,12 @@ AGENT_CARD: dict[str, Any] = {
         },
         {
             "name": "summarize_strength_progress",
-            "description": "Summarize training volume, reps, sets, and session trends.",
+            "description": "Summarize gym progress across reps, sets, volume, and session trends.",
             "payload_schema": "SummarizeStrengthProgressPayload",
         },
         {
             "name": "get_personal_records",
-            "description": "Return heaviest and highest-volume set records by exercise.",
+            "description": "Return gym personal-best set records by exercise.",
             "payload_schema": "GetPersonalRecordsPayload",
         },
         {
