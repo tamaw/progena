@@ -21,7 +21,7 @@ import time
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +68,7 @@ from .shutdown import (
 # New modules for enhanced features
 from .telegram_client import (
     TelegramClient,
+    TelegramDraftStreamingError,
     get_telegram_client,
     init_telegram_client,
     stop_telegram_client,
@@ -413,6 +414,69 @@ async def _send_telegram_message(
         logger.error("Error sending to Telegram: %s", e)
 
 
+async def _handle_telegram_agent_message(
+    telegram: TelegramClient,
+    progenitor: ProgenitorClient | IPCProgenitorClient,
+    chat_id: str,
+    message: str,
+    metadata: dict[str, Any],
+) -> str | None:
+    """Handle an inbound Telegram chat by streaming the reply back to Telegram."""
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            logger.info(
+                "Processing Telegram message from %s (attempt %d): %s",
+                metadata.get("username", chat_id),
+                attempt + 1,
+                message[:50] + "..." if len(message) > 50 else message,
+            )
+
+            if not progenitor.is_running:
+                logger.info("IPC client not running, starting...")
+                await progenitor.start()
+
+            request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
+            streamed_chars = await telegram.stream_agent_response_to_chat(
+                chat_id,
+                progenitor.send_message_stream(message, request_id=request_id),
+                message_thread_id=metadata.get("message_thread_id"),
+            )
+
+            logger.info(
+                "Streamed Telegram response for %s (%d chars)",
+                metadata.get("username", chat_id),
+                streamed_chars,
+            )
+            if streamed_chars == 0:
+                return "⚠️ Empty response from agent."
+            return None
+
+        except TelegramDraftStreamingError as e:
+            logger.error("Telegram draft streaming failed: %s", e)
+            return (
+                "⚠️ Telegram native draft streaming failed. "
+                "Please check the backend logs and bot API support."
+            )
+        except TimeoutError:
+            logger.error("Timeout waiting for agent response")
+            return "⏱️ Sorry, the request timed out. Please try again."
+        except (ConnectionError, OSError) as e:
+            logger.warning("Connection error on attempt %d: %s", attempt + 1, e)
+            if attempt < max_retries:
+                with suppress(Exception):
+                    await progenitor.stop()
+                await asyncio.sleep(1)
+                continue
+            logger.error("Failed after %d attempts: %s", max_retries + 1, e)
+            return "⚠️ Connection error. Please try again in a moment."
+        except Exception as e:
+            logger.error("Error processing Telegram message: %s", e)
+            return None
+
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager with graceful shutdown (OPS-002).
@@ -547,64 +611,14 @@ async def lifespan(app: FastAPI):
             Returns:
                 Response from the agent, or None if failed.
             """
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    logger.info(
-                        "Processing Telegram message from %s (attempt %d): %s",
-                        metadata.get("username", chat_id),
-                        attempt + 1,
-                        message[:50] + "..." if len(message) > 50 else message
-                    )
-
-                    # Ensure client is available
-                    assert client is not None, "Client should be available in this context"
-
-                    # Ensure client is started/connected
-                    if not client.is_running:
-                        logger.info("IPC client not running, starting...")
-                        await client.start()
-
-                    # Create a unique request ID for correlation
-                    request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
-
-                    # Use streaming API and collect chunks into full response
-                    # (The Progenitor loop always streams, so we must use stream mode)
-                    response_chunks = []
-                    async for chunk in client.send_message_stream(message, request_id=request_id):
-                        if chunk:
-                            response_chunks.append(chunk)
-
-                    response = "".join(response_chunks)
-
-                    logger.info(
-                        "Got response for Telegram message (%d chars)",
-                        len(response) if response else 0
-                    )
-
-                    return response if response else None
-
-                except TimeoutError:
-                    logger.error("Timeout waiting for agent response")
-                    return "⏱️ Sorry, the request timed out. Please try again."
-                except (ConnectionError, OSError) as e:
-                    logger.warning("Connection error on attempt %d: %s", attempt + 1, e)
-                    if attempt < max_retries:
-                        # Try to reconnect
-                        try:
-                            assert client is not None
-                            await client.stop()
-                        except Exception:
-                            pass
-                        await asyncio.sleep(1)
-                        continue
-                    logger.error("Failed after %d attempts: %s", max_retries + 1, e)
-                    return "⚠️ Connection error. Please try again in a moment."
-                except Exception as e:
-                    logger.error("Error processing Telegram message: %s", e)
-                    return None
-
-            return None
+            assert client is not None, "Client should be available in this context"
+            return await _handle_telegram_agent_message(
+                telegram_client,
+                client,
+                chat_id,
+                message,
+                metadata,
+            )
 
         telegram_client.set_message_handler(handle_telegram_message)
         await telegram_client.start_polling()
