@@ -1,177 +1,464 @@
-"""Storage layer for the Gym Agent.
-
-Primary backend: SQLite (file ``gym_agent.db`` in the repository root).
-Fallback backend: JSON file at ``data/gym_agent.json``.
-
-The active backend is selected once at import time via :func:`init_db`.
-To override the database path (e.g. for testing with ``:memory:``), set the
-``GYM_AGENT_DB`` environment variable *before* calling :func:`init_db`.
-"""
+"""SQLite storage layer for the Gym Agent."""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sqlite3
+from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 _DEFAULT_DB_PATH = str(Path(__file__).resolve().parents[2] / "gym_agent.db")
-_FALLBACK_JSON = str(Path(__file__).resolve().parents[2] / "data" / "gym_agent.json")
 
 _db_path: str = os.environ.get("GYM_AGENT_DB", _DEFAULT_DB_PATH)
-_use_json_fallback: bool = False
-_memory_conn: sqlite3.Connection | None = None  # reused for :memory: databases
+_memory_conn: sqlite3.Connection | None = None
+
+
+def _round_kg(value: float) -> float:
+    """Round weight/volume values to two decimals."""
+    return round(value, 2)
+
+
+def _require_lastrowid(lastrowid: int | None, entity_name: str) -> int:
+    """Return a SQLite row id or raise when insertion did not produce one."""
+    if lastrowid is None:  # pragma: no cover - sqlite should always provide this
+        raise RuntimeError(f"Failed to persist {entity_name}")
+    return int(lastrowid)
 
 
 def _get_db_path() -> str:
-    """Return the active DB path (can be overridden at runtime for tests)."""
+    """Return the active SQLite database path."""
     return os.environ.get("GYM_AGENT_DB", _db_path)
 
 
-# ---------------------------------------------------------------------------
-# SQLite helpers
-# ---------------------------------------------------------------------------
-
 def _connect() -> sqlite3.Connection:
+    """Create or reuse a SQLite connection."""
     global _memory_conn
+
     path = _get_db_path()
     if path == ":memory:":
-        # Reuse the same connection so all callers share the same in-memory DB.
         if _memory_conn is None:
             _memory_conn = sqlite3.connect(":memory:", check_same_thread=False)
             _memory_conn.row_factory = sqlite3.Row
-            _memory_conn.execute("PRAGMA journal_mode=WAL")
+            _memory_conn.execute("PRAGMA foreign_keys = ON")
         return _memory_conn
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+
+    connection = sqlite3.connect(path, check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+@contextmanager
+def _connection() -> Iterator[sqlite3.Connection]:
+    """Yield a managed SQLite connection and close non-memory connections."""
+    connection = _connect()
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        if connection is not _memory_conn:
+            connection.close()
 
 
 def init_db() -> None:
-    """Initialise the storage backend.
+    """Initialise the lifting/bodyweight schema."""
+    global _memory_conn
 
-    Creates the SQLite schema if it does not exist.  Falls back to JSON if
-    SQLite cannot be initialised.  When ``GYM_AGENT_DB`` is ``:memory:``,
-    resets the shared in-memory connection so tests start with a clean slate.
-    """
-    global _use_json_fallback, _memory_conn
-    if _get_db_path() == ":memory:":
-        # Drop and recreate the shared in-memory connection for a clean state.
-        if _memory_conn is not None:
-            _memory_conn.close()
-        _memory_conn = None  # _connect() will create a fresh one
-    try:
-        conn = _connect()
-        conn.execute(
+    if _get_db_path() == ":memory:" and _memory_conn is not None:
+        _memory_conn.close()
+        _memory_conn = None
+
+    with _connection() as connection:
+        connection.execute(
             """
-            CREATE TABLE IF NOT EXISTS workouts (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     TEXT    NOT NULL,
-                date        TEXT    NOT NULL,
-                type        TEXT    NOT NULL,
-                duration_min INTEGER,
-                distance_km REAL,
-                notes       TEXT,
-                created_at  TEXT    DEFAULT (datetime('now'))
+            CREATE TABLE IF NOT EXISTS lifting_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                date TEXT NOT NULL,
+                workout_name TEXT NOT NULL,
+                notes TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
             """
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_date ON workouts(user_id, date)")
-        conn.commit()
-        logger.info("gym_agent: SQLite backend ready at %s", _get_db_path())
-    except Exception as exc:  # pragma: no cover
-        logger.warning("gym_agent: SQLite unavailable (%s), falling back to JSON", exc)
-        _use_json_fallback = True
-        _ensure_json_store()
-
-
-# ---------------------------------------------------------------------------
-# JSON fallback helpers
-# ---------------------------------------------------------------------------
-
-def _ensure_json_store() -> None:
-    """Create the JSON store file if it does not exist."""
-    path = Path(_FALLBACK_JSON)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(json.dumps({"workouts": []}))
-
-
-def _load_json() -> dict[str, Any]:
-    _ensure_json_store()
-    return json.loads(Path(_FALLBACK_JSON).read_text())
-
-
-def _save_json(data: dict[str, Any]) -> None:
-    Path(_FALLBACK_JSON).write_text(json.dumps(data, indent=2))
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def save_workout(user_id: str, workout_date: str, workout: dict[str, Any]) -> int:
-    """Persist a workout entry and return its ID.
-
-    Args:
-        user_id: Identifier for the user.
-        workout_date: ISO date string (``YYYY-MM-DD``).
-        workout: Dict with keys ``type``, ``duration_min``, ``distance_km``, ``notes``.
-
-    Returns:
-        The integer ID of the saved record.
-    """
-    if _use_json_fallback:
-        return _json_save_workout(user_id, workout_date, workout)
-
-    with _connect() as conn:
-        cur = conn.execute(
+        connection.execute(
             """
-            INSERT INTO workouts (user_id, date, type, duration_min, distance_km, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
+            CREATE TABLE IF NOT EXISTS lifting_exercises (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                exercise_order INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                notes TEXT,
+                FOREIGN KEY(session_id) REFERENCES lifting_sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lifting_sets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                exercise_id INTEGER NOT NULL,
+                set_order INTEGER NOT NULL,
+                reps INTEGER NOT NULL,
+                weight_kg REAL NOT NULL,
+                set_type TEXT NOT NULL,
+                rpe REAL,
+                rir INTEGER,
+                notes TEXT,
+                FOREIGN KEY(exercise_id) REFERENCES lifting_exercises(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bodyweight_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                date TEXT NOT NULL,
+                weight_kg REAL NOT NULL,
+                notes TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lifting_sessions_user_date "
+            "ON lifting_sessions(user_id, date DESC, id DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lifting_exercises_session_order "
+            "ON lifting_exercises(session_id, exercise_order)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lifting_exercises_name "
+            "ON lifting_exercises(name)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lifting_sets_exercise_order "
+            "ON lifting_sets(exercise_id, set_order)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bodyweight_entries_user_date "
+            "ON bodyweight_entries(user_id, date DESC, id DESC)"
+        )
+
+    logger.info("gym_agent: SQLite backend ready at %s", _get_db_path())
+
+
+def save_lifting_session(
+    user_id: str,
+    session_date: str,
+    workout_name: str,
+    exercises: list[dict[str, Any]],
+    notes: str | None = None,
+) -> int:
+    """Persist a gym session with nested exercises and sets."""
+    with _connection() as connection:
+        session_cursor = connection.execute(
+            """
+            INSERT INTO lifting_sessions (user_id, date, workout_name, notes)
+            VALUES (?, ?, ?, ?)
             """,
-            (
-                user_id,
-                workout_date,
-                workout.get("type", ""),
-                workout.get("duration_min"),
-                workout.get("distance_km"),
-                workout.get("notes"),
+            (user_id, session_date, workout_name, notes),
+        )
+        session_id = _require_lastrowid(session_cursor.lastrowid, "gym session")
+
+        for exercise_order, exercise in enumerate(exercises, start=1):
+            exercise_cursor = connection.execute(
+                """
+                INSERT INTO lifting_exercises (session_id, exercise_order, name, notes)
+                VALUES (?, ?, ?, ?)
+                """,
+                (session_id, exercise_order, exercise["name"], exercise.get("notes")),
+            )
+            exercise_id = _require_lastrowid(exercise_cursor.lastrowid, "lifting exercise")
+            for set_order, lifting_set in enumerate(exercise["sets"], start=1):
+                connection.execute(
+                    """
+                    INSERT INTO lifting_sets (
+                        exercise_id,
+                        set_order,
+                        reps,
+                        weight_kg,
+                        set_type,
+                        rpe,
+                        rir,
+                        notes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        exercise_id,
+                        set_order,
+                        lifting_set["reps"],
+                        lifting_set["weight_kg"],
+                        lifting_set["set_type"],
+                        lifting_set.get("rpe"),
+                        lifting_set.get("rir"),
+                        lifting_set.get("notes"),
+                    ),
+                )
+
+    return session_id
+
+
+def get_lifting_history(
+    user_id: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exercise_name: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return gym sessions with nested exercises and sets."""
+    clauses = ["s.user_id = ?"]
+    params: list[Any] = [user_id]
+    if start_date:
+        clauses.append("s.date >= ?")
+        params.append(start_date)
+    if end_date:
+        clauses.append("s.date <= ?")
+        params.append(end_date)
+    if exercise_name:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM lifting_exercises filter_exercise
+                WHERE filter_exercise.session_id = s.id
+                AND LOWER(filter_exercise.name) = LOWER(?)
+            )
+            """
+        )
+        params.append(exercise_name)
+    params.append(limit)
+
+    with _connection() as connection:
+        session_rows = connection.execute(
+            f"""
+            SELECT s.id, s.user_id, s.date, s.workout_name, s.notes, s.created_at
+            FROM lifting_sessions s
+            WHERE {' AND '.join(clauses)}
+            ORDER BY s.date DESC, s.id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+        sessions = [_build_session(connection, session_row["id"]) for session_row in session_rows]
+
+    return sessions
+
+
+def summarize_strength_progress(
+    user_id: str,
+    days: int,
+    exercise_name: str | None = None,
+) -> dict[str, Any]:
+    """Summarize lifting progress over a rolling time window."""
+    start_date = (date.today() - timedelta(days=days - 1)).isoformat()
+    end_date = date.today().isoformat()
+
+    clauses = ["s.user_id = ?", "s.date >= ?", "s.date <= ?"]
+    params: list[Any] = [user_id, start_date, end_date]
+    if exercise_name:
+        clauses.append("LOWER(e.name) = LOWER(?)")
+        params.append(exercise_name)
+
+    with _connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                s.id AS session_id,
+                s.date AS session_date,
+                e.name AS exercise_name,
+                sets.reps AS reps,
+                sets.weight_kg AS weight_kg
+            FROM lifting_sessions s
+            JOIN lifting_exercises e ON e.session_id = s.id
+            JOIN lifting_sets sets ON sets.exercise_id = e.id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY s.date DESC, s.id DESC, e.exercise_order ASC, sets.set_order ASC
+            """,
+            params,
+        ).fetchall()
+
+    if not rows:
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "exercise_name": exercise_name,
+            "total_sessions": 0,
+            "distinct_exercises": 0,
+            "total_sets": 0,
+            "total_reps": 0,
+            "total_volume_kg": 0.0,
+            "avg_session_volume_kg": 0.0,
+            "top_set_weight_kg": 0.0,
+            "latest_session_date": None,
+            "exercise_summaries": [],
+        }
+
+    session_ids = {int(row["session_id"]) for row in rows}
+    exercise_summaries: dict[str, dict[str, Any]] = {}
+    total_reps = 0
+    total_volume = 0.0
+    top_set_weight = 0.0
+    latest_session_date = max(str(row["session_date"]) for row in rows)
+
+    for row in rows:
+        exercise_key = str(row["exercise_name"])
+        reps = int(row["reps"])
+        weight_kg = float(row["weight_kg"])
+        volume_kg = reps * weight_kg
+        total_reps += reps
+        total_volume += volume_kg
+        top_set_weight = max(top_set_weight, weight_kg)
+
+        summary = exercise_summaries.setdefault(
+            exercise_key,
+            {
+                "exercise_name": exercise_key,
+                "total_sets": 0,
+                "total_reps": 0,
+                "total_volume_kg": 0.0,
+                "top_set_weight_kg": 0.0,
+            },
+        )
+        summary["total_sets"] += 1
+        summary["total_reps"] += reps
+        summary["total_volume_kg"] += volume_kg
+        summary["top_set_weight_kg"] = max(float(summary["top_set_weight_kg"]), weight_kg)
+
+    ordered_summaries = []
+    for summary in sorted(exercise_summaries.values(), key=lambda item: item["exercise_name"]):
+        ordered_summaries.append(
+            {
+                **summary,
+                "total_volume_kg": _round_kg(float(summary["total_volume_kg"])),
+                "top_set_weight_kg": _round_kg(float(summary["top_set_weight_kg"])),
+            }
+        )
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "exercise_name": exercise_name,
+        "total_sessions": len(session_ids),
+        "distinct_exercises": len(exercise_summaries),
+        "total_sets": len(rows),
+        "total_reps": total_reps,
+        "total_volume_kg": _round_kg(total_volume),
+        "avg_session_volume_kg": _round_kg(total_volume / len(session_ids)),
+        "top_set_weight_kg": _round_kg(top_set_weight),
+        "latest_session_date": latest_session_date,
+        "exercise_summaries": ordered_summaries,
+    }
+
+
+def get_personal_records(
+    user_id: str,
+    exercise_name: str | None = None,
+) -> dict[str, Any]:
+    """Return heaviest and highest-volume set records for each exercise."""
+    clauses = ["s.user_id = ?"]
+    params: list[Any] = [user_id]
+    if exercise_name:
+        clauses.append("LOWER(e.name) = LOWER(?)")
+        params.append(exercise_name)
+
+    with _connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                e.name AS exercise_name,
+                s.date AS session_date,
+                sets.reps AS reps,
+                sets.weight_kg AS weight_kg
+            FROM lifting_sessions s
+            JOIN lifting_exercises e ON e.session_id = s.id
+            JOIN lifting_sets sets ON sets.exercise_id = e.id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY e.name ASC, s.date ASC, sets.set_order ASC
+            """,
+            params,
+        ).fetchall()
+
+    records_by_exercise: dict[str, list[sqlite3.Row]] = defaultdict(list)
+    for row in rows:
+        records_by_exercise[str(row["exercise_name"])].append(row)
+
+    records = []
+    for exercise, exercise_rows in sorted(records_by_exercise.items()):
+        heaviest_row = max(exercise_rows, key=lambda row: (float(row["weight_kg"]), int(row["reps"])))
+        highest_volume_row = max(
+            exercise_rows,
+            key=lambda row: (
+                float(row["weight_kg"]) * int(row["reps"]),
+                int(row["reps"]),
+                float(row["weight_kg"]),
             ),
         )
-        return cur.lastrowid  # type: ignore[return-value]
+        records.append(
+            {
+                "exercise_name": exercise,
+                "heaviest_set": {
+                    "weight_kg": _round_kg(float(heaviest_row["weight_kg"])),
+                    "reps": int(heaviest_row["reps"]),
+                    "achieved_on": str(heaviest_row["session_date"]),
+                },
+                "highest_volume_set": {
+                    "weight_kg": _round_kg(float(highest_volume_row["weight_kg"])),
+                    "reps": int(highest_volume_row["reps"]),
+                    "volume_kg": _round_kg(
+                        float(highest_volume_row["weight_kg"]) * int(highest_volume_row["reps"])
+                    ),
+                    "achieved_on": str(highest_volume_row["session_date"]),
+                },
+            }
+        )
+
+    return {
+        "user_id": user_id,
+        "exercise_name": exercise_name,
+        "records": records,
+    }
 
 
-def get_history(
+def save_bodyweight(
+    user_id: str,
+    entry_date: str,
+    weight_kg: float,
+    notes: str | None = None,
+) -> int:
+    """Persist a bodyweight entry."""
+    with _connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO bodyweight_entries (user_id, date, weight_kg, notes)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, entry_date, weight_kg, notes),
+        )
+        return _require_lastrowid(cursor.lastrowid, "bodyweight entry")
+
+
+def get_bodyweight_history(
     user_id: str,
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """Retrieve workout history for a user.
-
-    Args:
-        user_id: Identifier for the user.
-        start_date: Optional ISO date string lower bound (inclusive).
-        end_date: Optional ISO date string upper bound (inclusive).
-        limit: Maximum number of records to return.
-
-    Returns:
-        List of workout dicts ordered by date descending.
-    """
-    if _use_json_fallback:
-        return _json_get_history(user_id, start_date, end_date, limit)
-
+    """Return bodyweight history ordered newest-first."""
     clauses = ["user_id = ?"]
     params: list[Any] = [user_id]
     if start_date:
@@ -182,182 +469,163 @@ def get_history(
         params.append(end_date)
     params.append(limit)
 
-    with _connect() as conn:
-        rows = conn.execute(
-            f"SELECT * FROM workouts WHERE {' AND '.join(clauses)} ORDER BY date DESC LIMIT ?",
+    with _connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT id, user_id, date, weight_kg, notes, created_at
+            FROM bodyweight_entries
+            WHERE {' AND '.join(clauses)}
+            ORDER BY date DESC, id DESC
+            LIMIT ?
+            """,
             params,
         ).fetchall()
-    return [dict(r) for r in rows]
+
+    return [
+        {
+            "id": int(row["id"]),
+            "user_id": str(row["user_id"]),
+            "date": str(row["date"]),
+            "weight_kg": _round_kg(float(row["weight_kg"])),
+            "notes": row["notes"],
+            "created_at": str(row["created_at"]),
+        }
+        for row in rows
+    ]
 
 
-def get_summary(user_id: str, days: int) -> dict[str, Any]:
-    """Return aggregate statistics for a user over the last *days* days.
+def summarize_bodyweight_progress(user_id: str, days: int) -> dict[str, Any]:
+    """Summarize bodyweight change over a rolling time window."""
+    start_date = (date.today() - timedelta(days=days - 1)).isoformat()
+    end_date = date.today().isoformat()
 
-    Args:
-        user_id: Identifier for the user.
-        days: Number of past days to include (e.g. 30).
-
-    Returns:
-        Dict with keys ``total_workouts``, ``total_duration_min``,
-        ``avg_duration_min``, ``total_distance_km``, ``start_date``, ``end_date``.
-    """
-    if _use_json_fallback:
-        return _json_get_summary(user_id, days)
-
-    start = (date.today() - timedelta(days=days - 1)).isoformat()
-    end = date.today().isoformat()
-
-    with _connect() as conn:
-        row = conn.execute(
+    with _connection() as connection:
+        rows = connection.execute(
             """
-            SELECT
-                COUNT(*)                      AS total_workouts,
-                COALESCE(SUM(duration_min),0) AS total_duration_min,
-                COALESCE(AVG(duration_min),0) AS avg_duration_min,
-                COALESCE(SUM(distance_km),0)  AS total_distance_km
-            FROM workouts
+            SELECT id, date, weight_kg
+            FROM bodyweight_entries
             WHERE user_id = ? AND date >= ? AND date <= ?
+            ORDER BY date ASC, id ASC
             """,
-            (user_id, start, end),
-        ).fetchone()
-
-    return {
-        "total_workouts": row["total_workouts"],
-        "total_duration_min": row["total_duration_min"],
-        "avg_duration_min": round(row["avg_duration_min"], 2),
-        "total_distance_km": round(row["total_distance_km"], 2),
-        "start_date": start,
-        "end_date": end,
-    }
-
-
-def get_habit_streak(user_id: str, habit: str, min_days: int = 1) -> dict[str, int]:
-    """Calculate current and longest streak for a given workout habit.
-
-    A *streak* is a consecutive run of days (with at most ``min_days - 1`` gap)
-    on which the user performed the specified habit workout type.
-
-    Args:
-        user_id: Identifier for the user.
-        habit: Workout type to track (e.g. ``"running"``).
-        min_days: Minimum number of days between two workout dates to still
-                  count as consecutive (default 1 = adjacent days only).
-
-    Returns:
-        Dict with keys ``current_streak`` and ``longest_streak``.
-    """
-    if _use_json_fallback:
-        return _json_get_habit_streak(user_id, habit, min_days)
-
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT date FROM workouts WHERE user_id=? AND type=? ORDER BY date ASC",
-            (user_id, habit),
+            (user_id, start_date, end_date),
         ).fetchall()
 
-    return _compute_streaks([r["date"] for r in rows], min_days)
-
-
-# ---------------------------------------------------------------------------
-# Streak computation (shared between backends)
-# ---------------------------------------------------------------------------
-
-def _compute_streaks(dates: list[str], min_days: int) -> dict[str, int]:
-    """Compute current and longest streak from a sorted list of ISO date strings."""
-    if not dates:
-        return {"current_streak": 0, "longest_streak": 0}
-
-    parsed = sorted(date.fromisoformat(d) for d in dates)
-    today = date.today()
-
-    current = longest = 1
-    run = 1
-
-    for i in range(1, len(parsed)):
-        gap = (parsed[i] - parsed[i - 1]).days
-        if gap <= min_days:
-            run += 1
-        else:
-            run = 1
-        longest = max(longest, run)
-
-    # Check if streak is still active (last workout within min_days of today)
-    if (today - parsed[-1]).days <= min_days:
-        current = run
-    else:
-        current = 0
-
-    return {"current_streak": current, "longest_streak": longest}
-
-
-# ---------------------------------------------------------------------------
-# JSON fallback implementations
-# ---------------------------------------------------------------------------
-
-def _next_json_id(workouts: list[dict]) -> int:
-    return max((w.get("id", 0) for w in workouts), default=0) + 1
-
-
-def _json_save_workout(user_id: str, workout_date: str, workout: dict[str, Any]) -> int:
-    data = _load_json()
-    new_id = _next_json_id(data["workouts"])
-    data["workouts"].append(
-        {
-            "id": new_id,
-            "user_id": user_id,
-            "date": workout_date,
-            "type": workout.get("type", ""),
-            "duration_min": workout.get("duration_min"),
-            "distance_km": workout.get("distance_km"),
-            "notes": workout.get("notes"),
+    if not rows:
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "entry_count": 0,
+            "starting_weight_kg": None,
+            "latest_weight_kg": None,
+            "change_kg": None,
+            "min_weight_kg": None,
+            "max_weight_kg": None,
+            "avg_weight_kg": None,
         }
-    )
-    _save_json(data)
-    return new_id
 
-
-def _json_get_history(
-    user_id: str,
-    start_date: str | None,
-    end_date: str | None,
-    limit: int,
-) -> list[dict[str, Any]]:
-    data = _load_json()
-    rows = [w for w in data["workouts"] if w["user_id"] == user_id]
-    if start_date:
-        rows = [w for w in rows if w["date"] >= start_date]
-    if end_date:
-        rows = [w for w in rows if w["date"] <= end_date]
-    rows.sort(key=lambda w: w["date"], reverse=True)
-    return rows[:limit]
-
-
-def _json_get_summary(user_id: str, days: int) -> dict[str, Any]:
-    start = (date.today() - timedelta(days=days - 1)).isoformat()
-    end = date.today().isoformat()
-    data = _load_json()
-    rows = [
-        w
-        for w in data["workouts"]
-        if w["user_id"] == user_id and start <= w["date"] <= end
-    ]
-    total = len(rows)
-    total_dur = sum(w["duration_min"] or 0 for w in rows)
-    total_dist = sum(w["distance_km"] or 0.0 for w in rows)
-    avg_dur = round(total_dur / total, 2) if total else 0.0
+    weights = [float(row["weight_kg"]) for row in rows]
+    starting_weight = weights[0]
+    latest_weight = weights[-1]
     return {
-        "total_workouts": total,
-        "total_duration_min": total_dur,
-        "avg_duration_min": avg_dur,
-        "total_distance_km": round(total_dist, 2),
-        "start_date": start,
-        "end_date": end,
+        "start_date": start_date,
+        "end_date": end_date,
+        "entry_count": len(rows),
+        "starting_weight_kg": _round_kg(starting_weight),
+        "latest_weight_kg": _round_kg(latest_weight),
+        "change_kg": _round_kg(latest_weight - starting_weight),
+        "min_weight_kg": _round_kg(min(weights)),
+        "max_weight_kg": _round_kg(max(weights)),
+        "avg_weight_kg": _round_kg(sum(weights) / len(weights)),
     }
 
 
-def _json_get_habit_streak(user_id: str, habit: str, min_days: int) -> dict[str, int]:
-    data = _load_json()
-    dates = sorted(
-        {w["date"] for w in data["workouts"] if w["user_id"] == user_id and w["type"] == habit}
-    )
-    return _compute_streaks(dates, min_days)
+def _build_session(connection: sqlite3.Connection, session_id: int) -> dict[str, Any]:
+    """Hydrate a session row into a nested response payload."""
+    session_row = connection.execute(
+        """
+        SELECT id, user_id, date, workout_name, notes, created_at
+        FROM lifting_sessions
+        WHERE id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+    if session_row is None:  # pragma: no cover - defensive guard
+        raise ValueError(f"Unknown session id: {session_id}")
+
+    exercise_rows = connection.execute(
+        """
+        SELECT id, exercise_order, name, notes
+        FROM lifting_exercises
+        WHERE session_id = ?
+        ORDER BY exercise_order ASC, id ASC
+        """,
+        (session_id,),
+    ).fetchall()
+
+    exercises: list[dict[str, Any]] = []
+    total_sets = 0
+    total_reps = 0
+    total_volume = 0.0
+
+    for exercise_row in exercise_rows:
+        set_rows = connection.execute(
+            """
+            SELECT id, set_order, reps, weight_kg, set_type, rpe, rir, notes
+            FROM lifting_sets
+            WHERE exercise_id = ?
+            ORDER BY set_order ASC, id ASC
+            """,
+            (exercise_row["id"],),
+        ).fetchall()
+        exercise_sets = []
+        exercise_reps = 0
+        exercise_volume = 0.0
+        for set_row in set_rows:
+            reps = int(set_row["reps"])
+            weight_kg = float(set_row["weight_kg"])
+            volume_kg = reps * weight_kg
+            exercise_reps += reps
+            exercise_volume += volume_kg
+            exercise_sets.append(
+                {
+                    "id": int(set_row["id"]),
+                    "set_order": int(set_row["set_order"]),
+                    "reps": reps,
+                    "weight_kg": _round_kg(weight_kg),
+                    "set_type": str(set_row["set_type"]),
+                    "rpe": None if set_row["rpe"] is None else float(set_row["rpe"]),
+                    "rir": None if set_row["rir"] is None else int(set_row["rir"]),
+                    "notes": set_row["notes"],
+                    "volume_kg": _round_kg(volume_kg),
+                }
+            )
+
+        total_sets += len(exercise_sets)
+        total_reps += exercise_reps
+        total_volume += exercise_volume
+        exercises.append(
+            {
+                "id": int(exercise_row["id"]),
+                "exercise_order": int(exercise_row["exercise_order"]),
+                "name": str(exercise_row["name"]),
+                "notes": exercise_row["notes"],
+                "total_sets": len(exercise_sets),
+                "total_reps": exercise_reps,
+                "total_volume_kg": _round_kg(exercise_volume),
+                "sets": exercise_sets,
+            }
+        )
+
+    return {
+        "id": int(session_row["id"]),
+        "user_id": str(session_row["user_id"]),
+        "date": str(session_row["date"]),
+        "workout_name": str(session_row["workout_name"]),
+        "notes": session_row["notes"],
+        "created_at": str(session_row["created_at"]),
+        "exercise_count": len(exercises),
+        "total_sets": total_sets,
+        "total_reps": total_reps,
+        "total_volume_kg": _round_kg(total_volume),
+        "exercises": exercises,
+    }
