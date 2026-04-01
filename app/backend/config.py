@@ -68,7 +68,7 @@ class ChatServerConfig:
 
     # Telegram polling settings (for receiving messages)
     telegram_polling_enabled: bool = True  # Enable polling for incoming messages
-    telegram_polling_interval: float = 1.0  # Polling interval in seconds
+    telegram_polling_interval: float = 2.0  # Polling interval in seconds
     telegram_polling_timeout: int = 30  # Long polling timeout (getUpdates timeout param)
     telegram_allowed_users: str = ""  # Comma-separated chat IDs allowed to send messages (empty = only chat_id)
 
@@ -107,7 +107,7 @@ class ChatServerConfig:
             telegram_draft_update_interval_ms=env_int("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS", 200),
             # Telegram polling settings
             telegram_polling_enabled=env_bool("TELEGRAM_POLLING_ENABLED", True),
-            telegram_polling_interval=env_float("TELEGRAM_POLLING_INTERVAL", 1.0),
+            telegram_polling_interval=env_float("TELEGRAM_POLLING_INTERVAL", 2.0),
             telegram_polling_timeout=env_int("TELEGRAM_POLLING_TIMEOUT", 30),
             telegram_allowed_users=os.getenv("TELEGRAM_ALLOWED_USERS", ""),
         )

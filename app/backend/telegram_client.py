@@ -44,7 +44,7 @@ class TelegramConfig:
     draft_update_interval_ms: int = 200
     # Polling settings
     polling_enabled: bool = True
-    polling_interval: float = 1.0
+    polling_interval: float = 2.0
     polling_timeout: int = 30
     allowed_users: set[str] = None  # type: ignore
 
