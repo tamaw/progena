@@ -269,6 +269,40 @@ def test_get_personal_records(client: TestClient) -> None:
     assert records[0]["highest_volume_set"]["volume_kg"] == 560.0
 
 
+def test_get_personal_records_bodyweight_exercise_prefers_more_reps(client: TestClient) -> None:
+    _log_lifting_session(
+        client,
+        "eve",
+        {
+            "date": "2024-01-10",
+            "workout_name": "Bodyweight A",
+            "exercises": [{"name": "Pull-Up", "sets": [{"reps": 10, "weight_kg": 0}]}],
+        },
+    )
+    _log_lifting_session(
+        client,
+        "eve",
+        {
+            "date": "2024-01-12",
+            "workout_name": "Bodyweight B",
+            "exercises": [{"name": "Pull-Up", "sets": [{"reps": 12, "weight_kg": 0}]}],
+        },
+    )
+
+    response = client.post(
+        "/a2a",
+        json={
+            "capability": "get_personal_records",
+            "payload": {"user_id": "eve", "exercise_name": "Pull-Up"},
+        },
+    )
+    assert response.status_code == 200
+    record = response.json()["result"]["records"][0]
+    assert record["heaviest_set"]["reps"] == 12
+    assert record["highest_volume_set"]["reps"] == 12
+    assert record["highest_volume_set"]["volume_kg"] == 0.0
+
+
 def test_log_bodyweight_and_history(client: TestClient) -> None:
     _log_bodyweight(client, "frank", "2024-01-01", 90.2)
     _log_bodyweight(client, "frank", "2024-01-05", 89.6)
