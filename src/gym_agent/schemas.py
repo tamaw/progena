@@ -81,7 +81,7 @@ class LiftingExercise(BaseModel):
 
 
 class LogLiftingSessionPayload(BaseModel):
-    """Payload for logging a lifting session."""
+    """Payload for logging a gym session."""
 
     user_id: str
     date: str = Field(..., description="ISO date string (YYYY-MM-DD)")
@@ -106,7 +106,7 @@ class LogLiftingSessionPayload(BaseModel):
 
 
 class GetLiftingHistoryPayload(BaseModel):
-    """Payload for retrieving lifting-session history."""
+    """Payload for retrieving gym-session history."""
 
     user_id: str
     start_date: str | None = Field(None, description="ISO date string (inclusive)")
@@ -131,7 +131,7 @@ class GetLiftingHistoryPayload(BaseModel):
 
 
 class SummarizeStrengthProgressPayload(BaseModel):
-    """Payload for training summaries."""
+    """Payload for gym-progress summaries."""
 
     user_id: str
     days: int = Field(30, ge=1, le=3650)

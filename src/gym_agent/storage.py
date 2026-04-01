@@ -162,7 +162,7 @@ def save_lifting_session(
     exercises: list[dict[str, Any]],
     notes: str | None = None,
 ) -> int:
-    """Persist a lifting session with nested exercises and sets."""
+    """Persist a gym session with nested exercises and sets."""
     with _connection() as connection:
         session_cursor = connection.execute(
             """
@@ -171,7 +171,7 @@ def save_lifting_session(
             """,
             (user_id, session_date, workout_name, notes),
         )
-        session_id = _require_lastrowid(session_cursor.lastrowid, "lifting session")
+        session_id = _require_lastrowid(session_cursor.lastrowid, "gym session")
 
         for exercise_order, exercise in enumerate(exercises, start=1):
             exercise_cursor = connection.execute(
@@ -219,7 +219,7 @@ def get_lifting_history(
     exercise_name: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Return lifting sessions with nested exercises and sets."""
+    """Return gym sessions with nested exercises and sets."""
     clauses = ["s.user_id = ?"]
     params: list[Any] = [user_id]
     if start_date:
