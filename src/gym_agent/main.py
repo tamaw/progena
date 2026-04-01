@@ -1,4 +1,4 @@
-"""FastAPI application for the lifting-first Gym Agent A2A service."""
+"""FastAPI application for the Gym Agent A2A service."""
 
 from __future__ import annotations
 
@@ -42,21 +42,21 @@ def get_storage() -> None:
 AGENT_CARD: dict[str, Any] = {
     "name": "gym_agent",
     "version": "2.0.0",
-    "description": "A2A-compatible agent for weight lifting and bodyweight tracking.",
+    "description": "A2A-compatible gym agent for structured training and bodyweight tracking.",
     "capabilities": [
         {
             "name": "log_lifting_session",
-            "description": "Log a structured lifting session with exercises and sets.",
+            "description": "Log a structured gym session with exercises and sets.",
             "payload_schema": "LogLiftingSessionPayload",
         },
         {
             "name": "get_lifting_history",
-            "description": "Retrieve lifting-session history with optional date or exercise filters.",
+            "description": "Retrieve gym-session history with optional date or exercise filters.",
             "payload_schema": "GetLiftingHistoryPayload",
         },
         {
             "name": "summarize_strength_progress",
-            "description": "Summarize lifting volume, reps, sets, and session trends.",
+            "description": "Summarize training volume, reps, sets, and session trends.",
             "payload_schema": "SummarizeStrengthProgressPayload",
         },
         {

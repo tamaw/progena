@@ -1,4 +1,4 @@
-"""Pytest tests for the lifting-first Gym Agent A2A service."""
+"""Pytest tests for the Gym Agent A2A service."""
 
 from __future__ import annotations
 
