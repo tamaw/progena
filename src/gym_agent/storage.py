@@ -402,7 +402,11 @@ def get_personal_records(
         heaviest_row = max(exercise_rows, key=lambda row: (float(row["weight_kg"]), int(row["reps"])))
         highest_volume_row = max(
             exercise_rows,
-            key=lambda row: (float(row["weight_kg"]) * int(row["reps"]), float(row["weight_kg"])),
+            key=lambda row: (
+                float(row["weight_kg"]) * int(row["reps"]),
+                int(row["reps"]),
+                float(row["weight_kg"]),
+            ),
         )
         records.append(
             {
