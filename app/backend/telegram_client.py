@@ -133,7 +133,7 @@ class TelegramDraftSession:
     segment_index: int = 0
     draft_sent: bool = False
     last_draft_text: str = ""
-    last_draft_update_at: float = 0.0
+    last_draft_update_at: float | None = None  # None until the first draft update is sent
 
 
 class TelegramClient:
@@ -659,7 +659,7 @@ class TelegramClient:
         """Return whether the current draft should be sent to Telegram now."""
         if visible_text == session.last_draft_text:
             return False
-        if session.last_draft_update_at <= 0:
+        if session.last_draft_update_at is None:
             return True
         interval = self._draft_update_interval_seconds()
         if interval <= 0:
