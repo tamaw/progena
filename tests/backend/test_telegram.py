@@ -337,7 +337,6 @@ class TestTelegramClient:
     def test_should_flush_draft_respects_interval_across_segments(self, client):
         """Test that a new segment does not bypass the global draft throttle window."""
         session = TelegramDraftSession(chat_id="111222333", draft_id=123)
-        session.draft_sent = False
         session.last_draft_text = ""
         session.last_draft_update_at = 10.0
 
@@ -346,6 +345,22 @@ class TestTelegramClient:
             "🤖 Progenitor Agent:\n\nnext segment",
             now=11.0,
         ) is False
+
+        assert client._should_flush_draft(
+            session,
+            "🤖 Progenitor Agent:\n\nnext segment",
+            now=12.0,
+        ) is True
+
+    def test_should_flush_draft_allows_first_update(self, client):
+        """Test that the first draft update is sent immediately."""
+        session = TelegramDraftSession(chat_id="111222333", draft_id=123)
+
+        assert client._should_flush_draft(
+            session,
+            "🤖 Progenitor Agent:\n\nhello",
+            now=0.5,
+        ) is True
 
 
 class TestTelegramClientIntegration:
