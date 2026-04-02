@@ -14,6 +14,7 @@ from app.backend.config import ChatServerConfig
 from app.backend.telegram_client import (
     TelegramClient,
     TelegramConfig,
+    TelegramDraftSession,
     TelegramDraftStreamingError,
     TelegramRateLimiter,
     get_telegram_client,
@@ -53,7 +54,7 @@ class TestTelegramConfig:
         assert tg_config.retry_delay == 2.0
         assert tg_config.max_message_length == 2048
         assert tg_config.rate_limit_per_minute == 20
-        assert tg_config.draft_update_interval_ms == 200
+        assert tg_config.draft_update_interval_ms == 2000
 
 
 class TestTelegramRateLimiter:
@@ -110,7 +111,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=100,  # Small for testing chunking
             rate_limit_per_minute=30,
-            draft_update_interval_ms=200,
+            draft_update_interval_ms=2000,
         )
 
     @pytest.fixture
@@ -151,7 +152,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=4096,
             rate_limit_per_minute=30,
-            draft_update_interval_ms=200,
+            draft_update_interval_ms=2000,
         )
         client = TelegramClient(config)
         await client.start()
@@ -332,6 +333,19 @@ class TestTelegramClient:
                 "111222333",
                 _async_iter("Hello"),
             )
+
+    def test_should_flush_draft_respects_interval_across_segments(self, client):
+        """Test that a new segment does not bypass the global draft throttle window."""
+        session = TelegramDraftSession(chat_id="111222333", draft_id=123)
+        session.draft_sent = False
+        session.last_draft_text = ""
+        session.last_draft_update_at = 10.0
+
+        assert client._should_flush_draft(
+            session,
+            "🤖 Progenitor Agent:\n\nnext segment",
+            now=11.0,
+        ) is False
 
 
 class TestTelegramClientIntegration:
