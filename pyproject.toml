@@ -17,6 +17,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "a2a-sdk[http-server]>=0.3.24",
     "openai>=1.0.0",
     "langgraph>=0.2.0",
     "pydantic>=2.0.0",
