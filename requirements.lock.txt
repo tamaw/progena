@@ -6,6 +6,8 @@
 #
 agent-client-protocol==0.7.1
     # via -r requirements.txt
+a2a-sdk[http-server]==0.3.25
+    # via -r requirements.txt
 aiofiles==25.1.0
     # via -r requirements.txt
 aiohappyeyeballs==2.6.1
@@ -102,6 +104,8 @@ geventhttpclient==2.3.8
     # via locust
 google-auth[requests]==2.48.0
     # via google-genai
+google-api-core==2.30.2
+    # via a2a-sdk
 google-genai==1.65.0
     # via langchain-google-genai
 greenlet==3.3.2
@@ -113,6 +117,8 @@ h11==0.16.0
     #   wsproto
 httpcore==1.0.9
     # via httpx
+httpx-sse==0.4.3
+    # via a2a-sdk
 httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
@@ -214,6 +220,8 @@ propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
+proto-plus==1.27.2
+    # via google-api-core
 psutil==7.2.2
     # via locust
 pyasn1==0.6.2
@@ -307,6 +315,8 @@ sqlite-vec==0.1.6
     # via langgraph-checkpoint-sqlite
 starlette==0.52.1
     # via fastapi
+sse-starlette==3.3.4
+    # via a2a-sdk
 tenacity==9.1.4
     # via
     #   google-genai
