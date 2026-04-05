@@ -58,8 +58,10 @@ COPY app/ /app/app/
 COPY prompts/ /app/prompts/
 COPY scripts/ /app/scripts/
 
-RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \
+RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner/.copilot && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
+
+COPY --chown=runner:agent app/agents/builder_progenitor/lsp-config.json /home/runner/.copilot/lsp-config.json
 
 VOLUME ["/app/data", "/app/logs", "/app/worktrees", "/app/prompts"]
 
