@@ -119,12 +119,10 @@ class ProgenitorService:
             )
             await self.tool_registry.load()
 
-            # Initialize MCP tools and register them so they show up
-            # in tool discovery and can be invoked via the registry.
-            from .tools.mcp import setup_mcp_for_llm_client
+            # Initialize external MCP servers and cache their discovered tools.
+            from .tools.mcp import refresh_mcp_runtime
 
-            await setup_mcp_for_llm_client(self.llm_client, self.config.mcp)
-            await self._register_mcp_tools()
+            await refresh_mcp_runtime(self.llm_client, self.tool_registry, self.config.mcp)
 
             # Run agent discovery to populate registry from agents/ folder
             await self._discover_agents()
@@ -144,17 +142,6 @@ class ProgenitorService:
 
             self._initialized = True
             logger.info("Progenitor service initialized (session=%s)", self._session_id)
-
-    async def _register_mcp_tools(self) -> None:
-        """Register MCP tools discovered via configured MCP endpoint."""
-        if not self.llm_client or not self.tool_registry:
-            return
-
-        if not self.llm_client.mcp_tools:
-            return
-
-        for tool in self.llm_client.get_mcp_tool_registry_entries():
-            await self.tool_registry.register_tool(tool)
 
     async def handle_message(
         self,
@@ -298,6 +285,8 @@ class ProgenitorService:
         # Commit any pending state
         if self.state_manager:
             await self.state_manager.commit_state()
+        if self.llm_client:
+            await self.llm_client.close()
 
         self._initialized = False
         logger.info("Progenitor service shutdown complete")

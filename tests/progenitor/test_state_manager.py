@@ -36,7 +36,6 @@ class TestStateManager:
         # build_state.json replaces both current_state.json and backlog.json
         assert (state_dir / "build_state.json").exists()
         assert (state_dir.parent / "config" / "agents.json").exists()
-        assert (state_dir.parent / "config" / "mcp.json").exists()
         assert (state_dir / "schedule.json").exists()
 
     @pytest.mark.asyncio
@@ -106,7 +105,7 @@ class TestStateManager:
 
         updated = backlog[0]
         # Check status - handle both enum and string
-        status_val = updated.status.value if hasattr(updated.status, 'value') else updated.status
+        status_val = updated.status.value if hasattr(updated.status, "value") else updated.status
         assert status_val == "in_progress"
         assert updated.description == "Updated description"
 
@@ -222,10 +221,12 @@ class TestStateManager:
         await manager.initialize()
 
         # Make some changes
-        await manager.save_build_state({
-            "cycle_count": 5,
-            "run_id": "test-run",
-        })
+        await manager.save_build_state(
+            {
+                "cycle_count": 5,
+                "run_id": "test-run",
+            }
+        )
 
         await manager.commit_state()
 

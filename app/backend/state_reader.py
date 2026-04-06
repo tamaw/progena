@@ -22,6 +22,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from app.progenitor.config import load_mcp_servers, resolve_mcp_config_path
+
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_STATE_DIR = DEFAULT_DATA_DIR / "state"
@@ -339,6 +341,7 @@ class StateReader:
         config_dir: Path | None = None,
         sessions_dir: Path | None = None,
         logs_dir: Path | None = None,
+        mcp_config_path: Path | None = None,
     ):
         data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(DEFAULT_DATA_DIR)))
         self.state_dir = state_dir or Path(
@@ -347,6 +350,7 @@ class StateReader:
         self.config_dir = config_dir or self.state_dir.parent / "config"
         self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
         self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
+        self.mcp_config_path = mcp_config_path or resolve_mcp_config_path()
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
@@ -412,7 +416,6 @@ class StateReader:
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
         agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
-        mcp_data = self._read_json_from_path(self.config_dir / "mcp.json") or {}
 
         agent_entries: list[dict[str, Any]] = []
         if isinstance(agents_data, dict):
@@ -437,21 +440,20 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
-        tools: list[ToolInfo] = []
-        if isinstance(mcp_data, dict):
-            raw_tools = mcp_data.get("tools")
-            if isinstance(raw_tools, list):
-                tools.extend(ToolInfo.from_dict(t) for t in raw_tools if isinstance(t, dict))
-            tool_map = {
-                str(name): cfg
-                for name, cfg in mcp_data.items()
-                if name != "tools" and isinstance(cfg, dict)
-            }
-            seen_names = {tool.name for tool in tools}
-            for name, cfg in tool_map.items():
-                if name in seen_names:
-                    continue
-                tools.append(ToolInfo.from_dict({"name": name, **cfg}))
+        tools = [
+            ToolInfo.from_dict(
+                {
+                    "name": server.name,
+                    "description": server.description or f"Remote MCP server at {server.url}",
+                    "enabled": server.enabled,
+                    "kind": "mcp_server",
+                    "status": "stopped",
+                    "transport": server.transport,
+                }
+            )
+            for server in load_mcp_servers(self.mcp_config_path)
+            if server.enabled
+        ]
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:
@@ -1103,7 +1105,7 @@ class StateReader:
             self.state_dir / "build_state.json",
             self.state_dir / "schedule.json",
             self.config_dir / "agents.json",
-            self.config_dir / "mcp.json",
+            self.mcp_config_path,
             self.sessions_dir / "sessions.json",
         ]
 

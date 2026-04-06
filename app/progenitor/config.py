@@ -1,12 +1,14 @@
 """
 Centralized Configuration for Progenitor.
 
-Configuration is read from environment variables. Per SPEC.md.
+Configuration is read from environment variables and checked-in agent config files.
 """
 
+import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -38,6 +40,8 @@ DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[2] / "worktrees"
 DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
+DEFAULT_PROJECT_MCP_CONFIG_PATH = Path(__file__).resolve().with_name("mcp.json")
+_ENV_TEMPLATE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _default_data_dir(project_root: Path | None = None) -> Path:
@@ -69,6 +73,39 @@ def _default_worktree_dir(
 def _default_prompts_dir(project_root: Path | None = None) -> Path:
     """Return the checked-in prompt root unless an explicit project root is provided."""
     return _default_data_dir(project_root) / "prompts"
+
+
+def _default_mcp_config_path(project_root: Path | None = None) -> Path:
+    """Return the checked-in MCP source config path for Progenitor."""
+    return (
+        DEFAULT_PROJECT_MCP_CONFIG_PATH
+        if project_root is None
+        else project_root / "app" / "progenitor" / "mcp.json"
+    )
+
+
+def resolve_mcp_config_path(project_root: Path | None = None) -> Path:
+    """Resolve the MCP source config path with optional env override."""
+    raw = (os.getenv("PROGENITOR_MCP_CONFIG_PATH") or "").strip()
+    return Path(raw) if raw else _default_mcp_config_path(project_root)
+
+
+def _resolve_required_env_template(value: str) -> tuple[str | None, list[str]]:
+    """Resolve ${VAR} placeholders, returning missing variable names when unresolved."""
+    missing: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        var_name = match.group(1)
+        resolved = os.getenv(var_name)
+        if resolved is None:
+            missing.append(var_name)
+            return ""
+        return resolved
+
+    rendered = _ENV_TEMPLATE_PATTERN.sub(_replace, value)
+    if missing:
+        return None, missing
+    return rendered, []
 
 
 @dataclass
@@ -353,24 +390,151 @@ class SchedulerConfig:
 
 
 @dataclass
+class MCPServerConfig:
+    """Remote HTTP MCP server definition loaded from app/progenitor/mcp.json."""
+
+    name: str
+    url: str
+    enabled: bool = True
+    transport: str = "http"
+    headers: dict[str, str] = field(default_factory=dict)
+    description: str = ""
+
+
+def load_mcp_servers(
+    config_path: Path | str | None = None,
+    *,
+    project_root: Path | None = None,
+) -> list[MCPServerConfig]:
+    """Load external MCP server definitions from Progenitor's checked-in config file."""
+    path = Path(config_path) if config_path is not None else resolve_mcp_config_path(project_root)
+    if not path.exists():
+        return []
+
+    try:
+        raw_data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load MCP config from %s: %s", path, exc)
+        return []
+
+    raw_servers = raw_data.get("mcpServers") if isinstance(raw_data, dict) else None
+    if not isinstance(raw_servers, dict):
+        logger.warning("MCP config at %s is missing an 'mcpServers' object", path)
+        return []
+
+    servers: list[MCPServerConfig] = []
+    for server_name, raw_server in raw_servers.items():
+        if not isinstance(server_name, str) or not isinstance(raw_server, dict):
+            continue
+
+        transport = str(raw_server.get("transport") or "http").strip().lower()
+        if transport != "http":
+            logger.warning(
+                "Skipping MCP server '%s': unsupported transport '%s' (remote HTTP only)",
+                server_name,
+                transport,
+            )
+            continue
+
+        raw_url = str(raw_server.get("url") or raw_server.get("endpoint") or "").strip()
+        if not raw_url:
+            logger.warning("Skipping MCP server '%s': missing url", server_name)
+            continue
+
+        resolved_url, missing_url_vars = _resolve_required_env_template(raw_url)
+        if resolved_url is None:
+            logger.warning(
+                "Skipping MCP server '%s': unresolved env vars in url: %s",
+                server_name,
+                ", ".join(sorted(set(missing_url_vars))),
+            )
+            continue
+
+        headers: dict[str, str] = {}
+        raw_headers = raw_server.get("headers")
+        if isinstance(raw_headers, dict):
+            for header_name, header_value in raw_headers.items():
+                if not isinstance(header_name, str):
+                    continue
+                resolved_header, missing_header_vars = _resolve_required_env_template(
+                    str(header_value)
+                )
+                if resolved_header is None:
+                    logger.info(
+                        "Skipping header '%s' for MCP server '%s': missing env vars %s",
+                        header_name,
+                        server_name,
+                        ", ".join(sorted(set(missing_header_vars))),
+                    )
+                    continue
+                headers[header_name] = resolved_header
+
+        servers.append(
+            MCPServerConfig(
+                name=server_name,
+                url=resolved_url,
+                enabled=bool(raw_server.get("enabled", True)),
+                transport=transport,
+                headers=headers,
+                description=str(raw_server.get("description") or "").strip(),
+            )
+        )
+
+    return servers
+
+
+@dataclass
 class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
     enabled: bool = True
-    base_url: str = "http://localhost:8080/mcp/"
-    api_key: str | None = None
+    config_path: Path = field(default_factory=_default_mcp_config_path)
+    servers: list[MCPServerConfig] = field(default_factory=list)
+    legacy_base_url: str | None = None
+    legacy_api_key: str | None = None
 
     @classmethod
-    def from_env(cls) -> "MCPConfig":
-        """Load MCP config from environment."""
-        base_url = os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:8080/mcp/").strip()
-        api_key = os.getenv("PROGENITOR_MCP_API_KEY")
+    def from_env(cls, project_root: Path | None = None) -> "MCPConfig":
+        """Load MCP config from Progenitor's checked-in source file with env fallbacks."""
+        config_path = resolve_mcp_config_path(project_root)
+        servers = load_mcp_servers(config_path, project_root=project_root)
+        legacy_base_url = (os.getenv("PROGENITOR_MCP_BASE_URL") or "").strip() or None
+        legacy_api_key = os.getenv("PROGENITOR_MCP_API_KEY")
+
+        if not servers and legacy_base_url:
+            headers: dict[str, str] = {}
+            if legacy_api_key:
+                headers["Authorization"] = f"Bearer {legacy_api_key}"
+            servers = [
+                MCPServerConfig(
+                    name="legacy",
+                    url=legacy_base_url,
+                    headers=headers,
+                    description="Legacy env-configured MCP server",
+                )
+            ]
 
         return cls(
             enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
-            base_url=base_url,
-            api_key=api_key,
+            config_path=config_path,
+            servers=servers,
+            legacy_base_url=legacy_base_url,
+            legacy_api_key=legacy_api_key,
         )
+
+    @property
+    def base_url(self) -> str | None:
+        """Return the first enabled server URL for compatibility with older callers."""
+        for server in self.enabled_servers:
+            return server.url
+        return None
+
+    @property
+    def enabled_servers(self) -> list[MCPServerConfig]:
+        """Return the remote HTTP MCP servers that should be active."""
+        if not self.enabled:
+            return []
+        return [server for server in self.servers if server.enabled]
 
 
 @dataclass
@@ -402,7 +566,7 @@ class ProgenitorConfig:
             copilot=CopilotConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             validation=ValidationConfig.from_env(),
-            mcp=MCPConfig.from_env(),
+            mcp=MCPConfig.from_env(project_root),
         )
 
         # Validate configuration
@@ -490,16 +654,25 @@ class ProgenitorConfig:
             },
             "mcp": {
                 "enabled": self.mcp.enabled,
-                "base_url": self.mcp.base_url,
+                "config_path": str(self.mcp.config_path),
+                "servers": [
+                    {
+                        "name": server.name,
+                        "url": server.url,
+                        "enabled": server.enabled,
+                        "transport": server.transport,
+                        "description": server.description,
+                        "header_keys": sorted(server.headers.keys()),
+                    }
+                    for server in self.mcp.servers
+                ],
             },
         }
 
         if redact_secrets:
             result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
-            result["mcp"]["api_key"] = "***REDACTED***" if self.mcp.api_key else None
         else:
             result["llm"]["api_key"] = self.llm.api_key
-            result["mcp"]["api_key"] = self.mcp.api_key
 
         return result
 

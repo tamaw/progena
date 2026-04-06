@@ -35,7 +35,7 @@ def client():
 
 
 @pytest.fixture
-def mock_state_files(tmp_path):
+def mock_state_files(tmp_path, monkeypatch):
     """Create mock state files that simulate a running progenitor."""
     state_dir = tmp_path / "state"
     config_dir = tmp_path / "config"
@@ -83,13 +83,20 @@ def mock_state_files(tmp_path):
             },
         ]
     }
+    mcp_config_path = tmp_path / "progenitor-mcp.json"
     mcp_data = {
-        "tools": [
-            {"name": "universal_decoder", "description": "Decodes alien signals", "enabled": True},
-        ]
+        "mcpServers": {
+            "universal_decoder": {
+                "description": "Decodes alien signals",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/universal_decoder",
+            }
+        }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
+    mcp_config_path.write_text(json.dumps(mcp_data))
+    monkeypatch.setenv("PROGENITOR_MCP_CONFIG_PATH", str(mcp_config_path))
 
     # Build state - in progress
     build_state = {
@@ -221,7 +228,9 @@ class TestUIFeedbackIntegration:
         assert parsed["health"]["is_running"] is True
         assert len(parsed["agents"]) == 2
 
-    def test_workspace_payload_and_widgets_include_mcp_and_schedule(self, mock_state_files, tmp_path):
+    def test_workspace_payload_and_widgets_include_mcp_and_schedule(
+        self, mock_state_files, tmp_path
+    ):
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
         (logs_dir / "galactic-translator.log").write_text("translator online\n", encoding="utf-8")
@@ -242,7 +251,14 @@ class TestUIFeedbackIntegration:
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
         (logs_dir / "tech-analyzer.jsonl").write_text(
-            json.dumps({"timestamp": "2026-03-12T10:00:00Z", "level": "warn", "message": "analysis delayed"}) + "\n",
+            json.dumps(
+                {
+                    "timestamp": "2026-03-12T10:00:00Z",
+                    "level": "warn",
+                    "message": "analysis delayed",
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -418,10 +434,13 @@ class TestRealTimeSSEFeedback:
 
         try:
             # Broadcast test event
-            broadcast_chat_event("alien_contact", {
-                "message": "First contact initiated",
-                "species": "Unknown",
-            })
+            broadcast_chat_event(
+                "alien_contact",
+                {
+                    "message": "First contact initiated",
+                    "species": "Unknown",
+                },
+            )
 
             # Verify event was queued
             assert not queue.empty()
@@ -516,27 +535,29 @@ class TestDataIntegrity:
 
     def test_agent_info_handles_all_fields(self):
         """Test AgentInfo handles all possible fields."""
-        full_agent = AgentInfo.from_dict({
-            "name": "complete-agent",
-            "kind": "a2a_agent",
-            "version": "3.0.0",
-            "description": "Complete agent with all fields",
-            "capabilities": ["cap1", "cap2", "cap3"],
-            "entrypoint": "python complete.py",
-            "endpoint": "http://localhost:9001",
-            "transport": "http",
-            "enabled": True,
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-15T12:00:00Z",
-            "status": "ready",
-            "status_message": "Waiting for requests",
-            "port": 9001,
-            "agent_card_url": "http://localhost:9001/.well-known/agent-card.json",
-            "pid": 54321,
-            "startup_time": "2024-01-15T11:00:00Z",
-            "last_heartbeat": "2024-01-15T12:00:00Z",
-            "last_error": None,
-        })
+        full_agent = AgentInfo.from_dict(
+            {
+                "name": "complete-agent",
+                "kind": "a2a_agent",
+                "version": "3.0.0",
+                "description": "Complete agent with all fields",
+                "capabilities": ["cap1", "cap2", "cap3"],
+                "entrypoint": "python complete.py",
+                "endpoint": "http://localhost:9001",
+                "transport": "http",
+                "enabled": True,
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-15T12:00:00Z",
+                "status": "ready",
+                "status_message": "Waiting for requests",
+                "port": 9001,
+                "agent_card_url": "http://localhost:9001/.well-known/agent-card.json",
+                "pid": 54321,
+                "startup_time": "2024-01-15T11:00:00Z",
+                "last_heartbeat": "2024-01-15T12:00:00Z",
+                "last_error": None,
+            }
+        )
 
         assert full_agent.name == "complete-agent"
         assert full_agent.port == 9001

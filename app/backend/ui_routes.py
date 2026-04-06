@@ -3,9 +3,9 @@ Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
 
-Reads real state data from data/state/ and data/config/:
+Reads real state data from data/state/, data/config/, and checked-in agent config:
 - health.json: Agent health status
-- agents.json + mcp.json: Registered agents and tools
+- agents.json + app/progenitor/mcp.json: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
 - schedule.json: Scheduled tasks (system feature, persists beyond user sessions)

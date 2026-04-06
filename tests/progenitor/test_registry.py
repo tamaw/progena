@@ -15,13 +15,11 @@ class TestToolRegistry:
 
     @pytest.fixture
     def temp_registry(self):
-        """Create isolated temporary registry + mcp files."""
+        """Create an isolated temporary agent registry file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             registry_path = root / "agents.json"
-            mcp_path = root / "mcp.json"
             registry_path.write_text(json.dumps({"agents": []}), encoding="utf-8")
-            mcp_path.write_text(json.dumps({"tools": []}), encoding="utf-8")
             yield registry_path
 
     @pytest.mark.asyncio
@@ -245,6 +243,21 @@ class TestToolRegistry:
         agents = registry2.get_agents()
         assert len(agents) == 1
         assert agents[0]["name"] == "persistent_agent"
+
+    @pytest.mark.asyncio
+    async def test_runtime_tools_are_not_persisted(self, temp_registry):
+        """Runtime MCP tools should stay in memory instead of writing mcp.json."""
+        registry = ToolRegistry(temp_registry)
+        await registry.load()
+
+        await registry.register_tool({"name": "ephemeral_tool", "capabilities": ["fetch"]})
+        tools = registry.get_tools()
+        assert len(tools) == 1
+        assert tools[0]["name"] == "ephemeral_tool"
+
+        registry_reloaded = ToolRegistry(temp_registry)
+        await registry_reloaded.load()
+        assert registry_reloaded.get_tools() == []
 
     @pytest.mark.asyncio
     async def test_load_merges_legacy_and_map_entries(self, temp_registry):
