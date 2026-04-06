@@ -7,7 +7,8 @@ import { loadWorkspaceState, saveWorkspaceState } from '../lib/indexedDb';
 const WorkspaceContext = createContext(null);
 
 const SAVE_DEBOUNCE_MS = 500;
-const SERVER_NODE_TYPES = new Set(['agent', 'mcp', 'schedule']);
+const SERVER_NODE_TYPES = new Set(['agent', 'mcp', 'schedule', 'event']);
+const DEFAULT_EVENT_TYPE = 'kanban.card.created';
 
 const defaultNodeSizes = {
   prompt: { width: 320, height: 200 },
@@ -15,6 +16,7 @@ const defaultNodeSizes = {
   webframe: { width: 480, height: 360 },
   label: { width: 200, height: 60 },
   schedule: { width: 300, height: 180 },
+  event: { width: 320, height: 200 },
   group: { width: 600, height: 400 },
   agent: { width: 320, height: 200 },
   mcp: { width: 320, height: 200 },
@@ -71,6 +73,19 @@ const defaultNodeData = {
     isSaving: false,
     saveError: null,
   }),
+  event: () => ({
+    eventType: DEFAULT_EVENT_TYPE,
+    enabled: true,
+    triggerCount: 0,
+    lastTriggeredAt: null,
+    lastRunStatus: 'idle',
+    lastPayload: null,
+    isUnsaved: false,
+    isSaving: false,
+    saveError: null,
+    summaryState: `Waiting for ${DEFAULT_EVENT_TYPE}`,
+    logs: [],
+  }),
   group: () => ({
     childIds: [],
     description: '',
@@ -99,6 +114,7 @@ const typeLabels = {
   webframe: 'Web Frame',
   label: 'Label',
   schedule: 'Schedule',
+  event: 'Event',
   group: 'Group',
   agent: 'Agent',
   mcp: 'MCP',
@@ -156,6 +172,30 @@ function mapWidgetToNodeData(widget, existingData = {}) {
   const title = widget.title || widget.name || existingData.title || widget.id;
   const summary = widget.summary || widget.description || existingData.summaryState || '';
   const logs = normalizeLogs(widget.logs || widget.data?.logs || existingData.logs);
+
+  if (widget.type === 'event') {
+    const eventType = widget.data?.event_type || widget.event_type || existingData.eventType || DEFAULT_EVENT_TYPE;
+    return {
+      ...defaultNodeData.event(),
+      ...existingData,
+      ...widget.data,
+      title,
+      summaryState: widget.summary || existingData.summaryState || buildEventWaitingSummary(eventType),
+      logs,
+      serverManaged: true,
+      status: widget.status || existingData.status || 'idle',
+      eventType,
+      enabled: widget.data?.enabled ?? widget.enabled ?? existingData.enabled ?? true,
+      triggerCount: widget.data?.trigger_count ?? widget.trigger_count ?? existingData.triggerCount ?? 0,
+      lastTriggeredAt: widget.data?.last_triggered_at || widget.last_triggered_at || existingData.lastTriggeredAt || null,
+      lastRunStatus: widget.data?.last_run_status || widget.last_run_status || existingData.lastRunStatus || 'idle',
+      lastPayload: widget.data?.last_payload ?? widget.last_payload ?? existingData.lastPayload ?? null,
+      isUnsaved: false,
+      isSaving: false,
+      saveError: null,
+      updatedAt: timestamp,
+    };
+  }
 
   if (widget.type === 'schedule') {
     return {
@@ -215,6 +255,10 @@ function getActionText(payload) {
     payload.message ||
     ''
   );
+}
+
+function buildEventWaitingSummary(eventType = DEFAULT_EVENT_TYPE) {
+  return `Waiting for ${eventType}`;
 }
 
 function dedupeNodeValues(values) {
@@ -325,6 +369,7 @@ export function WorkspaceProvider({ children }) {
     getWidgetSchemas,
     updateWidget,
     createSchedule,
+    createEvent,
     runAction,
     generateAction,
   } = useApi();
@@ -440,7 +485,7 @@ export function WorkspaceProvider({ children }) {
     patchTimersRef.current.forEach((timerId) => clearTimeout(timerId));
   }, []);
 
-  const scheduleWidgetPatch = useCallback((nodeId, updates) => {
+  const queueWidgetPatch = useCallback((nodeId, updates) => {
     const existing = patchTimersRef.current.get(nodeId);
     if (existing) {
       clearTimeout(existing);
@@ -479,6 +524,21 @@ export function WorkspaceProvider({ children }) {
         title: overrides.title || 'New Schedule',
         expanded: overrides.expanded ?? true,
         isUnsaved: true,
+      };
+    }
+    if (type === 'event' && !newNode.data.serverManaged) {
+      newNode.style = {
+        ...newNode.style,
+        width: Math.max(defaultNodeSizes.event.width, 480),
+        height: Math.max(defaultNodeSizes.event.height, 400),
+      };
+      newNode.data = {
+        ...newNode.data,
+        title: overrides.title || 'New Event',
+        expanded: overrides.expanded ?? true,
+        enabled: overrides.enabled ?? true,
+        isUnsaved: true,
+        summaryState: overrides.summaryState || buildEventWaitingSummary(overrides.eventType || newNode.data.eventType),
       };
     }
     setNodes((currentNodes) => [...currentNodes, newNode]);
@@ -520,17 +580,34 @@ export function WorkspaceProvider({ children }) {
           return node;
         }
 
+        let nextDataUpdates = dataUpdates;
+        if (
+          node.type === 'event'
+          && Object.prototype.hasOwnProperty.call(dataUpdates, 'eventType')
+          && dataUpdates.summaryState === undefined
+        ) {
+          const currentEventType = node.data?.eventType || DEFAULT_EVENT_TYPE;
+          const nextEventType = dataUpdates.eventType || currentEventType;
+          const currentSummary = node.data?.summaryState || '';
+          if (!currentSummary || currentSummary === buildEventWaitingSummary(currentEventType)) {
+            nextDataUpdates = {
+              ...dataUpdates,
+              summaryState: buildEventWaitingSummary(nextEventType),
+            };
+          }
+        }
+
         const updatedNode = {
           ...node,
           data: {
             ...node.data,
-            ...dataUpdates,
+            ...nextDataUpdates,
             updatedAt: new Date().toISOString(),
           },
         };
 
         if (node.type === 'schedule' && node.data?.serverManaged) {
-          scheduleWidgetPatch(nodeId, {
+          queueWidgetPatch(nodeId, {
             name: updatedNode.data.title,
             instruction: updatedNode.data.instruction,
             enabled: updatedNode.data.enabled,
@@ -540,10 +617,18 @@ export function WorkspaceProvider({ children }) {
           });
         }
 
+        if (node.type === 'event' && node.data?.serverManaged) {
+          queueWidgetPatch(nodeId, {
+            name: updatedNode.data.title,
+            enabled: updatedNode.data.enabled,
+            event_type: updatedNode.data.eventType,
+          });
+        }
+
         return updatedNode;
       })
     );
-  }, [scheduleWidgetPatch]);
+  }, [queueWidgetPatch]);
 
   const connectPromptToAgent = useCallback((promptNodeId, targetAgent) => {
     const promptNode = latestNodesRef.current.find((node) => node.id === promptNodeId && node.type === 'prompt');
@@ -665,6 +750,77 @@ export function WorkspaceProvider({ children }) {
       )));
     }
   }, [createSchedule, updateNodeData]);
+
+  const saveEventNode = useCallback(async (nodeId) => {
+    const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+    if (!node || node.type !== 'event' || node.data?.serverManaged) {
+      return;
+    }
+
+    const title = (node.data.title || '').trim();
+    const eventType = (node.data.eventType || '').trim();
+
+    if (!title || !eventType) {
+      updateNodeData(nodeId, {
+        saveError: 'Name and event type are required before saving.',
+      });
+      return;
+    }
+
+    setNodes((currentNodes) => currentNodes.map((entry) => (
+      entry.id === nodeId
+        ? {
+          ...entry,
+          data: {
+            ...entry.data,
+            isSaving: true,
+            saveError: null,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+        : entry
+    )));
+
+    try {
+      const widget = await createEvent({
+        name: title,
+        event_type: eventType,
+        enabled: node.data.enabled,
+      });
+
+      setNodes((currentNodes) => {
+        const existingNode = currentNodes.find((entry) => entry.id === nodeId) || node;
+        const remainingNodes = currentNodes.filter((entry) => entry.id !== nodeId);
+        const serverNode = buildServerNode(
+          widget,
+          {
+            ...existingNode,
+            id: widget.id,
+            data: {
+              ...existingNode.data,
+              expanded: existingNode.data.expanded,
+            },
+          },
+          remainingNodes.length,
+        );
+        return [...remainingNodes, serverNode];
+      });
+    } catch (saveError) {
+      setNodes((currentNodes) => currentNodes.map((entry) => (
+        entry.id === nodeId
+          ? {
+            ...entry,
+            data: {
+              ...entry.data,
+              isSaving: false,
+              saveError: saveError.message,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+          : entry
+      )));
+    }
+  }, [createEvent, updateNodeData]);
 
   const removeNodes = useCallback((nodeIds) => {
     const idSet = new Set(nodeIds);
@@ -921,6 +1077,7 @@ export function WorkspaceProvider({ children }) {
         runCodeNode,
         runScheduleNode,
         saveScheduleNode,
+        saveEventNode,
         getWidgetTabs,
         getWidgetDefaultTab,
       }}
@@ -937,6 +1094,3 @@ export function useWorkspaceContext() {
   }
   return context;
 }
-
-
-
