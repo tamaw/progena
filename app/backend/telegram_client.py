@@ -42,7 +42,7 @@ class TelegramConfig:
     retry_delay: float
     max_message_length: int
     rate_limit_per_minute: int
-    draft_update_interval_ms: int = 200
+    draft_update_interval_ms: int = 2000
     # Polling settings
     polling_enabled: bool = True
     polling_interval: float = 2.0
@@ -129,7 +129,7 @@ class TelegramDraftSession:
     segment_index: int = 0
     draft_sent: bool = False
     last_draft_text: str = ""
-    last_draft_update_at: float = 0.0
+    last_draft_update_at: float | None = None  # None until the first draft update is sent
 
 
 class TelegramClient:
@@ -661,7 +661,7 @@ class TelegramClient:
         """Return whether the current draft should be sent to Telegram now."""
         if visible_text == session.last_draft_text:
             return False
-        if not session.draft_sent:
+        if session.last_draft_update_at is None:
             return True
         interval = self._draft_update_interval_seconds()
         if interval <= 0:
@@ -801,7 +801,6 @@ class TelegramClient:
                 session.segment_text = remainder
                 session.draft_sent = False
                 session.last_draft_text = ""
-                session.last_draft_update_at = 0.0
 
         if streamed_chars == 0:
             return 0
