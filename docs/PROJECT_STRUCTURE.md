@@ -54,7 +54,7 @@ Most runtime data is created while the system is running.
 ```text
 data/
 ├── state/         # Runtime checkpoints, schedules, and health data
-├── config/        # Runtime-managed registry/config data
+├── config/        # Runtime-managed agent registry data
 ├── sessions/      # Backend session persistence
 ├── attachments/   # Uploaded file storage
 ├── prompts/       # Checked-in markdown prompt templates by agent
@@ -62,6 +62,9 @@ data/
 
 logs/              # Runtime and backend logs
 ```
+
+Checked-in agent-specific config currently lives alongside the agent code, e.g.
+`app/progenitor/mcp.json` for Progenitor's external MCP server definitions.
 
 ## Docker assets
 

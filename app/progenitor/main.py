@@ -76,6 +76,9 @@ class Progenitor:
 
         # Load tool/agent registry
         await self.tool_registry.load()
+        from .tools.mcp import refresh_mcp_runtime
+
+        await refresh_mcp_runtime(self.llm_client, self.tool_registry, self.config.mcp)
         # Startup discovery: scan local agents and persist to registry.
         try:
             from .tools.agent_discovery import discover_agents
@@ -252,6 +255,7 @@ class Progenitor:
 
         # Persist final state
         await self.state_manager.commit_state()
+        await self.llm_client.close()
 
         # Write offline status to health file
         await self._write_health_status("offline")

@@ -9,12 +9,16 @@ from unittest.mock import patch
 
 from app.progenitor.config import (
     LLMConfig,
+    MCPConfig,
+    MCPServerConfig,
     ProgenitorConfig,
     RuntimeConfig,
     SchedulerConfig,
     StorageConfig,
     get_config,
+    load_mcp_servers,
     reload_config,
+    resolve_mcp_config_path,
     setup_logging,
 )
 from app.progenitor.llm.prompts import DEFAULT_PROMPTS_DIR
@@ -223,6 +227,100 @@ class TestStorageConfig:
             assert config.worktree_dir == Path("/custom/worktrees")
             assert config.prompts_dir == Path("/custom/data/prompts")
             assert config.state_lock_timeout_seconds == 30
+
+
+class TestMCPConfig:
+    """Tests for Progenitor's checked-in MCP source config loader."""
+
+    def test_resolve_mcp_config_path_uses_project_default(self):
+        project_root = Path("/test/project")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PROGENITOR_MCP_CONFIG_PATH", None)
+            path = resolve_mcp_config_path(project_root)
+        assert path == project_root / "app" / "progenitor" / "mcp.json"
+
+    def test_load_mcp_servers_reads_mcp_servers_map(self, tmp_path):
+        config_path = tmp_path / "mcp.json"
+        config_path.write_text(
+            """{
+  "mcpServers": {
+    "jina": {
+      "enabled": true,
+      "transport": "http",
+      "description": "Web search",
+      "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+      "headers": {
+        "Authorization": "Bearer ${JINA_API_KEY}"
+      }
+    }
+  }
+}""",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"JINA_API_KEY": "jina_test_key"}, clear=False):
+            servers = load_mcp_servers(config_path)
+
+        assert servers == [
+            MCPServerConfig(
+                name="jina",
+                enabled=True,
+                transport="http",
+                description="Web search",
+                url="https://mcp.jina.ai/v1?include_tags=search,read",
+                headers={"Authorization": "Bearer jina_test_key"},
+            )
+        ]
+
+    def test_load_mcp_servers_drops_headers_with_missing_env(self, tmp_path):
+        config_path = tmp_path / "mcp.json"
+        config_path.write_text(
+            """{
+  "mcpServers": {
+    "jina": {
+      "enabled": true,
+      "transport": "http",
+      "url": "https://mcp.jina.ai/v1",
+      "headers": {
+        "Authorization": "Bearer ${JINA_API_KEY}"
+      }
+    }
+  }
+}""",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("JINA_API_KEY", None)
+            servers = load_mcp_servers(config_path)
+
+        assert len(servers) == 1
+        assert servers[0].name == "jina"
+        assert servers[0].headers == {}
+
+    def test_from_env_prefers_checked_in_file_and_global_toggle(self, tmp_path):
+        project_root = tmp_path
+        mcp_dir = project_root / "app" / "progenitor"
+        mcp_dir.mkdir(parents=True)
+        (mcp_dir / "mcp.json").write_text(
+            """{
+  "mcpServers": {
+    "jina": {
+      "enabled": true,
+      "transport": "http",
+      "url": "https://mcp.jina.ai/v1"
+    }
+  }
+}""",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"PROGENITOR_MCP_ENABLED": "false"}, clear=False):
+            config = MCPConfig.from_env(project_root)
+
+        assert config.enabled is False
+        assert config.config_path == project_root / "app" / "progenitor" / "mcp.json"
+        assert [server.name for server in config.servers] == ["jina"]
 
 
 class TestSchedulerConfig:

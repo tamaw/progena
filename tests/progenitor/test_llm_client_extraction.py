@@ -1,7 +1,7 @@
 """Tests for LLM client helpers and message handling."""
 
 from types import MethodType, SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -67,9 +67,7 @@ def test_extracts_output_message_part_with_nested_text_dict():
         "output": [
             {
                 "type": "message",
-                "content": [
-                    {"type": "output_text", "text": {"value": "From output content"}}
-                ],
+                "content": [{"type": "output_text", "text": {"value": "From output content"}}],
             }
         ]
     }
@@ -80,7 +78,7 @@ def test_extracts_output_message_part_with_nested_text_dict():
 
 def test_extract_strips_inline_tool_markup_from_top_level_text():
     payload = {
-        "text": "schedule_task{\"description\":\"Foot tapping reminder\",\"delay_minutes\":2}✅ Scheduled."
+        "text": 'schedule_task{"description":"Foot tapping reminder","delay_minutes":2}✅ Scheduled.'
     }
     text, reasoning = _extract(payload)
     assert text == "✅ Scheduled."
@@ -89,7 +87,7 @@ def test_extract_strips_inline_tool_markup_from_top_level_text():
 
 def test_extract_strips_inline_tool_markup_from_output_text():
     payload = {
-        "output_text": "schedule_task{\"instruction\":\"Remind user\"}In two minutes, reminder set."
+        "output_text": 'schedule_task{"instruction":"Remind user"}In two minutes, reminder set.'
     }
     text, _ = _extract(payload)
     assert text == "In two minutes, reminder set."
@@ -195,7 +193,15 @@ async def test_decide_trims_history_to_recent_messages():
     captured: dict[str, object] = {}
     client.prompts = SimpleNamespace(get_decide_prompt=lambda _: "decide prompt")
 
-    async def fake_chat(self, messages, system_prompt=None, temperature=0.7, max_tokens=4096, tools=None, response_format=None):
+    async def fake_chat(
+        self,
+        messages,
+        system_prompt=None,
+        temperature=0.7,
+        max_tokens=4096,
+        tools=None,
+        response_format=None,
+    ):
         captured["messages"] = messages
         captured["system_prompt"] = system_prompt
         return '{"action":"answer_directly","confidence":0.9,"reasoning":"ok","requires_planning":false}'
@@ -219,7 +225,15 @@ async def test_generate_response_trims_history_to_recent_messages():
     captured: dict[str, object] = {}
     client.prompts = SimpleNamespace(get_genesis_prompt=lambda: "genesis")
 
-    async def fake_chat(self, messages, system_prompt=None, temperature=0.7, max_tokens=4096, tools=None, response_format=None):
+    async def fake_chat(
+        self,
+        messages,
+        system_prompt=None,
+        temperature=0.7,
+        max_tokens=4096,
+        tools=None,
+        response_format=None,
+    ):
         captured["messages"] = messages
         captured["system_prompt"] = system_prompt
         return "ok"
@@ -264,3 +278,44 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     assert result == {"result": {"success": True, "result": {"ok": True}}}
     client._call_mcp_tool.assert_not_awaited()
     mock_call_agent.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_routes_to_server_by_alias():
+    client = LLMClient.__new__(LLMClient)
+    client.mcp_config = SimpleNamespace(enabled=True)
+    client.mcp_tool_lookup = {
+        "jina_search_web": {
+            "name": "jina_search_web",
+            "mcp_original_name": "search_web",
+            "mcp_server_name": "jina",
+        }
+    }
+    client.mcp_tools = list(client.mcp_tool_lookup.values())
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"result": {"items": ["ok"]}}
+    mcp_client = AsyncMock()
+    mcp_client.post.return_value = response
+    client.mcp_servers = {
+        "jina": {
+            "client": mcp_client,
+            "url": "https://mcp.jina.ai/v1",
+        }
+    }
+
+    result = await LLMClient._call_mcp_tool(
+        client,
+        {
+            "name": "jina_search_web",
+            "arguments": {"query": "latest ai"},
+            "call_id": "call-1",
+        },
+    )
+
+    assert result == {"items": ["ok"]}
+    mcp_client.post.assert_awaited_once()
+    assert mcp_client.post.await_args.args[0] == "https://mcp.jina.ai/v1"
+    payload = mcp_client.post.await_args.kwargs["json"]
+    assert payload["params"]["name"] == "search_web"
+    assert payload["params"]["arguments"] == {"query": "latest ai"}

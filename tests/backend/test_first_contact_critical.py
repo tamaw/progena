@@ -38,7 +38,7 @@ def client():
 
 
 @pytest.fixture
-def complete_state_files(tmp_path):
+def complete_state_files(tmp_path, monkeypatch):
     """
     Create a complete set of state files simulating a fully operational
     Progenitor agent with multiple sub-agents - ready for alien inspection.
@@ -107,15 +107,32 @@ def complete_state_files(tmp_path):
             },
         ]
     }
+    mcp_config_path = tmp_path / "progenitor-mcp.json"
     mcp_data = {
-        "tools": [
-            {"name": "universal_translator", "description": "Translates any language", "enabled": True},
-            {"name": "spectrum_analyzer", "description": "Analyzes signal spectrums", "enabled": True},
-            {"name": "pattern_matcher", "description": "Matches complex patterns", "enabled": True},
-        ]
+        "mcpServers": {
+            "universal_translator": {
+                "description": "Translates any language",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/universal_translator",
+            },
+            "spectrum_analyzer": {
+                "description": "Analyzes signal spectrums",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/spectrum_analyzer",
+            },
+            "pattern_matcher": {
+                "description": "Matches complex patterns",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/pattern_matcher",
+            },
+        }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
+    mcp_config_path.write_text(json.dumps(mcp_data))
+    monkeypatch.setenv("PROGENITOR_MCP_CONFIG_PATH", str(mcp_config_path))
 
     # Build state - actively working on first contact
     build_state = {
@@ -161,8 +178,20 @@ def complete_state_files(tmp_path):
 
     # Schedule
     schedule = [
-        {"id": "sched-1", "name": "Signal scan", "schedule": "*/5 * * * *", "enabled": True, "next_run": None},
-        {"id": "sched-2", "name": "Protocol check", "schedule": "0 * * * *", "enabled": True, "next_run": None},
+        {
+            "id": "sched-1",
+            "name": "Signal scan",
+            "schedule": "*/5 * * * *",
+            "enabled": True,
+            "next_run": None,
+        },
+        {
+            "id": "sched-2",
+            "name": "Protocol check",
+            "schedule": "0 * * * *",
+            "enabled": True,
+            "next_run": None,
+        },
     ]
     (state_dir / "schedule.json").write_text(json.dumps(schedule))
 
@@ -187,7 +216,9 @@ class TestCriticalUIDataPipeline:
 
         for endpoint in endpoints:
             response = client.get(endpoint)
-            assert response.status_code == 200, f"Endpoint {endpoint} failed with {response.status_code}"
+            assert response.status_code == 200, (
+                f"Endpoint {endpoint} failed with {response.status_code}"
+            )
 
     def test_status_endpoint_complete_data(self, client):
         """Status endpoint must provide ALL data needed by the UI."""
@@ -289,11 +320,14 @@ class TestRealTimeFeedbackConsistency:
 
         try:
             # Broadcast an important message
-            broadcast_chat_event("first_contact", {
-                "status": "initiated",
-                "signal_strength": 0.98,
-                "decoded_message": "Greetings from Earth",
-            })
+            broadcast_chat_event(
+                "first_contact",
+                {
+                    "status": "initiated",
+                    "signal_strength": 0.98,
+                    "decoded_message": "Greetings from Earth",
+                },
+            )
 
             # All subscribers must receive the event
             for i, q in enumerate(queues):
@@ -391,9 +425,10 @@ class TestErrorRecoveryAndGracefulDegradation:
         config_dir = state_dir.parent / "config"
         config_dir.mkdir()
         (config_dir / "agents.json").write_text("{this is not valid json!!!")
-        (config_dir / "mcp.json").write_text("{this is not valid json!!!")
+        mcp_config_path = tmp_path / "progenitor-mcp.json"
+        mcp_config_path.write_text("{this is not valid json!!!")
 
-        reader = StateReader(state_dir=state_dir)
+        reader = StateReader(state_dir=state_dir, mcp_config_path=mcp_config_path)
 
         # All methods should return defaults, not crash
         health = reader.get_health()

@@ -59,14 +59,13 @@ class ListToolsTool(BaseSystemTool):
         mcp_config = getattr(llm_client, "mcp_config", None) if llm_client is not None else None
         if llm_client is not None and isinstance(mcp_config, MCPConfig) and mcp_config.enabled:
             with suppress(Exception):
-                from .mcp import setup_mcp_for_llm_client
+                from .mcp import refresh_mcp_runtime
 
-                await setup_mcp_for_llm_client(llm_client, cast(MCPConfig, mcp_config))
-
-            if hasattr(context.tool_registry, "register_tool") and hasattr(llm_client, "get_mcp_tool_registry_entries"):
-                with suppress(Exception):
-                    for entry in llm_client.get_mcp_tool_registry_entries() or []:
-                        await context.tool_registry.register_tool(entry)
+                await refresh_mcp_runtime(
+                    llm_client,
+                    context.tool_registry,
+                    cast(MCPConfig, mcp_config),
+                )
 
         system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]
 
@@ -90,7 +89,9 @@ class ListToolsTool(BaseSystemTool):
         ]
 
         # Get registered MCP tools from registry
-        mcp_tools = context.tool_registry.get_tools() if hasattr(context.tool_registry, "get_tools") else []
+        mcp_tools = (
+            context.tool_registry.get_tools() if hasattr(context.tool_registry, "get_tools") else []
+        )
         local_mcp_tools = []
         if hasattr(context.tool_registry, "get_local_mcp_tools"):
             local_mcp_tools = context.tool_registry.get_local_mcp_tools()
@@ -98,7 +99,9 @@ class ListToolsTool(BaseSystemTool):
         # Include in-memory discovered MCP tools even if they haven't been
         # persisted to agents.json yet (e.g. in-process service path).
         discovered_mcp_tools: list[dict] = []
-        if getattr(context, "llm_client", None) is not None and hasattr(context.llm_client, "get_mcp_tool_registry_entries"):
+        if getattr(context, "llm_client", None) is not None and hasattr(
+            context.llm_client, "get_mcp_tool_registry_entries"
+        ):
             try:
                 discovered_mcp_tools = context.llm_client.get_mcp_tool_registry_entries() or []
             except Exception:
@@ -129,14 +132,16 @@ class ListToolsTool(BaseSystemTool):
             for tool in deduped_mcp_tools
         ]
 
-        return ToolResult.ok({
-            "system_tools": system_tools,
-            "agents": agent_entries,
-            "mcp_tools": mcp_tool_entries,
-            "total_count": len(system_tools) + len(agent_entries) + len(mcp_tool_entries),
-            "summary": {
-                "system_tools": len(system_tools),
-                "agents": len(agent_entries),
-                "mcp_tools": len(mcp_tool_entries),
-            },
-        })
+        return ToolResult.ok(
+            {
+                "system_tools": system_tools,
+                "agents": agent_entries,
+                "mcp_tools": mcp_tool_entries,
+                "total_count": len(system_tools) + len(agent_entries) + len(mcp_tool_entries),
+                "summary": {
+                    "system_tools": len(system_tools),
+                    "agents": len(agent_entries),
+                    "mcp_tools": len(mcp_tool_entries),
+                },
+            }
+        )
