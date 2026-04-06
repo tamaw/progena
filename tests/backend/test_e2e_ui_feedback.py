@@ -83,7 +83,7 @@ def mock_state_files(tmp_path, monkeypatch):
             },
         ]
     }
-    mcp_config_path = tmp_path / "progenitor-mcp.json"
+    mcp_config_path = config_dir / "mcp.json"
     mcp_data = {
         "mcpServers": {
             "universal_decoder": {

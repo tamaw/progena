@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import aiofiles
 
+from ..config import default_mcp_config_payload
 from ..runtime.time_utils import utcnow_isoformat
 from .models import (
     ConversationMessage,
@@ -77,6 +78,7 @@ class StateManager:
         "build_state": "build_state.json",  # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
         "registry": "agents.json",
+        "mcp": "mcp.json",
         "schedule": "schedule.json",
     }
 
@@ -100,7 +102,7 @@ class StateManager:
     def _core_file_path(self, name: str) -> Path:
         """Resolve absolute path for a core state/config file."""
         filename = self.CORE_FILES[name]
-        if name == "registry":
+        if name in {"registry", "mcp"}:
             return self.config_dir / filename
         return self.state_dir / filename
 
@@ -248,6 +250,7 @@ class StateManager:
                 "current_build_request": None,  # Reference to active build (id only)
             },
             "registry": {},
+            "mcp": default_mcp_config_payload(),
             "schedule": [],
         }
 

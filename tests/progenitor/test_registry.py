@@ -246,7 +246,7 @@ class TestToolRegistry:
 
     @pytest.mark.asyncio
     async def test_runtime_tools_are_not_persisted(self, temp_registry):
-        """Runtime MCP tools should stay in memory instead of writing mcp.json."""
+        """Runtime MCP tools should stay in memory instead of overwriting config/mcp.json."""
         registry = ToolRegistry(temp_registry)
         await registry.load()
 

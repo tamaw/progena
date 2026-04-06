@@ -230,14 +230,14 @@ class TestStorageConfig:
 
 
 class TestMCPConfig:
-    """Tests for Progenitor's checked-in MCP source config loader."""
+    """Tests for Progenitor's live MCP config loader."""
 
     def test_resolve_mcp_config_path_uses_project_default(self):
         project_root = Path("/test/project")
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PROGENITOR_MCP_CONFIG_PATH", None)
             path = resolve_mcp_config_path(project_root)
-        assert path == project_root / "app" / "progenitor" / "mcp.json"
+        assert path == project_root / "data" / "config" / "mcp.json"
 
     def test_load_mcp_servers_reads_mcp_servers_map(self, tmp_path):
         config_path = tmp_path / "mcp.json"
@@ -300,7 +300,7 @@ class TestMCPConfig:
 
     def test_from_env_prefers_checked_in_file_and_global_toggle(self, tmp_path):
         project_root = tmp_path
-        mcp_dir = project_root / "app" / "progenitor"
+        mcp_dir = project_root / "data" / "config"
         mcp_dir.mkdir(parents=True)
         (mcp_dir / "mcp.json").write_text(
             """{
@@ -319,7 +319,7 @@ class TestMCPConfig:
             config = MCPConfig.from_env(project_root)
 
         assert config.enabled is False
-        assert config.config_path == project_root / "app" / "progenitor" / "mcp.json"
+        assert config.config_path == project_root / "data" / "config" / "mcp.json"
         assert [server.name for server in config.servers] == ["jina"]
 
 
