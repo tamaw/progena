@@ -54,7 +54,7 @@ class TestTelegramConfig:
         assert tg_config.retry_delay == 2.0
         assert tg_config.max_message_length == 2048
         assert tg_config.rate_limit_per_minute == 20
-        assert tg_config.draft_update_interval_ms == 2000
+        assert tg_config.draft_update_interval_ms == 1000
 
 
 class TestTelegramRateLimiter:
@@ -111,7 +111,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=100,  # Small for testing chunking
             rate_limit_per_minute=30,
-            draft_update_interval_ms=2000,
+            draft_update_interval_ms=1000,
         )
 
     @pytest.fixture
@@ -152,7 +152,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=4096,
             rate_limit_per_minute=30,
-            draft_update_interval_ms=2000,
+            draft_update_interval_ms=1000,
         )
         client = TelegramClient(config)
         await client.start()
@@ -342,7 +342,7 @@ class TestTelegramClient:
             client._should_flush_draft(
                 session,
                 "🤖 Progenitor Agent:\n\nnext segment",
-                now=11.0,
+                now=10.5,
             )
             is False
         )
@@ -351,7 +351,7 @@ class TestTelegramClient:
             client._should_flush_draft(
                 session,
                 "🤖 Progenitor Agent:\n\nnext segment",
-                now=12.0,
+                now=11.0,
             )
             is True
         )

@@ -66,7 +66,7 @@ class ChatServerConfig:
     telegram_retry_delay: float = 1.0  # Base delay between retries (exponential backoff)
     telegram_max_message_length: int = 4096  # Telegram max message length
     telegram_rate_limit_per_minute: int = 30  # Rate limit for outgoing messages
-    telegram_draft_update_interval_ms: int = 2000  # Minimum delay between sendMessageDraft updates
+    telegram_draft_update_interval_ms: int = 1000  # Minimum delay between sendMessageDraft updates
 
     # Telegram polling settings (for receiving messages)
     telegram_polling_enabled: bool = True  # Enable polling for incoming messages
@@ -112,7 +112,7 @@ class ChatServerConfig:
             telegram_retry_delay=env_float("TELEGRAM_RETRY_DELAY", 1.0),
             telegram_max_message_length=env_int("TELEGRAM_MAX_MESSAGE_LENGTH", 4096),
             telegram_rate_limit_per_minute=env_int("TELEGRAM_RATE_LIMIT_PER_MINUTE", 30),
-            telegram_draft_update_interval_ms=env_int("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS", 2000),
+            telegram_draft_update_interval_ms=env_int("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS", 1000),
             # Telegram polling settings
             telegram_polling_enabled=env_bool("TELEGRAM_POLLING_ENABLED", True),
             telegram_polling_interval=env_float("TELEGRAM_POLLING_INTERVAL", 2.0),

@@ -42,7 +42,7 @@ class TelegramConfig:
     retry_delay: float
     max_message_length: int
     rate_limit_per_minute: int
-    draft_update_interval_ms: int = 2000
+    draft_update_interval_ms: int = 1000
     # Polling settings
     polling_enabled: bool = True
     polling_interval: float = 2.0
