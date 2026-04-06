@@ -70,8 +70,6 @@ jobs:
     env:
       AGENT_NAME: ${{ matrix.agent }}
       PIP_CACHE_DIR: /tmp/pip-cache
-      PROGENITOR_LOG_DIR: /app/logs
-      PROGENITOR_DATA_DIR: /app/data
     strategy:
       fail-fast: false
       matrix:
