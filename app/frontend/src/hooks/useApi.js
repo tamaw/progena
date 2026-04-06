@@ -174,6 +174,14 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const createEvent = useCallback(async (payload) => {
+    const response = await fetchWithRetry('events', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
   const getLogs = useCallback(async (params = {}) => {
     const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
@@ -336,6 +344,7 @@ export function useApi() {
     updateWidget,
     getSchedules,
     createSchedule,
+    createEvent,
     getLogs,
     getLogSources,
     runAction,

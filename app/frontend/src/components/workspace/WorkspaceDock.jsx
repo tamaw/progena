@@ -6,6 +6,7 @@ const dockItems = [
   { type: 'webframe', name: 'Web', icon: 'W' },
   { type: 'label', name: 'Label', icon: 'T' },
   { type: 'schedule', name: 'Schedule', icon: 'S' },
+  { type: 'event', name: 'Event', icon: 'E' },
   { type: 'group', name: 'Group', icon: 'G' },
   { type: 'agent', name: 'Agent', icon: 'A' },
 ];

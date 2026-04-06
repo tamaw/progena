@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
+KANBAN_EVENT_TYPE_LABELS = {
+    "kanban.card.created": "Card created",
+    "kanban.card.updated": "Card updated",
+    "kanban.card.moved": "Card moved",
+    "kanban.card.deleted": "Card deleted",
+    "kanban.card.status_changed": "Status changed",
+}
+MAX_EVENT_WIDGET_LOGS = 20
+
 
 class BuildInfoResponse(BaseModel):
     """Build status information."""
@@ -272,6 +281,7 @@ class WidgetPatchRequest(BaseModel):
     schedule_type: str | None = None
     expression: str | None = None
     timezone: str | None = None
+    event_type: str | None = None
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -282,6 +292,14 @@ class ScheduleCreateRequest(BaseModel):
     schedule_type: str = "cron"
     expression: str
     timezone: str | None = None
+    enabled: bool = True
+
+
+class EventWidgetCreateRequest(BaseModel):
+    """Create request for a new persisted event widget."""
+
+    name: str
+    event_type: str
     enabled: bool = True
 
 
@@ -690,6 +708,13 @@ def _widget_to_response(widget: dict) -> WidgetResponse:
     )
 
 
+def _kanban_event_type_options() -> list[WidgetFieldOptionResponse]:
+    return [
+        WidgetFieldOptionResponse(value=value, label=label)
+        for value, label in KANBAN_EVENT_TYPE_LABELS.items()
+    ]
+
+
 def _widget_schemas() -> list[WidgetSchemaResponse]:
     """Return schema definitions for workspace details editing."""
     return [
@@ -956,6 +981,45 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                         WidgetFieldSchemaResponse(key="lastRunAt", label="Last Run"),
                         WidgetFieldSchemaResponse(key="lastRunStatus", label="Last Run Status"),
                         WidgetFieldSchemaResponse(key="saveError", label="Save Error"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="event",
+            default_tab="details",
+            tabs=[
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="enabled", label="Enabled", control="boolean", editable=True
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="eventType",
+                            label="Event Type",
+                            control="select",
+                            editable=True,
+                            options=_kanban_event_type_options(),
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="status",
+                    label="Status",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="triggerCount", label="Trigger Count"),
+                        WidgetFieldSchemaResponse(key="lastTriggeredAt", label="Last Triggered"),
+                        WidgetFieldSchemaResponse(key="lastRunStatus", label="Last Run Status"),
+                        WidgetFieldSchemaResponse(key="saveError", label="Save Error"),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
             ],
@@ -1287,11 +1351,116 @@ def _kanban_board_path(state_reader: StateReader) -> Path:
     return state_reader.config_dir / "kanban.json"
 
 
+def _event_widget_path(state_reader: StateReader) -> Path:
+    """Return the persisted event widget state path."""
+    return state_reader.config_dir / "event_widgets.json"
+
+
 def _read_kanban_board(state_reader: StateReader) -> dict:
     """Read the kanban board from persisted config state."""
     board_path = _kanban_board_path(state_reader)
     raw = state_reader._read_json_from_path(board_path)  # noqa: SLF001 - shared helper
     return _normalize_kanban_board(raw)
+
+
+def _normalize_event_widget_logs(data: object) -> list[dict]:
+    if not isinstance(data, list):
+        return []
+
+    normalized: list[dict] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        normalized.append(
+            {
+                "time": entry.get("time") or entry.get("timestamp"),
+                "timestamp": entry.get("timestamp") or entry.get("time"),
+                "level": entry.get("level", "info"),
+                "source": entry.get("source", "kanban"),
+                "message": entry.get("message") or "",
+            }
+        )
+    return normalized[:MAX_EVENT_WIDGET_LOGS]
+
+
+def _normalize_event_widget_record(entry: dict) -> dict:
+    event_type = str(entry.get("event_type") or "kanban.card.created").strip().lower()
+    name = str(entry.get("name") or event_type or "Event").strip()
+    last_payload = entry.get("last_payload")
+    logs = _normalize_event_widget_logs(entry.get("logs"))
+    summary = str(entry.get("summary") or f"Waiting for {event_type}").strip()
+    try:
+        trigger_count = int(entry.get("trigger_count", 0) or 0)
+    except (TypeError, ValueError):
+        trigger_count = 0
+    return {
+        "id": str(entry.get("id") or ""),
+        "name": name,
+        "event_type": event_type,
+        "enabled": bool(entry.get("enabled", True)),
+        "trigger_count": trigger_count,
+        "last_triggered_at": entry.get("last_triggered_at"),
+        "last_run_status": str(entry.get("last_run_status") or "idle"),
+        "last_payload": last_payload if isinstance(last_payload, dict) else None,
+        "summary": summary,
+        "logs": logs,
+        "created_at": entry.get("created_at"),
+        "updated_at": entry.get("updated_at") or entry.get("created_at"),
+    }
+
+
+def _read_event_widget_records(state_reader: StateReader) -> list[dict]:
+    event_path = _event_widget_path(state_reader)
+    raw = state_reader._read_json_from_path(event_path)  # noqa: SLF001 - shared helper
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=500, detail="Event widget state is invalid")
+    return [_normalize_event_widget_record(entry) for entry in raw if isinstance(entry, dict)]
+
+
+def _write_event_widget_records(state_reader: StateReader, records: list[dict]) -> list[dict]:
+    event_path = _event_widget_path(state_reader)
+    normalized = [
+        _normalize_event_widget_record(entry) for entry in records if isinstance(entry, dict)
+    ]
+    _atomic_write_json(event_path, normalized)
+    state_reader.invalidate(event_path)
+    return normalized
+
+
+def _validate_event_type(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Event type is required")
+    if normalized not in KANBAN_EVENT_TYPE_LABELS:
+        raise HTTPException(status_code=400, detail=f"Unsupported event type: {value}")
+    return normalized
+
+
+def _build_event_widget_entry(
+    *,
+    event_widget_id: str,
+    name: str,
+    event_type: str,
+    enabled: bool,
+    created_at: str,
+) -> dict:
+    normalized_type = _validate_event_type(event_type)
+    return {
+        "id": event_widget_id,
+        "name": name,
+        "event_type": normalized_type,
+        "enabled": enabled,
+        "trigger_count": 0,
+        "last_triggered_at": None,
+        "last_run_status": "idle",
+        "last_payload": None,
+        "summary": f"Waiting for {normalized_type}",
+        "logs": [],
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
 
 
 def _write_kanban_board(state_reader: StateReader, board: dict) -> dict:
@@ -1323,6 +1492,63 @@ def _atomic_write_json(filepath: Path, data: object) -> None:
 def _broadcast_widget_refresh(state_reader) -> None:
     """Notify status listeners that backend-derived widgets changed."""
     broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
+
+
+def _summarize_event_trigger(event_type: str, payload: dict) -> str:
+    label = KANBAN_EVENT_TYPE_LABELS.get(event_type, event_type)
+    card = payload.get("card") if isinstance(payload, dict) else None
+    if isinstance(card, dict):
+        title = str(card.get("title") or "").strip()
+        if title:
+            return f"{label} fired for {title}"
+    return f"{label} fired"
+
+
+def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]) -> None:
+    if not triggers:
+        return
+
+    event_widgets = _read_event_widget_records(state_reader)
+    if not event_widgets:
+        return
+
+    changed = False
+    for widget in event_widgets:
+        if not widget.get("enabled", True):
+            continue
+
+        for trigger in triggers:
+            event_type = trigger.get("event_type")
+            if widget.get("event_type") != event_type:
+                continue
+
+            timestamp = str(trigger.get("timestamp") or utcnow().isoformat())
+            payload = trigger.get("payload")
+            normalized_payload = payload if isinstance(payload, dict) else {}
+            summary = str(
+                trigger.get("summary") or _summarize_event_trigger(event_type, normalized_payload)
+            )
+            widget["trigger_count"] = int(widget.get("trigger_count", 0) or 0) + 1
+            widget["last_triggered_at"] = timestamp
+            widget["last_run_status"] = "success"
+            widget["last_payload"] = normalized_payload
+            widget["summary"] = summary
+            widget["updated_at"] = timestamp
+            widget["logs"] = [
+                {
+                    "time": timestamp,
+                    "timestamp": timestamp,
+                    "level": "info",
+                    "source": "kanban",
+                    "message": summary,
+                },
+                *_normalize_event_widget_logs(widget.get("logs")),
+            ][:MAX_EVENT_WIDGET_LOGS]
+            changed = True
+
+    if changed:
+        _write_event_widget_records(state_reader, event_widgets)
+        _broadcast_widget_refresh(state_reader)
 
 
 def _parse_once_datetime(expression: str) -> datetime:
@@ -1458,75 +1684,126 @@ async def get_widget_schemas():
 async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     """Patch a backend-owned widget where a matching state file exists."""
     state_reader = get_state_reader()
-    if not widget_id.startswith("schedule:"):
-        raise HTTPException(
-            status_code=400, detail="Only schedule widgets are mutable from the backend"
-        )
+    if widget_id.startswith("schedule:"):
+        schedule_id = widget_id.split(":", 1)[1]
+        schedule_path = state_reader.state_dir / "schedule.json"
+        schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
+        if not isinstance(schedule_data, list):
+            raise HTTPException(status_code=404, detail="Schedule state not found")
 
-    schedule_id = widget_id.split(":", 1)[1]
-    schedule_path = state_reader.state_dir / "schedule.json"
-    schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
-    if not isinstance(schedule_data, list):
-        raise HTTPException(status_code=404, detail="Schedule state not found")
-
-    updated = None
-    for entry in schedule_data:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("id") != schedule_id:
-            continue
-        current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
-        current_expression = (
-            body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
-        )
-        if body.enabled is not None:
-            entry["enabled"] = body.enabled
-        if body.name is not None:
-            entry["name"] = body.name
-            entry["user_request"] = body.name
-        if body.instruction is not None:
-            entry["message"] = body.instruction
-            entry["instruction"] = body.instruction
-        if body.expression is not None or body.schedule_type is not None:
-            normalized_type, cron_expression = _resolve_schedule_expression(
-                current_schedule_type, current_expression
+        updated = None
+        for entry in schedule_data:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("id") != schedule_id:
+                continue
+            current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
+            current_expression = (
+                body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
             )
-            entry["schedule_type"] = normalized_type
-            entry["schedule"] = current_expression
-            entry["cron_expression"] = cron_expression
-        if body.timezone is not None:
-            entry["timezone"] = body.timezone
-        entry["updated_at"] = utcnow().isoformat()
-        next_run = Scheduler().next_run_for_entry(entry)
-        entry["next_run"] = next_run.isoformat() if next_run else None
-        entry["next_run_at"] = next_run.isoformat() if next_run else None
-        updated = entry
-        break
+            if body.enabled is not None:
+                entry["enabled"] = body.enabled
+            if body.name is not None:
+                entry["name"] = body.name
+                entry["user_request"] = body.name
+            if body.instruction is not None:
+                entry["message"] = body.instruction
+                entry["instruction"] = body.instruction
+            if body.expression is not None or body.schedule_type is not None:
+                normalized_type, cron_expression = _resolve_schedule_expression(
+                    current_schedule_type, current_expression
+                )
+                entry["schedule_type"] = normalized_type
+                entry["schedule"] = current_expression
+                entry["cron_expression"] = cron_expression
+            if body.timezone is not None:
+                entry["timezone"] = body.timezone
+            entry["updated_at"] = utcnow().isoformat()
+            next_run = Scheduler().next_run_for_entry(entry)
+            entry["next_run"] = next_run.isoformat() if next_run else None
+            entry["next_run_at"] = next_run.isoformat() if next_run else None
+            updated = entry
+            break
 
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Widget not found")
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Widget not found")
 
-    _atomic_write_json(schedule_path, schedule_data)
-    state_reader.invalidate(schedule_path)
+        _atomic_write_json(schedule_path, schedule_data)
+        state_reader.invalidate(schedule_path)
 
-    refreshed = next(
-        (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        refreshed = next(
+            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        )
+        if refreshed is None:
+            refreshed = {
+                "id": widget_id,
+                "type": "schedule",
+                "name": updated.get("name", schedule_id),
+                "title": updated.get("name", schedule_id),
+                "status": "enabled" if updated.get("enabled", True) else "disabled",
+                "description": updated.get("message"),
+                "summary": updated.get("message"),
+                "logs": [],
+                "updated_at": updated.get("created_at"),
+            }
+
+        _broadcast_widget_refresh(state_reader)
+        return _widget_to_response(refreshed)
+
+    if widget_id.startswith("event:"):
+        event_id = widget_id.split(":", 1)[1]
+        event_widgets = _read_event_widget_records(state_reader)
+        updated = None
+        for entry in event_widgets:
+            if entry.get("id") != event_id:
+                continue
+            if body.enabled is not None:
+                entry["enabled"] = body.enabled
+            if body.name is not None:
+                name = body.name.strip()
+                if not name:
+                    raise HTTPException(status_code=400, detail="Event widget name is required")
+                entry["name"] = name
+            if body.event_type is not None:
+                entry["event_type"] = _validate_event_type(body.event_type)
+                if not entry.get("summary") or str(entry.get("summary")).startswith("Waiting for "):
+                    entry["summary"] = f"Waiting for {entry['event_type']}"
+            entry["updated_at"] = utcnow().isoformat()
+            updated = entry
+            break
+
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Widget not found")
+
+        _write_event_widget_records(state_reader, event_widgets)
+        refreshed = next(
+            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        )
+        if refreshed is None:
+            refreshed = {
+                "id": widget_id,
+                "type": "event",
+                "name": updated.get("name", event_id),
+                "title": updated.get("name", event_id),
+                "status": "enabled" if updated.get("enabled", True) else "disabled",
+                "description": updated.get("event_type"),
+                "summary": updated.get("summary"),
+                "logs": updated.get("logs", []),
+                "updated_at": updated.get("updated_at"),
+                "event_type": updated.get("event_type"),
+                "enabled": updated.get("enabled", True),
+                "trigger_count": updated.get("trigger_count", 0),
+                "last_triggered_at": updated.get("last_triggered_at"),
+                "last_run_status": updated.get("last_run_status", "idle"),
+                "last_payload": updated.get("last_payload"),
+            }
+
+        _broadcast_widget_refresh(state_reader)
+        return _widget_to_response(refreshed)
+
+    raise HTTPException(
+        status_code=400, detail="Only schedule and event widgets are mutable from the backend"
     )
-    if refreshed is None:
-        refreshed = {
-            "id": widget_id,
-            "type": "schedule",
-            "name": updated.get("name", schedule_id),
-            "title": updated.get("name", schedule_id),
-            "status": "enabled" if updated.get("enabled", True) else "disabled",
-            "description": updated.get("message"),
-            "summary": updated.get("message"),
-            "logs": [],
-            "updated_at": updated.get("created_at"),
-        }
-
-    _broadcast_widget_refresh(state_reader)
-    return _widget_to_response(refreshed)
 
 
 @router.get("/schedules", response_model=ScheduleResponse)
@@ -1595,6 +1872,52 @@ async def create_schedule(body: ScheduleCreateRequest):
     return _widget_to_response(refreshed)
 
 
+@router.post("/events", response_model=WidgetResponse)
+async def create_event_widget(body: EventWidgetCreateRequest):
+    """Create a new persisted event widget trigger."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Event widget name is required")
+
+    state_reader = get_state_reader()
+    event_widgets = _read_event_widget_records(state_reader)
+    created_at = utcnow().isoformat()
+    event_widget_id = f"evt_{uuid.uuid4().hex[:12]}"
+    entry = _build_event_widget_entry(
+        event_widget_id=event_widget_id,
+        name=name,
+        event_type=body.event_type,
+        enabled=body.enabled,
+        created_at=created_at,
+    )
+    event_widgets.append(entry)
+    _write_event_widget_records(state_reader, event_widgets)
+
+    refreshed = next(
+        (
+            widget
+            for widget in state_reader.get_widgets()
+            if widget["id"] == f"event:{event_widget_id}"
+        ),
+        None,
+    )
+    if refreshed is None:
+        refreshed = {
+            "id": f"event:{event_widget_id}",
+            "type": "event",
+            "name": name,
+            "title": name,
+            "status": "enabled" if body.enabled else "disabled",
+            "description": entry["event_type"],
+            "summary": entry["summary"],
+            "updated_at": created_at,
+            "data": entry,
+        }
+
+    _broadcast_widget_refresh(state_reader)
+    return _widget_to_response(refreshed)
+
+
 @router.get("/kanban", response_model=KanbanBoardResponse)
 async def get_kanban_board():
     """Get the persisted kanban board used by the frontend."""
@@ -1641,6 +1964,19 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
     board["cards"].append(card)
     board = _write_kanban_board(state_reader, board)
     created = next((item for item in board["cards"] if item["id"] == card["id"]), card)
+    _apply_event_widget_triggers(
+        state_reader,
+        [
+            {
+                "event_type": "kanban.card.created",
+                "timestamp": now,
+                "payload": {
+                    "event_type": "kanban.card.created",
+                    "card": created,
+                },
+            }
+        ],
+    )
     return KanbanCardResponse(**created)
 
 
@@ -1654,10 +1990,12 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
     now = utcnow().isoformat()
 
     updated_card = None
+    previous_card = None
     for card in board["cards"]:
         if card["id"] != card_id:
             continue
 
+        previous_card = json.loads(json.dumps(card))
         if body.title is not None:
             title = body.title.strip()
             if not title:
@@ -1723,6 +2061,79 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
     )
     board = _write_kanban_board(state_reader, board)
     refreshed = next((item for item in board["cards"] if item["id"] == card_id), updated_card)
+    triggers = []
+    if previous_card is not None:
+        content_field_map = {
+            "title": "title",
+            "summary": "summary",
+            "description": "description",
+            "agent_name": "agent_name",
+            "owner": "owner",
+            "labels": "labels",
+            "spec_path": "spec_path",
+            "branch_name": "branch_name",
+            "pr_url": "pr_url",
+            "started_at": "started_at",
+            "completed_at": "completed_at",
+            "last_error": "last_error",
+            "metadata": "metadata",
+        }
+        changed_fields = [
+            response_key
+            for request_key, response_key in content_field_map.items()
+            if getattr(body, request_key) is not None
+            and previous_card.get(response_key) != refreshed.get(response_key)
+        ]
+        if changed_fields:
+            triggers.append(
+                {
+                    "event_type": "kanban.card.updated",
+                    "timestamp": now,
+                    "payload": {
+                        "event_type": "kanban.card.updated",
+                        "card": refreshed,
+                        "previous_card": previous_card,
+                        "changed_fields": changed_fields,
+                    },
+                }
+            )
+        if previous_card.get("column_id") != refreshed.get("column_id") or previous_card.get(
+            "position"
+        ) != refreshed.get("position"):
+            triggers.append(
+                {
+                    "event_type": "kanban.card.moved",
+                    "timestamp": now,
+                    "payload": {
+                        "event_type": "kanban.card.moved",
+                        "card": refreshed,
+                        "previous_card": previous_card,
+                        "from": {
+                            "column_id": previous_card.get("column_id"),
+                            "position": previous_card.get("position"),
+                        },
+                        "to": {
+                            "column_id": refreshed.get("column_id"),
+                            "position": refreshed.get("position"),
+                        },
+                    },
+                }
+            )
+        if previous_card.get("status") != refreshed.get("status"):
+            triggers.append(
+                {
+                    "event_type": "kanban.card.status_changed",
+                    "timestamp": now,
+                    "payload": {
+                        "event_type": "kanban.card.status_changed",
+                        "card": refreshed,
+                        "previous_card": previous_card,
+                        "from_status": previous_card.get("status"),
+                        "to_status": refreshed.get("status"),
+                    },
+                }
+            )
+    _apply_event_widget_triggers(state_reader, triggers)
     return KanbanCardResponse(**refreshed)
 
 
@@ -1732,11 +2143,27 @@ async def delete_kanban_card(card_id: str):
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
     original_count = len(board["cards"])
+    deleted_card = next((card for card in board["cards"] if card["id"] == card_id), None)
     board["cards"] = [card for card in board["cards"] if card["id"] != card_id]
     if len(board["cards"]) == original_count:
         raise HTTPException(status_code=404, detail="Kanban card not found")
 
     board = _write_kanban_board(state_reader, board)
+    if deleted_card is not None:
+        timestamp = utcnow().isoformat()
+        _apply_event_widget_triggers(
+            state_reader,
+            [
+                {
+                    "event_type": "kanban.card.deleted",
+                    "timestamp": timestamp,
+                    "payload": {
+                        "event_type": "kanban.card.deleted",
+                        "card": deleted_card,
+                    },
+                }
+            ],
+        )
     return None
 
 
