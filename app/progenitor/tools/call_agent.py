@@ -13,7 +13,7 @@ import logging
 from collections.abc import Awaitable
 from typing import Any, cast
 
-from .mcp import A2AClient
+from ..runtime.a2a_tasks import build_task_response, dispatch_tracked_a2a_task
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,9 @@ class CallAgentTool(BaseSystemTool):
         return ["call agent", "delegate", "run agent", "ask agent"]
 
     async def execute(self, context: ToolContext) -> ToolResult:
+        if context.state_manager is None:
+            return ToolResult.fail("state_manager unavailable; cannot track A2A tasks")
+
         tool_registry = context.tool_registry
         if not tool_registry:
             return ToolResult.fail("tool_registry unavailable")
@@ -55,6 +58,12 @@ class CallAgentTool(BaseSystemTool):
         agent = str(args.get("agent") or args.get("agent_name") or args.get("name") or "").strip()
         request = str(args.get("request") or context.user_input or "").strip()
         timeout_seconds = float(args.get("timeout_seconds") or 60.0)
+        blocking_arg = args.get("blocking", False)
+        blocking = (
+            blocking_arg
+            if isinstance(blocking_arg, bool)
+            else str(blocking_arg).strip().lower() in {"1", "true", "yes", "on"}
+        )
 
         if not agent:
             return ToolResult.fail("Missing 'agent' (name or capability)")
@@ -72,23 +81,33 @@ class CallAgentTool(BaseSystemTool):
         if not isinstance(cfg, dict):
             return ToolResult.fail(f"Unknown agent: {agent}")
 
-        a2a_client = A2AClient()
-
-        # Pull latest agent card into memory before invocation.
-        with contextlib.suppress(Exception):
-            card = await a2a_client.get_agent_card(cfg, timeout=min(timeout_seconds, 5.0))
-            if isinstance(card, dict):
-                cfg = dict(cfg)
-                cfg["agent_card"] = card
-                if not cfg.get("url"):
-                    url = str(card.get("url") or "").strip()
-                    if url:
-                        cfg["url"] = url
-
-        result = await a2a_client.call_agent(
+        result, tracked_task = await dispatch_tracked_a2a_task(
+            state_manager=context.state_manager,
+            agent_name=str(cfg.get("name") or agent or "").strip() or agent,
             agent_config=cfg,
-            request=request,
-            context={"caller": "progenitor"},
+            request_text=request,
+            request_metadata={
+                "caller": "progenitor",
+                "dispatch_mode": "blocking" if blocking else "async",
+            },
+            source="call_agent",
             timeout=timeout_seconds,
+            blocking=blocking,
+            notify_on_completion=not blocking,
         )
+        if not result.get("success"):
+            return ToolResult.fail(str(result.get("error") or f"Agent call failed: {agent}"))
+
+        if tracked_task is not None:
+            payload = build_task_response(tracked_task)
+            if not blocking:
+                payload["message"] = (
+                    f"Task submitted to '{agent}' (task_id: {tracked_task.task_id}). "
+                    "Use get_a2a_task for progress and final results."
+                )
+            return ToolResult.ok(payload)
+
+        if not blocking:
+            return ToolResult.fail(f"{agent} did not return a trackable A2A task")
+
         return ToolResult.ok(result if isinstance(result, dict) else {"result": result})

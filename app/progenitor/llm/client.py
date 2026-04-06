@@ -522,22 +522,51 @@ class LLMClient:
                     and agent_type != "mcp_tool"
                     and agent_kind != "mcp_tool"
                 ):
-                    from ..tools.mcp import A2AClient
+                    from ..runtime.a2a_tasks import build_task_response, dispatch_tracked_a2a_task
 
                     req = str(tool_args.get("request") or "")
                     ctx = (
-                        tool_args.get("context")
+                        cast(dict[str, Any], tool_args.get("context"))
                         if isinstance(tool_args.get("context"), dict)
                         else {}
                     )
-                    result = await A2AClient().call_agent(
-                        agent_config=agent_cfg,
-                        request=req,
-                        context=ctx,
-                        timeout=60.0,
+                    state_manager = system_tool_context.get("state_manager")
+                    if state_manager is None:
+                        return {"error": "state_manager unavailable; cannot track A2A tasks"}
+
+                    blocking_arg = tool_args.get("blocking", False)
+                    blocking = (
+                        blocking_arg
+                        if isinstance(blocking_arg, bool)
+                        else str(blocking_arg).strip().lower() in {"1", "true", "yes", "on"}
                     )
-                    if isinstance(result, dict) and result.get("error"):
+                    result, tracked_task = await dispatch_tracked_a2a_task(
+                        state_manager=state_manager,
+                        agent_name=str(agent_cfg.get("name") or tool_name),
+                        agent_config=agent_cfg,
+                        request_text=req,
+                        request_metadata={
+                            **ctx,
+                            "caller": "progenitor",
+                            "dispatch_mode": "blocking" if blocking else "async",
+                        },
+                        source=f"tool:{tool_name}",
+                        timeout=60.0,
+                        blocking=blocking,
+                        notify_on_completion=not blocking,
+                    )
+                    if isinstance(result, dict) and not result.get("success"):
                         return {"error": str(result.get("error"))}
+                    if tracked_task is not None:
+                        payload = build_task_response(tracked_task)
+                        if not blocking:
+                            payload["message"] = (
+                                f"Task submitted to '{tool_name}' (task_id: {tracked_task.task_id}). "
+                                "Use get_a2a_task to check progress and final results."
+                            )
+                        return {"result": payload}
+                    if not blocking:
+                        return {"error": f"{tool_name} did not return a trackable A2A task"}
                     return {"result": result}
 
         # Default: call MCP tool

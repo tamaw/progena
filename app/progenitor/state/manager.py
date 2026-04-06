@@ -25,6 +25,7 @@ import aiofiles
 
 from ..runtime.time_utils import utcnow_isoformat
 from .models import (
+    A2ATaskRecord,
     ConversationMessage,
     ScheduleEntry,
     WorkItem,
@@ -76,6 +77,7 @@ class StateManager:
     CORE_FILES: dict[str, str] = {
         "build_state": "build_state.json",  # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
+        "a2a_tasks": "a2a_tasks.json",  # Tracked async A2A task state
         "registry": "agents.json",
         "mcp": "mcp.json",
         "schedule": "schedule.json",
@@ -248,6 +250,7 @@ class StateManager:
                 "current_decision": None,
                 "current_build_request": None,  # Reference to active build (id only)
             },
+            "a2a_tasks": [],
             "registry": {},
             "mcp": {"tools": []},
             "schedule": [],
@@ -662,6 +665,59 @@ class StateManager:
             state.update(updates)
             await self._atomic_write_json(self.state_dir / self.CORE_FILES["current_state"], state)
             self._state_cache["current_state"] = state
+
+    # ==========================================================================
+    # A2A Task Tracking (stored in a2a_tasks.json)
+    # ==========================================================================
+
+    async def get_a2a_tasks(self) -> list[A2ATaskRecord]:
+        """Return all persisted A2A task records."""
+        if "a2a_tasks" in self._state_cache:
+            data = copy.deepcopy(cast(list[dict[str, Any]], self._state_cache["a2a_tasks"]))
+            return [A2ATaskRecord(**item) for item in data]
+        async with self._file_lock("a2a_tasks"):
+            data = await self._read_json(self.state_dir / self.CORE_FILES["a2a_tasks"]) or []
+            task_rows = [item for item in data if isinstance(item, dict)]
+            self._state_cache["a2a_tasks"] = task_rows
+            return [A2ATaskRecord(**item) for item in copy.deepcopy(task_rows)]
+
+    async def save_a2a_tasks(self, tasks: list[A2ATaskRecord]) -> None:
+        """Persist the full tracked A2A task list."""
+        task_rows = [task.model_dump(mode="json", exclude_none=True) for task in tasks]
+        async with self._file_lock("a2a_tasks"):
+            await self._atomic_write_json(self.state_dir / self.CORE_FILES["a2a_tasks"], task_rows)
+            self._state_cache["a2a_tasks"] = task_rows
+
+    async def get_a2a_task(self, task_id: str) -> A2ATaskRecord | None:
+        """Return one tracked A2A task by ID, if present."""
+        for task in await self.get_a2a_tasks():
+            if task.task_id == task_id:
+                return task
+        return None
+
+    async def upsert_a2a_task(self, task: A2ATaskRecord) -> None:
+        """Insert or replace a tracked A2A task record."""
+        tasks = await self.get_a2a_tasks()
+        for idx, existing in enumerate(tasks):
+            if existing.task_id == task.task_id:
+                tasks[idx] = task
+                break
+        else:
+            tasks.append(task)
+        await self.save_a2a_tasks(tasks)
+
+    async def update_a2a_task(self, task_id: str, updates: dict[str, Any]) -> bool:
+        """Apply a partial update to a tracked A2A task."""
+        tasks = await self.get_a2a_tasks()
+        for idx, existing in enumerate(tasks):
+            if existing.task_id != task_id:
+                continue
+            payload = existing.model_dump()
+            payload.update(updates)
+            tasks[idx] = A2ATaskRecord(**payload)
+            await self.save_a2a_tasks(tasks)
+            return True
+        return False
 
     # ==========================================================================
     # Messages Management (stored in current_state.json)

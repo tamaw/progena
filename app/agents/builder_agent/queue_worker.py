@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from a2a.types import Message, Part, Role, TaskState, TaskStatus, TaskStatusUpdateEvent, TextPart
+
 if TYPE_CHECKING:
     from .runtime.background_build import BuildResult
 
@@ -62,10 +64,19 @@ class _QueuedTask:
     context_id: str
     request_text: str
     request_ctx: dict[str, Any]
+    event_queue: Any
 
 
 def _resolve_log_path(log_path: Path | None) -> Path:
     return log_path if log_path is not None else get_task_log_path()
+
+
+def _task_message(text: str) -> Message:
+    return Message(
+        message_id=str(datetime.now(UTC).timestamp()),
+        role=Role.agent,
+        parts=[Part(root=TextPart(text=text))],
+    )
 
 
 def append_task_record(record: TaskRecord, log_path: Path | None = None) -> None:
@@ -240,6 +251,18 @@ class BuilderTaskQueue:
             )
 
             try:
+                await task.event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        task_id=task.task_id,
+                        context_id=task.context_id,
+                        final=False,
+                        status=TaskStatus(
+                            state=TaskState.working,
+                            message=_task_message("Build task is running."),
+                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        ),
+                    )
+                )
                 logger.info(
                     "BuilderTaskQueue: starting task task_id=%s text=%.80r",
                     task.task_id,
@@ -257,6 +280,51 @@ class BuilderTaskQueue:
                 record.build_id = result.build_id
                 record.pr_url = result.pr_url
                 record.error_message = result.error_message
+                if status == "completed":
+                    summary = result.output_summary or "Build completed."
+                    if result.pr_url:
+                        summary = f"{summary}\nPR: {result.pr_url}"
+                    await task.event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            task_id=task.task_id,
+                            context_id=task.context_id,
+                            final=True,
+                            status=TaskStatus(
+                                state=TaskState.completed,
+                                message=_task_message(summary),
+                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                            ),
+                        )
+                    )
+                elif status == "cancelled":
+                    await task.event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            task_id=task.task_id,
+                            context_id=task.context_id,
+                            final=True,
+                            status=TaskStatus(
+                                state=TaskState.canceled,
+                                message=_task_message("Build task cancelled."),
+                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                            ),
+                        )
+                    )
+                else:
+                    failure_text = (
+                        result.error_message or result.output_summary or "Build task failed."
+                    )
+                    await task.event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            task_id=task.task_id,
+                            context_id=task.context_id,
+                            final=True,
+                            status=TaskStatus(
+                                state=TaskState.failed,
+                                message=_task_message(failure_text),
+                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                            ),
+                        )
+                    )
                 logger.info(
                     "BuilderTaskQueue: task completed task_id=%s status=%s pr_url=%s",
                     task.task_id,
@@ -267,11 +335,35 @@ class BuilderTaskQueue:
                 record.status = "cancelled"
                 record.phase_completed = "cancelled"
                 record.error_message = "Build task cancelled"
+                await task.event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        task_id=task.task_id,
+                        context_id=task.context_id,
+                        final=True,
+                        status=TaskStatus(
+                            state=TaskState.canceled,
+                            message=_task_message("Build task cancelled."),
+                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        ),
+                    )
+                )
                 logger.info("BuilderTaskQueue: task cancelled task_id=%s", task.task_id)
             except Exception as exc:
                 record.status = "failure"
                 record.phase_completed = "failed"
                 record.error_message = str(exc)
+                await task.event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        task_id=task.task_id,
+                        context_id=task.context_id,
+                        final=True,
+                        status=TaskStatus(
+                            state=TaskState.failed,
+                            message=_task_message(record.error_message or "Build task failed."),
+                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        ),
+                    )
+                )
                 logger.exception("BuilderTaskQueue: task failed task_id=%s", task.task_id)
             finally:
                 record.timestamp_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")

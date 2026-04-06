@@ -5,14 +5,27 @@ Handles communication with MCP servers via stdio or HTTP transports.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import shlex
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
 import httpx
+from a2a.client.client import ClientConfig
+from a2a.client.client_factory import ClientFactory
+from a2a.types import (
+    Message,
+    MessageSendConfiguration,
+    Part,
+    Role,
+    TaskIdParams,
+    TaskQueryParams,
+    TextPart,
+)
 
 from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -40,19 +53,22 @@ class MCPTool(BaseSystemTool):
         mcp_config = getattr(llm_client, "mcp_config", None)
         mcp_tools = getattr(llm_client, "mcp_tools", None) or []
 
-        return ToolResult.ok({
-            "enabled": bool(getattr(mcp_config, "enabled", False)) if mcp_config else False,
-            "base_url": getattr(mcp_config, "base_url", None) if mcp_config else None,
-            "tool_count": len(mcp_tools),
-            "tools": [
-                {
-                    "name": t.get("name"),
-                    "description": t.get("description") or t.get("summary"),
-                }
-                for t in mcp_tools
-                if isinstance(t, dict)
-            ],
-        })
+        return ToolResult.ok(
+            {
+                "enabled": bool(getattr(mcp_config, "enabled", False)) if mcp_config else False,
+                "base_url": getattr(mcp_config, "base_url", None) if mcp_config else None,
+                "tool_count": len(mcp_tools),
+                "tools": [
+                    {
+                        "name": t.get("name"),
+                        "description": t.get("description") or t.get("summary"),
+                    }
+                    for t in mcp_tools
+                    if isinstance(t, dict)
+                ],
+            }
+        )
+
 
 # Allowlist of safe command prefixes for MCP servers
 # Commands must start with one of these to be executed
@@ -92,7 +108,7 @@ async def initialize_mcp_tools(
             line = line.strip()
             if not line.startswith("data:"):
                 continue
-            payload = line[len("data:"):].strip()
+            payload = line[len("data:") :].strip()
             if not payload:
                 continue
             try:
@@ -195,7 +211,7 @@ def _validate_command(command: str | list[str]) -> list[str]:
     # Extract just the executable name (handle paths like /usr/bin/python)
     executable_name = Path(executable).name.lower()
     # Remove common extensions
-    if executable_name.endswith('.exe'):
+    if executable_name.endswith(".exe"):
         executable_name = executable_name[:-4]
 
     if not any(executable_name.startswith(prefix) for prefix in ALLOWED_COMMAND_PREFIXES):
@@ -316,12 +332,15 @@ class MCPClient:
                 headers["Authorization"] = f"Bearer {mcp_config.api_key}"
 
         try:
-            async with aiohttp.ClientSession() as session, session.post(
-                endpoint,
-                json=request,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    endpoint,
+                    json=request,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response,
+            ):
                 result = await response.json()
                 return cast(dict[str, Any], result.get("result", result))
         except Exception as e:
@@ -330,7 +349,9 @@ class MCPClient:
     async def list_tools(self, tool_config: dict[str, Any]) -> list[dict[str, Any]]:
         """List available tools from an MCP server."""
         result = await self.call_tool(tool_config, "tools/list")
-        return cast(list[dict[str, Any]], result.get("tools", []) if isinstance(result, dict) else [])
+        return cast(
+            list[dict[str, Any]], result.get("tools", []) if isinstance(result, dict) else []
+        )
 
     async def healthcheck(self, tool_config: dict[str, Any]) -> bool:
         """Check if an MCP server is healthy."""
@@ -349,12 +370,77 @@ class A2AClient:
     HTTP agents should expose endpoints at their registered URL.
     """
 
+    def _resolve_agent_url(self, agent_config: dict[str, Any]) -> str:
+        url = str(agent_config.get("url") or "").strip()
+        if not url:
+            raise ValueError("No agent URL configured")
+        return url
+
+    def _build_headers(
+        self,
+        agent_config: dict[str, Any],
+        *,
+        include_content_type: bool = True,
+    ) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if include_content_type:
+            headers["Content-Type"] = "application/json"
+        custom_headers = agent_config.get("headers")
+        if isinstance(custom_headers, dict):
+            headers.update({str(k): str(v) for k, v in custom_headers.items()})
+        return headers
+
+    async def _close_client(self, client: Any) -> None:
+        close = getattr(client, "close", None)
+        if not callable(close):
+            return
+        maybe = close()
+        if inspect.isawaitable(maybe):
+            await cast(Any, maybe)
+
+    @asynccontextmanager
+    async def _sdk_client(
+        self,
+        agent_config: dict[str, Any],
+        *,
+        timeout: float,
+        streaming: bool = False,
+        polling: bool = False,
+    ):
+        url = self._resolve_agent_url(agent_config)
+        headers = self._build_headers(agent_config, include_content_type=False)
+        async with httpx.AsyncClient(timeout=timeout, headers=headers) as httpx_client:
+            client_config = ClientConfig(
+                streaming=streaming,
+                polling=polling,
+                httpx_client=httpx_client,
+            )
+            client = await ClientFactory.connect(
+                url,
+                client_config=client_config,
+                resolver_http_kwargs={"headers": headers},
+            )
+            try:
+                yield cast(Any, client)
+            finally:
+                await self._close_client(client)
+
+    @staticmethod
+    def _serialize_model(payload: Any) -> Any:
+        if hasattr(payload, "model_dump"):
+            return payload.model_dump(mode="json", by_alias=True, exclude_none=True)
+        return payload
+
     async def call_agent(
         self,
         agent_config: dict[str, Any],
         request: str,
         context: dict[str, Any] | None = None,
         timeout: float = 60.0,
+        task_id: str | None = None,
+        context_id: str | None = None,
+        blocking: bool = False,
+        history_length: int | None = None,
     ) -> dict[str, Any]:
         """Call an A2A agent with a request.
 
@@ -378,77 +464,85 @@ class A2AClient:
             }
 
         if transport != "http":
-            return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
-
-        url = str(agent_config.get("url") or "").strip()
-        if not url:
-            return {"success": False, "error": "No agent URL configured"}
-
-        direct_cfg = dict(agent_config)
-        direct_cfg["url"] = url
-        return await self._call_http_agent(direct_cfg, request, context, timeout)
-
-    async def _call_http_agent(
-        self,
-        agent_config: dict[str, Any],
-        request: str,
-        context: dict[str, Any] | None = None,
-        timeout: float = 60.0,
-    ) -> dict[str, Any]:
-        """Call an A2A agent via JSON-RPC (A2A protocol v0.3.x).
-
-        Our A2A agents are implemented with the official a2a-sdk, so they expect
-        JSON-RPC 2.0 methods like `message/send` (not `{request: ...}` payloads).
-        """
-        url = agent_config.get("url")
-        if not url:
-            raise ValueError("No URL specified for HTTP agent")
+            return {
+                "success": False,
+                "error": f"Unsupported transport: {transport}. Only 'http' is supported.",
+            }
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as httpx_client:
-                message_id = uuid.uuid4().hex
-                payload = {
-                    "jsonrpc": "2.0",
-                    "id": uuid.uuid4().hex,
-                    "method": "message/send",
-                    "params": {
-                        "message": {
-                            "kind": "message",
-                            "message_id": message_id,
-                            "role": "user",
-                            "parts": [{"kind": "text", "text": request or ""}],
-                        },
-                        "metadata": context or {},
-                    },
-                }
-                headers = {"Content-Type": "application/json"}
-                custom_headers = agent_config.get("headers")
-                if isinstance(custom_headers, dict):
-                    headers.update({str(k): str(v) for k, v in custom_headers.items()})
-                resp = await httpx_client.post(str(url), json=payload, headers=headers)
+            async with self._sdk_client(
+                agent_config,
+                timeout=timeout,
+                streaming=False,
+                polling=not blocking,
+            ) as client:
+                message = Message(
+                    role=Role.user,
+                    parts=[Part(root=TextPart(text=request or ""))],
+                    message_id=uuid.uuid4().hex,
+                    task_id=task_id,
+                    context_id=context_id,
+                    metadata=context or {},
+                )
+                configuration = MessageSendConfiguration(
+                    blocking=blocking,
+                    history_length=history_length,
+                )
+                last_payload: Any = None
+                async for item in client.send_message(message, configuration=configuration):
+                    if isinstance(item, tuple) and len(item) == 2:
+                        task_payload = self._serialize_model(item[0])
+                        update_payload = (
+                            self._serialize_model(item[1]) if item[1] is not None else None
+                        )
+                        if isinstance(task_payload, dict) and update_payload is not None:
+                            task_payload["latestUpdate"] = update_payload
+                        last_payload = task_payload
+                    else:
+                        last_payload = self._serialize_model(item)
         except (TimeoutError, httpx.TimeoutException):
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-        if resp.status_code >= 400:
-            return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        if last_payload is None:
+            return {"success": False, "error": "Agent returned no response"}
+        return {"success": True, "result": last_payload}
 
+    async def get_task(
+        self,
+        agent_config: dict[str, Any],
+        task_id: str,
+        history_length: int | None = 20,
+        timeout: float = 15.0,
+    ) -> dict[str, Any]:
+        """Fetch an A2A task snapshot by task ID."""
         try:
-            data = resp.json()
-        except Exception:
-            return {"success": False, "error": f"Non-JSON A2A response: {resp.text[:200]}"}
+            async with self._sdk_client(agent_config, timeout=timeout) as client:
+                task = await client.get_task(
+                    TaskQueryParams(id=task_id, history_length=history_length)
+                )
+        except (TimeoutError, httpx.TimeoutException):
+            return {"success": False, "error": f"Request timeout after {timeout}s"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "result": self._serialize_model(task)}
 
-        if isinstance(data, dict) and data.get("error"):
-            err = data.get("error")
-            if isinstance(err, dict):
-                return {"success": False, "error": err.get("message") or str(err)}
-            return {"success": False, "error": str(err)}
-
-        if not isinstance(data, dict) or "result" not in data:
-            return {"success": False, "error": f"Invalid A2A response: {str(data)[:200]}"}
-
-        return {"success": True, "result": data.get("result")}
+    async def cancel_task(
+        self,
+        agent_config: dict[str, Any],
+        task_id: str,
+        timeout: float = 15.0,
+    ) -> dict[str, Any]:
+        """Cancel an A2A task by task ID."""
+        try:
+            async with self._sdk_client(agent_config, timeout=timeout) as client:
+                task = await client.cancel_task(TaskIdParams(id=task_id))
+        except (TimeoutError, httpx.TimeoutException):
+            return {"success": False, "error": f"Request timeout after {timeout}s"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "result": self._serialize_model(task)}
 
     async def get_agent_card(
         self,
@@ -464,22 +558,21 @@ class A2AClient:
         Returns:
             Agent card dict or None if unavailable.
         """
-        import aiohttp
-
         agent_card_url = agent_config.get("agent_card_url")
         if not agent_card_url:
-            url = agent_config.get("url")
+            url = str(agent_config.get("url") or "").strip()
             if not url:
                 return None
             agent_card_url = f"{url}/.well-known/agent-card.json"
 
         try:
-            async with aiohttp.ClientSession() as session, session.get(
-                agent_card_url,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
-                if response.status == 200:
-                    return cast(dict[str, Any], await response.json())
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                headers=self._build_headers(agent_config, include_content_type=False),
+            ) as client:
+                response = await client.get(str(agent_card_url))
+                response.raise_for_status()
+                return cast(dict[str, Any], response.json())
         except Exception as e:
             logger.debug("Failed to fetch agent card: %s", e)
 
