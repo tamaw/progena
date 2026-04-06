@@ -1,7 +1,7 @@
 """Tests for LLM client helpers and message handling."""
 
 from types import MethodType, SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,6 +11,7 @@ from app.progenitor.llm.client import (
     LLMClient,
     _build_responses_endpoint,
 )
+from app.progenitor.state.models import A2ATaskRecord
 
 
 def _extract(data: dict):
@@ -67,9 +68,7 @@ def test_extracts_output_message_part_with_nested_text_dict():
         "output": [
             {
                 "type": "message",
-                "content": [
-                    {"type": "output_text", "text": {"value": "From output content"}}
-                ],
+                "content": [{"type": "output_text", "text": {"value": "From output content"}}],
             }
         ]
     }
@@ -80,7 +79,7 @@ def test_extracts_output_message_part_with_nested_text_dict():
 
 def test_extract_strips_inline_tool_markup_from_top_level_text():
     payload = {
-        "text": "schedule_task{\"description\":\"Foot tapping reminder\",\"delay_minutes\":2}✅ Scheduled."
+        "text": 'schedule_task{"description":"Foot tapping reminder","delay_minutes":2}✅ Scheduled.'
     }
     text, reasoning = _extract(payload)
     assert text == "✅ Scheduled."
@@ -89,7 +88,7 @@ def test_extract_strips_inline_tool_markup_from_top_level_text():
 
 def test_extract_strips_inline_tool_markup_from_output_text():
     payload = {
-        "output_text": "schedule_task{\"instruction\":\"Remind user\"}In two minutes, reminder set."
+        "output_text": 'schedule_task{"instruction":"Remind user"}In two minutes, reminder set.'
     }
     text, _ = _extract(payload)
     assert text == "In two minutes, reminder set."
@@ -195,7 +194,15 @@ async def test_decide_trims_history_to_recent_messages():
     captured: dict[str, object] = {}
     client.prompts = SimpleNamespace(get_decide_prompt=lambda _: "decide prompt")
 
-    async def fake_chat(self, messages, system_prompt=None, temperature=0.7, max_tokens=4096, tools=None, response_format=None):
+    async def fake_chat(
+        self,
+        messages,
+        system_prompt=None,
+        temperature=0.7,
+        max_tokens=4096,
+        tools=None,
+        response_format=None,
+    ):
         captured["messages"] = messages
         captured["system_prompt"] = system_prompt
         return '{"action":"answer_directly","confidence":0.9,"reasoning":"ok","requires_planning":false}'
@@ -219,7 +226,15 @@ async def test_generate_response_trims_history_to_recent_messages():
     captured: dict[str, object] = {}
     client.prompts = SimpleNamespace(get_genesis_prompt=lambda: "genesis")
 
-    async def fake_chat(self, messages, system_prompt=None, temperature=0.7, max_tokens=4096, tools=None, response_format=None):
+    async def fake_chat(
+        self,
+        messages,
+        system_prompt=None,
+        temperature=0.7,
+        max_tokens=4096,
+        tools=None,
+        response_format=None,
+    ):
         captured["messages"] = messages
         captured["system_prompt"] = system_prompt
         return "ok"
@@ -250,17 +265,29 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     )
 
     with patch(
-        "app.progenitor.tools.mcp.A2AClient.call_agent",
-        new=AsyncMock(return_value={"success": True, "result": {"ok": True}}),
-    ) as mock_call_agent:
+        "app.progenitor.runtime.a2a_tasks.dispatch_tracked_a2a_task",
+        new=AsyncMock(
+            return_value=(
+                {"success": True, "result": {"id": "task-123"}},
+                A2ATaskRecord(
+                    task_id="task-123",
+                    agent_name="builder",
+                    agent_url="http://progenitor-agent-builder:8108",
+                    context_id="ctx-123",
+                    source="tool:builder",
+                    request_text="hello",
+                ),
+            )
+        ),
+    ) as mock_dispatch:
         result = await LLMClient._execute_tool_call(
             client,
             {"id": "tool_1"},
             "builder",
             {"request": "hello", "context": {"caller": "test"}},
-            {"tool_registry": tool_registry},
+            {"tool_registry": tool_registry, "state_manager": MagicMock()},
         )
 
-    assert result == {"result": {"success": True, "result": {"ok": True}}}
+    assert result["result"]["task_id"] == "task-123"
     client._call_mcp_tool.assert_not_awaited()
-    mock_call_agent.assert_awaited_once()
+    mock_dispatch.assert_awaited_once()

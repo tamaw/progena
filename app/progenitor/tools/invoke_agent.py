@@ -2,48 +2,32 @@
 Invoke Agent — Dispatch a task to any registered A2A agent asynchronously.
 
 Flow when called as a DeepAgent tool:
-  1. LLM calls the tool with request + optional tool_args["agent"]
-  2. If agent is not specified → small LLM routing call selects best agent
+ 1. LLM calls the tool with request + optional tool_args["agent"]
+ 2. If agent is not specified → small LLM routing call selects best agent
      from agents.json based on capabilities
-  3. A2A message/send is dispatched as an asyncio background task (fire-and-forget)
-  4. task_id is returned immediately; the agent runs independently in the background
+  3. A2A message/send is submitted in non-blocking mode and persisted as a tracked task
+  4. task_id is returned immediately; Progenitor can query and notify on completion
 
 Uses A2AClient from app.progenitor.tools.mcp — the project existing A2A transport.
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import inspect
 import json
 import logging
-import uuid
 from pathlib import Path
 from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from .mcp import A2AClient
+from ..runtime.a2a_tasks import build_task_response, dispatch_tracked_a2a_task
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
 _AGENTS_JSON = Path(__file__).resolve().parents[3] / "data" / "config" / "agents.json"
-
-
-def _log_background_task_completion(task: asyncio.Task[None], task_id: str, agent_name: str) -> None:
-    """Log the outcome of a background agent dispatch task."""
-    if task.cancelled():
-        logger.info("Task %s (%s): cancelled", task_id, agent_name)
-        return
-
-    exception = task.exception()
-    if exception is not None:
-        logger.warning("Task %s (%s): unhandled exception: %s", task_id, agent_name, exception)
-        return
-
-    logger.info("Task %s (%s): completed", task_id, agent_name)
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +75,8 @@ class InvokeAgentTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Dispatch a task to a registered A2A agent asynchronously (fire-and-forget). "
-            "Returns task_id immediately; the agent works in the background and creates a PR when done. "
+            "Dispatch a task to a registered A2A agent asynchronously and track it via A2A task_id. "
+            "Returns task_id immediately; use get_a2a_task for progress and Progenitor will notify on completion. "
             "Pass tool_args={'agent': 'builder'} to target a specific agent, or omit to auto-route. "
             "Use for: code tasks, PRs, builds, documentation, monitoring, or any delegatable work. "
             "Available agents: builder (small code tasks/PRs), builder_agent (full build loop), "
@@ -117,7 +101,7 @@ class InvokeAgentTool(BaseSystemTool):
 
     async def execute(self, context: ToolContext) -> ToolResult:
         """
-        Dispatch a task to a registered A2A agent asynchronously.
+        Dispatch a task to a registered A2A agent asynchronously and track it.
 
         context.user_input: task description
         context.tool_args (optional):
@@ -127,6 +111,9 @@ class InvokeAgentTool(BaseSystemTool):
             "timeout": 30,                 # A2A request timeout in seconds (default 30)
           }
         """
+        if context.state_manager is None:
+            return ToolResult.fail("state_manager unavailable; cannot track async A2A tasks")
+
         request_text = (context.user_input or "").strip()
         if not request_text:
             return ToolResult.fail("Missing task description. What should the agent do?")
@@ -158,9 +145,7 @@ class InvokeAgentTool(BaseSystemTool):
             dispatch_message = message_override or request_text
         else:
             if not agents:
-                return ToolResult.fail(
-                    f"No agents registered — add entries to {_AGENTS_JSON}."
-                )
+                return ToolResult.fail(f"No agents registered — add entries to {_AGENTS_JSON}.")
             selection = await _route_agent(context, agents, request_text)
             if selection.agent_name == "none":
                 return ToolResult.fail(
@@ -189,90 +174,34 @@ class InvokeAgentTool(BaseSystemTool):
         if not isinstance(cfg, dict):
             return ToolResult.fail(f"Unknown agent '{agent_name}'.")
 
-        # ------------------------------------------------------------------
-        # 3. Fire-and-forget: dispatch A2A call as background asyncio task
-        # ------------------------------------------------------------------
-        task_id = f"{agent_name}_{uuid.uuid4().hex[:12]}"
-        context_id = uuid.uuid4().hex
-
-        logger.info(
-            "Dispatching task %s → %s at %s (async, timeout=%ds): %s",
-            task_id,
-            agent_name,
-            cfg.get("url", "?"),
-            timeout,
-            dispatch_message[:80],
+        response, tracked_task = await dispatch_tracked_a2a_task(
+            state_manager=context.state_manager,
+            agent_name=agent_name,
+            agent_config=cfg,
+            request_text=dispatch_message,
+            request_metadata={
+                "caller": "progenitor",
+                "dispatch_mode": "async",
+            },
+            source="invoke_agent",
+            timeout=timeout,
+            blocking=False,
+            notify_on_completion=True,
         )
-
-        task = asyncio.create_task(
-            _fire_and_forget(
-                task_id=task_id,
-                context_id=context_id,
-                agent_name=agent_name,
-                agent_config=cfg,
-                message=dispatch_message,
-                timeout=timeout,
+        if not response.get("success"):
+            return ToolResult.fail(str(response.get("error") or f"{agent_name} dispatch failed"))
+        if tracked_task is None:
+            return ToolResult.fail(
+                f"{agent_name} did not return a trackable A2A task for async dispatch"
             )
+
+        result = build_task_response(tracked_task)
+        result["message"] = (
+            f"Task dispatched to '{agent_name}' (task_id: {tracked_task.task_id}). "
+            "Use get_a2a_task to check progress; Progenitor will notify you when it finishes."
         )
-        def _on_complete(task_result: asyncio.Task[None]) -> None:
-            _log_background_task_completion(task_result, task_id, agent_name)
-
-        task.add_done_callback(_on_complete)
-
-        return ToolResult.ok({
-            "task_id": task_id,
-            "agent": agent_name,
-            "status": "dispatched",
-            "message": (
-                f"Task dispatched to '{agent_name}' (task_id: {task_id}). "
-                "Running in the background — the agent will create a PR when complete."
-            ),
-            "url": cfg.get("url", ""),
-        })
-
-
-# ---------------------------------------------------------------------------
-# Async background dispatch
-# ---------------------------------------------------------------------------
-
-
-async def _fire_and_forget(
-    task_id: str,
-    context_id: str,
-    agent_name: str,
-    agent_config: dict[str, Any],
-    message: str,
-    timeout: float,
-) -> None:
-    """Fetch agent card, then send A2A message/send. Completion logged via add_done_callback."""
-    a2a_client = A2AClient()
-    cfg = dict(agent_config)
-
-    # Fetch live agent card before calling — identical to call_agent behaviour
-    with contextlib.suppress(Exception):
-        card = await a2a_client.get_agent_card(cfg, timeout=min(timeout, 5.0))
-        if isinstance(card, dict):
-            cfg["agent_card"] = card
-            if not cfg.get("url"):
-                url = str(card.get("url") or "").strip()
-                if url:
-                    cfg["url"] = url
-
-    response = await a2a_client.call_agent(
-        agent_config=cfg,
-        request=message,
-        context={
-            "caller": "progenitor",
-            "dispatch_mode": "async",
-            "a2a_task_id": task_id,
-            "a2a_context_id": context_id,
-        },
-        timeout=timeout,
-    )
-    error = response.get("error", "") if not response.get("success") else ""
-    # Empty error or timeout = agent accepted and is processing asynchronously
-    if error and "timeout" not in error.lower():
-        raise RuntimeError(f"{agent_name} returned error: {error}")
+        result["url"] = cfg.get("url", "")
+        return ToolResult.ok(result)
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +229,7 @@ def _format_agents_for_prompt(agents: dict[str, Any]) -> str:
         caps = ", ".join(cfg.get("capabilities", []))
         desc = cfg.get("description", "")
         status = cfg.get("status", "unknown")
-        lines.append(
-            f"- **{name}** (status: {status})\n  {desc}\n  capabilities: [{caps}]"
-        )
+        lines.append(f"- **{name}** (status: {status})\n  {desc}\n  capabilities: [{caps}]")
     return "\n".join(lines)
 
 

@@ -3,7 +3,7 @@ Tests for InvokeAgentTool - generic async A2A dispatcher.
 
 Verifies:
 1. Tool metadata and auto-discovery
-2. Fire-and-forget dispatch returns task_id immediately
+2. Async A2A dispatch returns task_id immediately
 3. Unknown agent fails hard (no fallbacks)
 4. Missing user_input fails validation
 5. Async dispatch propagates caller correlation IDs
@@ -13,8 +13,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.progenitor.tools.invoke_agent import InvokeAgentTool, _fire_and_forget
+from app.progenitor.state.models import A2ATaskRecord
+from app.progenitor.tools.invoke_agent import InvokeAgentTool
 from app.progenitor.tools.protocol import ToolContext
+
+
+def _tracked_task(agent_name: str = "builder_agent") -> A2ATaskRecord:
+    return A2ATaskRecord(
+        task_id=f"{agent_name}_abc123",
+        agent_name=agent_name,
+        agent_url="http://localhost:8107",
+        context_id="ctx-xyz",
+        source="invoke_agent",
+        request_text="Build it",
+    )
 
 
 class TestInvokeAgentTool:
@@ -43,6 +55,7 @@ class TestInvokeAgentTool:
             tool_args={"agent": "builder"},
             tool_registry=mock_registry,
             llm_client=MagicMock(),
+            state_manager=MagicMock(),
         )
         result = await tool.execute(context)
         assert not result.success
@@ -59,6 +72,7 @@ class TestInvokeAgentTool:
             tool_args={"agent": "nonexistent_agent"},
             tool_registry=mock_registry,
             llm_client=MagicMock(),
+            state_manager=MagicMock(),
         )
         result = await tool.execute(context)
         assert not result.success
@@ -75,13 +89,21 @@ class TestInvokeAgentTool:
             tool_args={"agent": "builder", "timeout": 1},
             tool_registry=mock_registry,
             llm_client=MagicMock(),
+            state_manager=MagicMock(),
         )
         with (
             patch(
                 "app.progenitor.tools.invoke_agent._load_agents",
                 return_value={"builder": {"url": "http://localhost:8108", "status": "running"}},
             ),
-            patch("app.progenitor.tools.invoke_agent._fire_and_forget", new_callable=AsyncMock),
+            patch(
+                "app.progenitor.tools.invoke_agent.dispatch_tracked_a2a_task",
+                new_callable=AsyncMock,
+                return_value=(
+                    {"success": True, "result": {"id": "builder_abc123"}},
+                    _tracked_task("builder"),
+                ),
+            ),
         ):
             result = await tool.execute(context)
 
@@ -104,14 +126,23 @@ class TestInvokeAgentTool:
             tool_args={"agent": "builder", "timeout": 1},
             tool_registry=mock_registry,
             llm_client=MagicMock(),
+            state_manager=MagicMock(),
         )
-        with patch("app.progenitor.tools.invoke_agent._fire_and_forget", new_callable=AsyncMock):
+        with patch(
+            "app.progenitor.tools.invoke_agent.dispatch_tracked_a2a_task",
+            new_callable=AsyncMock,
+            return_value=(
+                {"success": True, "result": {"id": "builder_abc123"}},
+                _tracked_task("builder"),
+            ),
+        ):
             result = await tool.execute(context)
         assert result.success
         assert result.data is not None
         assert "task_id" in result.data
         assert result.data["agent"] == "builder"
-        assert result.data["status"] == "dispatched"
+        assert result.data["status"] == "submitted"
+        assert "get_a2a_task" in result.data["message"]
 
 
 def test_tool_auto_discovery():
@@ -124,22 +155,30 @@ def test_tool_auto_discovery():
 
 
 @pytest.mark.asyncio
-async def test_fire_and_forget_propagates_async_ids():
-    mock_client = AsyncMock()
-    mock_client.get_agent_card = AsyncMock(return_value=None)
-    mock_client.call_agent = AsyncMock(return_value={"success": True})
+async def test_execute_dispatches_async_metadata():
+    tool = InvokeAgentTool()
+    mock_registry = MagicMock()
+    mock_registry.find_by_name.return_value = {
+        "url": "http://localhost:8108",
+        "transport": "http",
+        "status": "running",
+    }
+    context = ToolContext(
+        user_input="Build it",
+        tool_args={"agent": "builder_agent", "timeout": 1},
+        tool_registry=mock_registry,
+        llm_client=MagicMock(),
+        state_manager=MagicMock(),
+    )
 
-    with patch("app.progenitor.tools.invoke_agent.A2AClient", return_value=mock_client):
-        await _fire_and_forget(
-            task_id="builder_agent_abc123",
-            context_id="ctx-xyz",
-            agent_name="builder_agent",
-            agent_config={"url": "http://localhost:8107"},
-            message="Build it",
-            timeout=5,
-        )
+    with patch(
+        "app.progenitor.tools.invoke_agent.dispatch_tracked_a2a_task",
+        new_callable=AsyncMock,
+        return_value=({"success": True, "result": {"id": "builder_agent_abc123"}}, _tracked_task()),
+    ) as dispatch_mock:
+        result = await tool.execute(context)
 
-    call_kwargs = mock_client.call_agent.await_args.kwargs
-    assert call_kwargs["context"]["dispatch_mode"] == "async"
-    assert call_kwargs["context"]["a2a_task_id"] == "builder_agent_abc123"
-    assert call_kwargs["context"]["a2a_context_id"] == "ctx-xyz"
+    assert result.success
+    kwargs = dispatch_mock.await_args.kwargs
+    assert kwargs["request_metadata"]["dispatch_mode"] == "async"
+    assert kwargs["request_metadata"]["caller"] == "progenitor"
