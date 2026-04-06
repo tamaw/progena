@@ -134,7 +134,8 @@ jobs:
   build-and-push:
     runs-on: self-hosted
     needs: [backend, progenitor, frontend]
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    # Keep push-based image publishing on main, but allow explicit manual dispatches from a branch.
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -196,7 +197,8 @@ jobs:
     runs-on: self-hosted
     environment: cronix
     needs: [build-and-push]
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    # Keep push-based deploys on main, but allow explicit manual dispatches from a branch.
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
 
