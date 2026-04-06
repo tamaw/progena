@@ -11,7 +11,7 @@ import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,7 @@ class GitWorktreeManager:
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=timeout
-                )
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
             except asyncio.CancelledError:
                 process.kill()
                 await process.communicate()
@@ -156,9 +154,7 @@ class GitWorktreeManager:
         # Write metadata
         await self._write_metadata(worktree_path, work_item_id, selected_branch)
 
-        logger.info(
-            "Created worktree at %s on branch %s", worktree_path, selected_branch
-        )
+        logger.info("Created worktree at %s on branch %s", worktree_path, selected_branch)
         return worktree_path
 
     async def remove_worktree(self, worktree_path: str | Path) -> dict[str, Any]:
@@ -213,8 +209,8 @@ class GitWorktreeManager:
         if result["returncode"] != 0:
             return None
 
-        before_sha = before["stdout"].strip() if before["returncode"] == 0 else ""
-        after_sha = result["stdout"].strip()
+        before_sha = cast(str, before["stdout"]).strip() if before["returncode"] == 0 else ""
+        after_sha = cast(str, result["stdout"]).strip()
         if before_sha and before_sha == after_sha:
             raise RuntimeError("git commit completed without advancing HEAD")
 

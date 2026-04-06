@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -103,7 +104,7 @@ def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str
             "name": schema_name,
             "schema": schema,
             "strict": True,
-        }
+        },
     }
 
 
@@ -114,6 +115,7 @@ class LLMClient:
         self,
         config: LLMConfig | None = None,
         mcp_config: MCPConfig | None = None,
+        prompts_dir: Path | str | None = None,
         role: str | None = None,
     ):
         """Initialize the LLM client.
@@ -121,11 +123,12 @@ class LLMClient:
         Args:
             config: LLM configuration. If None, loads from environment.
             mcp_config: MCP configuration. If None, loads from environment.
+            prompts_dir: Prompt root to use for template loading.
             role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
         self.mcp_config = mcp_config or MCPConfig.from_env()
-        self.prompts = PromptTemplates()
+        self.prompts = PromptTemplates(prompts_dir=prompts_dir)
         self.role = role
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 
@@ -192,10 +195,12 @@ class LLMClient:
         allowed_roles = {"system", "user", "assistant", "tool"}
 
         if system_prompt:
-            input_messages.append({
-                "role": "system",
-                "content": system_prompt,
-            })
+            input_messages.append(
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                }
+            )
 
         for msg in messages:
             role = str(msg.get("role", "user") or "user")
@@ -207,18 +212,23 @@ class LLMClient:
             content = msg.get("content", "")
 
             if isinstance(content, list):
-                if content and isinstance(content[0], dict) and content[0].get("type") in {
-                    "input_text",
-                    "output_text",
-                    "input_image",
-                    "input_file",
-                    "refusal",
-                    "summary_text",
-                    "tether_browsing_display",
-                    "computer_screenshot",
-                    "tool_call",
-                    "tool_result",
-                }:
+                if (
+                    content
+                    and isinstance(content[0], dict)
+                    and content[0].get("type")
+                    in {
+                        "input_text",
+                        "output_text",
+                        "input_image",
+                        "input_file",
+                        "refusal",
+                        "summary_text",
+                        "tether_browsing_display",
+                        "computer_screenshot",
+                        "tool_call",
+                        "tool_result",
+                    }
+                ):
                     wrapped_content: Any = content
                 else:
                     text_parts = []
@@ -231,10 +241,12 @@ class LLMClient:
             else:
                 wrapped_content = str(content)
 
-            input_messages.append({
-                "role": role,
-                "content": wrapped_content,
-            })
+            input_messages.append(
+                {
+                    "role": role,
+                    "content": wrapped_content,
+                }
+            )
 
         return input_messages
 
@@ -306,7 +318,11 @@ class LLMClient:
         seen_names: set[str] = set()
 
         for tool in tools or []:
-            name = tool.get("function", {}).get("name") if tool.get("type") == "function" else tool.get("name")
+            name = (
+                tool.get("function", {}).get("name")
+                if tool.get("type") == "function"
+                else tool.get("name")
+            )
             if name:
                 seen_names.add(name)
             merged.append(tool)
@@ -410,7 +426,10 @@ class LLMClient:
 
         request = {
             "jsonrpc": "2.0",
-            "id": tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id") or 1,
+            "id": tool_call.get("call_id")
+            or tool_call.get("id")
+            or tool_call.get("tool_call_id")
+            or 1,
             "method": "tools/call",
             "params": {
                 "name": name,
@@ -444,7 +463,11 @@ class LLMClient:
         if system_tool_context:
             from ..nodes.node_helpers.registry import execute_system_tool, get_system_tool
 
-            if callable(get_system_tool) and callable(execute_system_tool) and get_system_tool(tool_name):
+            if (
+                callable(get_system_tool)
+                and callable(execute_system_tool)
+                and get_system_tool(tool_name)
+            ):
                 tool_registry = system_tool_context.get("tool_registry")
                 state_manager = system_tool_context.get("state_manager")
                 state = system_tool_context.get("state")
@@ -478,9 +501,15 @@ class LLMClient:
                 except Exception:
                     agent_cfg = None
 
-                agent_url = str(agent_cfg.get("url") or "").strip() if isinstance(agent_cfg, dict) else ""
-                agent_type = str(agent_cfg.get("type") or "").strip() if isinstance(agent_cfg, dict) else ""
-                agent_kind = str(agent_cfg.get("kind") or "").strip() if isinstance(agent_cfg, dict) else ""
+                agent_url = (
+                    str(agent_cfg.get("url") or "").strip() if isinstance(agent_cfg, dict) else ""
+                )
+                agent_type = (
+                    str(agent_cfg.get("type") or "").strip() if isinstance(agent_cfg, dict) else ""
+                )
+                agent_kind = (
+                    str(agent_cfg.get("kind") or "").strip() if isinstance(agent_cfg, dict) else ""
+                )
                 agent_transport = (
                     str(agent_cfg.get("transport") or "http").strip()
                     if isinstance(agent_cfg, dict)
@@ -496,7 +525,11 @@ class LLMClient:
                     from ..tools.mcp import A2AClient
 
                     req = str(tool_args.get("request") or "")
-                    ctx = tool_args.get("context") if isinstance(tool_args.get("context"), dict) else {}
+                    ctx = (
+                        tool_args.get("context")
+                        if isinstance(tool_args.get("context"), dict)
+                        else {}
+                    )
                     result = await A2AClient().call_agent(
                         agent_config=agent_cfg,
                         request=req,
@@ -531,8 +564,7 @@ class LLMClient:
         }
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
-        """Extract response text and optional reasoning trace from /responses output.
-        """
+        """Extract response text and optional reasoning trace from /responses output."""
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
 
@@ -548,7 +580,15 @@ class LLMClient:
                     _append_text_candidate(item)
                 return
             if isinstance(candidate, dict):
-                for key in ("text", "value", "content", "output_text", "refusal", "message", "parts"):
+                for key in (
+                    "text",
+                    "value",
+                    "content",
+                    "output_text",
+                    "refusal",
+                    "message",
+                    "parts",
+                ):
                     if key in candidate:
                         _append_text_candidate(candidate.get(key))
 
@@ -605,7 +645,8 @@ class LLMClient:
             incomplete_details = data.get("incomplete_details")
             truncation = data.get("truncation")
             top_text = data.get("text")
-            output_items: list[Any] = data.get("output") if isinstance(data.get("output"), list) else []  # type: ignore[assignment]
+            output_value = data.get("output")
+            output_items: list[Any] = output_value if isinstance(output_value, list) else []
 
             output_summaries: list[dict[str, Any]] = []
             for item in output_items[:5]:
@@ -719,7 +760,7 @@ class LLMClient:
                     usage_percent,
                     token_count,
                     context_window,
-                    model or self.model
+                    model or self.model,
                 )
         except Exception as e:
             logger.debug("Failed to check token usage: %s", e)
@@ -799,7 +840,9 @@ class LLMClient:
             tool_result_messages: list[dict[str, Any]] = []
 
             for tool_call in tool_calls:
-                tool_call_id = tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
+                tool_call_id = (
+                    tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
+                )
                 tool_name = (
                     tool_call.get("name")
                     or tool_call.get("tool_name")
@@ -1014,10 +1057,14 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
-        messages = conversation_history[-DECISION_HISTORY_LIMIT:] + [{"role": "user", "content": user_input}]
+        messages = conversation_history[-DECISION_HISTORY_LIMIT:] + [
+            {"role": "user", "content": user_input}
+        ]
         response_format = _build_json_schema_format(DecisionResponse, "decision_response")
 
-        response = await self.chat(messages, system_prompt, temperature=0.3, response_format=response_format)
+        response = await self.chat(
+            messages, system_prompt, temperature=0.3, response_format=response_format
+        )
         if not response.strip():
             logger.warning("Empty decide response; returning default decision")
             validated = validate_decision_response({})
@@ -1033,7 +1080,7 @@ class LLMClient:
             end = response.rfind("}")
             if start != -1 and end != -1 and end > start:
                 try:
-                    raw_data = json.loads(response[start:end + 1])
+                    raw_data = json.loads(response[start : end + 1])
                     validated = validate_decision_response(raw_data)
                     return validated.model_dump()
                 except json.JSONDecodeError:
@@ -1052,14 +1099,18 @@ class LLMClient:
         messages = conversation_history[-RESPONSE_HISTORY_LIMIT:]
 
         if action_results:
-            results_summary = "\n".join([
-                f"- {r.get('action', 'unknown')}: {r.get('result', 'completed')}"
-                for r in action_results
-            ])
-            messages.append({
-                "role": "system",
-                "content": f"Actions completed:\n{results_summary}\n\nRespond to the user about these results."
-            })
+            results_summary = "\n".join(
+                [
+                    f"- {r.get('action', 'unknown')}: {r.get('result', 'completed')}"
+                    for r in action_results
+                ]
+            )
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"Actions completed:\n{results_summary}\n\nRespond to the user about these results.",
+                }
+            )
 
         messages.append({"role": "user", "content": user_input})
         return await self.chat(messages, system_prompt, temperature=0.7)

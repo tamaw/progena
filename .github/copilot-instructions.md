@@ -95,5 +95,5 @@ See `app/progenitor/config.py` for full dataclass definitions.
 - `app/progenitor/state/models.py` - All Pydantic models
 - `app/progenitor/config.py` - Configuration dataclasses
 - `app/backend/main.py` - FastAPI endpoints
-- `docs/loop.spec.md` - The "Last Algorithm" specification
+- `docs/SPEC.md` - Checked-in main system specification
 - `docs/ARCHITECTURE_DIAGRAM.md` - Visual architecture

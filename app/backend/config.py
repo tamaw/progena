@@ -20,7 +20,7 @@ class ChatServerConfig:
     """Configuration for the backend."""
 
     # Server settings
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # nosec B104 - container/server default must listen on all interfaces
     port: int = 8000
     debug: bool = False
 
@@ -30,7 +30,9 @@ class ChatServerConfig:
     )
     progenitor_timeout: int = 300  # seconds for request timeout
     progenitor_stop_timeout: int = 5  # seconds to wait for graceful shutdown (CR-001)
-    progenitor_python: str = field(default_factory=lambda: sys.executable)  # Use same Python as backend
+    progenitor_python: str = field(
+        default_factory=lambda: sys.executable
+    )  # Use same Python as backend
 
     # Progenitor IPC settings (socket-based communication)
     progenitor_ipc_host: str = "127.0.0.1"  # IPC server host
@@ -64,19 +66,21 @@ class ChatServerConfig:
     telegram_retry_delay: float = 1.0  # Base delay between retries (exponential backoff)
     telegram_max_message_length: int = 4096  # Telegram max message length
     telegram_rate_limit_per_minute: int = 30  # Rate limit for outgoing messages
-    telegram_draft_update_interval_ms: int = 2000  # Minimum delay between sendMessageDraft updates
+    telegram_draft_update_interval_ms: int = 1000  # Minimum delay between sendMessageDraft updates
 
     # Telegram polling settings (for receiving messages)
     telegram_polling_enabled: bool = True  # Enable polling for incoming messages
     telegram_polling_interval: float = 2.0  # Polling interval in seconds
     telegram_polling_timeout: int = 30  # Long polling timeout (getUpdates timeout param)
-    telegram_allowed_users: str = ""  # Comma-separated chat IDs allowed to send messages (empty = only chat_id)
+    telegram_allowed_users: str = (
+        ""  # Comma-separated chat IDs allowed to send messages (empty = only chat_id)
+    )
 
     @classmethod
     def from_env(cls) -> "ChatServerConfig":
         """Load config from environment variables."""
         return cls(
-            host=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"),
+            host=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"),  # nosec B104 - same runtime default as above
             port=env_int("CHAT_SERVER_PORT", 8000),
             debug=env_bool("CHAT_SERVER_DEBUG", False),
             progenitor_timeout=env_int("CHAT_SERVER_PROGENITOR_TIMEOUT", 300),
@@ -91,8 +95,12 @@ class ChatServerConfig:
             rate_limit_enabled=env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),
             rate_limit_per_minute=env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 10000),
             rate_limit_per_hour=env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 100000),
-            rate_limit_cleanup_interval_seconds=env_int("CHAT_SERVER_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS", 300),
-            rate_limit_stale_client_timeout_seconds=env_int("CHAT_SERVER_RATE_LIMIT_STALE_CLIENT_TIMEOUT_SECONDS", 3600),
+            rate_limit_cleanup_interval_seconds=env_int(
+                "CHAT_SERVER_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS", 300
+            ),
+            rate_limit_stale_client_timeout_seconds=env_int(
+                "CHAT_SERVER_RATE_LIMIT_STALE_CLIENT_TIMEOUT_SECONDS", 3600
+            ),
             stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
             stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
             # Telegram settings
@@ -104,7 +112,7 @@ class ChatServerConfig:
             telegram_retry_delay=env_float("TELEGRAM_RETRY_DELAY", 1.0),
             telegram_max_message_length=env_int("TELEGRAM_MAX_MESSAGE_LENGTH", 4096),
             telegram_rate_limit_per_minute=env_int("TELEGRAM_RATE_LIMIT_PER_MINUTE", 30),
-            telegram_draft_update_interval_ms=env_int("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS", 2000),
+            telegram_draft_update_interval_ms=env_int("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS", 1000),
             # Telegram polling settings
             telegram_polling_enabled=env_bool("TELEGRAM_POLLING_ENABLED", True),
             telegram_polling_interval=env_float("TELEGRAM_POLLING_INTERVAL", 2.0),

@@ -54,7 +54,7 @@ class TestTelegramConfig:
         assert tg_config.retry_delay == 2.0
         assert tg_config.max_message_length == 2048
         assert tg_config.rate_limit_per_minute == 20
-        assert tg_config.draft_update_interval_ms == 2000
+        assert tg_config.draft_update_interval_ms == 1000
 
 
 class TestTelegramRateLimiter:
@@ -111,7 +111,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=100,  # Small for testing chunking
             rate_limit_per_minute=30,
-            draft_update_interval_ms=2000,
+            draft_update_interval_ms=1000,
         )
 
     @pytest.fixture
@@ -152,7 +152,7 @@ class TestTelegramClient:
             retry_delay=0.1,
             max_message_length=4096,
             rate_limit_per_minute=30,
-            draft_update_interval_ms=2000,
+            draft_update_interval_ms=1000,
         )
         client = TelegramClient(config)
         await client.start()
@@ -226,11 +226,9 @@ class TestTelegramClient:
         client._started = True
 
         mock_response = AsyncMock()
-        mock_response.json = AsyncMock(return_value={
-            "ok": False,
-            "error_code": 401,
-            "description": "Unauthorized"
-        })
+        mock_response.json = AsyncMock(
+            return_value={"ok": False, "error_code": 401, "description": "Unauthorized"}
+        )
         mock_response.__aenter__ = AsyncMock(return_value=mock_response)
         mock_response.__aexit__ = AsyncMock()
 
@@ -340,27 +338,36 @@ class TestTelegramClient:
         session.last_draft_text = ""
         session.last_draft_update_at = 10.0
 
-        assert client._should_flush_draft(
-            session,
-            "🤖 Progenitor Agent:\n\nnext segment",
-            now=11.0,
-        ) is False
+        assert (
+            client._should_flush_draft(
+                session,
+                "🤖 Progenitor Agent:\n\nnext segment",
+                now=10.5,
+            )
+            is False
+        )
 
-        assert client._should_flush_draft(
-            session,
-            "🤖 Progenitor Agent:\n\nnext segment",
-            now=12.0,
-        ) is True
+        assert (
+            client._should_flush_draft(
+                session,
+                "🤖 Progenitor Agent:\n\nnext segment",
+                now=11.0,
+            )
+            is True
+        )
 
     def test_should_flush_draft_allows_first_update(self, client):
         """Test that the first draft update is sent immediately."""
         session = TelegramDraftSession(chat_id="111222333", draft_id=123)
 
-        assert client._should_flush_draft(
-            session,
-            "🤖 Progenitor Agent:\n\nhello",
-            now=0.5,
-        ) is True
+        assert (
+            client._should_flush_draft(
+                session,
+                "🤖 Progenitor Agent:\n\nhello",
+                now=0.5,
+            )
+            is True
+        )
 
 
 class TestTelegramClientIntegration:
@@ -400,7 +407,9 @@ class TestTelegramClientIntegration:
 
             # Mock getMe response
             mock_response = AsyncMock()
-            mock_response.json = AsyncMock(return_value={"ok": True, "result": {"username": "testbot"}})
+            mock_response.json = AsyncMock(
+                return_value={"ok": True, "result": {"username": "testbot"}}
+            )
             mock_response.__aenter__ = AsyncMock(return_value=mock_response)
             mock_response.__aexit__ = AsyncMock()
             mock_instance.post = MagicMock(return_value=mock_response)
@@ -463,6 +472,7 @@ class TestTelegramRoutes:
         from fastapi.testclient import TestClient
 
         from app.backend.main import app
+
         return TestClient(app)
 
     def test_telegram_status_disabled(self, client):
@@ -527,6 +537,7 @@ class TestTelegramPolling:
 
     def test_set_message_handler(self, client_with_polling):
         """Test setting a message handler."""
+
         async def handler(chat_id, text, metadata):
             return f"Echo: {text}"
 
@@ -554,7 +565,9 @@ class TestTelegramPolling:
 
             # Mock getMe response
             mock_response = AsyncMock()
-            mock_response.json = AsyncMock(return_value={"ok": True, "result": {"username": "testbot"}})
+            mock_response.json = AsyncMock(
+                return_value={"ok": True, "result": {"username": "testbot"}}
+            )
             mock_response.__aenter__ = AsyncMock(return_value=mock_response)
             mock_response.__aexit__ = AsyncMock()
             mock_instance.post = MagicMock(return_value=mock_response)
@@ -577,11 +590,12 @@ class TestTelegramPolling:
                 "message_id": 1,
                 "chat": {"id": 999999999, "type": "private"},  # Not in allowed_users
                 "from": {"id": 999999999, "username": "hacker"},
-                "text": "Hello"
-            }
+                "text": "Hello",
+            },
         }
 
         handler_called = False
+
         async def handler(chat_id, text, metadata):
             nonlocal handler_called
             handler_called = True
@@ -606,8 +620,8 @@ class TestTelegramPolling:
                 "message_id": 1,
                 "chat": {"id": 987654321, "type": "private"},  # In allowed_users
                 "from": {"id": 987654321, "username": "owner", "first_name": "Owner"},
-                "text": "Hello"
-            }
+                "text": "Hello",
+            },
         }
 
         handler_called = False
@@ -623,8 +637,12 @@ class TestTelegramPolling:
 
         # Mock API calls (chat action and send message)
         with (
-            patch.object(client_with_polling, '_api_call', new=AsyncMock(return_value={"ok": True})),
-            patch.object(client_with_polling, 'send_message_to_chat', new=AsyncMock(return_value=True)),
+            patch.object(
+                client_with_polling, "_api_call", new=AsyncMock(return_value={"ok": True})
+            ),
+            patch.object(
+                client_with_polling, "send_message_to_chat", new=AsyncMock(return_value=True)
+            ),
         ):
             await client_with_polling._process_update(update)
 
@@ -643,7 +661,7 @@ class TestTelegramPolling:
             sent_messages.append((chat_id, text))
             return True
 
-        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+        with patch.object(client_with_polling, "send_message_to_chat", side_effect=mock_send):
             await client_with_polling._handle_command("987654321", "/start", {})
 
         assert len(sent_messages) == 1
@@ -661,7 +679,7 @@ class TestTelegramPolling:
             sent_messages.append((chat_id, text))
             return True
 
-        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+        with patch.object(client_with_polling, "send_message_to_chat", side_effect=mock_send):
             await client_with_polling._handle_command("987654321", "/help", {})
 
         assert len(sent_messages) == 1
@@ -679,7 +697,7 @@ class TestTelegramPolling:
             sent_messages.append((chat_id, text))
             return True
 
-        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+        with patch.object(client_with_polling, "send_message_to_chat", side_effect=mock_send):
             await client_with_polling._handle_command("987654321", "/status", {})
 
         assert len(sent_messages) == 1
@@ -697,7 +715,7 @@ class TestTelegramPolling:
             sent_messages.append((chat_id, text))
             return True
 
-        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+        with patch.object(client_with_polling, "send_message_to_chat", side_effect=mock_send):
             await client_with_polling._handle_command("987654321", "/ping", {})
 
         assert len(sent_messages) == 1
@@ -715,7 +733,7 @@ class TestTelegramPolling:
             sent_messages.append((chat_id, text))
             return True
 
-        with patch.object(client_with_polling, 'send_message_to_chat', side_effect=mock_send):
+        with patch.object(client_with_polling, "send_message_to_chat", side_effect=mock_send):
             await client_with_polling._handle_command("987654321", "/unknown", {})
 
         assert len(sent_messages) == 1
@@ -727,13 +745,15 @@ class TestTelegramPolling:
         client_with_polling._started = True
 
         mock_response = AsyncMock()
-        mock_response.json = AsyncMock(return_value={
-            "ok": True,
-            "result": [
-                {"update_id": 100, "message": {"text": "Hello"}},
-                {"update_id": 101, "message": {"text": "World"}},
-            ]
-        })
+        mock_response.json = AsyncMock(
+            return_value={
+                "ok": True,
+                "result": [
+                    {"update_id": 100, "message": {"text": "Hello"}},
+                    {"update_id": 101, "message": {"text": "World"}},
+                ],
+            }
+        )
         mock_response.__aenter__ = AsyncMock(return_value=mock_response)
         mock_response.__aexit__ = AsyncMock()
 
@@ -765,7 +785,10 @@ class TestTelegramPolling:
         assert result is True
         # Verify the API was called with correct chat_id
         call_args = mock_session.post.call_args
-        assert "111222333" in str(call_args) or call_args[1].get("json", {}).get("chat_id") == "111222333"
+        assert (
+            "111222333" in str(call_args)
+            or call_args[1].get("json", {}).get("chat_id") == "111222333"
+        )
 
     @pytest.mark.asyncio
     async def test_stop_polling(self, client_with_polling):
@@ -842,9 +865,7 @@ class TestTelegramBackendStreaming:
 
         progenitor = AsyncMock()
         progenitor.is_running = True
-        progenitor.send_message_stream = MagicMock(
-            return_value=_async_iter("Hello", " world")
-        )
+        progenitor.send_message_stream = MagicMock(return_value=_async_iter("Hello", " world"))
 
         result = await backend_main._handle_telegram_agent_message(
             telegram,

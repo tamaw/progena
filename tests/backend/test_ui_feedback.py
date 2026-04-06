@@ -190,9 +190,7 @@ class TestBuildPhaseFeedback:
     def test_valid_build_phases(self):
         """Test that build phases match expected values used in UI."""
         # These phases are displayed in the UI with icons
-        valid_phases = {
-            "observe", "think", "plan", "build", "execute", "verify", "learn"
-        }
+        valid_phases = {"observe", "think", "plan", "build", "execute", "verify", "learn"}
 
         # Verify BuildInfo can handle all phases
         for phase in valid_phases:
@@ -383,6 +381,22 @@ class TestStateReader:
         assert build.iteration == 3
         assert build.score == 0.75
         assert build.message_count == 5
+
+    def test_state_reader_uses_env_storage_paths(self, monkeypatch, tmp_path):
+        """StateReader defaults should honor configured storage env vars."""
+        data_dir = tmp_path / "custom-data"
+        state_dir = data_dir / "state"
+        logs_dir = tmp_path / "custom-logs"
+        monkeypatch.delenv("PROGENITOR_STATE_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(data_dir))
+        monkeypatch.setenv("PROGENITOR_LOG_DIR", str(logs_dir))
+
+        reader = StateReader()
+
+        assert reader.state_dir == state_dir
+        assert reader.config_dir == state_dir.parent / "config"
+        assert reader.sessions_dir == state_dir.parent / "sessions"
+        assert reader.logs_dir == logs_dir
 
     def test_backlog_item_from_dict(self):
         """Test BacklogItem.from_dict() handles fields."""
@@ -590,8 +604,6 @@ class TestStateReaderFileOperations:
 
         assert "widgets" in payload
         assert any(widget["name"] == "observe_agent" for widget in payload["widgets"])
-
-
 
 
 class TestLogsEndpoint:

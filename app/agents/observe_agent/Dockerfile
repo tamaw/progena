@@ -11,14 +11,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AGENT_NAME=observe_agent \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
     PROGENITOR_LOG_DIR=/app/logs \
-    PROGENITOR_STATE_DIR=/app/data/state \
+    PROGENITOR_DATA_DIR=/app/data \
     AGENT_MODEL_DEFAULT= \
     PROGENITOR_MODEL_DEFAULT= \
-    PROGENITOR_WORKTREES_ROOT=/app/worktrees
+    PROGENITOR_WORKTREES_ROOT=/app/worktrees \
+    PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees
 
 RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
@@ -28,17 +29,17 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY requirements.lock.txt /app/requirements.lock.txt
+COPY pyproject.toml README.md /app/
+COPY app/ /app/app/
+COPY data/prompts/ /app/data/prompts/
+COPY data/skills/ /app/data/skills/
+COPY scripts/ /app/scripts/
 COPY app/agents/observe_agent/requirements.txt /app/requirements.observe.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.lock.txt && \
+    pip install --no-cache-dir . && \
     pip install --no-cache-dir -r /app/requirements.observe.txt
 
-COPY app/ /app/app/
-COPY prompts/ /app/prompts/
-COPY scripts/ /app/scripts/
-
-RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \
+RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/worktrees /app/tmp /home/runner && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
 
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]

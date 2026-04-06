@@ -1,0 +1,145 @@
+name: mcp
+
+# Minimal MCP workflow: build+push+deploy on merge to main or manual dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Deploy mode: changed (diff HEAD^..HEAD) or all mcps"
+        required: false
+        default: "changed"
+        type: choice
+        options:
+          - changed
+          - all
+  push:
+    branches:
+      - main
+    paths:
+      - "app/mcp/**"
+      - ".github/scripts/detect_changed_components.py"
+      - ".github/workflows/mcp.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  detect-changes:
+    runs-on: [self-hosted, Linux]
+    outputs:
+      mcps: ${{ steps.diff.outputs.mcps }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed MCP servers
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MODE: ${{ inputs.mode }}
+        run: python .github/scripts/detect_changed_components.py
+
+  build-mcp:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate MCP Dockerfile exists
+        run: |
+          test -f "app/mcp/${{ matrix.mcp }}/Dockerfile" \
+            || { echo "Dockerfile app/mcp/${{ matrix.mcp }}/Dockerfile not found"; exit 1; }
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push MCP image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: app/mcp/${{ matrix.mcp }}/Dockerfile
+          push: true
+          labels: |
+            com.progenitor.managed=true
+            com.progenitor.component=mcp
+          tags: |
+            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
+            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-mcp:
+    needs: [detect-changes, build-mcp]
+    if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
+    runs-on: self-hosted
+    environment: cronix
+    strategy:
+      fail-fast: false
+      matrix:
+        mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate MCP directory exists
+        run: |
+          test -d "app/mcp/${{ matrix.mcp }}" \
+            || { echo "MCP directory app/mcp/${{ matrix.mcp }} not found"; exit 1; }
+          test -f "app/mcp/${{ matrix.mcp }}/Dockerfile" \
+            || { echo "Dockerfile app/mcp/${{ matrix.mcp }}/Dockerfile not found"; exit 1; }
+
+      - name: Docker login (GHCR)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull MCP image
+        run: docker pull ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
+
+      - name: Stop existing container (if any)
+        run: docker rm -f progenitor-mcp-${{ matrix.mcp }} 2>/dev/null || true
+
+      - name: Run MCP container
+        run: |
+          docker run -d \
+            --name progenitor-mcp-${{ matrix.mcp }} \
+            --restart unless-stopped \
+            --network progenitor_network \
+            -e TEST_MODE=false \
+            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
+
+      - name: Wait for MCP server to become healthy
+        run: |
+          echo "Waiting for MCP container to start..."
+          for i in $(seq 1 30); do
+            if docker exec progenitor-mcp-${{ matrix.mcp }} \
+              python -c "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()" 2>/dev/null; then
+              echo "MCP ${{ matrix.mcp }} is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MCP ${{ matrix.mcp }} failed health check"
+          docker logs progenitor-mcp-${{ matrix.mcp }} --tail 50
+          exit 1
+
+      - name: Cleanup unused managed images
+        if: success()
+        run: |
+          docker image prune -af \
+            --filter "label=com.progenitor.managed=true" \
+            --filter "until=168h" || true

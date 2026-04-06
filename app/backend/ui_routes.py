@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
-from croniter import croniter  # type: ignore[import-untyped]
+from croniter import croniter
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -44,6 +44,7 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 class BuildInfoResponse(BaseModel):
     """Build status information."""
+
     in_progress: bool = False
     phase: str | None = None  # observe, think, plan, build, execute, verify, learn
     task_description: str | None = None
@@ -55,6 +56,7 @@ class BuildInfoResponse(BaseModel):
 
 class UIStatusResponse(BaseModel):
     """Combined status response for the UI."""
+
     connected: bool
     server_status: str
     progenitor_running: bool
@@ -85,6 +87,7 @@ class UIStatusResponse(BaseModel):
 
 class LoopInfo(BaseModel):
     """Processing loop information (Planner/Executor)."""
+
     name: str
     status: str
     current_task: str | None = None
@@ -92,11 +95,13 @@ class LoopInfo(BaseModel):
 
 class LoopsResponse(BaseModel):
     """Response containing loop status."""
+
     loops: list[LoopInfo]
 
 
 class SubAgentInfo(BaseModel):
     """Sub-agent (registered agent) information."""
+
     name: str
     status: str
     kind: str = "a2a_agent"
@@ -109,12 +114,14 @@ class SubAgentInfo(BaseModel):
 
 class SubAgentsResponse(BaseModel):
     """Response containing registered agents."""
+
     agents: list[SubAgentInfo]
     total: int
 
 
 class BacklogItemInfo(BaseModel):
     """Backlog item information."""
+
     id: str
     type: str
     status: str
@@ -123,12 +130,14 @@ class BacklogItemInfo(BaseModel):
 
 class BacklogResponse(BaseModel):
     """Response containing backlog items."""
+
     items: list[BacklogItemInfo]
     total: int
 
 
 class ScheduleItemInfo(BaseModel):
     """Schedule item information."""
+
     id: str
     name: str
     schedule: str
@@ -138,12 +147,14 @@ class ScheduleItemInfo(BaseModel):
 
 class ScheduleResponse(BaseModel):
     """Response containing schedule items."""
+
     items: list[ScheduleItemInfo]
     total: int
 
 
 class WidgetResponse(BaseModel):
     """Unified widget payload."""
+
     id: str
     type: str
     title: str
@@ -158,18 +169,21 @@ class WidgetResponse(BaseModel):
 
 class WidgetsResponse(BaseModel):
     """Response containing widget entries."""
+
     items: list[WidgetResponse]
     total: int
 
 
 class WidgetFieldOptionResponse(BaseModel):
     """Selectable option for a widget field."""
+
     value: str
     label: str
 
 
 class WidgetFieldSchemaResponse(BaseModel):
     """Schema for a single editable or readonly widget field."""
+
     key: str
     label: str
     control: str = "text"
@@ -181,6 +195,7 @@ class WidgetFieldSchemaResponse(BaseModel):
 
 class WidgetSectionSchemaResponse(BaseModel):
     """Schema for a collapsible widget details section."""
+
     id: str
     label: str
     default_expanded: bool = True
@@ -189,12 +204,14 @@ class WidgetSectionSchemaResponse(BaseModel):
 
 class WidgetTabSchemaResponse(BaseModel):
     """Schema for a widget canvas tab."""
+
     id: str
     label: str
 
 
 class WidgetSchemaResponse(BaseModel):
     """Details-pane schema for a widget type."""
+
     type: str
     default_tab: str | None = None
     tabs: list[WidgetTabSchemaResponse] = Field(default_factory=list)
@@ -203,11 +220,13 @@ class WidgetSchemaResponse(BaseModel):
 
 class WidgetSchemasResponse(BaseModel):
     """Response containing details-pane schemas by widget type."""
+
     schemas: list[WidgetSchemaResponse]
 
 
 class WorkspaceResponse(BaseModel):
     """Workspace bootstrap payload."""
+
     timestamp: float
     workspace: dict
     health: dict
@@ -246,6 +265,7 @@ class PromptUpdateRequest(BaseModel):
 
 class WidgetPatchRequest(BaseModel):
     """Patch request for mutable backend-backed widgets."""
+
     enabled: bool | None = None
     name: str | None = None
     instruction: str | None = None
@@ -256,6 +276,7 @@ class WidgetPatchRequest(BaseModel):
 
 class ScheduleCreateRequest(BaseModel):
     """Create request for a new schedule entry."""
+
     name: str
     instruction: str
     schedule_type: str = "cron"
@@ -266,6 +287,7 @@ class ScheduleCreateRequest(BaseModel):
 
 class KanbanColumnResponse(BaseModel):
     """Kanban column metadata."""
+
     id: str
     label: str
     description: str
@@ -276,6 +298,7 @@ class KanbanColumnResponse(BaseModel):
 
 class KanbanStatusOptionResponse(BaseModel):
     """Allowed kanban card status."""
+
     id: str
     label: str
     tone: str = "neutral"
@@ -283,6 +306,7 @@ class KanbanStatusOptionResponse(BaseModel):
 
 class KanbanFieldSchemaResponse(BaseModel):
     """Schema for an editable kanban card field."""
+
     key: str
     label: str
     control: str = "text"
@@ -292,12 +316,14 @@ class KanbanFieldSchemaResponse(BaseModel):
 
 class KanbanCardSchemaResponse(BaseModel):
     """Schema describing editable kanban card state."""
+
     statuses: list[KanbanStatusOptionResponse] = Field(default_factory=list)
     fields: list[KanbanFieldSchemaResponse] = Field(default_factory=list)
 
 
 class KanbanCardResponse(BaseModel):
     """Single kanban card entry."""
+
     id: str
     title: str
     summary: str = ""
@@ -321,6 +347,7 @@ class KanbanCardResponse(BaseModel):
 
 class KanbanBoardResponse(BaseModel):
     """Kanban board payload for the frontend."""
+
     id: str
     title: str
     updated_at: str
@@ -331,6 +358,7 @@ class KanbanBoardResponse(BaseModel):
 
 class KanbanCardCreateRequest(BaseModel):
     """Create a new kanban card."""
+
     title: str
     summary: str = ""
     description: str = ""
@@ -340,6 +368,7 @@ class KanbanCardCreateRequest(BaseModel):
 
 class KanbanCardPatchRequest(BaseModel):
     """Update mutable kanban card fields."""
+
     title: str | None = None
     summary: str | None = None
     description: str | None = None
@@ -360,6 +389,7 @@ class KanbanCardPatchRequest(BaseModel):
 
 class ActionRunRequest(BaseModel):
     """Run an action using the existing IPC message flow."""
+
     widget_id: str | None = None
     prompt: str | None = None
     code: str | None = None
@@ -370,6 +400,7 @@ class ActionRunRequest(BaseModel):
 
 class ActionGenerateRequest(BaseModel):
     """Generate content using the existing IPC message flow."""
+
     widget_id: str | None = None
     prompt: str
     target: str | None = None
@@ -377,6 +408,7 @@ class ActionGenerateRequest(BaseModel):
 
 class ActionResponse(BaseModel):
     """Action response payload."""
+
     ok: bool
     widget_id: str | None = None
     response: str
@@ -384,6 +416,7 @@ class ActionResponse(BaseModel):
 
 class TaskInfo(BaseModel):
     """Active task information."""
+
     id: str
     title: str
     status: str
@@ -393,12 +426,14 @@ class TaskInfo(BaseModel):
 
 class TasksResponse(BaseModel):
     """Response containing active tasks."""
+
     tasks: list[TaskInfo]
     total: int
 
 
 class AlertInfo(BaseModel):
     """Alert information."""
+
     id: str
     type: str
     title: str
@@ -410,6 +445,7 @@ class AlertInfo(BaseModel):
 
 class AlertsResponse(BaseModel):
     """Response containing pending alerts."""
+
     alerts: list[AlertInfo]
     total: int
 
@@ -473,8 +509,12 @@ async def get_ui_status_snapshot():
             version=health.get("version", "unknown"),
             memory_mb=health.get("memory", {}).get("rss_mb"),
             active_requests=health.get("shutdown", {}).get("active_requests", 0),
-            rate_limit_minute_limit=health.get("rate_limiter", {}).get("requests_per_minute_limit", 60),
-            rate_limit_hour_limit=health.get("rate_limiter", {}).get("requests_per_hour_limit", 500),
+            rate_limit_minute_limit=health.get("rate_limiter", {}).get(
+                "requests_per_minute_limit", 60
+            ),
+            rate_limit_hour_limit=health.get("rate_limiter", {}).get(
+                "requests_per_hour_limit", 500
+            ),
             # State data
             cycle_count=snapshot.health.cycle_count,
             run_id=snapshot.health.run_id,
@@ -485,7 +525,11 @@ async def get_ui_status_snapshot():
             build=build_info,
             # Lists
             loops=[
-                LoopInfo(name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task)
+                LoopInfo(
+                    name=loop_item.name,
+                    status=loop_item.status,
+                    current_task=loop_item.current_task,
+                )
                 for loop_item in snapshot.loops
             ],
             agents=[
@@ -504,17 +548,27 @@ async def get_ui_status_snapshot():
                 for tool in snapshot.tools
             ],
             backlog=[
-                BacklogItemInfo(id=b.id, type=b.item_type, status=b.status, description=b.description)
+                BacklogItemInfo(
+                    id=b.id, type=b.item_type, status=b.status, description=b.description
+                )
                 for b in snapshot.backlog
             ],
             schedule=[
-                ScheduleItemInfo(id=s.id, name=s.name, schedule=s.schedule, next_run=s.next_run, enabled=s.enabled)
+                ScheduleItemInfo(
+                    id=s.id,
+                    name=s.name,
+                    schedule=s.schedule,
+                    next_run=s.next_run,
+                    enabled=s.enabled,
+                )
                 for s in snapshot.schedule
             ],
             widgets=state_reader.get_widgets(),
             sessions={
                 "total": snapshot.sessions.total if snapshot.sessions else 0,
-                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_session_id": snapshot.sessions.latest_session_id
+                if snapshot.sessions
+                else None,
                 "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
             },
         )
@@ -534,7 +588,9 @@ async def get_loops():
 
     return LoopsResponse(
         loops=[
-            LoopInfo(name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task)
+            LoopInfo(
+                name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task
+            )
             for loop_item in loops
         ]
     )
@@ -556,16 +612,18 @@ async def get_sub_agents():
     agent_infos = []
     for agent in agents:
         if agent.enabled:
-            agent_infos.append(SubAgentInfo(
-                name=agent.name,
-                status="ready" if progenitor_running else "offline",
-                kind=agent.kind,
-                version=agent.version,
-                description=agent.description,
-                transport=agent.transport,
-                task=None,
-                progress=None,
-            ))
+            agent_infos.append(
+                SubAgentInfo(
+                    name=agent.name,
+                    status="ready" if progenitor_running else "offline",
+                    kind=agent.kind,
+                    version=agent.version,
+                    description=agent.description,
+                    transport=agent.transport,
+                    task=None,
+                    progress=None,
+                )
+            )
 
     return SubAgentsResponse(agents=agent_infos, total=len(agent_infos))
 
@@ -687,8 +745,12 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     fields=[
                         WidgetFieldSchemaResponse(key="sourcePath", label="Source Path"),
                         WidgetFieldSchemaResponse(key="primaryAgent", label="Primary Agent"),
-                        WidgetFieldSchemaResponse(key="associatedAgents", label="Associated Agents", control="list"),
-                        WidgetFieldSchemaResponse(key="linkedOutputIds", label="Linked Outputs", control="list"),
+                        WidgetFieldSchemaResponse(
+                            key="associatedAgents", label="Associated Agents", control="list"
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="linkedOutputIds", label="Linked Outputs", control="list"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -708,14 +770,18 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
                         WidgetFieldSchemaResponse(key="language", label="Language", editable=True),
-                        WidgetFieldSchemaResponse(key="runtimeProfile", label="Runtime Profile", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="runtimeProfile", label="Runtime Profile", editable=True
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
                     id="content",
                     label="Content",
                     fields=[
-                        WidgetFieldSchemaResponse(key="content", label="Code", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="content", label="Code", control="textarea", editable=True
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -724,7 +790,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     default_expanded=False,
                     fields=[
                         WidgetFieldSchemaResponse(key="lastRunId", label="Last Run"),
-                        WidgetFieldSchemaResponse(key="outputRefs", label="Outputs", control="list"),
+                        WidgetFieldSchemaResponse(
+                            key="outputRefs", label="Outputs", control="list"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -760,9 +828,15 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     id="markup",
                     label="Markup",
                     fields=[
-                        WidgetFieldSchemaResponse(key="html", label="HTML", control="textarea", editable=True),
-                        WidgetFieldSchemaResponse(key="css", label="CSS", control="textarea", editable=True),
-                        WidgetFieldSchemaResponse(key="js", label="JavaScript", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="html", label="HTML", control="textarea", editable=True
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="css", label="CSS", control="textarea", editable=True
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="js", label="JavaScript", control="textarea", editable=True
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -787,7 +861,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Content",
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(key="text", label="Text", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="text", label="Text", control="textarea", editable=True
+                        ),
                         WidgetFieldSchemaResponse(
                             key="variant",
                             label="Variant",
@@ -815,7 +891,12 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Content",
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(key="description", label="Description", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="description",
+                            label="Description",
+                            control="textarea",
+                            editable=True,
+                        ),
                         WidgetFieldSchemaResponse(key="childIds", label="Children", control="list"),
                     ],
                 ),
@@ -834,7 +915,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Identity",
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
-                        WidgetFieldSchemaResponse(key="enabled", label="Enabled", control="boolean", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="enabled", label="Enabled", control="boolean", editable=True
+                        ),
                         WidgetFieldSchemaResponse(
                             key="scheduleType",
                             label="Schedule Type",
@@ -846,7 +929,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                                 WidgetFieldOptionResponse(value="once", label="Once"),
                             ],
                         ),
-                        WidgetFieldSchemaResponse(key="expression", label="Expression", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="expression", label="Expression", editable=True
+                        ),
                         WidgetFieldSchemaResponse(key="timezone", label="Timezone", editable=True),
                     ],
                 ),
@@ -854,7 +939,12 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     id="content",
                     label="Task",
                     fields=[
-                        WidgetFieldSchemaResponse(key="instruction", label="Instruction", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="instruction",
+                            label="Instruction",
+                            control="textarea",
+                            editable=True,
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -894,7 +984,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     fields=[
                         WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
                         WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
-                        WidgetFieldSchemaResponse(key="summaryState", label="Summary", control="textarea"),
+                        WidgetFieldSchemaResponse(
+                            key="summaryState", label="Summary", control="textarea"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -924,7 +1016,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     fields=[
                         WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
                         WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
-                        WidgetFieldSchemaResponse(key="summaryState", label="Summary", control="textarea"),
+                        WidgetFieldSchemaResponse(
+                            key="summaryState", label="Summary", control="textarea"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -1134,7 +1228,13 @@ def _resequence_kanban_cards(cards: list[dict], columns: list[dict]) -> list[dic
     return normalized_cards
 
 
-def _reorder_kanban_cards(cards: list[dict], columns: list[dict], card_id: str, target_column_id: str, target_position: int) -> list[dict]:
+def _reorder_kanban_cards(
+    cards: list[dict],
+    columns: list[dict],
+    card_id: str,
+    target_column_id: str,
+    target_position: int,
+) -> list[dict]:
     """Move a card to a specific position within a target column."""
     grouped_cards: dict[str, list[dict]] = {column["id"]: [] for column in columns}
     moving_card: dict | None = None
@@ -1359,7 +1459,9 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     """Patch a backend-owned widget where a matching state file exists."""
     state_reader = get_state_reader()
     if not widget_id.startswith("schedule:"):
-        raise HTTPException(status_code=400, detail="Only schedule widgets are mutable from the backend")
+        raise HTTPException(
+            status_code=400, detail="Only schedule widgets are mutable from the backend"
+        )
 
     schedule_id = widget_id.split(":", 1)[1]
     schedule_path = state_reader.state_dir / "schedule.json"
@@ -1374,7 +1476,9 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         if entry.get("id") != schedule_id:
             continue
         current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
-        current_expression = body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
+        current_expression = (
+            body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
+        )
         if body.enabled is not None:
             entry["enabled"] = body.enabled
         if body.name is not None:
@@ -1384,7 +1488,9 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             entry["message"] = body.instruction
             entry["instruction"] = body.instruction
         if body.expression is not None or body.schedule_type is not None:
-            normalized_type, cron_expression = _resolve_schedule_expression(current_schedule_type, current_expression)
+            normalized_type, cron_expression = _resolve_schedule_expression(
+                current_schedule_type, current_expression
+            )
             entry["schedule_type"] = normalized_type
             entry["schedule"] = current_expression
             entry["cron_expression"] = cron_expression
@@ -1403,7 +1509,9 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     _atomic_write_json(schedule_path, schedule_data)
     state_reader.invalidate(schedule_path)
 
-    refreshed = next((widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None)
+    refreshed = next(
+        (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+    )
     if refreshed is None:
         refreshed = {
             "id": widget_id,
@@ -1462,7 +1570,14 @@ async def create_schedule(body: ScheduleCreateRequest):
     _atomic_write_json(schedule_path, schedule_data)
     state_reader.invalidate(schedule_path)
 
-    refreshed = next((widget for widget in state_reader.get_widgets() if widget["id"] == f"schedule:{schedule_id}"), None)
+    refreshed = next(
+        (
+            widget
+            for widget in state_reader.get_widgets()
+            if widget["id"] == f"schedule:{schedule_id}"
+        ),
+        None,
+    )
     if refreshed is None:
         refreshed = {
             "id": f"schedule:{schedule_id}",
@@ -1554,7 +1669,9 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
             card["description"] = body.description
         if body.column_id is not None:
             if body.column_id not in column_map:
-                raise HTTPException(status_code=400, detail=f"Unknown kanban column: {body.column_id}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown kanban column: {body.column_id}"
+                )
             card["column_id"] = body.column_id
             if body.agent_name is None:
                 card["agent_name"] = column_map[body.column_id]["agent_name"]
@@ -1648,11 +1765,14 @@ async def action_run(body: ActionRunRequest):
         raise HTTPException(status_code=400, detail="No run payload provided")
 
     response = await chat_main.client.send_message("\n\n".join(segments))
-    broadcast_chat_event("agent_message", {
-        "content": response,
-        "metadata": {"widget_id": body.widget_id, "action": "run"},
-        "timestamp": time.time(),
-    })
+    broadcast_chat_event(
+        "agent_message",
+        {
+            "content": response,
+            "metadata": {"widget_id": body.widget_id, "action": "run"},
+            "timestamp": time.time(),
+        },
+    )
     _broadcast_widget_refresh(get_state_reader())
     return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
 
@@ -1672,17 +1792,21 @@ async def action_generate(body: ActionGenerateRequest):
         prompt = f"Widget ID: {body.widget_id}\n\n{prompt}"
 
     response = await chat_main.client.send_message(prompt)
-    broadcast_chat_event("agent_message", {
-        "content": response,
-        "metadata": {"widget_id": body.widget_id, "action": "generate"},
-        "timestamp": time.time(),
-    })
+    broadcast_chat_event(
+        "agent_message",
+        {
+            "content": response,
+            "metadata": {"widget_id": body.widget_id, "action": "generate"},
+            "timestamp": time.time(),
+        },
+    )
     _broadcast_widget_refresh(get_state_reader())
     return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
 
 
 class TelegramStatusResponse(BaseModel):
     """Telegram integration status."""
+
     enabled: bool
     connected: bool
     chat_id: str = ""  # Masked for security
@@ -1716,9 +1840,7 @@ async def get_telegram_status():
         chat_id=masked_chat_id if config.telegram_enabled else "",
         web_clients_active=subscriber_counts["chat"],
         will_forward_to_telegram=(
-            telegram is not None
-            and telegram._started
-            and subscriber_counts["chat"] == 0
+            telegram is not None and telegram._started and subscriber_counts["chat"] == 0
         ),
         rate_limit_per_minute=config.telegram_rate_limit_per_minute,
     )
@@ -1726,11 +1848,13 @@ async def get_telegram_status():
 
 class TelegramTestRequest(BaseModel):
     """Request to test Telegram integration."""
+
     message: str = "Test message from Progenitor"
 
 
 class TelegramTestResponse(BaseModel):
     """Response from Telegram test."""
+
     success: bool
     message: str
 
@@ -1747,8 +1871,7 @@ async def test_telegram():
     telegram = get_telegram_client()
     if not telegram:
         return TelegramTestResponse(
-            success=False,
-            message="Telegram integration not enabled or not configured"
+            success=False, message="Telegram integration not enabled or not configured"
         )
 
     try:
@@ -1757,21 +1880,14 @@ async def test_telegram():
             "If you see this, Telegram integration is working!"
         )
         if success:
-            return TelegramTestResponse(
-                success=True,
-                message="Test message sent successfully"
-            )
+            return TelegramTestResponse(success=True, message="Test message sent successfully")
         else:
             return TelegramTestResponse(
-                success=False,
-                message="Failed to send test message - check logs for details"
+                success=False, message="Failed to send test message - check logs for details"
             )
     except Exception as e:
         logger.error("Telegram test failed: %s", e)
-        return TelegramTestResponse(
-            success=False,
-            message=f"Error: {str(e)}"
-        )
+        return TelegramTestResponse(success=False, message=f"Error: {str(e)}")
 
 
 @router.get("/tasks", response_model=TasksResponse)
@@ -1793,13 +1909,15 @@ async def get_active_tasks():
     tasks = []
 
     if active_requests > 0:
-        tasks.append(TaskInfo(
-            id="task-active-1",
-            title="Processing Chat Request",
-            status="running",
-            description=f"Handling {active_requests} active request(s)",
-            progress=None
-        ))
+        tasks.append(
+            TaskInfo(
+                id="task-active-1",
+                title="Processing Chat Request",
+                status="running",
+                description=f"Handling {active_requests} active request(s)",
+                progress=None,
+            )
+        )
 
     return TasksResponse(tasks=tasks, total=len(tasks))
 
@@ -1856,6 +1974,7 @@ async def respond_to_alert(alert_id: str, response: str = "acknowledged"):
 
 class AgentDetailResponse(BaseModel):
     """Detailed information about a single agent."""
+
     name: str
     status: str
     kind: str = "a2a_agent"
@@ -1917,7 +2036,10 @@ async def get_prompts(agent: str | None = None):
     associations for the workspace prompt library.
     """
     service = PromptService()
-    prompts = [PromptFileResponse.model_validate(prompt, from_attributes=True) for prompt in service.list_prompts(agent=agent)]
+    prompts = [
+        PromptFileResponse.model_validate(prompt, from_attributes=True)
+        for prompt in service.list_prompts(agent=agent)
+    ]
     return PromptsResponse(prompts=prompts, total=len(prompts))
 
 
@@ -1925,7 +2047,9 @@ async def get_prompts(agent: str | None = None):
 async def get_prompt_content(path: str = Query(..., min_length=1)):
     """Get a single prompt file from the mounted prompts directory."""
     try:
-        return PromptFileResponse.model_validate(PromptService().get_prompt(path), from_attributes=True)
+        return PromptFileResponse.model_validate(
+            PromptService().get_prompt(path), from_attributes=True
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Prompt '{path}' not found") from exc
     except ValueError as exc:
@@ -2032,7 +2156,10 @@ async def get_logs(
             "entries": entries,
             "total": result["total"],
             "returned": result["returned"],
-            "filtered": any(value is not None for value in (level, search, source, folder, file_path, start_date, end_date)),
+            "filtered": any(
+                value is not None
+                for value in (level, search, source, folder, file_path, start_date, end_date)
+            ),
             "source_groups": source_groups,
             "folders": folders,
             "newest_cursor": result["newest_cursor"],
@@ -2154,11 +2281,7 @@ async def export_logs(
 
 
 def create_alert(
-    type: str,
-    title: str,
-    message: str,
-    urgent: bool = False,
-    requires_response: bool = False
+    type: str, title: str, message: str, urgent: bool = False, requires_response: bool = False
 ) -> AlertInfo:
     """
     Create a new alert (called by the progenitor agent).
@@ -2180,7 +2303,7 @@ def create_alert(
         message=message,
         timestamp=time.time(),
         urgent=urgent,
-        requires_response=requires_response
+        requires_response=requires_response,
     )
     _pending_alerts.append(alert)
 
@@ -2242,15 +2365,15 @@ async def _get_current_status() -> dict:
     snapshot = state_reader.get_snapshot()
 
     now = time.time()
-    start_time = getattr(chat_main, '_server_start_time', now)
-    shutdown_mgr = getattr(chat_main, 'shutdown_manager', None)
+    start_time = getattr(chat_main, "_server_start_time", now)
+    shutdown_mgr = getattr(chat_main, "shutdown_manager", None)
 
     status = {
         "status": "healthy",
         "uptime_seconds": round(now - start_time, 1),
         "progenitor_running": snapshot.health.is_running(),
         "progenitor_status": snapshot.health.status,  # Raw status from health.json
-        "version": getattr(chat_main.config, 'api_version', '0.1.0'),
+        "version": getattr(chat_main.config, "api_version", "0.1.0"),
         # State data
         "cycle_count": snapshot.health.cycle_count,  # Use health.cycle_count for accuracy
         "run_id": snapshot.health.run_id or snapshot.run_id,
@@ -2259,7 +2382,11 @@ async def _get_current_status() -> dict:
         "last_active": snapshot.health.last_active,
         # Loops
         "loops": [
-            {"name": loop_item.name, "status": loop_item.status, "current_task": loop_item.current_task}
+            {
+                "name": loop_item.name,
+                "status": loop_item.status,
+                "current_task": loop_item.current_task,
+            }
             for loop_item in snapshot.loops
         ],
         # Agents
@@ -2297,7 +2424,9 @@ async def _get_current_status() -> dict:
             "iteration": snapshot.build.iteration if snapshot.build else 0,
             "score": snapshot.build.score if snapshot.build else 0.0,
             "message_count": snapshot.build.message_count if snapshot.build else 0,
-        } if snapshot.build else None,
+        }
+        if snapshot.build
+        else None,
         "widgets": state_reader.get_widgets(),
         "sessions": {
             "total": snapshot.sessions.total if snapshot.sessions else 0,
@@ -2453,8 +2582,12 @@ async def close_all_sse_connections():
     status_count = len(_status_subscribers)
     total_count = chat_count + status_count
 
-    logger.info("Closing SSE connections: %d chat, %d status (total: %d)",
-                chat_count, status_count, total_count)
+    logger.info(
+        "Closing SSE connections: %d chat, %d status (total: %d)",
+        chat_count,
+        status_count,
+        total_count,
+    )
 
     # Set the shutdown event to signal all SSE generators to exit
     shutdown_event = get_sse_shutdown_event()
@@ -2463,7 +2596,7 @@ async def close_all_sse_connections():
     # Send shutdown event to all subscriber types
     shutdown_data = {
         "type": "shutdown",
-        "data": '{"reason": "server_shutdown", "message": "Server is shutting down"}'
+        "data": '{"reason": "server_shutdown", "message": "Server is shutting down"}',
     }
 
     for queue in _chat_subscribers:
@@ -2502,6 +2635,7 @@ async def close_all_sse_connections():
 # ============================================================================
 # NEW SPLIT SSE ENDPOINTS
 # ============================================================================
+
 
 async def _generate_chat_events() -> AsyncGenerator[str, None]:
     """Generate SSE events for chat/IPC stream only.
@@ -2543,7 +2677,7 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
 
                 # Check if this is a shutdown event
-                if event.get('type') == 'shutdown':
+                if event.get("type") == "shutdown":
                     yield f"event: shutdown\ndata: {event['data']}\n\n"
                     break
 
@@ -2607,7 +2741,7 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
                 event = await asyncio.wait_for(queue.get(), timeout=5.0)
 
                 # Check if this is a shutdown event
-                if event.get('type') == 'shutdown':
+                if event.get("type") == "shutdown":
                     yield f"event: shutdown\ndata: {event['data']}\n\n"
                     break
 
@@ -2660,8 +2794,8 @@ async def events_stream():
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Disable nginx buffering
-        }
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
     )
 
 
@@ -2698,14 +2832,15 @@ async def status_stream():
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Disable nginx buffering
-        }
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
     )
 
 
 # ============================================================================
 # BROADCAST FUNCTIONS
 # ============================================================================
+
 
 def broadcast_chat_event(event_type: str, data: dict):
     """
@@ -2724,10 +2859,7 @@ def broadcast_chat_event(event_type: str, data: dict):
     """
     import json
 
-    event = {
-        "type": event_type,
-        "data": json.dumps(data)
-    }
+    event = {"type": event_type, "data": json.dumps(data)}
 
     # Push to /chat subscribers
     for queue in _chat_subscribers:
@@ -2753,10 +2885,7 @@ def broadcast_status_event(event_type: str, data: dict):
     """
     import json
 
-    event = {
-        "type": event_type,
-        "data": json.dumps(data)
-    }
+    event = {"type": event_type, "data": json.dumps(data)}
 
     # Push to /status subscribers only
     for queue in _status_subscribers:
@@ -2769,20 +2898,21 @@ def broadcast_status_event(event_type: str, data: dict):
 def broadcast_alert(alert: AlertInfo):
     """Broadcast a new alert to all subscribers."""
     # Alerts go to chat stream
-    broadcast_chat_event("alert", {
-        "id": alert.id,
-        "type": alert.type,
-        "title": alert.title,
-        "message": alert.message,
-        "urgent": alert.urgent
-    })
+    broadcast_chat_event(
+        "alert",
+        {
+            "id": alert.id,
+            "type": alert.type,
+            "title": alert.title,
+            "message": alert.message,
+            "urgent": alert.urgent,
+        },
+    )
 
 
 def broadcast_status_change(status: str, details: dict | None = None):
     """Broadcast a status change to all subscribers."""
     # Status changes go to status stream
-    broadcast_status_event("status", {
-        "status": status,
-        "details": details or {},
-        "timestamp": time.time()
-    })
+    broadcast_status_event(
+        "status", {"status": status, "details": details or {}, "timestamp": time.time()}
+    )
