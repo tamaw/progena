@@ -28,7 +28,8 @@ progenitor/
 │   ├── frontend/       # React/Vite UI
 │   ├── agents/         # Agent implementations
 │   └── mcp/            # MCP server integrations
-├── prompts/
+├── data/
+│   ├── prompts/
 │   └── skills/         # DeepAgent SKILL.md files
 ├── tests/              # Test suites
 └── docs/               # Documentation
@@ -65,6 +66,6 @@ progenitor/
 
 ### References
 - Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
-- Loop Specification: `docs/loop.spec.md`
+- System Specification: `docs/SPEC.md`
 - Backend Details: `docs/BACKEND.md`
 - Project Structure: `docs/PROJECT_STRUCTURE.md`

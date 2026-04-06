@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class SessionConfig(BaseModel):
     """Configuration for session management."""
+
     session_timeout_minutes: int = 60 * 24  # 24 hours
     max_sessions: int = 1000
     cleanup_interval_seconds: int = 300  # 5 minutes
@@ -40,6 +41,7 @@ class SessionConfig(BaseModel):
 
 class UserPreferences(BaseModel):
     """User preferences that persist across sessions."""
+
     # UI preferences
     theme: str = "dark"  # dark, light
     font_size: str = "medium"  # small, medium, large
@@ -57,11 +59,13 @@ class UserPreferences(BaseModel):
     max_tokens: int | None = None
 
     # Feature toggles
-    enabled_features: list[str] = Field(default_factory=lambda: [
-        "attachments",
-        "web_search",
-        "code_highlighting",
-    ])
+    enabled_features: list[str] = Field(
+        default_factory=lambda: [
+            "attachments",
+            "web_search",
+            "code_highlighting",
+        ]
+    )
 
     # Custom settings
     custom: dict[str, Any] = Field(default_factory=dict)
@@ -69,6 +73,7 @@ class UserPreferences(BaseModel):
 
 class SessionState(BaseModel):
     """Full session state."""
+
     # Identity
     session_id: str = Field(default_factory=lambda: f"sess_{uuid.uuid4().hex[:16]}")
     user_id: str | None = None  # For authenticated users
@@ -281,9 +286,11 @@ class SessionManager:
                     expired.append(session_id)
 
             for session_id in expired:
-                session = self._sessions.pop(session_id, None)  # type: ignore[arg-type]
-                if session and session.user_id:
-                    self._user_sessions.pop(session.user_id, "")
+                expired_session = self._sessions.get(session_id)
+                if expired_session is not None:
+                    del self._sessions[session_id]
+                if expired_session and expired_session.user_id:
+                    self._user_sessions.pop(expired_session.user_id, "")
 
             if expired:
                 logger.debug("Cleaned up %d expired sessions", len(expired))
@@ -353,7 +360,8 @@ class SessionManager:
         """Get session statistics."""
         now = datetime.utcnow()
         active_count = sum(
-            1 for s in self._sessions.values()
+            1
+            for s in self._sessions.values()
             if (now - s.last_activity).total_seconds() < 300  # Active in last 5 min
         )
 
@@ -421,9 +429,9 @@ class SettingsManager:
             default_model=settings.get("default_model", "progenitor-v1"),
             temperature=settings.get("temperature", 0.7),
             max_tokens=settings.get("max_tokens"),
-            enabled_features=settings.get("enabled_features", [
-                "attachments", "web_search", "code_highlighting"
-            ]),
+            enabled_features=settings.get(
+                "enabled_features", ["attachments", "web_search", "code_highlighting"]
+            ),
         )
 
         # Extract extension states (keys with "-")
@@ -438,9 +446,17 @@ class SettingsManager:
 
         # Custom settings (not standard prefs or extension)
         known_keys = {
-            "theme", "font_size", "show_timestamps", "show_token_counts",
-            "stream_responses", "auto_scroll", "show_thinking",
-            "default_model", "temperature", "max_tokens", "enabled_features",
+            "theme",
+            "font_size",
+            "show_timestamps",
+            "show_token_counts",
+            "stream_responses",
+            "auto_scroll",
+            "show_thinking",
+            "default_model",
+            "temperature",
+            "max_tokens",
+            "enabled_features",
         }
         for key, value in settings.items():
             if key not in known_keys and "-" not in key:
@@ -470,6 +486,7 @@ class SettingsManager:
 
 
 # FastAPI middleware helpers
+
 
 async def get_session_from_request(
     request,

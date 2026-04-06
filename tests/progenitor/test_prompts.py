@@ -8,7 +8,7 @@ from app.progenitor.llm.prompts import DEFAULT_PROMPTS_DIR, PromptTemplates
 
 
 def test_prompt_templates_uses_project_prompts_by_default():
-    """Default prompt resolution uses top-level prompts/ directory."""
+    """Default prompt resolution uses the checked-in data/prompts/ directory."""
     prompts = PromptTemplates()
     assert prompts.prompts_dir == DEFAULT_PROMPTS_DIR
     assert prompts.prompts_dir.exists()
@@ -17,17 +17,18 @@ def test_prompt_templates_uses_project_prompts_by_default():
 
 
 def test_prompt_templates_invalid_env_raises(monkeypatch, tmp_path):
-    """Invalid PROGENITOR_PROMPTS_DIR raises FileNotFoundError immediately."""
+    """Invalid PROGENITOR_DATA_DIR raises FileNotFoundError immediately."""
     invalid_dir = tmp_path / "does-not-exist"
-    monkeypatch.setenv("PROGENITOR_PROMPTS_DIR", str(invalid_dir))
+    monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+    monkeypatch.setenv("PROGENITOR_DATA_DIR", str(invalid_dir))
 
-    with pytest.raises(FileNotFoundError, match="PROGENITOR_PROMPTS_DIR"):
+    with pytest.raises(FileNotFoundError, match="PROGENITOR_DATA_DIR"):
         PromptTemplates()
 
 
 def test_prompt_templates_explicit_dir_is_honored(tmp_path):
     """Explicit prompts_dir override should always be used."""
-    custom_dir = tmp_path / "prompts"
+    custom_dir = tmp_path / "data" / "prompts"
     (custom_dir / "progenitor").mkdir(parents=True)
     (custom_dir / "progenitor" / "decide.md").write_text("custom decide prompt", encoding="utf-8")
 

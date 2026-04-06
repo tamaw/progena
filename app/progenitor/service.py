@@ -63,10 +63,7 @@ class ProgenitorService:
             project_root: Project root path. If None, uses default.
         """
         self.project_root = project_root or Path(__file__).parent.parent.parent
-        self.config = config or get_config(
-            self.project_root,
-            self.project_root / "config"
-        )
+        self.config = config or get_config(self.project_root, self.project_root / "config")
 
         self._initialized = False
         self._lock = asyncio.Lock()
@@ -110,7 +107,11 @@ class ProgenitorService:
             await self.state_manager.initialize()
 
             # Initialize LLM client
-            self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
+            self.llm_client = LLMClient(
+                config=self.config.llm,
+                mcp_config=self.config.mcp,
+                prompts_dir=self.config.storage.prompts_dir,
+            )
 
             # Initialize tool registry
             self.tool_registry = ToolRegistry(
@@ -142,10 +143,7 @@ class ProgenitorService:
             self._session_id = f"session_{uuid.uuid4().hex[:12]}"
 
             self._initialized = True
-            logger.info(
-                "Progenitor service initialized (session=%s)",
-                self._session_id
-            )
+            logger.info("Progenitor service initialized (session=%s)", self._session_id)
 
     async def _register_mcp_tools(self) -> None:
         """Register MCP tools discovered via configured MCP endpoint."""
@@ -248,7 +246,7 @@ class ProgenitorService:
                     last_result.update(node_output)
                     if chunk := node_output.get("pending_response"):
                         # Yield new content
-                        new_content = chunk[len(full_response):]
+                        new_content = chunk[len(full_response) :]
                         if new_content:
                             full_response = chunk
                             yield new_content
@@ -461,9 +459,7 @@ def get_service(config: ProgenitorConfig | None = None) -> ProgenitorService:
     return _service
 
 
-async def get_initialized_service(
-    config: ProgenitorConfig | None = None
-) -> ProgenitorService:
+async def get_initialized_service(config: ProgenitorConfig | None = None) -> ProgenitorService:
     """Get an initialized service instance.
 
     Args:

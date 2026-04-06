@@ -19,7 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from ..config import ProgenitorConfig, get_config
-from ..llm.prompts import PromptTemplates
+from ..llm.prompts import PromptTemplates, resolve_skills_dir
 from .backends import create_progenitor_backend
 from .langchain_adapter import create_langchain_model
 from .middleware import AuditLoggingMiddleware, MetricsMiddleware, SecretRedactionMiddleware
@@ -81,7 +81,7 @@ def create_progenitor_agent(
         project_root: Root directory for filesystem backend. Defaults to cwd.
         log_dir: Directory for JSONL audit logs. If None, logs to Python logger only.
         skills_dirs: Paths to skill directories for progressive disclosure.
-                     If None, auto-discovers from prompts/skills/.
+                     If None, auto-discovers from data/skills/progenitor/.
         memory_paths: Paths to memory files (e.g., AGENTS.md).
                       If None, auto-discovers from project root.
         inner_loop_graph: Compiled LangGraph for the inner build loop.
@@ -91,7 +91,8 @@ def create_progenitor_agent(
         Compiled DeepAgent graph ready for invoke/stream.
     """
     if config is None:
-        config = get_config(validate=False)
+        resolved_project_root = Path(project_root) if project_root else None
+        config = get_config(project_root=resolved_project_root, validate=False)
 
     # Create LangChain model routed through Azure endpoint
     model = create_langchain_model(config.llm)
@@ -104,6 +105,7 @@ def create_progenitor_agent(
     # Default to in-memory store for development
     if store is None:
         from langgraph.store.memory import InMemoryStore
+
         store = InMemoryStore()
 
     # Core-only backend: no project filesystem, no shell.
@@ -123,10 +125,16 @@ def create_progenitor_agent(
         MetricsMiddleware(),
     ]
 
-    # Auto-discover skills from prompts/skills/ if not provided
+    prompts_dir = Path(config.storage.prompts_dir).expanduser().resolve()
+    if not prompts_dir.is_dir():
+        raise FileNotFoundError(
+            f"Configured prompts_dir does not exist: {prompts_dir}. "
+            "Set PROGENITOR_DATA_DIR (or legacy PROGENITOR_PROMPTS_DIR) or update config.storage.prompts_dir."
+        )
+
+    # Auto-discover skills from data/skills/progenitor/ if not provided
     if skills_dirs is None:
-        root = Path(project_root) if project_root else Path.cwd()
-        skills_path = root / "prompts" / "skills"
+        skills_path = resolve_skills_dir("progenitor", prompts_dir=prompts_dir)
         if skills_path.is_dir():
             skills_dirs = [str(skills_path)]
 
@@ -139,7 +147,7 @@ def create_progenitor_agent(
             memory_paths.append(str(agents_md))
 
     # Use the canonical genesis prompt so every conversation starts with it.
-    system_prompt = PromptTemplates().get_genesis_prompt().strip()
+    system_prompt = PromptTemplates(prompts_dir=prompts_dir).get_genesis_prompt().strip()
 
     agent = create_deep_agent(
         name="progenitor",

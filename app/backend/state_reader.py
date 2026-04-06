@@ -20,9 +20,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
+DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DEFAULT_STATE_DIR = DEFAULT_DATA_DIR / "state"
+DEFAULT_LOGS_DIR = Path(__file__).resolve().parents[2] / "logs"
 PLAIN_LOG_LINE_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
     r"\s+-\s+(?P<logger>.*?)\s+-\s+(?P<level>[A-Z]+)\s+-\s+(?P<message>.*)$"
@@ -92,14 +95,16 @@ def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> date
 
 
 def _entry_identity(entry: dict[str, Any]) -> str:
-    payload = "|".join([
-        str(entry.get("relative_path", "")),
-        str(entry.get("timestamp", "")),
-        str(entry.get("level", "")),
-        str(entry.get("source", "")),
-        str(entry.get("message", "")),
-    ])
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    payload = "|".join(
+        [
+            str(entry.get("relative_path", "")),
+            str(entry.get("timestamp", "")),
+            str(entry.get("level", "")),
+            str(entry.get("source", "")),
+            str(entry.get("message", "")),
+        ]
+    )
+    return hashlib.sha1(payload.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 @dataclass
@@ -286,11 +291,13 @@ class BuildInfo:
         return cls(
             in_progress=data.get("build_in_progress", False),
             phase=data.get("build_phase"),
-            task_description=data.get("build_task_description") or data.get("task", {}).get("description"),
+            task_description=data.get("build_task_description")
+            or data.get("task", {}).get("description"),
             started_at=data.get("build_started_at"),
             iteration=data.get("iteration", {}).get("current", 0),
             score=verification.get("current_score", verify_phase.get("score", 0.0)),
-            message_count=len(data.get("build_messages", [])) + len(data.get("history", {}).get("messages", [])),
+            message_count=len(data.get("build_messages", []))
+            + len(data.get("history", {}).get("messages", [])),
         )
 
 
@@ -333,10 +340,13 @@ class StateReader:
         sessions_dir: Path | None = None,
         logs_dir: Path | None = None,
     ):
-        self.state_dir = state_dir or Path("data/state")
+        data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(DEFAULT_DATA_DIR)))
+        self.state_dir = state_dir or Path(
+            os.getenv("PROGENITOR_STATE_DIR", str(data_dir / "state"))
+        )
         self.config_dir = config_dir or self.state_dir.parent / "config"
         self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
-        self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", "logs"))
+        self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
@@ -478,7 +488,11 @@ class StateReader:
         latest = None
         latest_session_id = None
         for session in sessions:
-            session_last = session.get("last_activity") or session.get("updated_at") or session.get("created_at")
+            session_last = (
+                session.get("last_activity")
+                or session.get("updated_at")
+                or session.get("created_at")
+            )
             if session_last and (latest is None or str(session_last) > str(latest)):
                 latest = str(session_last)
                 latest_session_id = session.get("session_id") or session.get("id")
@@ -502,7 +516,9 @@ class StateReader:
             return str(logs[0].get("message") or fallback)
         return fallback
 
-    def _normalize_widget_logs(self, entries: list[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
+    def _normalize_widget_logs(
+        self, entries: list[dict[str, Any]], limit: int = 20
+    ) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         for entry in entries[:limit]:
             normalized.append(
@@ -540,7 +556,9 @@ class StateReader:
                 name="Executor",
                 status=executor_status,
                 last_activity=health.last_active,
-                current_task=f"Executing ({actions} actions)" if executor_status == "active" else None,
+                current_task=f"Executing ({actions} actions)"
+                if executor_status == "active"
+                else None,
             ),
         ]
 
@@ -683,7 +701,12 @@ class StateReader:
                 or payload.get("created_at")
                 or self._path_fallback_timestamp(path)
             )
-            message = payload.get("message") or payload.get("msg") or payload.get("content") or json.dumps(payload)
+            message = (
+                payload.get("message")
+                or payload.get("msg")
+                or payload.get("content")
+                or json.dumps(payload)
+            )
             entry = {
                 "timestamp": str(timestamp),
                 "time": str(timestamp),
@@ -792,7 +815,9 @@ class StateReader:
                     if folder_path.is_file():
                         return [folder_path]
                     files = [path for path in folder_path.rglob("*") if path.is_file()]
-                    files.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+                    files.sort(
+                        key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True
+                    )
                     return files
             return []
 
@@ -802,7 +827,8 @@ class StateReader:
 
         source_lc = source.lower()
         return [
-            path for path in files
+            path
+            for path in files
             if self._entry_matches_source(
                 {
                     "relative_path": self._relative_log_path(path),
@@ -837,7 +863,9 @@ class StateReader:
         if search and search_mode == "regex":
             regex = re.compile(search, re.IGNORECASE)
 
-        candidate_files = self._candidate_log_files(source=source, folder=folder, file_path=file_path)
+        candidate_files = self._candidate_log_files(
+            source=source, folder=folder, file_path=file_path
+        )
 
         for path in candidate_files:
             lines = self._read_text_lines(path, limit=None)
@@ -874,7 +902,9 @@ class StateReader:
                         continue
                 entries.append(entry)
 
-        entries.sort(key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True)
+        entries.sort(
+            key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
+        )
         return entries
 
     def query_logs(
@@ -906,7 +936,9 @@ class StateReader:
         returned_entries = entries
 
         if after:
-            cursor_index = next((index for index, entry in enumerate(entries) if entry.get("id") == after), None)
+            cursor_index = next(
+                (index for index, entry in enumerate(entries) if entry.get("id") == after), None
+            )
             if cursor_index is None:
                 cursor_found = False
             else:
@@ -932,7 +964,8 @@ class StateReader:
         limit: int = 500,
         source: str | None = None,
     ) -> list[dict[str, Any]]:
-        return self.query_logs(level=level, search=search, limit=limit, source=source)["entries"]
+        logs = self.query_logs(level=level, search=search, limit=limit, source=source)
+        return cast(list[dict[str, Any]], logs["entries"])
 
     def get_logs_for_widget(self, widget_name: str, limit: int = 40) -> list[dict[str, Any]]:
         normalized = _normalize_name(widget_name)
@@ -950,7 +983,9 @@ class StateReader:
                 entry = self._line_to_entry(line, source, path)
                 if entry:
                     matches.append(entry)
-        matches.sort(key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True)
+        matches.sort(
+            key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
+        )
         return matches[:limit]
 
     def get_widgets(self) -> list[dict[str, Any]]:
@@ -964,9 +999,8 @@ class StateReader:
                 continue
             logs = self._normalize_widget_logs(self.get_logs_for_widget(agent.name))
             status = self._status_with_health(agent.status, health.is_running())
-            summary = (
-                agent.status_message
-                or self._summary_from_logs(logs, agent.description or f"{agent.name} is {status}")
+            summary = agent.status_message or self._summary_from_logs(
+                logs, agent.description or f"{agent.name} is {status}"
             )
             widgets.append(
                 {
@@ -1027,7 +1061,9 @@ class StateReader:
                     "last_run_at": item.raw.get("last_run"),
                     "last_run_status": item.raw.get("last_run_status", "idle"),
                     "timezone": item.raw.get("timezone", "UTC"),
-                    "logs": self._normalize_widget_logs(self.get_logs_for_widget(item.id, limit=20), limit=20),
+                    "logs": self._normalize_widget_logs(
+                        self.get_logs_for_widget(item.id, limit=20), limit=20
+                    ),
                     "updated_at": item.raw.get("updated_at") or item.raw.get("created_at"),
                 }
             )
@@ -1040,7 +1076,9 @@ class StateReader:
             "timestamp": snapshot.timestamp,
             "sessions": {
                 "total": snapshot.sessions.total if snapshot.sessions else 0,
-                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_session_id": snapshot.sessions.latest_session_id
+                if snapshot.sessions
+                else None,
                 "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
             },
             "health": {
@@ -1126,7 +1164,11 @@ class StateReader:
                 for s in snapshot.schedule
             ],
             "loops": [
-                {"name": loop_item.name, "status": loop_item.status, "current_task": loop_item.current_task}
+                {
+                    "name": loop_item.name,
+                    "status": loop_item.status,
+                    "current_task": loop_item.current_task,
+                }
                 for loop_item in snapshot.loops
             ],
             "cycle_count": snapshot.cycle_count,
@@ -1134,7 +1176,9 @@ class StateReader:
             "messages_count": snapshot.messages_count,
             "sessions": {
                 "total": snapshot.sessions.total if snapshot.sessions else 0,
-                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_session_id": snapshot.sessions.latest_session_id
+                if snapshot.sessions
+                else None,
                 "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
             },
             "widgets": self.get_widgets(),
@@ -1211,7 +1255,9 @@ class StateReader:
             return True
         if len(new.backlog) != len(old.backlog):
             return True
-        return (new.sessions.total if new.sessions else 0) != (old.sessions.total if old.sessions else 0)
+        return (new.sessions.total if new.sessions else 0) != (
+            old.sessions.total if old.sessions else 0
+        )
 
 
 _state_reader: StateReader | None = None

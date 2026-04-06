@@ -102,12 +102,15 @@ class TestUIRoutes:
         assert "total" in data
 
     def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
-        prompts_dir = tmp_path / "prompts"
+        prompts_dir = tmp_path / "data" / "prompts"
         (prompts_dir / "builder_agent").mkdir(parents=True)
         (prompts_dir / "progenitor" / "nested").mkdir(parents=True)
         (prompts_dir / "builder_agent" / "think.md").write_text("builder content", encoding="utf-8")
-        (prompts_dir / "progenitor" / "nested" / "decide.md").write_text("progenitor content", encoding="utf-8")
-        monkeypatch.setenv("PROGENITOR_PROMPTS_DIR", str(prompts_dir))
+        (prompts_dir / "progenitor" / "nested" / "decide.md").write_text(
+            "progenitor content", encoding="utf-8"
+        )
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
 
         response = client.get("/api/ui/prompts")
 
@@ -118,16 +121,19 @@ class TestUIRoutes:
             "builder_agent/think.md",
             "progenitor/nested/decide.md",
         }
-        builder_prompt = next(prompt for prompt in data["prompts"] if prompt["path"] == "builder_agent/think.md")
+        builder_prompt = next(
+            prompt for prompt in data["prompts"] if prompt["path"] == "builder_agent/think.md"
+        )
         assert builder_prompt["primary_agent"] == "builder_agent"
         assert "builder_agent" in builder_prompt["associated_agents"]
 
     def test_prompts_endpoint_updates_prompt_content(self, client, tmp_path, monkeypatch):
-        prompts_dir = tmp_path / "prompts"
+        prompts_dir = tmp_path / "data" / "prompts"
         (prompts_dir / "builder_agent").mkdir(parents=True)
         prompt_path = prompts_dir / "builder_agent" / "think.md"
         prompt_path.write_text("before", encoding="utf-8")
-        monkeypatch.setenv("PROGENITOR_PROMPTS_DIR", str(prompts_dir))
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
 
         response = client.put(
             "/api/ui/prompts/content",
@@ -313,8 +319,6 @@ class TestDashboardRoutes:
         assert response.status_code == 404
 
 
-
-
 class TestLogsEndpoint:
     """Tests for /api/ui/logs endpoint."""
 
@@ -354,7 +358,9 @@ class TestLogsEndpoint:
         response = client.get("/api/ui/logs?search=test")
         assert response.status_code == 200
 
-    def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(self, client, kanban_state_reader):
+    def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(
+        self, client, kanban_state_reader
+    ):
         """Test grouped source metadata and parsed timestamps from plain-text logs."""
         builder_dir = kanban_state_reader.logs_dir / "builder"
         builder_dir.mkdir(parents=True, exist_ok=True)
@@ -381,22 +387,45 @@ class TestLogsEndpoint:
         assert any(option["id"] == "progenitor.log" for option in groups["root"]["options"])
         assert any(option["id"] == "builder/builder.log" for option in groups["builder"]["options"])
 
-        builder_entry = next(entry for entry in data["entries"] if entry["relative_path"] == "builder/builder.log")
+        builder_entry = next(
+            entry for entry in data["entries"] if entry["relative_path"] == "builder/builder.log"
+        )
         assert builder_entry["timestamp"] == "2026-03-08 00:33:35"
         assert builder_entry["source"] == "app.agents.builder_progenitor.agent"
 
-    def test_logs_json_supports_incremental_cursor_and_regex_search(self, client, kanban_state_reader):
+    def test_logs_json_supports_incremental_cursor_and_regex_search(
+        self, client, kanban_state_reader
+    ):
         """Test cursor-based incremental fetches and regex search."""
         base_time = datetime.now(UTC).replace(microsecond=0)
         (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
-            "\n".join([
-                json.dumps({"message": "alpha ready", "timestamp": (base_time - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"), "level": "info"}),
-                json.dumps({"message": "beta failed", "timestamp": base_time.isoformat().replace("+00:00", "Z"), "level": "error"}),
-            ]) + "\n",
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "message": "alpha ready",
+                            "timestamp": (base_time - timedelta(minutes=1))
+                            .isoformat()
+                            .replace("+00:00", "Z"),
+                            "level": "info",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "message": "beta failed",
+                            "timestamp": base_time.isoformat().replace("+00:00", "Z"),
+                            "level": "error",
+                        }
+                    ),
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
 
-        full_response = client.get("/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0")
+        full_response = client.get(
+            "/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0"
+        )
         assert full_response.status_code == 200
         full_data = full_response.json()
         assert full_data["total"] == 2
@@ -415,11 +444,32 @@ class TestLogsEndpoint:
         range_start = range_end - timedelta(days=1)
         old_date = range_start - timedelta(days=1)
         (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
-            "\n".join([
-                json.dumps({"message": "old entry", "timestamp": f"{old_date.isoformat()}T10:00:00Z", "level": "info"}),
-                json.dumps({"message": "in range", "timestamp": f"{range_start.isoformat()}T10:00:00Z", "level": "warning"}),
-                json.dumps({"message": "boundary end", "timestamp": f"{range_end.isoformat()}T23:59:00Z", "level": "error"}),
-            ]) + "\n",
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "message": "old entry",
+                            "timestamp": f"{old_date.isoformat()}T10:00:00Z",
+                            "level": "info",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "message": "in range",
+                            "timestamp": f"{range_start.isoformat()}T10:00:00Z",
+                            "level": "warning",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "message": "boundary end",
+                            "timestamp": f"{range_end.isoformat()}T23:59:00Z",
+                            "level": "error",
+                        }
+                    ),
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -429,7 +479,10 @@ class TestLogsEndpoint:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["date_range"] == {"start": range_start.isoformat(), "end": range_end.isoformat()}
+        assert data["date_range"] == {
+            "start": range_start.isoformat(),
+            "end": range_end.isoformat(),
+        }
         assert [entry["message"] for entry in data["entries"]] == ["boundary end", "in range"]
         assert {entry["level"] for entry in data["entries"]} == {"warn", "error"}
 
@@ -437,7 +490,8 @@ class TestLogsEndpoint:
         """Test export endpoint returns attachment headers."""
         timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
-            json.dumps({"message": "decision made", "timestamp": timestamp, "level": "info"}) + "\n",
+            json.dumps({"message": "decision made", "timestamp": timestamp, "level": "info"})
+            + "\n",
             encoding="utf-8",
         )
 
@@ -607,8 +661,6 @@ class TestUIAccessibility:
         pass
 
 
-
-
 class TestSSEConnection:
     """Tests for Server-Sent Events connectivity."""
 
@@ -620,8 +672,16 @@ class TestSSEConnection:
 
         # These fields are used by SSE status updates
         required_fields = [
-            "connected", "server_status", "progenitor_running", "uptime_seconds",
-            "version", "cycle_count", "agents", "backlog", "schedule", "loops"
+            "connected",
+            "server_status",
+            "progenitor_running",
+            "uptime_seconds",
+            "version",
+            "cycle_count",
+            "agents",
+            "backlog",
+            "schedule",
+            "loops",
         ]
 
         for field in required_fields:
@@ -669,7 +729,9 @@ class TestSplitSSEEndpoints:
         paths = openapi.get("paths", {})
         # The SSE stream endpoint has the same path as the snapshot but different handler
         # The snapshot is registered first, so check both handlers exist
-        assert "/api/ui/status" in paths or "/api/ui/status/snapshot" in paths, "Status endpoint should be registered"
+        assert "/api/ui/status" in paths or "/api/ui/status/snapshot" in paths, (
+            "Status endpoint should be registered"
+        )
 
     def test_broadcast_functions_exist(self):
         """Test that the broadcast functions are available."""
@@ -677,6 +739,7 @@ class TestSplitSSEEndpoints:
             broadcast_chat_event,
             broadcast_status_event,
         )
+
         # Just verify they're callable
         assert callable(broadcast_chat_event)
         assert callable(broadcast_status_event)
@@ -744,7 +807,9 @@ class TestWorkspaceBridgeActions:
             payload = response.json()
             assert payload["type"] == "schedule"
             assert payload["title"] == "Morning Check-in"
-            assert payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
+            assert (
+                payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
+            )
             updated = schedule_path.read_text(encoding="utf-8")
             assert "Morning Check-in" in updated
             assert "Summarize overnight alerts and prep the inbox." in updated

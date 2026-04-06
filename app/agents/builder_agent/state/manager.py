@@ -33,16 +33,20 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 # Cross-platform file locking
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import msvcrt
+
     def lock_file(f):
         msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+
     def unlock_file(f):
         msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 else:
     import fcntl
+
     def lock_file(f):
         fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def unlock_file(f):
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
@@ -69,7 +73,7 @@ class StateManager:
     """
 
     CORE_FILES: dict[str, str] = {
-        "build_state": "build_state.json",      # Agent builds only
+        "build_state": "build_state.json",  # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
         "registry": "agents.json",
         "mcp": "mcp.json",
@@ -161,7 +165,6 @@ class StateManager:
                 "build_started_at": None,
                 "build_phase": None,
                 "task_id": None,
-
                 # Nested objects for organization
                 "task": {
                     "description": None,
@@ -219,14 +222,11 @@ class StateManager:
                     "awaiting": False,
                     "response": None,
                 },
-
                 # Complex objects at top level
                 "should_iterate": True,
                 "iteration_stop_reason": None,
-
                 # Backlog stays at top level
                 "backlog": [],
-
                 # Build settings
                 "build_settings": None,
             },
@@ -237,14 +237,14 @@ class StateManager:
                 "actions_this_cycle": 0,
                 "shutdown_requested": False,
                 "last_checkpoint": None,
-                "messages": [],                    # Chat history (user ↔ progenitor)
+                "messages": [],  # Chat history (user ↔ progenitor)
                 # NOTE: schedule is stored in schedule.json (system feature, not user session)
-                "attachments": [],                 # Attachment path links
-                "tool_calls": [],                  # Session tool calls
+                "attachments": [],  # Attachment path links
+                "tool_calls": [],  # Session tool calls
                 "current_input": None,
                 "pending_response": None,
                 "current_decision": None,
-                "current_build_request": None,     # Reference to active build (id only)
+                "current_build_request": None,  # Reference to active build (id only)
             },
             "registry": {},
             "mcp": {"tools": []},
@@ -300,13 +300,11 @@ class StateManager:
 
         # Write to temp file in same directory
         fd, tmp_path = tempfile.mkstemp(
-            dir=filepath.parent,
-            prefix=f".{filepath.name}.",
-            suffix=".tmp"
+            dir=filepath.parent, prefix=f".{filepath.name}.", suffix=".tmp"
         )
 
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, default=str)
                 f.flush()
                 os.fsync(f.fileno())
@@ -323,7 +321,10 @@ class StateManager:
                     if attempt < max_retries - 1:
                         logger.debug(
                             "Retry %d/%d: os.replace failed for %s: %s",
-                            attempt + 1, max_retries, filepath.name, pe
+                            attempt + 1,
+                            max_retries,
+                            filepath.name,
+                            pe,
                         )
                         time.sleep(retry_delay)
                         retry_delay *= 2  # Exponential backoff
@@ -345,7 +346,7 @@ class StateManager:
         if not filepath.exists():
             return None
 
-        async with aiofiles.open(filepath, encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding="utf-8") as f:
             content = await f.read()
             # Handle empty files gracefully
             if not content or not content.strip():
@@ -371,7 +372,7 @@ class StateManager:
         line = json.dumps(entry, default=str)
         line = redact_secrets(line) + "\n"
 
-        async with aiofiles.open(filepath, 'a', encoding='utf-8') as f:
+        async with aiofiles.open(filepath, "a", encoding="utf-8") as f:
             await f.write(line)
             await f.flush()
             # fsync for durability - use os.fsync on the file descriptor
@@ -387,7 +388,7 @@ class StateManager:
         line = json.dumps(entry, default=str)
         line = redact_secrets(line) + "\n"
 
-        async with aiofiles.open(filepath, 'a', encoding='utf-8') as f:
+        async with aiofiles.open(filepath, "a", encoding="utf-8") as f:
             await f.write(line)
             await f.flush()
             os.fsync(f.fileno())
@@ -459,17 +460,14 @@ class StateManager:
         """
         async with self._file_lock("schedule"):
             data = [item.model_dump() for item in schedule]
-            await self._atomic_write_json(
-                self.state_dir / self.CORE_FILES["schedule"],
-                data
-            )
+            await self._atomic_write_json(self.state_dir / self.CORE_FILES["schedule"], data)
             self._state_cache["schedule"] = data
 
     # SpecDoc management (persistent spec artifact in build_state.json)
     async def get_spec_doc(self) -> dict[str, Any] | None:
         """Get the current spec_doc from build_state, if it exists."""
         state = await self.get_build_state()
-        return state.get("spec_doc")
+        return cast(dict[str, Any] | None, state.get("spec_doc"))
 
     async def save_spec_doc(self, spec_doc) -> None:
         """Save spec_doc to build_state.json (backward compatible - only adds key)."""
@@ -491,17 +489,12 @@ class StateManager:
     async def get_registry(self) -> dict[str, Any]:
         """Get the agent/tool registry."""
         async with self._file_lock("registry"):
-            return await self._read_json(
-                self._path_for("registry")
-            ) or {}
+            return await self._read_json(self._path_for("registry")) or {}
 
     async def save_registry(self, registry: dict[str, Any]) -> None:
         """Save the registry."""
         async with self._file_lock("registry"):
-            await self._atomic_write_json(
-                self._path_for("registry"),
-                registry
-            )
+            await self._atomic_write_json(self._path_for("registry"), registry)
             self._state_cache["registry"] = registry
 
     # ==========================================================================
@@ -517,9 +510,7 @@ class StateManager:
         if "build_state" in self._state_cache:
             return cast(dict[str, Any], self._state_cache["build_state"])
         async with self._file_lock("build_state"):
-            data = await self._read_json(
-                self.state_dir / self.CORE_FILES["build_state"]
-            ) or {}
+            data = await self._read_json(self.state_dir / self.CORE_FILES["build_state"]) or {}
             self._state_cache["build_state"] = data
             return data
 
@@ -528,10 +519,7 @@ class StateManager:
         # Ensure nested objects exist
         state = self._ensure_nested_structure(state)
         async with self._file_lock("build_state"):
-            await self._atomic_write_json(
-                self.state_dir / self.CORE_FILES["build_state"],
-                state
-            )
+            await self._atomic_write_json(self.state_dir / self.CORE_FILES["build_state"], state)
             self._state_cache["build_state"] = state
 
     def _ensure_nested_structure(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -541,18 +529,34 @@ class StateManager:
         if "iteration" not in state:
             state["iteration"] = {"current": 0, "max": 20, "start_time": None}
         if "spec" not in state:
-            state["spec"] = {"file_path": None, "revision": 0, "created_at": None, "updated_at": None}
+            state["spec"] = {
+                "file_path": None,
+                "revision": 0,
+                "created_at": None,
+                "updated_at": None,
+            }
         if "phases" not in state:
             state["phases"] = {}
         for phase in ["think", "plan", "execute", "verify"]:
             if phase not in state["phases"]:
                 state["phases"][phase] = {}
         if "history" not in state:
-            state["history"] = {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []}
+            state["history"] = {
+                "artefacts": [],
+                "verification_reports": [],
+                "lessons_learned": [],
+                "messages": [],
+            }
         if "best" not in state:
             state["best"] = {"iteration": None, "score": 0.0, "passed": False}
         if "clarification" not in state:
-            state["clarification"] = {"needed": False, "question": None, "context": None, "awaiting": False, "response": None}
+            state["clarification"] = {
+                "needed": False,
+                "question": None,
+                "context": None,
+                "awaiting": False,
+                "response": None,
+            }
         return state
 
     async def update_build_state(self, updates: dict[str, Any]) -> None:
@@ -572,11 +576,7 @@ class StateManager:
         For non-dict values, updates override base.
         """
         for key, value in updates.items():
-            if (
-                key in base
-                and isinstance(base[key], dict)
-                and isinstance(value, dict)
-            ):
+            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
                 self._deep_merge(base[key], value)
             else:
                 base[key] = value
@@ -589,7 +589,12 @@ class StateManager:
         """
         state = await self.get_build_state()
         if "history" not in state:
-            state["history"] = {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []}
+            state["history"] = {
+                "artefacts": [],
+                "verification_reports": [],
+                "lessons_learned": [],
+                "messages": [],
+            }
         if "messages" not in state["history"]:
             state["history"]["messages"] = []
         state["history"]["messages"].append(message)
@@ -608,19 +613,14 @@ class StateManager:
         if "current_state" in self._state_cache:
             return cast(dict[str, Any], self._state_cache["current_state"])
         async with self._file_lock("current_state"):
-            data = await self._read_json(
-                self.state_dir / self.CORE_FILES["current_state"]
-            ) or {}
+            data = await self._read_json(self.state_dir / self.CORE_FILES["current_state"]) or {}
             self._state_cache["current_state"] = data
             return data
 
     async def save_current_state(self, state: dict[str, Any]) -> None:
         """Save current progenitor agent state."""
         async with self._file_lock("current_state"):
-            await self._atomic_write_json(
-                self.state_dir / self.CORE_FILES["current_state"],
-                state
-            )
+            await self._atomic_write_json(self.state_dir / self.CORE_FILES["current_state"], state)
             self._state_cache["current_state"] = state
 
     async def update_current_state(self, updates: dict[str, Any]) -> None:
@@ -637,14 +637,15 @@ class StateManager:
         """Get chat messages from current_state."""
         state = await self.get_current_state()
         messages_data = state.get("messages", [])
-        return [ConversationMessage(**msg) if isinstance(msg, dict) else msg for msg in messages_data]
+        return [
+            ConversationMessage(**msg) if isinstance(msg, dict) else msg for msg in messages_data
+        ]
 
     async def save_messages(self, messages: list[ConversationMessage]) -> None:
         """Save chat messages to current_state."""
         state = await self.get_current_state()
         state["messages"] = [
-            msg.model_dump() if hasattr(msg, "model_dump") else msg
-            for msg in messages
+            msg.model_dump() if hasattr(msg, "model_dump") else msg for msg in messages
         ]
         await self.save_current_state(state)
 
@@ -672,16 +673,19 @@ class StateManager:
         else:
             # It's a dict - convert to ScheduleEntry
             from .models import ScheduleEntry
+
             schedule.append(ScheduleEntry(**entry))
         await self.save_schedule(schedule)
 
         # Log the schedule event
         entry_dict = entry.model_dump() if hasattr(entry, "model_dump") else entry
-        await self.log_schedule_event({
-            "event": "entry_added",
-            "schedule_id": entry_dict.get("id"),
-            "description": entry_dict.get("description"),
-        })
+        await self.log_schedule_event(
+            {
+                "event": "entry_added",
+                "schedule_id": entry_dict.get("id"),
+                "description": entry_dict.get("description"),
+            }
+        )
 
     async def remove_schedule_entry(self, schedule_id: str) -> bool:
         """Remove a schedule entry from schedule.json by ID.
@@ -698,10 +702,12 @@ class StateManager:
 
         if len(schedule) < original_len:
             await self.save_schedule(schedule)
-            await self.log_schedule_event({
-                "event": "entry_removed",
-                "schedule_id": schedule_id,
-            })
+            await self.log_schedule_event(
+                {
+                    "event": "entry_removed",
+                    "schedule_id": schedule_id,
+                }
+            )
             return True
         return False
 
@@ -721,13 +727,16 @@ class StateManager:
                 entry_dict = entry.model_dump()
                 entry_dict.update(updates)
                 from .models import ScheduleEntry
+
                 schedule[i] = ScheduleEntry(**entry_dict)
                 await self.save_schedule(schedule)
-                await self.log_schedule_event({
-                    "event": "entry_updated",
-                    "schedule_id": schedule_id,
-                    "updates": list(updates.keys()),
-                })
+                await self.log_schedule_event(
+                    {
+                        "event": "entry_updated",
+                        "schedule_id": schedule_id,
+                        "updates": list(updates.keys()),
+                    }
+                )
                 return True
         return False
 
@@ -780,14 +789,13 @@ class StateManager:
             # already saved it correctly with a full read-modify-write pattern.
             # The cache may be stale/incomplete.
             if name == "build_state" and data and data.get("build_phase") == "suspended":
-                logger.debug("commit_state: Skipping build_state (already saved by suspend handler)")
+                logger.debug(
+                    "commit_state: Skipping build_state (already saved by suspend handler)"
+                )
                 continue
 
             async with self._file_lock(name):
-                await self._atomic_write_json(
-                    self._path_for(name),
-                    data
-                )
+                await self._atomic_write_json(self._path_for(name), data)
 
     async def read_conversation_log(self, limit: int = 100) -> list[dict[str, Any]]:
         """Read recent conversation log entries asynchronously."""
@@ -809,33 +817,42 @@ class StateManager:
         """Log the start of an inner loop iteration."""
         from ..runtime.time_utils import utcnow_isoformat
 
-        ideal_state_dict = ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
+        ideal_state_dict = (
+            ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
+        )
 
         entry = {
             "event": "iteration_start",
             "iteration": iteration,
             "timestamp": utcnow_isoformat(),
-            "ideal_state_version": ideal_state_dict.get("version", 1) if isinstance(ideal_state_dict, dict) else 1,
-            "criteria_count": len(ideal_state_dict.get("success_criteria", [])) if isinstance(ideal_state_dict, dict) else 0,
+            "ideal_state_version": ideal_state_dict.get("version", 1)
+            if isinstance(ideal_state_dict, dict)
+            else 1,
+            "criteria_count": len(ideal_state_dict.get("success_criteria", []))
+            if isinstance(ideal_state_dict, dict)
+            else 0,
         }
         await self.log_decision(entry)
 
     async def log_iteration_end(
-        self,
-        iteration: int,
-        verification_report: Any,
-        stop_reason: str | None = None
+        self, iteration: int, verification_report: Any, stop_reason: str | None = None
     ) -> None:
         """Log the end of an inner loop iteration."""
         from ..runtime.time_utils import utcnow_isoformat
 
-        report_dict = verification_report.model_dump() if hasattr(verification_report, "model_dump") else verification_report
+        report_dict = (
+            verification_report.model_dump()
+            if hasattr(verification_report, "model_dump")
+            else verification_report
+        )
 
         entry = {
             "event": "iteration_end",
             "iteration": iteration,
             "timestamp": utcnow_isoformat(),
-            "verification_score": report_dict.get("overall_score", 0.0) if isinstance(report_dict, dict) else 0.0,
+            "verification_score": report_dict.get("overall_score", 0.0)
+            if isinstance(report_dict, dict)
+            else 0.0,
             "passed": report_dict.get("passed", False) if isinstance(report_dict, dict) else False,
             "gaps_count": len(report_dict.get("gaps", [])) if isinstance(report_dict, dict) else 0,
             "stop_reason": stop_reason,

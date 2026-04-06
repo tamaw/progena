@@ -40,6 +40,7 @@ AGENT_PORT_RANGE_END = 8199
 
 class RegistryData(TypedDict):
     """Type definition for registry data structure."""
+
     agents: list[dict[str, Any]]
     tools: list[dict[str, Any]]
 
@@ -110,8 +111,8 @@ class ToolRegistry:
 
         logger.info(
             "Loaded registry with %d agents and %d tools",
-            len(self._registry.get('agents', [])),
-            len(self._registry.get('tools', [])),
+            len(self._registry.get("agents", [])),
+            len(self._registry.get("tools", [])),
         )
 
     async def save(self) -> None:
@@ -124,14 +125,10 @@ class ToolRegistry:
             name = str(agent.get("name") or "").strip()
             if not name:
                 continue
-            agent_map[name] = {
-                k: v
-                for k, v in agent.items()
-                if k not in {"name", "agent_card"}
-            }
-        with open(self.registry_path, 'w') as f:
+            agent_map[name] = {k: v for k, v in agent.items() if k not in {"name", "agent_card"}}
+        with open(self.registry_path, "w") as f:
             json.dump(agent_map, f, indent=2, default=str)
-        with open(self.mcp_path, 'w') as f:
+        with open(self.mcp_path, "w") as f:
             json.dump({"tools": self._registry.get("tools", [])}, f, indent=2, default=str)
         logger.info("Saved registry to %s and MCP state to %s", self.registry_path, self.mcp_path)
 
@@ -172,7 +169,9 @@ class ToolRegistry:
                 continue
 
             spec_path = entry / "spec.md"
-            description = f"Local FastMCP tool (HTTP). Start with: python app/mcp/{entry.name}/server.py"
+            description = (
+                f"Local FastMCP tool (HTTP). Start with: python app/mcp/{entry.name}/server.py"
+            )
 
             if spec_path.exists():
                 try:
@@ -186,12 +185,14 @@ class ToolRegistry:
                 except OSError:
                     pass
 
-            local_tools.append({
-                "name": entry.name,
-                "description": description,
-                "type": "mcp_tool",
-                "source": "local",
-            })
+            local_tools.append(
+                {
+                    "name": entry.name,
+                    "description": description,
+                    "type": "mcp_tool",
+                    "source": "local",
+                }
+            )
 
         return local_tools
 
@@ -215,9 +216,15 @@ class ToolRegistry:
 
         # Build actions are handled via decide -> BackgroundBuildRunner, but they are
         # still important routing capabilities to surface in tool context.
-        lines.append("- build_agent: Build a new A2A agent in the background (explicit requests only)")
-        lines.append("- build_mcp: Build a new FastMCP tool/server in the background (explicit requests only)")
-        lines.append("- build_progenitor: Improve Progenitor in the background (explicit requests only)")
+        lines.append(
+            "- build_agent: Build a new A2A agent in the background (explicit requests only)"
+        )
+        lines.append(
+            "- build_mcp: Build a new FastMCP tool/server in the background (explicit requests only)"
+        )
+        lines.append(
+            "- build_progenitor: Improve Progenitor in the background (explicit requests only)"
+        )
         sections.append("\n".join(lines))
 
         # A2A agents from registry
@@ -288,8 +295,7 @@ class ToolRegistry:
         """Register a new A2A agent."""
         # Remove existing with same name
         self._registry["agents"] = [
-            a for a in self._registry.get("agents", [])
-            if a.get("name") != entry.name
+            a for a in self._registry.get("agents", []) if a.get("name") != entry.name
         ]
 
         self._registry["agents"].append(entry.model_dump())
@@ -299,8 +305,7 @@ class ToolRegistry:
         """Register a new MCP tool."""
         # Remove existing with same name
         self._registry["tools"] = [
-            t for t in self._registry.get("tools", [])
-            if t.get("name") != entry.get("name")
+            t for t in self._registry.get("tools", []) if t.get("name") != entry.get("name")
         ]
 
         entry["updated_at"] = utcnow().isoformat()
@@ -313,17 +318,15 @@ class ToolRegistry:
         original_tools = len(self._registry.get("tools", []))
 
         self._registry["agents"] = [
-            a for a in self._registry.get("agents", [])
-            if a.get("name") != name
+            a for a in self._registry.get("agents", []) if a.get("name") != name
         ]
         self._registry["tools"] = [
-            t for t in self._registry.get("tools", [])
-            if t.get("name") != name
+            t for t in self._registry.get("tools", []) if t.get("name") != name
         ]
 
         removed = (
-            len(self._registry.get("agents", [])) < original_agents or
-            len(self._registry.get("tools", [])) < original_tools
+            len(self._registry.get("agents", [])) < original_agents
+            or len(self._registry.get("tools", [])) < original_tools
         )
 
         if removed:
@@ -485,7 +488,8 @@ class ToolRegistry:
         """Get the HTTP URL for an agent."""
         agent = self.find_by_name(name)
         if agent:
-            return agent.get("url")
+            url = agent.get("url")
+            return url if isinstance(url, str) else None
         return None
 
     async def refresh_agent_cards(
@@ -566,10 +570,13 @@ class ToolRegistry:
 
             async with sem:
                 try:
-                    async with aiohttp.ClientSession() as session, session.get(
-                        health_url,
-                        timeout=aiohttp.ClientTimeout(total=timeout),
-                    ) as response:
+                    async with (
+                        aiohttp.ClientSession() as session,
+                        session.get(
+                            health_url,
+                            timeout=aiohttp.ClientTimeout(total=timeout),
+                        ) as response,
+                    ):
                         if response.status < 400:
                             healthy += 1
                             if agent.get("status") != AgentStatus.RUNNING.value:
@@ -598,6 +605,7 @@ class ToolRegistry:
             "errors": errors,
         }
 
+
 class RegistryTool(BaseSystemTool):
     """Expose the current agent/tool registry summary."""
 
@@ -617,12 +625,16 @@ class RegistryTool(BaseSystemTool):
         registry = context.tool_registry
         agents = registry.get_agents() if hasattr(registry, "get_agents") else []
         tools = registry.get_tools() if hasattr(registry, "get_tools") else []
-        capabilities = registry.get_all_capabilities() if hasattr(registry, "get_all_capabilities") else []
+        capabilities = (
+            registry.get_all_capabilities() if hasattr(registry, "get_all_capabilities") else []
+        )
 
-        return ToolResult.ok({
-            "registry_path": str(getattr(registry, "registry_path", None)),
-            "agent_count": len(agents),
-            "tool_count": len(tools),
-            "capability_count": len(capabilities),
-            "capabilities": sorted(capabilities),
-        })
+        return ToolResult.ok(
+            {
+                "registry_path": str(getattr(registry, "registry_path", None)),
+                "agent_count": len(agents),
+                "tool_count": len(tools),
+                "capability_count": len(capabilities),
+                "capabilities": sorted(capabilities),
+            }
+        )

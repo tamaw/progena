@@ -34,6 +34,44 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
+DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[3] / "worktrees"
+DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
+
+
+def _default_data_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in data directory unless an explicit project root is provided."""
+    return DEFAULT_PROJECT_DATA_DIR if project_root is None else project_root / "data"
+
+
+def _default_state_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in state directory unless an explicit project root is provided."""
+    return _default_data_dir(project_root) / "state"
+
+
+def _default_log_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in logs directory unless an explicit project root is provided."""
+    return DEFAULT_PROJECT_LOG_DIR if project_root is None else project_root / "logs"
+
+
+def _default_worktree_dir(
+    project_root: Path | None = None,
+    *,
+    worktrees_root: Path | str | None = None,
+) -> Path:
+    """Return the managed worktree directory for the current project root."""
+    if worktrees_root is not None:
+        return Path(worktrees_root) / "worktrees"
+    return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "worktrees"
+
+
+def _default_prompts_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in prompt root unless an explicit project root is provided."""
+    return _default_data_dir(project_root) / "prompts"
+
+
 @dataclass
 class LLMConfig:
     """Azure OpenAI Responses API settings."""
@@ -63,28 +101,30 @@ class LLMConfig:
 class StorageConfig:
     """Filesystem paths used by observe_agent."""
 
-    state_dir: Path = field(default_factory=lambda: Path("/data/state"))
-    log_dir: Path = field(default_factory=lambda: Path("/logs"))
-    worktree_dir: Path = field(default_factory=lambda: Path("/worktrees"))
-    prompts_dir: Path = field(default_factory=lambda: Path("/prompts"))
+    data_dir: Path = field(default_factory=_default_data_dir)
+    state_dir: Path = field(default_factory=_default_state_dir)
+    log_dir: Path = field(default_factory=_default_log_dir)
+    worktree_dir: Path = field(default_factory=_default_worktree_dir)
+    prompts_dir: Path = field(default_factory=_default_prompts_dir)
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> StorageConfig:
         wt_root = (os.getenv("PROGENITOR_WORKTREES_ROOT") or "").strip()
-        if project_root:
-            d_state = project_root / "data" / "state"
-            d_logs = project_root / "logs"
-            d_wt = Path(wt_root) / "worktrees" if wt_root else project_root / "worktrees"
-            d_prompts = project_root / "prompts"
-        else:
-            d_state = Path("/data/state")
-            d_logs = Path("/logs")
-            d_wt = Path(wt_root) / "worktrees" if wt_root else Path("/worktrees")
-            d_prompts = Path("/prompts")
+        data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(_default_data_dir(project_root))))
+        d_state = data_dir / "state"
+        d_logs = Path(os.getenv("PROGENITOR_LOG_DIR", str(_default_log_dir(project_root))))
+        d_wt = Path(
+            os.getenv(
+                "PROGENITOR_WORKTREE_DIR",
+                str(_default_worktree_dir(project_root, worktrees_root=wt_root or None)),
+            )
+        )
+        d_prompts = data_dir / "prompts"
         return cls(
+            data_dir=data_dir,
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", str(d_state))),
-            log_dir=Path(os.getenv("PROGENITOR_LOG_DIR", str(d_logs))),
-            worktree_dir=Path(os.getenv("PROGENITOR_WORKTREE_DIR", str(d_wt))),
+            log_dir=d_logs,
+            worktree_dir=d_wt,
             prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(d_prompts))),
         )
 
