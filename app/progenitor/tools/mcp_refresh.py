@@ -1,5 +1,5 @@
 """
-MCP Refresh - Refresh live MCP tool discovery from app/progenitor/mcp.json.
+MCP Refresh - Refresh live MCP tool discovery from data/config/mcp.json.
 """
 
 import logging
@@ -37,11 +37,17 @@ class MCPRefreshTool(BaseSystemTool):
         persist = bool(args.get("persist", True))
 
         if persist:
-            await refresh_mcp_runtime(llm_client, context.tool_registry, mcp_config)
+            await refresh_mcp_runtime(
+                llm_client,
+                context.tool_registry,
+                mcp_config,
+                reload_config=True,
+            )
         else:
+            refreshed_config = MCPConfig.from_env(config_path=mcp_config.config_path)
             from .mcp import setup_mcp_for_llm_client
 
-            await setup_mcp_for_llm_client(llm_client, mcp_config)
+            await setup_mcp_for_llm_client(llm_client, refreshed_config)
 
         return ToolResult.ok(
             {

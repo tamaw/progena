@@ -120,7 +120,7 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 - `data/state/schedule.json` - Scheduled tasks
 - `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
 - `data/config/agents.json` - Agent registry
-- `app/progenitor/mcp.json` - Progenitor external MCP server configuration
+- `data/config/mcp.json` - Progenitor external MCP server configuration
 
 ### Log Files
 
@@ -130,9 +130,9 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 
 ## Configuration
 
-Configuration is sourced from environment variables plus checked-in agent config files. See `.env.example` for defaults.
+Configuration is sourced from environment variables plus live config files under `data/config/`. See `.env.example` for defaults.
 
-Progenitor loads external MCP servers from `app/progenitor/mcp.json`. The checked-in default includes a disabled Jina remote MCP example for web search and page reading:
+Progenitor loads external MCP servers from `data/config/mcp.json`. The default file includes a disabled Jina remote MCP example for web search and page reading:
 
 ```json
 {

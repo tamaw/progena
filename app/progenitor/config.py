@@ -1,7 +1,7 @@
 """
 Centralized Configuration for Progenitor.
 
-Configuration is read from environment variables and checked-in agent config files.
+Configuration is read from environment variables and live config files.
 """
 
 import json
@@ -40,7 +40,6 @@ DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[2] / "worktrees"
 DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
-DEFAULT_PROJECT_MCP_CONFIG_PATH = Path(__file__).resolve().with_name("mcp.json")
 _ENV_TEMPLATE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -75,13 +74,17 @@ def _default_prompts_dir(project_root: Path | None = None) -> Path:
     return _default_data_dir(project_root) / "prompts"
 
 
+def _default_config_dir(project_root: Path | None = None) -> Path:
+    """Return the live config directory derived from the active data/state roots."""
+    data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(_default_data_dir(project_root))))
+    default_state_dir = data_dir / "state"
+    state_dir = Path(os.getenv("PROGENITOR_STATE_DIR", str(default_state_dir)))
+    return state_dir.parent / "config"
+
+
 def _default_mcp_config_path(project_root: Path | None = None) -> Path:
-    """Return the checked-in MCP source config path for Progenitor."""
-    return (
-        DEFAULT_PROJECT_MCP_CONFIG_PATH
-        if project_root is None
-        else project_root / "app" / "progenitor" / "mcp.json"
-    )
+    """Return the live MCP config path for Progenitor."""
+    return _default_config_dir(project_root) / "mcp.json"
 
 
 def resolve_mcp_config_path(project_root: Path | None = None) -> Path:
@@ -106,6 +109,23 @@ def _resolve_required_env_template(value: str) -> tuple[str | None, list[str]]:
     if missing:
         return None, missing
     return rendered, []
+
+
+def default_mcp_config_payload() -> dict[str, Any]:
+    """Return the default MCP server configuration written to data/config/mcp.json."""
+    return {
+        "mcpServers": {
+            "jina": {
+                "enabled": False,
+                "transport": "http",
+                "description": "Jina AI web search and page read tools",
+                "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+                "headers": {
+                    "Authorization": "Bearer ${JINA_API_KEY}",
+                },
+            }
+        }
+    }
 
 
 @dataclass
@@ -391,7 +411,7 @@ class SchedulerConfig:
 
 @dataclass
 class MCPServerConfig:
-    """Remote HTTP MCP server definition loaded from app/progenitor/mcp.json."""
+    """Remote HTTP MCP server definition loaded from the live MCP config file."""
 
     name: str
     url: str
@@ -406,7 +426,7 @@ def load_mcp_servers(
     *,
     project_root: Path | None = None,
 ) -> list[MCPServerConfig]:
-    """Load external MCP server definitions from Progenitor's checked-in config file."""
+    """Load external MCP server definitions from Progenitor's live config file."""
     path = Path(config_path) if config_path is not None else resolve_mcp_config_path(project_root)
     if not path.exists():
         return []
@@ -494,10 +514,17 @@ class MCPConfig:
     legacy_api_key: str | None = None
 
     @classmethod
-    def from_env(cls, project_root: Path | None = None) -> "MCPConfig":
-        """Load MCP config from Progenitor's checked-in source file with env fallbacks."""
-        config_path = resolve_mcp_config_path(project_root)
-        servers = load_mcp_servers(config_path, project_root=project_root)
+    def from_env(
+        cls,
+        project_root: Path | None = None,
+        *,
+        config_path: Path | str | None = None,
+    ) -> "MCPConfig":
+        """Load MCP config from the live config file with env fallbacks."""
+        resolved_config_path = (
+            Path(config_path) if config_path is not None else resolve_mcp_config_path(project_root)
+        )
+        servers = load_mcp_servers(resolved_config_path, project_root=project_root)
         legacy_base_url = (os.getenv("PROGENITOR_MCP_BASE_URL") or "").strip() or None
         legacy_api_key = os.getenv("PROGENITOR_MCP_API_KEY")
 
@@ -516,7 +543,7 @@ class MCPConfig:
 
         return cls(
             enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
-            config_path=config_path,
+            config_path=resolved_config_path,
             servers=servers,
             legacy_base_url=legacy_base_url,
             legacy_api_key=legacy_api_key,

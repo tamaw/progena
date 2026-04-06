@@ -107,7 +107,7 @@ def complete_state_files(tmp_path, monkeypatch):
             },
         ]
     }
-    mcp_config_path = tmp_path / "progenitor-mcp.json"
+    mcp_config_path = config_dir / "mcp.json"
     mcp_data = {
         "mcpServers": {
             "universal_translator": {
@@ -425,7 +425,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         config_dir = state_dir.parent / "config"
         config_dir.mkdir()
         (config_dir / "agents.json").write_text("{this is not valid json!!!")
-        mcp_config_path = tmp_path / "progenitor-mcp.json"
+        mcp_config_path = config_dir / "mcp.json"
         mcp_config_path.write_text("{this is not valid json!!!")
 
         reader = StateReader(state_dir=state_dir, mcp_config_path=mcp_config_path)

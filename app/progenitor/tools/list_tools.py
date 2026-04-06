@@ -65,6 +65,7 @@ class ListToolsTool(BaseSystemTool):
                     llm_client,
                     context.tool_registry,
                     cast(MCPConfig, mcp_config),
+                    reload_config=True,
                 )
 
         system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]

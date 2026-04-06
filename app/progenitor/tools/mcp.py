@@ -262,6 +262,7 @@ async def setup_mcp_for_llm_client(
     mcp_config: MCPConfig,
 ) -> None:
     """Initialize MCP tools and attach them to the LLM client."""
+    llm_client.mcp_config = mcp_config
     close_mcp_context = getattr(llm_client, "close_mcp_context", None)
     if callable(close_mcp_context):
         await close_mcp_context()
@@ -270,9 +271,19 @@ async def setup_mcp_for_llm_client(
     llm_client.set_mcp_context(mcp_servers, mcp_tools)
 
 
-async def refresh_mcp_runtime(llm_client, tool_registry, mcp_config: MCPConfig) -> None:
+async def refresh_mcp_runtime(
+    llm_client,
+    tool_registry,
+    mcp_config: MCPConfig,
+    *,
+    reload_config: bool = False,
+) -> None:
     """Refresh the live MCP runtime context and sync the in-memory tool registry."""
-    await setup_mcp_for_llm_client(llm_client, mcp_config)
+    effective_config = mcp_config
+    if reload_config:
+        effective_config = MCPConfig.from_env(config_path=mcp_config.config_path)
+
+    await setup_mcp_for_llm_client(llm_client, effective_config)
     entries = llm_client.get_mcp_tool_registry_entries()
     if tool_registry is None:
         return

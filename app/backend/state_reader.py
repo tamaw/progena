@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from app.progenitor.config import load_mcp_servers, resolve_mcp_config_path
+from app.progenitor.config import load_mcp_servers
 
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -172,6 +172,7 @@ class ToolInfo:
     kind: str = "mcp"
     status: str = "ready"
     transport: str = "mcp"
+    url: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolInfo:
@@ -182,6 +183,7 @@ class ToolInfo:
             kind=data.get("kind", "mcp"),
             status=data.get("status", "ready"),
             transport=data.get("transport", "mcp"),
+            url=data.get("url"),
         )
 
 
@@ -350,7 +352,10 @@ class StateReader:
         self.config_dir = config_dir or self.state_dir.parent / "config"
         self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
         self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
-        self.mcp_config_path = mcp_config_path or resolve_mcp_config_path()
+        raw_mcp_config_path = (os.getenv("PROGENITOR_MCP_CONFIG_PATH") or "").strip()
+        self.mcp_config_path = mcp_config_path or (
+            Path(raw_mcp_config_path) if raw_mcp_config_path else self.config_dir / "mcp.json"
+        )
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
@@ -447,12 +452,12 @@ class StateReader:
                     "description": server.description or f"Remote MCP server at {server.url}",
                     "enabled": server.enabled,
                     "kind": "mcp_server",
-                    "status": "stopped",
+                    "status": "stopped" if server.enabled else "disabled",
                     "transport": server.transport,
+                    "url": server.url,
                 }
             )
             for server in load_mcp_servers(self.mcp_config_path)
-            if server.enabled
         ]
         return agents, tools
 
@@ -1022,8 +1027,6 @@ class StateReader:
             )
 
         for tool in tools:
-            if not tool.enabled:
-                continue
             logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
             summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
             widgets.append(
@@ -1037,6 +1040,8 @@ class StateReader:
                     "status": self._status_with_health(tool.status, health.is_running()),
                     "summary": summary,
                     "transport": tool.transport,
+                    "enabled": tool.enabled,
+                    "url": tool.url,
                     "current_run_id": health.run_id,
                     "logs": logs,
                     "updated_at": health.last_active,

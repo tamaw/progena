@@ -488,7 +488,7 @@ class TestStateReaderFileOperations:
             }
         }
         config_dir = temp_state_dir.parent / "config"
-        mcp_config_path = temp_state_dir.parent / "progenitor-mcp.json"
+        mcp_config_path = config_dir / "mcp.json"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "agents.json").write_text(json.dumps(agents_data))
         mcp_config_path.write_text(json.dumps(mcp_data))
@@ -504,7 +504,7 @@ class TestStateReaderFileOperations:
     def test_read_registry_merges_legacy_and_map(self, temp_state_dir):
         """Map entries should be visible even if legacy list is present."""
         config_dir = temp_state_dir.parent / "config"
-        mcp_config_path = temp_state_dir.parent / "progenitor-mcp.json"
+        mcp_config_path = config_dir / "mcp.json"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "agents.json").write_text(
             json.dumps(
