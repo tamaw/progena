@@ -60,8 +60,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir . && \
     pip install --no-cache-dir -r /app/requirements.builder.txt
 
-RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/worktrees /app/tmp /home/runner && \
+RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/worktrees /app/tmp /home/runner/.copilot && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
+
+COPY --chown=runner:agent app/agents/builder_progenitor/lsp-config.json /home/runner/.copilot/lsp-config.json
 
 VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
