@@ -1,137 +1,62 @@
-# Progenitor Architecture Diagram
+# Progenitor Runtime Architecture
 
-## System Overview
+This document describes the main running stack. For the checked-in repository layout, see [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md).
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    PROGENITOR SYSTEM                                 │
-│                                                                      │
-│  ┌──────────────────────────┐     ┌──────────────────────────────┐  │
-│  │       PROGENITOR         │     │       BUILDER AGENT          │  │
-│  │  (app/progenitor/)       │     │  (app/agents/builder_agent/) │  │
-│  │                          │ A2A │                              │  │
-│  │  DeepAgent chat harness  │────▶│  A2A server (port 8107)      │  │
-│  │  Perpetual outer loop    │     │  Inner build loop            │  │
-│  │  Delegation + routing    │     │  OBSERVE→…→LEARN             │  │
-│  └──────────────────────────┘     └──────────────────────────────┘  │
-│                                                                      │
-│  ┌──────────────────────────┐     ┌──────────────────────────────┐  │
-│  │     BACKEND / API        │     │       FRONTEND               │  │
-│  │  (app/backend/)          │     │  (app/frontend/)             │  │
-│  │  FastAPI :8000            │     │  React/Vite :5173            │  │
-│  └──────────────────────────┘     └──────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
+## High-level topology
+
+```text
+Browser / API client
+        |
+        v
+Frontend
+        |
+        v
+Backend HTTP API
+        |
+        v
+Progenitor runtime
+   |        \
+   |         +--> runtime tools and optional external integrations
+   |
+   +--> persisted state, sessions, attachments, and logs
 ```
 
-## Progenitor — Outer Loop
+## Request path
 
-```
-┌──────────────────── OUTER LOOP (Perpetual) ─────────────────────────┐
-│                                                                       │
-│  ┌────────┐  ┌───────────┐  ┌──────────────┐  ┌────────────────┐   │
-│  │ INTAKE │─▶│TIME CHECK │─▶│ ENQUEUE DUE  │─▶│    DECIDE      │   │
-│  └────────┘  └───────────┘  └──────────────┘  └───────┬────────┘   │
-│                                                         │             │
-│                        ┌────────────────────────────────┤            │
-│                        │                                │            │
-│              ANSWER_DIRECTLY                  DELEGATE_A2A           │
-│                        │                                │            │
-│                        ▼                                ▼            │
-│               ┌──────────────┐               ┌─────────────────┐   │
-│               │    CHAT      │               │  PICK_NEXT      │   │
-│               │  (DeepAgent) │               │  (A2A call to   │   │
-│               └──────┬───────┘               │  builder_agent) │   │
-│                       │                       └────────┬────────┘   │
-│                       └──────────────┬─────────────────┘            │
-│                                      ▼                               │
-│                              ┌──────────────┐                        │
-│                              │   RESPOND    │                        │
-│                              └──────┬───────┘                        │
-│                                     │                                 │
-│                              ┌──────▼───────┐                        │
-│                              │     IDLE     │ (exponential backoff)  │
-│                              └──────┬───────┘                        │
-│                                     └──────────────────▶ (repeat)   │
-└───────────────────────────────────────────────────────────────────────┘
+```text
+HTTP request
+  -> backend request handler
+  -> IPC call to runtime
+  -> conversation graph
+  -> streamed response back through backend
 ```
 
-## DeepAgent Layer (inside Progenitor)
+Scheduled work enters the runtime through the same core path as normal user input.
 
-```
-┌──────────────────── DEEPAGENT LAYER ─────────────────────────────────┐
-│                       (Conversational Graph)                          │
-│                                                                       │
-│  ┌────────────┐  ┌────────────┐  ┌──────────┐  ┌───────────────┐   │
-│  │ Middleware  │  │   Skills   │  │  Memory  │  │   Subagents   │   │
-│  │            │  │            │  │          │  │               │   │
-│  │ • Redact   │  │ • build    │  │ AGENTS.md│  │ • builder_    │   │
-│  │ • Audit    │  │ • schedule │  │ /memories│  │   agent (A2A) │   │
-│  │ • Metrics  │  │ • git      │  │ • Store  │  │ • code review │   │
-│  │ • Summarize│  │ • reflect  │  │          │  │ • researcher  │   │
-│  │ • PatchTC  │  │ • arch     │  │          │  │               │   │
-│  └────────────┘  └────────────┘  └──────────┘  └───────────────┘   │
-│                                                                       │
-│  Tools ──▶ LiteLLM Proxy ──▶ Azure/OpenAI                           │
-│  CompositeBackend: LocalShell + StoreBackend + StateBackend          │
-└───────────────────────────────────────────────────────────────────────┘
-```
+## Runtime responsibilities
 
-## Builder Agent — Inner Loop
+- Owns the long-running conversation service.
+- Restores persisted state on startup and checkpoints state while running.
+- Executes the DeepAgent-backed conversation graph.
+- Processes scheduled work and runtime tool calls.
 
-The build loop lives entirely inside the Builder Agent (`app/agents/builder_agent/`),
-which is a self-contained A2A server with its own Dockerfile, requirements.txt, and state.
+## Backend responsibilities
 
-```
-┌──────────────────── BUILDER AGENT INNER LOOP ────────────────────────┐
-│                                                                        │
-│  Triggered by: A2A Task from Progenitor (or any A2A client)           │
-│  Runs: OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN     │
-│  Repeats until: score threshold reached or max iterations hit         │
-│                                                                        │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐          │
-│  │ OBSERVE  │──▶│  THINK   │──▶│   PLAN   │──▶│  BUILD   │          │
-│  └──────────┘   └──────────┘   └──────────┘   └────┬─────┘          │
-│                                                      │                 │
-│                                                      ▼                 │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐          │
-│  │  LEARN   │◀──│  VERIFY  │◀──│ EXECUTE  │◀──│  MERGE   │          │
-│  └────┬─────┘   └──────────┘   └──────────┘   └──────────┘          │
-│       │                                                                │
-│       ├──────────────────────────────────────────▶ OBSERVE (loop)     │
-│       │                                                                │
-│       └──────────────────────────────────────────▶ PUBLISH (done)     │
-│                                                    (raises PR)        │
-│                                                                        │
-│  Checkpointing: SQLite per-build at state_dir/build_checkpoints.db    │
-│  thread_id = build_id (each build isolated)                           │
-└────────────────────────────────────────────────────────────────────────┘
-```
+- Provides the HTTP surface used by the frontend and compatible clients.
+- Manages streaming responses, sessions, attachments, and UI-facing data routes.
+- Translates HTTP requests into runtime IPC calls.
 
-## Service Ports
+## Frontend responsibilities
 
-| Service          | Port  | Notes                          |
-|------------------|-------|--------------------------------|
-| Backend API      | 8000  | FastAPI, OpenAI-compatible     |
-| Frontend         | 5173  | Vite dev server                |
-| Builder Agent    | 8107  | A2A JSON-RPC over HTTP         |
-| Other agents     | 8080+ | Generic A2A agents             |
-| Azure OpenAI API | 443   | Direct `/responses` calls      |
+- Provides the web chat and runtime status interface.
+- Reads and mutates application state through the backend only.
 
-## State Files
+## State and logging
 
-```
-data/state/
-├── current_state.json     # Progenitor: messages, conversation
-├── schedule.json          # Scheduled tasks (progenitor)
-└── build_checkpoints.db   # Builder agent: SQLite LangGraph checkpoints
+- Runtime state is stored under `data/state/`.
+- Backend-managed session and attachment data are stored under `data/`.
+- Operational logs are written under `logs/`.
 
-data/config/
-├── agents.json            # Agent registry (progenitor reads, builder writes)
-└── mcp.json               # MCP tool registry
-```
+## Deployment shape
 
----
-
-**Key Design Principle**: Progenitor is a stable, minimal orchestrator.
-Risky capabilities (code generation, git mutation, shell execution) live in
-the isolated Builder Agent — reachable only via the A2A protocol.
+The default checked-in container stack runs three main services: frontend, backend, and the Progenitor runtime.

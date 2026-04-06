@@ -32,7 +32,7 @@ export AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1
 export AZURE_OPENAI_API_KEY=your_key_here
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 ### Running Locally
@@ -108,9 +108,9 @@ data/
   state/                # Persisted state (JSON)
   sessions/             # Session persistence
   attachments/          # Uploaded file cache/data
+  prompts/              # Prompt templates
+  skills/               # DeepAgent SKILL.md files (grouped by agent)
 logs/                   # Append-only logs (JSONL)
-prompts/                # Prompt templates
-  skills/               # DeepAgent SKILL.md files
 worktrees/              # Git worktrees for builds (used by Builder Agent)
 ```
 
@@ -151,7 +151,7 @@ AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
 Progenitor accepts natural language input and decides how to handle it:
 
 1. **Direct answers**: Simple questions answered immediately
-2. **A2A delegation**: Calls existing agents for specialized tasks  
+2. **A2A delegation**: Calls existing agents for specialized tasks
 3. **MCP tools**: Uses registered MCP servers for tool access
 4. **Build/Upgrade**: Delegates to Builder Agent (creates new agents/tools)
 5. **Scheduling**: Creates time-based recurring or one-off tasks
@@ -214,7 +214,7 @@ mypy app/
 ### Adding New Capabilities
 
 1. Create an agent in `app/agents/<agent_name>/`
-2. Or create an MCP server in `app/mcp/`
+2. Or create an MCP server in `app/mcp/<mcp_name>/` with its own `Dockerfile`
 3. Register in `data/config/agents.json`
 
 Or ask Progenitor to build it for you — it will delegate to the Builder Agent automatically.
@@ -222,11 +222,10 @@ Or ask Progenitor to build it for you — it will delegate to the Builder Agent 
 ## Docs
 
 - [SPEC.md](docs/SPEC.md) — System specification
-- [loop.spec.md](docs/loop.spec.md) — Inner loop (Last Algorithm) spec
 - [ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) — Visual architecture
+- [PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) — Checked-in repository layout
 - [BACKEND.md](docs/BACKEND.md) — Backend API
 - [DOCKER.md](docs/DOCKER.md) — Docker deployment
-- [CONTAINER_RUNNERS.md](docs/CONTAINER_RUNNERS.md) — Isolated A2A/MCP runner containers
 
 ## License
 

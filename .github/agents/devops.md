@@ -35,7 +35,7 @@ services:
 - `Dockerfile` - Container image definition
 - `docker/docker-compose.progenitor.yml` - Main stack orchestration
 - `.env.example` - Environment variable template
-- `requirements.txt` - Python dependencies
+- `pyproject.toml` - Python dependencies and tool config
 - `app/frontend/package.json` - Node.js dependencies
 
 ## Deployment
@@ -93,7 +93,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt
+      - run: pip install -e ".[dev]"
       - run: pytest --cov
       - run: mypy app/
       - run: ruff check app/

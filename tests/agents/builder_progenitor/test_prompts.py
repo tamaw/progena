@@ -31,5 +31,5 @@ def test_load_skill_context_reads_repo_skills():
 
 
 def test_load_skill_context_missing_skill_raises():
-    with pytest.raises(FileNotFoundError, match="prompts/skills/does-not-exist/SKILL.md"):
+    with pytest.raises(FileNotFoundError, match="does-not-exist/SKILL.md"):
         load_skill_context(["does-not-exist"])
