@@ -41,6 +41,8 @@ repos:
         additional_dependencies:
           - pydantic>=2.0
           - types-aiofiles
+          - types-croniter
+          - types-PyYAML
           - types-pytz
         exclude: ^(tests/|scripts/|examples/)
         pass_filenames: false
@@ -64,7 +66,7 @@ repos:
 
 # Configuration for specific tools
 default_language_version:
-  python: python3.12
+  python: python3
 
 ci:
   autofix_commit_msg: |

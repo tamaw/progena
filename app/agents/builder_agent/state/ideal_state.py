@@ -6,7 +6,7 @@ verification methods, and stop conditions. The Ideal State is the primary
 control surface for the agent loop.
 
 All LLM interactions use structured output (Pydantic models) for reliable
-parsing. Prompts are loaded from prompts/ via PromptTemplates.
+parsing. Prompts are loaded from data/prompts/ via PromptTemplates.
 """
 
 import inspect
@@ -35,7 +35,7 @@ from ..runtime.time_utils import utcnow
 logger = logging.getLogger(__name__)
 
 # Type variable for generic structured LLM call
-T = TypeVar('T', bound=BaseModel)
+T = TypeVar("T", bound=BaseModel)
 
 
 # ============================================================================
@@ -45,6 +45,7 @@ T = TypeVar('T', bound=BaseModel)
 
 class CriterionType(StrEnum):
     """Type of success criterion."""
+
     FUNCTIONAL = "functional"
     QUALITY = "quality"
     PERFORMANCE = "performance"
@@ -79,7 +80,9 @@ class QualityBar(BaseModel):
 
     description: str = Field(description="What quality means for this task")
     examples: list[str] = Field(default_factory=list, description="Examples of quality")
-    anti_examples: list[str] = Field(default_factory=list, description="Examples of what's NOT quality")
+    anti_examples: list[str] = Field(
+        default_factory=list, description="Examples of what's NOT quality"
+    )
 
 
 class VerificationMethod(BaseModel):
@@ -93,7 +96,9 @@ class VerificationMethod(BaseModel):
 class StopCondition(BaseModel):
     """When to stop iterating."""
 
-    condition_type: str = Field(description="Type: min_score, max_iterations, time_limit, tool_budget")
+    condition_type: str = Field(
+        description="Type: min_score, max_iterations, time_limit, tool_budget"
+    )
     threshold: float = Field(description="Threshold value")
     met: bool = Field(default=False, description="Has this condition been met?")
 
@@ -113,23 +118,19 @@ class IdealState(BaseModel):
     # Core components from loop.spec.md
     task_description: str = Field(description="Original task/request")
     success_criteria: list[SuccessCriterion] = Field(
-        default_factory=list,
-        description="Ranked, measurable success criteria"
+        default_factory=list, description="Ranked, measurable success criteria"
     )
     anti_criteria: list[AntiCriterion] = Field(
-        default_factory=list,
-        description="Things to actively avoid/penalize"
+        default_factory=list, description="Things to actively avoid/penalize"
     )
     quality_bar: QualityBar = Field(
         default_factory=lambda: QualityBar(description="High quality, correct, maintainable output")
     )
     verification_methods: list[VerificationMethod] = Field(
-        default_factory=list,
-        description="How to verify success"
+        default_factory=list, description="How to verify success"
     )
     stop_conditions: list[StopCondition] = Field(
-        default_factory=list,
-        description="When to stop iterating"
+        default_factory=list, description="When to stop iterating"
     )
 
     # Context
@@ -182,7 +183,9 @@ class IdealState(BaseModel):
             if condition.condition_type == "min_score":
                 if current_score >= condition.threshold:
                     condition_met = True
-                    reasons.append(f"Minimum score {condition.threshold} reached: {current_score:.2f}")
+                    reasons.append(
+                        f"Minimum score {condition.threshold} reached: {current_score:.2f}"
+                    )
 
             elif condition.condition_type == "max_iterations":
                 if iteration >= condition.threshold:
@@ -192,7 +195,9 @@ class IdealState(BaseModel):
             elif condition.condition_type == "time_limit":
                 if elapsed_time >= condition.threshold:
                     condition_met = True
-                    reasons.append(f"Time limit {condition.threshold}s exceeded: {elapsed_time:.1f}s")
+                    reasons.append(
+                        f"Time limit {condition.threshold}s exceeded: {elapsed_time:.1f}s"
+                    )
 
             elif condition.condition_type == "tool_budget" and tool_calls >= condition.threshold:
                 condition_met = True
@@ -269,7 +274,7 @@ class IdealStateBuilder:
     """Builds and refines ideal state using structured LLM outputs.
 
     All LLM calls use Pydantic response models for guaranteed schema
-    compliance. Prompts are loaded from prompts/ via PromptTemplates.
+    compliance. Prompts are loaded from data/prompts/ via PromptTemplates.
     """
 
     def __init__(self, llm_client):
@@ -342,9 +347,7 @@ class IdealStateBuilder:
         Uses LLM to extract success criteria, anti-criteria, quality bar,
         verification methods, and stop conditions. All via structured output.
         """
-        prompt = self.prompts.get_ideal_state_extraction_prompt(
-            task_description, context or {}
-        )
+        prompt = self.prompts.get_ideal_state_extraction_prompt(task_description, context or {})
 
         try:
             extraction = await self._structured_call(
@@ -424,9 +427,7 @@ class IdealStateBuilder:
                 response_model=IdealStateClarificationResponse,
                 schema_name="ideal_state_clarification",
             )
-            return self._apply_clarification(
-                current_ideal_state, response, user_clarification
-            )
+            return self._apply_clarification(current_ideal_state, response, user_clarification)
 
         except Exception as e:
             logger.warning("Failed to incorporate clarification: %s", e)
@@ -453,8 +454,7 @@ class IdealStateBuilder:
             return []
 
         existing_anti = [
-            {"id": ac.id, "description": ac.description}
-            for ac in current_ideal_state.anti_criteria
+            {"id": ac.id, "description": ac.description} for ac in current_ideal_state.anti_criteria
         ]
 
         prompt = self.prompts.get_ideal_state_anti_criteria_prompt(
@@ -492,8 +492,13 @@ class IdealStateBuilder:
         Returns validation result with issues and suggestions.
         """
         criteria_data = [
-            {"id": sc.id, "description": sc.description, "measurement": sc.measurement,
-             "type": sc.criterion_type.value, "target_score": sc.target_score}
+            {
+                "id": sc.id,
+                "description": sc.description,
+                "measurement": sc.measurement,
+                "type": sc.criterion_type.value,
+                "target_score": sc.target_score,
+            }
             for sc in ideal_state.success_criteria
         ]
         anti_data = [
@@ -535,8 +540,12 @@ class IdealStateBuilder:
         the most appropriate verification approaches.
         """
         criteria_data = [
-            {"id": sc.id, "description": sc.description, "measurement": sc.measurement,
-             "type": sc.criterion_type.value}
+            {
+                "id": sc.id,
+                "description": sc.description,
+                "measurement": sc.measurement,
+                "type": sc.criterion_type.value,
+            }
             for sc in ideal_state.success_criteria
         ]
 
@@ -578,14 +587,8 @@ class IdealStateBuilder:
         """Convert a structured extraction response to an IdealState domain model."""
         return IdealState(
             task_description=task_description,
-            success_criteria=[
-                _spec_to_success_criterion(sc)
-                for sc in extraction.success_criteria
-            ],
-            anti_criteria=[
-                _spec_to_anti_criterion(ac)
-                for ac in extraction.anti_criteria
-            ],
+            success_criteria=[_spec_to_success_criterion(sc) for sc in extraction.success_criteria],
+            anti_criteria=[_spec_to_anti_criterion(ac) for ac in extraction.anti_criteria],
             quality_bar=QualityBar(
                 description=extraction.quality_bar.description,
                 examples=extraction.quality_bar.examples,
@@ -642,7 +645,8 @@ class IdealStateBuilder:
             refined.quality_bar = QualityBar(
                 description=refinement.updated_quality_description,
                 examples=refinement.updated_quality_examples or refined.quality_bar.examples,
-                anti_examples=refinement.updated_quality_anti_examples or refined.quality_bar.anti_examples,
+                anti_examples=refinement.updated_quality_anti_examples
+                or refined.quality_bar.anti_examples,
             )
 
         return refined.refine({})
@@ -678,9 +682,7 @@ class IdealStateBuilder:
             current_state.constraints.append(constraint)
 
         # Always record the clarification
-        current_state.constraints.append(
-            f"User clarification: {user_clarification[:200]}"
-        )
+        current_state.constraints.append(f"User clarification: {user_clarification[:200]}")
 
         return current_state.refine(refinements)
 

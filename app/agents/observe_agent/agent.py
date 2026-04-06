@@ -155,7 +155,9 @@ class ObserveAgent:
 
     AGENT_ID = AGENT_ID
     AGENT_NAME = AGENT_NAME
-    DESCRIPTION = "Monitors Progenitor by reading mounted state/logs and producing diagnostic insights."
+    DESCRIPTION = (
+        "Monitors Progenitor by reading mounted state/logs and producing diagnostic insights."
+    )
     CAPABILITIES = CAPABILITIES
 
     def __init__(
@@ -171,7 +173,10 @@ class ObserveAgent:
         self.state_dir = state_dir or self.config.storage.state_dir
         self.source_logs_dir = source_logs_dir or logs_dir or self.config.storage.log_dir
         self.agent_log_dir = self.config.storage.log_dir / self.runtime_agent_name
-        self._system_prompt = load_prompt("system.md").strip()
+        self._system_prompt = load_prompt(
+            "system.md",
+            prompts_dir=self.config.storage.prompts_dir,
+        ).strip()
         self._graph = self._build_graph()
 
     async def initialize(self) -> None:
@@ -207,7 +212,9 @@ class ObserveAgent:
     def _list_files(base_dir: Path, limit: int = 200) -> list[str]:
         if not base_dir.exists():
             return []
-        results = [str(path.relative_to(base_dir)) for path in base_dir.rglob("*") if path.is_file()]
+        results = [
+            str(path.relative_to(base_dir)) for path in base_dir.rglob("*") if path.is_file()
+        ]
         return sorted(results)[:limit]
 
     def tool_list_state_files(self) -> dict[str, Any]:
@@ -218,7 +225,10 @@ class ObserveAgent:
 
     def tool_list_log_files(self) -> dict[str, Any]:
         try:
-            return {"logs_dir": str(self.source_logs_dir), "files": self._list_files(self.source_logs_dir)}
+            return {
+                "logs_dir": str(self.source_logs_dir),
+                "files": self._list_files(self.source_logs_dir),
+            }
         except Exception as exc:
             return {"error": str(exc)}
 
@@ -380,7 +390,9 @@ class ObserveAgent:
                 {"role": "user", "content": request},
             ]
             if context:
-                input_messages.append({"role": "user", "content": f"Context keys: {sorted(context.keys())}"})
+                input_messages.append(
+                    {"role": "user", "content": f"Context keys: {sorted(context.keys())}"}
+                )
 
             payload: dict[str, Any] = {
                 "model": self.config.llm.get_model(),
@@ -415,7 +427,12 @@ class ObserveAgent:
                 if not isinstance(call, dict):
                     continue
                 call_id = call.get("call_id") or call.get("id") or call.get("tool_call_id") or ""
-                name = call.get("name") or call.get("tool_name") or call.get("function", {}).get("name") or ""
+                name = (
+                    call.get("name")
+                    or call.get("tool_name")
+                    or call.get("function", {}).get("name")
+                    or ""
+                )
                 raw_args = (
                     call.get("arguments")
                     or call.get("input")
@@ -461,7 +478,9 @@ class ObserveAgent:
 
         def route_after_llm(state: ObserveGraphState) -> str:
             tool_calls = state.get("tool_calls") or []
-            if tool_calls and int(state.get("tool_round", 0)) < int(state.get("max_tool_rounds", 0)):
+            if tool_calls and int(state.get("tool_round", 0)) < int(
+                state.get("max_tool_rounds", 0)
+            ):
                 return "run_tools"
             return "finalize"
 
@@ -484,7 +503,9 @@ class ObserveAgent:
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self._responses_endpoint()
         start = time.monotonic()
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._responses_headers()) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0), headers=self._responses_headers()
+        ) as client:
             response = await client.post(endpoint, json=payload)
             response.raise_for_status()
             data = cast(dict[str, Any], response.json())
@@ -531,7 +552,9 @@ class ObserveAgent:
         return ""
 
     async def process(self, request: str, context: dict[str, Any]) -> str:
-        req = (request or "").strip() or "Summarize current Progenitor health and explain any recent errors."
+        req = (
+            request or ""
+        ).strip() or "Summarize current Progenitor health and explain any recent errors."
         initial_state: ObserveGraphState = {
             "request": req,
             "context": context if isinstance(context, dict) else {},

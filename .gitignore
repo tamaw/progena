@@ -64,6 +64,7 @@ venv.bak/
 .idea/
 *.swp
 *.swo
+.codex
 .progenitor_worktree
 
 # Project specific

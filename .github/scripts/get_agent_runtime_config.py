@@ -103,7 +103,6 @@ def _map_target_to_host(target: str, mounts: dict[str, str]) -> str | None:
         ("/app/data", "/app/data"),
         ("/app/logs", "/app/logs"),
         ("/app/worktrees", "/app/worktrees"),
-        ("/app/prompts", "/app/prompts"),
     ]
     for target_root, progenitor_root in mapping_roots:
         if target == target_root or target.startswith(f"{target_root}/"):
@@ -167,17 +166,23 @@ def main() -> int:
     runtime_env_keys = [key for key in unique_env_keys if key in os.environ]
 
     required_targets: list[str] = []
-    if "PROGENITOR_STATE_DIR" in unique_env_keys:
+    data_target = os.environ.get("PROGENITOR_DATA_DIR", "/app/data")
+    if "PROGENITOR_DATA_DIR" in unique_env_keys or "PROGENITOR_STATE_DIR" in unique_env_keys:
         required_targets.append("/app/data")
     if "PROGENITOR_LOG_DIR" in unique_env_keys:
         required_targets.append("/app/logs")
     if any(
         key in unique_env_keys
-        for key in ("PROGENITOR_WORKTREE_DIR", "PROGENITOR_WORKTREES_ROOT", "PROGENITOR_PROJECT_ROOT")
+        for key in (
+            "PROGENITOR_WORKTREE_DIR",
+            "PROGENITOR_WORKTREES_ROOT",
+            "PROGENITOR_PROJECT_ROOT",
+        )
     ):
         required_targets.append("/app/worktrees")
+    prompt_target = os.environ.get("PROGENITOR_PROMPTS_DIR", f"{data_target.rstrip('/')}/prompts")
     if "PROGENITOR_PROMPTS_DIR" in unique_env_keys:
-        required_targets.append("/app/prompts")
+        required_targets.append(prompt_target)
 
     for target in required_targets:
         if target not in unique_volumes:
@@ -197,6 +202,11 @@ def main() -> int:
             seen_paths.add(host_path)
             chown_paths.append(host_path)
 
+    prompts_host_dir = (
+        _map_target_to_host(prompt_target, progenitor_mounts)
+        if "PROGENITOR_PROMPTS_DIR" in unique_env_keys or "PROGENITOR_DATA_DIR" in unique_env_keys
+        else None
+    )
     volume_args_str = " ".join(volume_args)
     chown_paths_str = " ".join(chown_paths)
     env_args_str = " ".join(f"-e {key}" for key in runtime_env_keys)
@@ -210,12 +220,14 @@ def main() -> int:
             f.write(f"chown_paths={chown_paths_str}\n")
             f.write(f"env_args={env_args_str}\n")
             f.write(f"tmpfs_args={tmpfs_args_str}\n")
+            f.write(f"prompts_host_dir={prompts_host_dir or ''}\n")
     else:
         print(f"port={port}")
         print(f"volume_args={volume_args_str}")
         print(f"chown_paths={chown_paths_str}")
         print(f"env_args={env_args_str}")
         print(f"tmpfs_args={tmpfs_args_str}")
+        print(f"prompts_host_dir={prompts_host_dir or ''}")
     return 0
 
 

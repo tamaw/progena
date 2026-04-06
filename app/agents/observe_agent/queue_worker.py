@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .agent import ObserveAgent
 
 logger = logging.getLogger(__name__)
+DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 
 
 def _agent_name() -> str:
@@ -25,11 +26,13 @@ def _agent_name() -> str:
 
 def get_task_log_path() -> Path:
     agent_name = _agent_name()
-    base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", "/app/logs"))
+    base_log_dir = Path(os.environ.get("PROGENITOR_LOG_DIR", str(DEFAULT_PROJECT_LOG_DIR)))
     return base_log_dir / agent_name / f"{agent_name}_tasks.jsonl"
 
 
-TASK_LOG_PATH: Path | None = get_task_log_path() if os.environ.get("AGENT_NAME", "").strip() else None
+TASK_LOG_PATH: Path | None = (
+    get_task_log_path() if os.environ.get("AGENT_NAME", "").strip() else None
+)
 
 _append_lock = threading.Lock()
 
@@ -64,16 +67,19 @@ def append_task_record(record: TaskRecord, log_path: Path | None = None) -> None
     """Atomically append *record* as a JSON line to *log_path*."""
     log_path = _resolve_log_path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(
-        {
-            "task_id": record.task_id,
-            "context_id": record.context_id,
-            "status": record.status,
-            "response_text": record.response_text,
-            "error": record.error,
-            "timestamp_utc": record.timestamp_utc,
-        }
-    ) + "\n"
+    line = (
+        json.dumps(
+            {
+                "task_id": record.task_id,
+                "context_id": record.context_id,
+                "status": record.status,
+                "response_text": record.response_text,
+                "error": record.error,
+                "timestamp_utc": record.timestamp_utc,
+            }
+        )
+        + "\n"
+    )
 
     lock_path = log_path.with_suffix(".lock")
     with _append_lock:
@@ -81,12 +87,12 @@ def append_task_record(record: TaskRecord, log_path: Path | None = None) -> None
             import fcntl
 
             with open(lock_path, "a", encoding="utf-8") as lock_fh:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
                 try:
                     with open(log_path, "a", encoding="utf-8") as log_fh:
                         log_fh.write(line)
                 finally:
-                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
         except ImportError:
             with open(log_path, "a", encoding="utf-8") as log_fh:
                 log_fh.write(line)

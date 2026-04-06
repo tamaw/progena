@@ -1,60 +1,27 @@
 """
-Prompt Templates for Progenitor.
+Prompt Templates for the builder agent.
 
-Loads prompts from prompts/ directory.
+Loads prompts from data/prompts/.
 All prompts are stored as markdown files for easy editing.
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
-_this_file = Path(__file__).resolve()
-
-# Find the repo root by walking up until we see a prompts/ directory.
-# This works both in-repo (…/progenitor/prompts) and in the Docker image (/app/prompts).
-PROJECT_ROOT: Path | None = None
-for parent in (_this_file.parent, *_this_file.parents):
-    if (parent / "prompts").exists():
-        PROJECT_ROOT = parent
-        break
-
-DEFAULT_PROMPTS_DIR = (PROJECT_ROOT or _this_file.parent) / "prompts"
-
-
-def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
-    """Resolve prompt directory from explicit override, env, and project default.
-
-    Resolution order:
-    1. Explicit ``prompts_dir`` argument (always honored)
-    2. ``PROGENITOR_PROMPTS_DIR`` environment variable (raises if missing)
-    3. Project default ``<root>/prompts`` (raises if missing)
-    """
-    if prompts_dir is not None:
-        return Path(prompts_dir).expanduser().resolve()
-
-    env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
-    if env_prompts_dir:
-        resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
-        if not resolved_env_dir.exists():
-            raise FileNotFoundError(
-                f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
-            )
-        return resolved_env_dir
-
-    if not DEFAULT_PROMPTS_DIR.exists():
-        raise FileNotFoundError(
-            f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
-            "Ensure the prompts/ directory exists at the project root."
-        )
-    return DEFAULT_PROMPTS_DIR
+from app.progenitor.llm.prompts import (
+    DEFAULT_PROMPTS_DIR,
+    resolve_prompts_dir,
+)
+from app.progenitor.llm.prompts import (
+    load_skill_context as load_repo_skill_context,
+)
 
 
 class PromptTemplates:
     """Manages prompt templates for Progenitor.
 
-    All prompts are loaded from prompts/*.md files.
+    All prompts are loaded from data/prompts/*.md files.
     """
 
     VERSION = "1.0.0"
@@ -62,16 +29,6 @@ class PromptTemplates:
     def __init__(self, prompts_dir: Path | str | None = None):
         """Initialize with optional custom prompts directory."""
         self.prompts_dir = resolve_prompts_dir(prompts_dir)
-
-    @staticmethod
-    def _strip_frontmatter(content: str) -> str:
-        """Remove SKILL.md frontmatter when present."""
-        if not content.startswith("---"):
-            return content.strip()
-        parts = content.split("---", 2)
-        if len(parts) < 3:
-            return content.strip()
-        return parts[2].strip()
 
     def _load_prompt(self, filename: str) -> str:
         """Load a prompt from file.
@@ -92,14 +49,14 @@ class PromptTemplates:
                 searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
             raise FileNotFoundError(
                 f"Prompt file not found: {prompt_file}. "
-                f"Ensure prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
+                f"Ensure data/prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
             )
         return prompt_file.read_text(encoding="utf-8")
 
     def get(self, filename: str, **replacements: str) -> str:
         """Load a prompt template and apply optional replacements.
 
-        Generic loader for any prompt file in prompts/.
+        Generic loader for any prompt file in data/prompts/.
         Template variables use {placeholder} syntax.
 
         Args:
@@ -140,29 +97,16 @@ class PromptTemplates:
     def get_builder_skill_context(self, skill_names: list[str] | None = None) -> str:
         """Load repo-level builder skills for prompt grounding.
 
-        The builder aligns to the same `prompts/skills` convention as Progenitor
-        rather than maintaining a private skills directory.
+        Builder-specific skills live under data/skills/builder_agent/,
+        with progenitor skills available as a fallback for shared bundles.
         """
         selected = skill_names or ["build-agent", "git-workflow"]
-        skills_dir = self.prompts_dir / "skills"
-        if not skills_dir.is_dir():
-            raise FileNotFoundError(
-                f"Skills directory not found: {skills_dir}. "
-                "Ensure prompts/skills is mounted and populated."
-            )
-
-        sections: list[str] = []
-        for skill_name in selected:
-            skill_file = skills_dir / skill_name / "SKILL.md"
-            if not skill_file.is_file():
-                raise FileNotFoundError(
-                    f"Skill file not found: {skill_file}. "
-                    f"Ensure prompts/skills/{skill_name}/SKILL.md exists."
-                )
-            body = self._strip_frontmatter(skill_file.read_text(encoding="utf-8"))
-            if body:
-                sections.append(body)
-        return "\n\n".join(sections)
+        return load_repo_skill_context(
+            selected,
+            agent_name="builder_agent",
+            prompts_dir=self.prompts_dir,
+            fallback_agents=("progenitor",),
+        )
 
     def get_copilot_task_prompt(self, spec: dict) -> str:
         """Generate a task prompt for Copilot CLI.
@@ -170,25 +114,25 @@ class PromptTemplates:
         If spec contains 'spec_doc_content', it will be included as
         additional guidance for the build (set by PLAN phase).
         """
-        capabilities = spec.get('capabilities', [])
-        caps_str = '\n'.join(['- ' + c for c in capabilities]) if capabilities else '- None specified'
+        capabilities = spec.get("capabilities", [])
+        caps_str = (
+            "\n".join(["- " + c for c in capabilities]) if capabilities else "- None specified"
+        )
 
-        agent_name = spec.get('name', 'unnamed')
-        kind = spec.get('kind', 'unknown')
+        agent_name = spec.get("name", "unnamed")
+        kind = spec.get("kind", "unknown")
 
         # Load structure guidance for agents
-        if kind == 'agent':
+        if kind == "agent":
             structure_template = self._load_prompt("builder_agent/agent_structure.md")
-            structure_guidance = structure_template.replace(
-                "{agent_name}", agent_name
-            ).replace(
-                "{agent_class}", agent_name.title().replace('_', '')
+            structure_guidance = structure_template.replace("{agent_name}", agent_name).replace(
+                "{agent_class}", agent_name.title().replace("_", "")
             )
         else:
             structure_guidance = ""
 
         # SpecDoc: Include persistent spec artifact if available
-        spec_doc_content = spec.get('spec_doc_content', '')
+        spec_doc_content = spec.get("spec_doc_content", "")
         if spec_doc_content:
             # Append spec_doc as additional context for Copilot
             spec_doc_section = f"""
@@ -204,18 +148,13 @@ The following specification has evolved through planning iterations and should g
             structure_guidance = spec_doc_section + structure_guidance
 
         template = self._load_prompt("builder_agent/copilot_task.md")
-        prompt = template.replace(
-            "{agent_name}", agent_name
-        ).replace(
-            "{kind}", kind
-        ).replace(
-            "{description}", spec.get('description', 'No description')
-        ).replace(
-            "{capabilities}", caps_str
-        ).replace(
-            "{implementation_notes}", spec.get('implementation_notes', 'None provided')
-        ).replace(
-            "{structure_guidance}", structure_guidance
+        prompt = (
+            template.replace("{agent_name}", agent_name)
+            .replace("{kind}", kind)
+            .replace("{description}", spec.get("description", "No description"))
+            .replace("{capabilities}", caps_str)
+            .replace("{implementation_notes}", spec.get("implementation_notes", "None provided"))
+            .replace("{structure_guidance}", structure_guidance)
         )
         skill_context = self.get_builder_skill_context()
         if not skill_context:
@@ -243,10 +182,8 @@ The following specification has evolved through planning iterations and should g
     ) -> str:
         """Get prompt for refining ideal state after an iteration."""
         template = self._load_prompt("builder_agent/ideal_state_refine.md")
-        return (
-            template
-            .replace("{current_state}", current_state_json)
-            .replace("{results}", results_str)
+        return template.replace("{current_state}", current_state_json).replace(
+            "{results}", results_str
         )
 
     def get_ideal_state_clarification_prompt(
@@ -259,8 +196,7 @@ The following specification has evolved through planning iterations and should g
         """Get prompt for incorporating user clarification."""
         template = self._load_prompt("builder_agent/ideal_state_clarify.md")
         return (
-            template
-            .replace("{original_task}", original_task)
+            template.replace("{original_task}", original_task)
             .replace("{trigger}", trigger)
             .replace("{clarification}", clarification)
             .replace("{current_state}", current_state_json)
@@ -275,8 +211,7 @@ The following specification has evolved through planning iterations and should g
         """Get prompt for extracting anti-criteria from violations."""
         template = self._load_prompt("builder_agent/ideal_state_anti_criteria.md")
         return (
-            template
-            .replace("{violations}", violations_str)
+            template.replace("{violations}", violations_str)
             .replace("{existing_anti_criteria}", existing_anti_criteria_str)
             .replace("{task_description}", task_description)
         )
@@ -290,8 +225,7 @@ The following specification has evolved through planning iterations and should g
         """Get prompt for validating criteria quality."""
         template = self._load_prompt("builder_agent/ideal_state_validate.md")
         return (
-            template
-            .replace("{criteria}", criteria_str)
+            template.replace("{criteria}", criteria_str)
             .replace("{anti_criteria}", anti_criteria_str)
             .replace("{task_description}", task_description)
         )
@@ -305,8 +239,7 @@ The following specification has evolved through planning iterations and should g
         """Get prompt for suggesting verification methods."""
         template = self._load_prompt("builder_agent/ideal_state_verify.md")
         return (
-            template
-            .replace("{criteria}", criteria_str)
+            template.replace("{criteria}", criteria_str)
             .replace("{task_description}", task_description)
             .replace("{context}", context_str)
         )
@@ -342,8 +275,7 @@ The following specification has evolved through planning iterations and should g
         """
         template = self._load_prompt("builder_agent/think.md")
         return (
-            template
-            .replace("{task_description}", task_description)
+            template.replace("{task_description}", task_description)
             .replace("{criteria}", criteria)
             .replace("{anti_criteria}", anti_criteria)
             .replace("{iteration_context}", iteration_context)
@@ -373,8 +305,7 @@ The following specification has evolved through planning iterations and should g
         """Get prompt for the LEARN phase iteration analysis."""
         template = self._load_prompt("builder_agent/learn.md")
         return (
-            template
-            .replace("{iteration}", str(iteration))
+            template.replace("{iteration}", str(iteration))
             .replace("{user_request}", user_request)
             .replace("{ideal_state}", ideal_state)
             .replace("{experiment_plan}", experiment_plan)
@@ -398,8 +329,7 @@ The following specification has evolved through planning iterations and should g
         """Get prompt for LLM-based severity assessment of validation findings."""
         template = self._load_prompt("builder_agent/validation_severity.md")
         return (
-            template
-            .replace("{findings_json}", findings_json)
+            template.replace("{findings_json}", findings_json)
             .replace("{project_directory}", project_directory)
             .replace("{iteration}", str(iteration))
         )

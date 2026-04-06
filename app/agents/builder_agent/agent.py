@@ -59,6 +59,7 @@ def _agent_log_name() -> str:
         raise RuntimeError("AGENT_NAME must be set for builder_agent")
     return agent_name
 
+
 # ---------------------------------------------------------------------------
 # Module-level singletons — initialised once on first request.
 # ---------------------------------------------------------------------------
@@ -155,7 +156,9 @@ async def _ensure_workspace() -> None:
     # Prefer origin/main, fall back to origin/master if needed.
     rc, _out, err = await _run_git("-C", str(workspace), "checkout", "-B", "main", "origin/main")
     if rc != 0:
-        rc, _out, err = await _run_git("-C", str(workspace), "checkout", "-B", "main", "origin/master")
+        rc, _out, err = await _run_git(
+            "-C", str(workspace), "checkout", "-B", "main", "origin/master"
+        )
         if rc != 0:
             logger.error("Failed to checkout default branch: %s", err[:500])
             return
@@ -191,7 +194,11 @@ async def _ensure_initialized() -> None:
     )
     await _state_manager.initialize()
 
-    _llm_client = create_llm_client(config=config.llm, mcp_config=config.mcp)
+    _llm_client = create_llm_client(
+        config=config.llm,
+        mcp_config=config.mcp,
+        prompts_dir=config.storage.prompts_dir,
+    )
 
     _tool_registry = ToolRegistry(config.storage.state_dir.parent / "config" / "agents.json")
     await _tool_registry.load()
@@ -327,6 +334,7 @@ async def _run_build_request(
 # A2A AgentExecutor implementation
 # ---------------------------------------------------------------------------
 
+
 class BuilderAgentExecutor(AgentExecutor):
     """Accept build tasks immediately and execute them in the background."""
 
@@ -342,7 +350,7 @@ class BuilderAgentExecutor(AgentExecutor):
         # ------------------------------------------------------------------
         request_text = ""
         if context.message:
-            for part in (context.message.parts or []):
+            for part in context.message.parts or []:
                 root = getattr(part, "root", part)
                 if isinstance(root, TextPart):
                     request_text += root.text
@@ -355,7 +363,9 @@ class BuilderAgentExecutor(AgentExecutor):
                     context_id=ctx_id,
                     status=TaskStatus(
                         state=TaskState.failed,
-                        message=_text_message("Empty build request — please describe what to build.", role=Role.agent),
+                        message=_text_message(
+                            "Empty build request — please describe what to build.", role=Role.agent
+                        ),
                         timestamp=utcnow_isoformat(),
                     ),
                     final=True,
@@ -424,6 +434,7 @@ class BuilderAgentExecutor(AgentExecutor):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _text_message(text: str, *, role: Role = Role.agent) -> Message:
     return Message(

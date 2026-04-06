@@ -110,7 +110,9 @@ Generate a list of work items to fulfill this request.
     return [item.model_dump() for item in validated.work_items]
 
 
-def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
+def create_node(
+    llm_client, state_manager
+) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the planner node function."""
 
     async def planner_node(state: ProgenitorState) -> ProgenitorState:
@@ -136,7 +138,7 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
 
         # Get decision action - Decision is always a Pydantic model
         action = decision.action
-        action_value = action.value if hasattr(action, 'value') else str(action)
+        action_value = action.value if hasattr(action, "value") else str(action)
 
         # Handle system tool requests directly without LLM planning
         if action_value == "system_tool":
@@ -226,22 +228,26 @@ def create_node(llm_client, state_manager) -> Callable[[ProgenitorState], Corout
                 backlog.append(work_item)
 
             # Log planning
-            await state_manager.log_decision({
-                "event": "planning",
-                "decision": decision_dict,
-                "work_items_created": len(work_items_data),
-                "timestamp": utcnow_isoformat(),
-            })
+            await state_manager.log_decision(
+                {
+                    "event": "planning",
+                    "decision": decision_dict,
+                    "work_items_created": len(work_items_data),
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
             return {"backlog": backlog}
 
         except Exception as e:
             # Log error but continue
-            await state_manager.log_decision({
-                "event": "planning_error",
-                "error": str(e),
-                "timestamp": utcnow_isoformat(),
-            })
+            await state_manager.log_decision(
+                {
+                    "event": "planning_error",
+                    "error": str(e),
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
             return {}
 
     return planner_node
@@ -311,13 +317,15 @@ async def _plan_schedule_task(
 
         if result.success and entry_data:
             # Log the schedule creation
-            await state_manager.log_decision({
-                "event": "schedule_created",
-                "schedule_id": result.schedule_id,
-                "instruction": instruction,
-                "time_expression": time_expression,
-                "timestamp": utcnow_isoformat(),
-            })
+            await state_manager.log_decision(
+                {
+                    "event": "schedule_created",
+                    "schedule_id": result.schedule_id,
+                    "instruction": instruction,
+                    "time_expression": time_expression,
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
             # Create a ScheduleEntry from the entry_data
             entry = ScheduleEntry(**entry_data)
@@ -336,7 +344,9 @@ async def _plan_schedule_task(
                         "builder_agent/planner_schedule_confirmation.md",
                         task_details=json.dumps(schedule_result_payload, ensure_ascii=False),
                     ),
-                    system_prompt=_prompts.get("builder_agent/planner_schedule_confirmation_system.md"),
+                    system_prompt=_prompts.get(
+                        "builder_agent/planner_schedule_confirmation_system.md"
+                    ),
                     temperature=0.2,
                 )
                 pending_response = pending_response.strip() if pending_response else None
@@ -437,10 +447,10 @@ async def _plan_from_ideal_state(
         if decision:
             if hasattr(decision, "action"):
                 action = decision.action
-                decision_action = action.value if hasattr(action, 'value') else str(action)
+                decision_action = action.value if hasattr(action, "value") else str(action)
             elif isinstance(decision, dict):
                 action = decision.get("action", "answer_directly")
-                decision_action = action.value if hasattr(action, 'value') else str(action)
+                decision_action = action.value if hasattr(action, "value") else str(action)
 
         # Determine work item type based on decision action
         if decision_action == "build_agent":
@@ -464,7 +474,9 @@ async def _plan_from_ideal_state(
     chosen_approach = _select_best_approach(approaches, last_verification)
 
     # Convert ideal state to dict for LLM
-    ideal_state_dict = ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
+    ideal_state_dict = (
+        ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
+    )
 
     # Extract key context for planning
     task_description = ideal_state_dict.get("task_description", "")
@@ -503,7 +515,9 @@ async def _plan_from_ideal_state(
             agent_name = build_settings.project_name or agent_name
             project_directory = getattr(build_settings, "project_directory", None)
             build_type_value = str(getattr(build_settings, "build_type", "") or "").lower().strip()
-        logger.debug(f"PLANNER: Got agent_name={agent_name}, project_directory={project_directory} from build_settings")
+        logger.debug(
+            f"PLANNER: Got agent_name={agent_name}, project_directory={project_directory} from build_settings"
+        )
 
         # If we still don't have an item_type, infer it from build_settings.build_type.
         if item_type == WorkItemType.DIRECT_ANSWER:
@@ -545,8 +559,12 @@ async def _plan_from_ideal_state(
     # Try to extract from task description (e.g., "build a weather agent")
     if agent_name == "unknown_agent" and task_description:
         import re
+
         # Look for patterns like "weather agent", "hello world agent"
-        match = re.search(r'(?:build\s+(?:a\s+|an\s+|me\s+a\s+)?)?(\w+(?:\s+\w+)?)\s+agent', task_description.lower())
+        match = re.search(
+            r"(?:build\s+(?:a\s+|an\s+|me\s+a\s+)?)?(\w+(?:\s+\w+)?)\s+agent",
+            task_description.lower(),
+        )
         if match:
             extracted = match.group(1).strip()
             if extracted and extracted not in ("a", "an", "the", "new", "build", "me"):
@@ -594,8 +612,8 @@ async def _plan_from_ideal_state(
         )
 
         # Get spec file path and copilot prompt
-        spec_file_path = getattr(spec_doc, 'spec_file_path', None)
-        copilot_prompt = getattr(spec_doc, 'copilot_prompt', None)
+        spec_file_path = getattr(spec_doc, "spec_file_path", None)
+        copilot_prompt = getattr(spec_doc, "copilot_prompt", None)
 
         # Create work item with experiment plan in context
         # NOTE: We only store spec_file_path and copilot_prompt, NOT the full spec_doc
@@ -621,24 +639,30 @@ async def _plan_from_ideal_state(
             },
         )
         backlog.append(work_item)
-        logger.info(f"PLANNER: Created work item id={work_item.id}, type={item_type}, status={work_item.status}")
+        logger.info(
+            f"PLANNER: Created work item id={work_item.id}, type={item_type}, status={work_item.status}"
+        )
         logger.info(f"PLANNER: Experiment plan has {len(experiment_plan.prompts)} prompts")
         logger.info(f"PLANNER: Backlog now has {len(backlog)} items")
-        logger.info(f"PLANNER: SpecDoc revision={spec_doc.revision}, spec_file_path={spec_file_path}")
+        logger.info(
+            f"PLANNER: SpecDoc revision={spec_doc.revision}, spec_file_path={spec_file_path}"
+        )
         logger.info(f"PLANNER: Copilot prompt generated ({len(copilot_prompt or '')} chars)")
 
         # Log planning with experiment plan details
-        await state_manager.log_decision({
-            "event": "plan_from_ideal_state",
-            "iteration": iteration,
-            "approach": chosen_approach.get("name"),
-            "experiment_plan_id": experiment_plan.plan_id,
-            "prompts_count": len(experiment_plan.prompts),
-            "expected_outcome": experiment_plan.expected_outcome[:200],
-            "spec_doc_revision": spec_doc.revision,
-            "work_items_created": 1,
-            "timestamp": utcnow_isoformat(),
-        })
+        await state_manager.log_decision(
+            {
+                "event": "plan_from_ideal_state",
+                "iteration": iteration,
+                "approach": chosen_approach.get("name"),
+                "experiment_plan_id": experiment_plan.plan_id,
+                "prompts_count": len(experiment_plan.prompts),
+                "expected_outcome": experiment_plan.expected_outcome[:200],
+                "spec_doc_revision": spec_doc.revision,
+                "work_items_created": 1,
+                "timestamp": utcnow_isoformat(),
+            }
+        )
 
         return {
             # Nested structure
@@ -648,10 +672,12 @@ async def _plan_from_ideal_state(
                 },
             },
             "spec": {
-                "file_path": spec_doc.spec_file_path if hasattr(spec_doc, 'spec_file_path') else None,
+                "file_path": spec_doc.spec_file_path
+                if hasattr(spec_doc, "spec_file_path")
+                else None,
                 "revision": spec_doc.revision,
-                "created_at": str(spec_doc.created_at) if hasattr(spec_doc, 'created_at') else None,
-                "updated_at": str(spec_doc.updated_at) if hasattr(spec_doc, 'updated_at') else None,
+                "created_at": str(spec_doc.created_at) if hasattr(spec_doc, "created_at") else None,
+                "updated_at": str(spec_doc.updated_at) if hasattr(spec_doc, "updated_at") else None,
             },
             "backlog": backlog,
             "build_phase": "plan",
@@ -666,8 +692,8 @@ async def _plan_from_ideal_state(
         )
 
         # Get spec file path and copilot prompt from spec_doc (even in fallback)
-        fallback_spec_file_path = getattr(spec_doc, 'spec_file_path', None)
-        fallback_copilot_prompt = getattr(spec_doc, 'copilot_prompt', None)
+        fallback_spec_file_path = getattr(spec_doc, "spec_file_path", None)
+        fallback_copilot_prompt = getattr(spec_doc, "copilot_prompt", None)
 
         work_item = WorkItem(
             id=str(uuid.uuid4()),
@@ -689,11 +715,13 @@ async def _plan_from_ideal_state(
         )
         backlog.append(work_item)
 
-        await state_manager.log_decision({
-            "event": "plan_fallback",
-            "error": str(e),
-            "timestamp": utcnow_isoformat(),
-        })
+        await state_manager.log_decision(
+            {
+                "event": "plan_fallback",
+                "error": str(e),
+                "timestamp": utcnow_isoformat(),
+            }
+        )
 
         return {
             # Nested structure (even in fallback)
@@ -755,7 +783,9 @@ async def _ensure_spec_doc(
             llm_client=llm_client,
             item_type=item_type,
         )
-        logger.info(f"PLANNER: Seeded new SpecDoc from template with LLM customization, revision {spec_doc.revision}")
+        logger.info(
+            f"PLANNER: Seeded new SpecDoc from template with LLM customization, revision {spec_doc.revision}"
+        )
 
     # Save spec file to appropriate directory for copilot to reference
     # BL-007: Use project_directory from build_settings if provided
@@ -851,7 +881,7 @@ async def _generate_copilot_prompt(
         iteration_context = f"""
 
 This is iteration {iteration} of the build. Focus on addressing these gaps:
-{chr(10).join(f'- {gap}' for gap in gaps[:5])}
+{chr(10).join(f"- {gap}" for gap in gaps[:5])}
 """
 
     # Adjust prompt based on whether entity exists and type
@@ -930,7 +960,13 @@ TASK FOCUS:
     return base_prompt
 
 
-async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work_item_id: str | None = None, project_directory: str | None = None, item_type: WorkItemType = WorkItemType.BUILD_AGENT) -> Path | None:
+async def _save_spec_file(
+    spec_doc: SpecDoc,
+    agent_name: str | None = None,
+    work_item_id: str | None = None,
+    project_directory: str | None = None,
+    item_type: WorkItemType = WorkItemType.BUILD_AGENT,
+) -> Path | None:
     """
     Save the spec content to a file in the appropriate project directory for copilot CLI to reference.
 
@@ -950,7 +986,9 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
             entity_folder = Path(project_directory)
             entity_folder.mkdir(parents=True, exist_ok=True)
             safe_name = entity_folder.name
-            logger.info(f"PLANNER: Using project_directory from build_settings: {project_directory}")
+            logger.info(
+                f"PLANNER: Using project_directory from build_settings: {project_directory}"
+            )
         else:
             # Fallback: Determine project root and appropriate directory based on item_type
             project_root = Path(__file__).parent.parent.parent.parent
@@ -980,15 +1018,21 @@ async def _save_spec_file(spec_doc: SpecDoc, agent_name: str | None = None, work
             entity_folder.mkdir(parents=True, exist_ok=True)
 
         # Check if entity already exists (has agent.py or server.py)
-        existing_entity = (entity_folder / "agent.py").exists() or (entity_folder / "server.py").exists()
+        existing_entity = (entity_folder / "agent.py").exists() or (
+            entity_folder / "server.py"
+        ).exists()
         if existing_entity:
-            logger.info(f"PLANNER: Entity '{safe_name}' already exists, spec will amend existing files")
+            logger.info(
+                f"PLANNER: Entity '{safe_name}' already exists, spec will amend existing files"
+            )
 
         # Save spec.md inside the entity folder
         spec_file_path = entity_folder / "spec.md"
         spec_file_path.write_text(spec_doc.content, encoding="utf-8")
 
-        logger.info(f"PLANNER: Saved spec file to {spec_file_path} (existing_entity={existing_entity})")
+        logger.info(
+            f"PLANNER: Saved spec file to {spec_file_path} (existing_entity={existing_entity})"
+        )
         return spec_file_path
     except Exception as e:
         logger.error(f"Failed to save spec file: {e}")
@@ -1024,11 +1068,10 @@ async def _seed_spec_doc_from_template(
     template_path = _prompts.prompts_dir / template_name
     if not template_path.exists():
         raise FileNotFoundError(
-            f"Spec template not found: {template_path}. "
-            f"Ensure prompts/{template_name} exists."
+            f"Spec template not found: {template_path}. Ensure data/prompts/{template_name} exists."
         )
     template_content = template_path.read_text(encoding="utf-8")
-    seed_path = f"prompts/{template_name}"
+    seed_path = f"data/prompts/{template_name}"
 
     # Use LLM to customize the template with user's task
     if llm_client:
@@ -1041,7 +1084,9 @@ async def _seed_spec_doc_from_template(
                     entity_name=agent_name,
                     template_content=template_content,
                 )
-                system_prompt = _prompts.get("builder_agent/planner_spec_customization_tool_system.md")
+                system_prompt = _prompts.get(
+                    "builder_agent/planner_spec_customization_tool_system.md"
+                )
             elif item_type == WorkItemType.BUILD_PROGENITOR:
                 customization_prompt = _prompts.get(
                     "builder_agent/planner_spec_customization_agent.md",
@@ -1049,7 +1094,9 @@ async def _seed_spec_doc_from_template(
                     entity_name="progenitor",
                     template_content=template_content,
                 )
-                system_prompt = _prompts.get("builder_agent/planner_spec_customization_agent_system.md")
+                system_prompt = _prompts.get(
+                    "builder_agent/planner_spec_customization_agent_system.md"
+                )
             else:
                 customization_prompt = _prompts.get(
                     "builder_agent/planner_spec_customization_agent.md",
@@ -1057,7 +1104,9 @@ async def _seed_spec_doc_from_template(
                     entity_name=agent_name,
                     template_content=template_content,
                 )
-                system_prompt = _prompts.get("builder_agent/planner_spec_customization_agent_system.md")
+                system_prompt = _prompts.get(
+                    "builder_agent/planner_spec_customization_agent_system.md"
+                )
 
             customized_content = await llm_client.generate(
                 prompt=customization_prompt,
@@ -1072,16 +1121,26 @@ async def _seed_spec_doc_from_template(
                 logger.warning("PLANNER: LLM customization too short, using manual replacement")
                 seed_content = template_content.replace("{agent_name}", agent_name)
                 seed_content = seed_content.replace("{tool_name}", agent_name)
-                seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
-                seed_content = seed_content.replace("{tool_class}", agent_name.title().replace("_", ""))
-                seed_content = seed_content.replace("{primary_function}", agent_name.replace("_tool", ""))
+                seed_content = seed_content.replace(
+                    "{agent_class}", agent_name.title().replace("_", "")
+                )
+                seed_content = seed_content.replace(
+                    "{tool_class}", agent_name.title().replace("_", "")
+                )
+                seed_content = seed_content.replace(
+                    "{primary_function}", agent_name.replace("_tool", "")
+                )
         except Exception as e:
             logger.error(f"PLANNER: LLM customization failed: {e}, using manual replacement")
             seed_content = template_content.replace("{agent_name}", agent_name)
             seed_content = seed_content.replace("{tool_name}", agent_name)
-            seed_content = seed_content.replace("{agent_class}", agent_name.title().replace("_", ""))
+            seed_content = seed_content.replace(
+                "{agent_class}", agent_name.title().replace("_", "")
+            )
             seed_content = seed_content.replace("{tool_class}", agent_name.title().replace("_", ""))
-            seed_content = seed_content.replace("{primary_function}", agent_name.replace("_tool", ""))
+            seed_content = seed_content.replace(
+                "{primary_function}", agent_name.replace("_tool", "")
+            )
     else:
         # No LLM client - do manual replacement
         seed_content = template_content.replace("{agent_name}", agent_name)
@@ -1123,13 +1182,20 @@ async def _generate_experiment_plan(
     scoring hooks, number of trials, and stop-early rules.
     """
     # Build prompt for LLM to generate experiment details
-    gaps_section = "GAPS TO ADDRESS:\n" + chr(10).join([f"- {gap}" for gap in gaps[:3]]) if gaps else ""
+    gaps_section = (
+        "GAPS TO ADDRESS:\n" + chr(10).join([f"- {gap}" for gap in gaps[:3]]) if gaps else ""
+    )
     prompt = _prompts.get(
         "builder_agent/planner_experiment_plan.md",
-        approach_name=chosen_approach.get('name', 'primary'),
-        approach_description=chosen_approach.get('description', ''),
+        approach_name=chosen_approach.get("name", "primary"),
+        approach_description=chosen_approach.get("description", ""),
         task_description=task_description,
-        success_criteria=chr(10).join([f"- {c.get('description', '')} (target: {c.get('target_score', 0.8)})" for c in success_criteria[:3]]),
+        success_criteria=chr(10).join(
+            [
+                f"- {c.get('description', '')} (target: {c.get('target_score', 0.8)})"
+                for c in success_criteria[:3]
+            ]
+        ),
         gaps_section=gaps_section,
     )
 
@@ -1228,7 +1294,7 @@ def _parse_prompts_from_response(response: str) -> list[PromptSpec]:
         elif current_prompt and line_lower.startswith("expect"):
             expect_text = line_stripped.split(":", 1)[-1].strip()
             # Extract keywords from expectation
-            keywords = [w.strip().strip('"\'') for w in expect_text.split() if len(w) > 3]
+            keywords = [w.strip().strip("\"'") for w in expect_text.split() if len(w) > 3]
             current_prompt.expected_response_contains = keywords[:5]
 
         # Look for SCORE_BY: pattern
@@ -1251,29 +1317,35 @@ def _generate_scoring_hooks(success_criteria: list[dict]) -> list[ScoringHook]:
 
         # Determine hook type based on criterion description
         if "respond" in criterion_desc or "answer" in criterion_desc:
-            hooks.append(ScoringHook(
-                id=f"hook_{i+1}",
-                name=f"Response check: {criterion.get('id', f'criterion_{i+1}')}",
-                hook_type="contains",
-                pattern=None,  # Will be filled based on specific responses
-                weight=criterion.get("weight", 1.0),
-            ))
+            hooks.append(
+                ScoringHook(
+                    id=f"hook_{i + 1}",
+                    name=f"Response check: {criterion.get('id', f'criterion_{i + 1}')}",
+                    hook_type="contains",
+                    pattern=None,  # Will be filled based on specific responses
+                    weight=criterion.get("weight", 1.0),
+                )
+            )
         elif "format" in criterion_desc or "json" in criterion_desc:
-            hooks.append(ScoringHook(
-                id=f"hook_{i+1}",
-                name=f"Format check: {criterion.get('id', f'criterion_{i+1}')}",
-                hook_type="json_path",
-                weight=criterion.get("weight", 1.0),
-            ))
+            hooks.append(
+                ScoringHook(
+                    id=f"hook_{i + 1}",
+                    name=f"Format check: {criterion.get('id', f'criterion_{i + 1}')}",
+                    hook_type="json_path",
+                    weight=criterion.get("weight", 1.0),
+                )
+            )
         else:
             # Default to LLM judge for complex criteria
-            hooks.append(ScoringHook(
-                id=f"hook_{i+1}",
-                name=f"Quality check: {criterion.get('id', f'criterion_{i+1}')}",
-                hook_type="llm_judge",
-                llm_prompt=f"Does the response satisfy: {criterion.get('description', '')}?",
-                weight=criterion.get("weight", 1.0),
-            ))
+            hooks.append(
+                ScoringHook(
+                    id=f"hook_{i + 1}",
+                    name=f"Quality check: {criterion.get('id', f'criterion_{i + 1}')}",
+                    hook_type="llm_judge",
+                    llm_prompt=f"Does the response satisfy: {criterion.get('description', '')}?",
+                    weight=criterion.get("weight", 1.0),
+                )
+            )
 
     return hooks
 
@@ -1287,7 +1359,9 @@ def _extract_expected_outcome(response: str, approach: dict) -> str:
             return line.split(":", 1)[-1].strip() if ":" in line else line.strip()
 
     # Fall back to approach expected outcome
-    return cast(str, approach.get("expected_outcome", "Agent responds correctly to all test prompts"))
+    return cast(
+        str, approach.get("expected_outcome", "Agent responds correctly to all test prompts")
+    )
 
 
 def _select_best_approach(approaches: list[dict], last_verification) -> dict:

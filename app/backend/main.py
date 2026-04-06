@@ -89,12 +89,16 @@ config = ChatServerConfig.from_env()
 client: ProgenitorClient | IPCProgenitorClient | None = None
 
 # Enhanced feature managers
-session_manager: SessionManager = SessionManager(SessionConfig(
-    persist_dir=Path("data/sessions") if config.host else None,
-))
-attachment_manager: AttachmentManager = AttachmentManager(AttachmentConfig(
-    cache_dir=Path("data/attachments"),
-))
+session_manager: SessionManager = SessionManager(
+    SessionConfig(
+        persist_dir=Path("data/sessions") if config.host else None,
+    )
+)
+attachment_manager: AttachmentManager = AttachmentManager(
+    AttachmentConfig(
+        cache_dir=Path("data/attachments"),
+    )
+)
 conversation_history: ConversationHistory = ConversationHistory()
 graceful_shutdown: GracefulShutdownManager = GracefulShutdownManager(
     drain_timeout=30.0,
@@ -215,9 +219,7 @@ class RateLimiter:
         self._minute_requests[client_id] = [
             t for t in self._minute_requests[client_id] if t > minute_ago
         ]
-        self._hour_requests[client_id] = [
-            t for t in self._hour_requests[client_id] if t > hour_ago
-        ]
+        self._hour_requests[client_id] = [t for t in self._hour_requests[client_id] if t > hour_ago]
 
         # Check limits
         if len(self._minute_requests[client_id]) >= self.requests_per_minute:
@@ -237,7 +239,13 @@ class RateLimiter:
         """Get remaining requests for headers."""
         now = time.time()
         minute_count = len([t for t in self._minute_requests[client_id] if t > now - 60])
-        hour_count = len([t for t in self._hour_requests[client_id] if t > now - self.stale_client_timeout_seconds])
+        hour_count = len(
+            [
+                t
+                for t in self._hour_requests[client_id]
+                if t > now - self.stale_client_timeout_seconds
+            ]
+        )
         return {
             "minute": max(0, self.requests_per_minute - minute_count),
             "hour": max(0, self.requests_per_hour - hour_count),
@@ -267,14 +275,15 @@ def get_client_id(request: Request) -> str:
     """Extract client identifier for rate limiting."""
     # Use X-Forwarded-For if behind proxy, otherwise use client host
     forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
+    if isinstance(forwarded, str) and forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return str(request.client.host) if request.client else "unknown"
 
 
 # ============================================================================
 # Graceful Shutdown Management (OPS-002)
 # ============================================================================
+
 
 class ShutdownManager:
     """Manages graceful shutdown with request draining."""
@@ -392,11 +401,7 @@ async def _send_telegram_connected_message(
             logger.warning("Failed to send fallback Telegram failure message: %s", e2)
 
 
-async def _send_telegram_message(
-    telegram: TelegramClient,
-    content: str,
-    event_type: str
-) -> None:
+async def _send_telegram_message(telegram: TelegramClient, content: str, event_type: str) -> None:
     """Send a message to Telegram (fire-and-forget helper).
 
     Args:
@@ -531,7 +536,9 @@ async def lifespan(app: FastAPI):
     if telegram_client:
         logger.info(
             "Telegram integration enabled (chat_id=%s)",
-            config.telegram_chat_id[:8] + "..." if len(config.telegram_chat_id) > 8 else config.telegram_chat_id
+            config.telegram_chat_id[:8] + "..."
+            if len(config.telegram_chat_id) > 8
+            else config.telegram_chat_id,
         )
         # Register Telegram shutdown callback
         graceful_shutdown.register_callback(
@@ -568,21 +575,20 @@ async def lifespan(app: FastAPI):
             # Skip status updates, heartbeats, etc.
             telegram_event_types = {
                 "scheduled_response",  # Scheduled task responses
-                "agent_message",       # Direct agent messages
+                "agent_message",  # Direct agent messages
             }
 
             if event_type in telegram_event_types:
                 content = data.get("content", "")
                 if content:
                     # Fire and forget - don't block SSE broadcast
-                    asyncio.create_task(
-                        _send_telegram_message(telegram, content, event_type)
-                    )
+                    asyncio.create_task(_send_telegram_message(telegram, content, event_type))
 
     client = get_ipc_client(config, event_callback=combined_event_callback)
 
     # Register client shutdown callback
     if client:
+
         async def shutdown_progenitor_client() -> None:
             """Wrapper to ensure callback returns None."""
             await stop_client_safely(client, timeout=10.0, name="Progenitor")
@@ -596,11 +602,8 @@ async def lifespan(app: FastAPI):
 
     # Set up Telegram message handler and start polling if enabled
     if telegram_client and client:
-        async def handle_telegram_message(
-            chat_id: str,
-            message: str,
-            metadata: dict
-        ) -> str | None:
+
+        async def handle_telegram_message(chat_id: str, message: str, metadata: dict) -> str | None:
             """Handle incoming Telegram messages by forwarding to Progenitor.
 
             Args:
@@ -835,6 +838,7 @@ async def health_check_detailed():
     - Memory usage (if available)
     """
     import sys
+
     now = time.time()
 
     # Basic health info
@@ -875,6 +879,7 @@ async def health_check_detailed():
     # Memory usage (if psutil available)
     try:
         import psutil
+
         process = psutil.Process()
         memory_info = process.memory_info()
         health_info["memory"] = {
@@ -934,8 +939,6 @@ async def liveness_check():
     return {"status": "alive"}
 
 
-
-
 @app.get("/v1/models", response_model=ModelsResponse)
 async def list_models():
     """List available models (OpenAI-compatible)."""
@@ -986,11 +989,7 @@ async def responses(request: Request, body: ResponseRequest):
         return ResponsePayload(
             id=response_id,
             model=body.model,
-            output=[
-                ResponseOutputMessage(
-                    content=[ResponseOutputText(text=response_text)]
-                )
-            ],
+            output=[ResponseOutputMessage(content=[ResponseOutputText(text=response_text)])],
             usage=Usage(
                 prompt_tokens=len(" ".join(all_inputs).split()),
                 completion_tokens=len(response_text.split()),
@@ -1083,6 +1082,7 @@ async def simple_chat(body: SimpleChatRequest):
 # Attachment Endpoints
 # ============================================================================
 
+
 @app.post("/v1/attachments")
 async def upload_attachment(
     request: Request,
@@ -1119,7 +1119,9 @@ async def upload_attachment(
         "mime_type": result.mime_type,
         "size_bytes": result.size_bytes,
         "content_truncated": result.content_truncated,
-        "content_preview": result.content[:500] + "..." if len(result.content) > 500 else result.content,
+        "content_preview": result.content[:500] + "..."
+        if len(result.content) > 500
+        else result.content,
     }
 
 
@@ -1146,6 +1148,7 @@ async def get_attachment(attachment_id: str):
 # ============================================================================
 # Session Endpoints
 # ============================================================================
+
 
 @app.get("/v1/session")
 async def get_session(request: Request):
@@ -1225,6 +1228,7 @@ async def import_settings(request: Request, response: Response):
 # Conversation History Endpoints
 # ============================================================================
 
+
 @app.get("/v1/conversation")
 async def get_conversation():
     """Get current conversation history."""
@@ -1271,6 +1275,7 @@ async def clear_conversation():
 # ============================================================================
 # Enhanced Health Endpoints
 # ============================================================================
+
 
 @app.get("/health/features")
 async def health_features():

@@ -20,7 +20,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import count
 from typing import Any
 
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TelegramConfig:
     """Telegram-specific configuration extracted from ChatServerConfig."""
+
     bot_token: str
     chat_id: str
     api_timeout: int
@@ -46,12 +47,7 @@ class TelegramConfig:
     polling_enabled: bool = True
     polling_interval: float = 2.0
     polling_timeout: int = 30
-    allowed_users: set[str] = None  # type: ignore
-
-    def __post_init__(self):
-        """Initialize allowed_users set."""
-        if self.allowed_users is None:
-            self.allowed_users = set()
+    allowed_users: set[str] = field(default_factory=set)
 
     @classmethod
     def from_chat_config(cls, config: ChatServerConfig) -> "TelegramConfig":
@@ -255,11 +251,11 @@ class TelegramClient:
                         logger.error(
                             "Detected %d consecutive 409 Conflict errors - another bot instance "
                             "is likely running. Stopping polling to avoid conflicts.",
-                            consecutive_conflicts
+                            consecutive_conflicts,
                         )
                         break
                     # Longer backoff for conflicts
-                    await asyncio.sleep(min(60, 5 * (2 ** consecutive_conflicts)))
+                    await asyncio.sleep(min(60, 5 * (2**consecutive_conflicts)))
                     continue
                 elif error_type == "timeout":
                     consecutive_timeouts += 1
@@ -267,17 +263,19 @@ class TelegramClient:
                     if consecutive_timeouts == 1 or consecutive_timeouts % 10 == 0:
                         logger.debug(
                             "Long polling timeout (count: %d) - this is normal behavior",
-                            consecutive_timeouts
+                            consecutive_timeouts,
                         )
                     # Don't count timeouts as errors for the consecutive_errors limit
                     # since they're expected with long polling
                 elif error_type == "error":
                     consecutive_errors += 1
                     if consecutive_errors >= max_consecutive_errors:
-                        logger.error("Too many consecutive polling errors (%d), stopping", consecutive_errors)
+                        logger.error(
+                            "Too many consecutive polling errors (%d), stopping", consecutive_errors
+                        )
                         break
                     # Exponential backoff on errors
-                    await asyncio.sleep(min(30, 2 ** consecutive_errors))
+                    await asyncio.sleep(min(30, 2**consecutive_errors))
                     continue
                 else:
                     # Success - reset counters
@@ -297,15 +295,19 @@ class TelegramClient:
                 break
             except Exception as e:
                 consecutive_errors += 1
-                logger.error("Unexpected error in polling loop (attempt %d/%d): %s",
-                           consecutive_errors, max_consecutive_errors, e)
+                logger.error(
+                    "Unexpected error in polling loop (attempt %d/%d): %s",
+                    consecutive_errors,
+                    max_consecutive_errors,
+                    e,
+                )
 
                 if consecutive_errors >= max_consecutive_errors:
                     logger.error("Too many consecutive polling errors, stopping")
                     break
 
                 # Exponential backoff on errors
-                await asyncio.sleep(min(30, 2 ** consecutive_errors))
+                await asyncio.sleep(min(30, 2**consecutive_errors))
 
     async def _get_updates(self) -> tuple[list[dict], str | None]:
         """Fetch updates from Telegram using long polling.
@@ -324,9 +326,7 @@ class TelegramClient:
 
         # Use longer timeout for the HTTP request during long polling
         # No retry on getUpdates - it's expected to timeout sometimes
-        result, error_type = await self._api_call_with_error_type(
-            "getUpdates", params, retry=False
-        )
+        result, error_type = await self._api_call_with_error_type("getUpdates", params, retry=False)
 
         if error_type:
             return [], error_type
@@ -375,7 +375,9 @@ class TelegramClient:
         if chat_id not in self.config.allowed_users:
             logger.warning(
                 "Ignoring message from unauthorized chat: %s (user: %s @%s)",
-                chat_id, first_name, username
+                chat_id,
+                first_name,
+                username,
             )
             return
 
@@ -385,8 +387,9 @@ class TelegramClient:
 
         logger.info(
             "Received message from %s (@%s): %s",
-            first_name or user_id, username or "no_username",
-            text[:50] + "..." if len(text) > 50 else text
+            first_name or user_id,
+            username or "no_username",
+            text[:50] + "..." if len(text) > 50 else text,
         )
 
         # Handle commands
@@ -594,8 +597,9 @@ class TelegramClient:
                 message_thread_id=message_thread_id,
                 reply_to_message_id=reply_to_message_id,
             ):
-                logger.warning("Failed to send message chunk %d/%d to %s",
-                             i + 1, len(chunks), chat_id)
+                logger.warning(
+                    "Failed to send message chunk %d/%d to %s", i + 1, len(chunks), chat_id
+                )
                 success = False
 
         return success
@@ -610,9 +614,7 @@ class TelegramClient:
 
     def _stream_segment_limit(self, segment_index: int) -> int:
         """Return the max raw content length for a streamed segment."""
-        limit = self.config.max_message_length - len(
-            self._stream_message_header(segment_index)
-        )
+        limit = self.config.max_message_length - len(self._stream_message_header(segment_index))
         if limit <= 0:
             raise TelegramDraftStreamingError(
                 "Telegram max_message_length is too small for streamed agent headers"
@@ -873,7 +875,8 @@ class TelegramClient:
                         logger.warning(
                             "Telegram API conflict (409) on %s: %s - "
                             "ensure only one bot instance is running",
-                            method, description
+                            method,
+                            description,
                         )
                         return None, "conflict"
 
@@ -881,8 +884,7 @@ class TelegramClient:
                     if error_code == 429:
                         retry_after = data.get("parameters", {}).get("retry_after", 60)
                         logger.warning(
-                            "Telegram rate limited on %s, waiting %d seconds",
-                            method, retry_after
+                            "Telegram rate limited on %s, waiting %d seconds", method, retry_after
                         )
                         await asyncio.sleep(retry_after)
                         last_error_type = "error"
@@ -924,20 +926,27 @@ class TelegramClient:
 
             # Exponential backoff before retry
             if attempt < attempts - 1:
-                delay = self.config.retry_delay * (2 ** attempt)
+                delay = self.config.retry_delay * (2**attempt)
                 logger.debug(
                     "Telegram %s call failed (attempt %d/%d): %s, retrying in %.1fs",
-                    method, attempt + 1, attempts, last_error, delay
+                    method,
+                    attempt + 1,
+                    attempts,
+                    last_error,
+                    delay,
                 )
                 await asyncio.sleep(delay)
 
         # Only log as error if it's not a timeout on getUpdates
         if method == "getUpdates" and last_error_type == "timeout":
-            logger.debug("Telegram %s timed out after %d attempts (normal for long polling)", method, attempts)
+            logger.debug(
+                "Telegram %s timed out after %d attempts (normal for long polling)",
+                method,
+                attempts,
+            )
         else:
             logger.error(
-                "Telegram %s call failed after %d attempts: %s",
-                method, attempts, last_error
+                "Telegram %s call failed after %d attempts: %s", method, attempts, last_error
             )
         return None, last_error_type
 
@@ -959,8 +968,6 @@ class TelegramClient:
         """
         result, _ = await self._api_call_with_error_type(method, params, retry)
         return result
-
-
 
     def _split_message(self, text: str) -> list[str]:
         """Split a long message into chunks that fit Telegram's limit.
@@ -1075,8 +1082,7 @@ async def init_telegram_client(config: ChatServerConfig) -> TelegramClient | Non
 
     if not config.telegram_bot_token or not config.telegram_chat_id:
         logger.warning(
-            "Telegram enabled but missing configuration "
-            "(TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)"
+            "Telegram enabled but missing configuration (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)"
         )
         return None
 

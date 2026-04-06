@@ -13,17 +13,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AGENT_NAME=builder_progenitor \
     PROGENITOR_REPO_URL=https://github.com/tamaw/progenitor.git \
     PROGENITOR_LOG_DIR=/app/logs \
+    PROGENITOR_DATA_DIR=/app/data \
     AGENT_MODEL_DEFAULT= \
     OVERRIDE_AGENT_PLANNER_MODEL= \
     OVERRIDE_AGENT_BUILDER_MODEL= \
     DEFAULT_COPILOT_MODEL= \
     PROGENITOR_COPILOT_ADDITIONAL_FLAGS= \
     PROGENITOR_WORKTREES_ROOT=/app/worktrees \
-    PROGENITOR_PROMPTS_DIR=/app/prompts
+    PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees
 
 RUN addgroup --system agent && adduser --system --home /home/runner --ingroup agent runner
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
@@ -40,28 +41,29 @@ RUN set -eux; \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list; \
     apt-get update; \
-    apt-get install -y gh; \
+    apt-get install -y --no-install-recommends gh; \
     rm -rf /var/lib/apt/lists/*
 
 # Install Copilot CLI extension
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN curl -fsSL --retry 8 --retry-delay 2 --retry-all-errors https://gh.io/copilot-install | bash
 
 WORKDIR /app
 
-COPY requirements.lock.txt /app/requirements.lock.txt
+COPY pyproject.toml README.md /app/
+COPY app/ /app/app/
+COPY data/prompts/ /app/data/prompts/
+COPY data/skills/ /app/data/skills/
+COPY scripts/ /app/scripts/
 COPY app/agents/builder_progenitor/requirements.txt /app/requirements.builder.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.lock.txt && \
+    pip install --no-cache-dir . && \
     pip install --no-cache-dir -r /app/requirements.builder.txt
 
-COPY app/ /app/app/
-COPY prompts/ /app/prompts/
-COPY scripts/ /app/scripts/
-
-RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp /home/runner && \
+RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/worktrees /app/tmp /home/runner && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp /home/runner
 
-VOLUME ["/app/data", "/app/logs", "/app/worktrees", "/app/prompts"]
+VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
 COPY app/agents/builder_progenitor/docker-entrypoint.sh /usr/local/bin/builder-entrypoint.sh
 RUN chmod +x /usr/local/bin/builder-entrypoint.sh
