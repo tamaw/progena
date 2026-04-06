@@ -13,9 +13,12 @@ logs
 tmp
 worktrees
 htmlcov
-data
+data/*
+!data/prompts/
+!data/prompts/**
+!data/skills/
+!data/skills/**
 
 # Frontend build artifacts / deps (not needed in Python images)
 app/frontend/node_modules
 app/frontend/dist
-
