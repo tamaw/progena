@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { NodeResizer } from '@xyflow/react';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
@@ -37,7 +37,7 @@ function formatEventLabel(eventType) {
 }
 
 function EventNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, saveEventNode } = useWorkspaceActions();
+  const { updateNodeData, toggleExpanded, saveEventNode, runEventNode } = useWorkspaceActions();
   const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
@@ -77,6 +77,7 @@ function EventNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon event">E</div>
@@ -145,6 +146,9 @@ function EventNode({ id, data, selected }) {
                   <div className="event-summary-note">
                     Listening for <strong>{formatEventLabel(data.eventType)}</strong> from the kanban board.
                   </div>
+                  <div className="event-summary-note">
+                    Use the right-side handle to trigger linked prompt, code, or saved schedule widgets.
+                  </div>
 
                   <div className="schedule-info">
                     {data.saveError && (
@@ -191,15 +195,24 @@ function EventNode({ id, data, selected }) {
           )}
         </div>
 
-        {expanded && isUnsaved && (
+        {expanded && (
           <div className="node-actions">
             <button
               className="node-action-btn primary"
-              onClick={() => saveEventNode(id)}
+              onClick={() => runEventNode(id)}
               disabled={isSaving}
             >
-              {isSaving ? 'Saving...' : 'Save Event'}
+              Run
             </button>
+            {isUnsaved && (
+              <button
+                className="node-action-btn"
+                onClick={() => saveEventNode(id)}
+                disabled={isSaving}
+              >
+                {isSaving ? 'Saving...' : 'Save Event'}
+              </button>
+            )}
           </div>
         )}
       </div>
