@@ -14,6 +14,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from langchain.agents.middleware.types import (
     ToolCallRequest,
 )
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
 from app.progenitor.state.models import redact_secrets
@@ -44,15 +46,23 @@ def _request_tool_name(tool: Any) -> str:
 
 
 class DynamicMCPToolMiddleware(AgentMiddleware):
-    """Inject the current external MCP tool set into each DeepAgent model request."""
+    """Inject and bind the current live external MCP tools for each agent turn."""
 
     def __init__(self, llm_client: Any = None):
         self._llm_client = llm_client
         self._warned_name_collisions: set[str] = set()
 
+    def _dynamic_tools_by_name(self) -> dict[str, BaseTool]:
+        tools_by_name: dict[str, BaseTool] = {}
+        for tool in create_dynamic_mcp_tools(self._llm_client):
+            name = _request_tool_name(tool)
+            if name:
+                tools_by_name[name] = tool
+        return tools_by_name
+
     def _merge_request_tools(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        mcp_tools = create_dynamic_mcp_tools(self._llm_client)
-        if not mcp_tools:
+        dynamic_tools = self._dynamic_tools_by_name()
+        if not dynamic_tools:
             return request
 
         existing_tools = list(request.tools or [])
@@ -63,7 +73,7 @@ class DynamicMCPToolMiddleware(AgentMiddleware):
             if name:
                 seen_names.add(name)
 
-        for tool in mcp_tools:
+        for tool in dynamic_tools.values():
             if tool.name in seen_names:
                 if tool.name not in self._warned_name_collisions:
                     logger.warning(
@@ -76,6 +86,20 @@ class DynamicMCPToolMiddleware(AgentMiddleware):
             merged_tools.append(tool)
 
         return request.override(tools=merged_tools)
+
+    def _bind_tool_request(self, request: ToolCallRequest) -> ToolCallRequest:
+        if request.tool is not None:
+            return request
+
+        tool_name = _request_tool_name(request.tool_call)
+        if not tool_name:
+            return request
+
+        dynamic_tool = self._dynamic_tools_by_name().get(tool_name)
+        if dynamic_tool is None:
+            return request
+
+        return replace(request, tool=dynamic_tool)
 
     def wrap_model_call(
         self,
@@ -90,6 +114,20 @@ class DynamicMCPToolMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest[Any]], Awaitable[Any]],
     ) -> Any:
         return await handler(self._merge_request_tools(request))
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        return handler(self._bind_tool_request(request))
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        return await handler(self._bind_tool_request(request))
 
 
 class SecretRedactionMiddleware(AgentMiddleware):
