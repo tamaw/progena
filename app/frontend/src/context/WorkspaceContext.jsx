@@ -19,6 +19,8 @@ const WorkspaceMetaContext = createContext(null);
 const SAVE_DEBOUNCE_MS = 500;
 const SERVER_NODE_TYPES = new Set(['agent', 'mcp', 'schedule', 'event']);
 const DEFAULT_EVENT_TYPE = 'kanban.card.created';
+const EVENT_TRIGGER_TARGET_TYPES = new Set(['prompt', 'code', 'schedule']);
+const MAX_EVENT_LOG_ENTRIES = 25;
 
 const defaultNodeSizes = {
   prompt: { width: 320, height: 200 },
@@ -283,6 +285,40 @@ function normalizeAgentName(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
+function isAgentNodeType(type) {
+  return type === 'agent' || type === 'mcp';
+}
+
+function isEventTriggerTargetType(type) {
+  return EVENT_TRIGGER_TARGET_TYPES.has(type);
+}
+
+function createEdgeId(sourceId, targetId) {
+  return `edge_${sourceId}_${targetId}`;
+}
+
+function formatWidgetLabel(node) {
+  return node?.data?.title || typeLabels[node?.type] || node?.type || 'widget';
+}
+
+function appendEventLog(logs, message, time = new Date().toISOString(), level = 'info') {
+  return [
+    { time, message, level, source: 'workspace' },
+    ...(Array.isArray(logs) ? logs : []),
+  ].slice(0, MAX_EVENT_LOG_ENTRIES);
+}
+
+function buildManualEventPayload(node) {
+  const triggeredAt = new Date().toISOString();
+  return {
+    event_type: node.data?.eventType || DEFAULT_EVENT_TYPE,
+    trigger_source: 'manual',
+    widget_id: node.id,
+    widget_title: node.data?.title || 'Event',
+    triggered_at: triggeredAt,
+  };
+}
+
 function getViewportSignature(viewport = {}) {
   return `${viewport.x ?? 0}:${viewport.y ?? 0}:${viewport.zoom ?? 1}`;
 }
@@ -346,6 +382,25 @@ function getAgentNameFromNode(node) {
   return node?.data?.agentId || node?.data?.title || '';
 }
 
+function getLinkedEventTargets(sourceNodeId, nodes, edges) {
+  const seen = new Set();
+
+  return edges.reduce((targets, edge) => {
+    if (edge.source !== sourceNodeId || seen.has(edge.target)) {
+      return targets;
+    }
+
+    const targetNode = nodes.find((node) => node.id === edge.target);
+    if (!targetNode || !isEventTriggerTargetType(targetNode.type)) {
+      return targets;
+    }
+
+    seen.add(targetNode.id);
+    targets.push(targetNode);
+    return targets;
+  }, []);
+}
+
 function getPromptTargetAgent(promptData = {}, connectedTargetAgent = '') {
   return dedupeNodeValues([
     connectedTargetAgent,
@@ -362,7 +417,7 @@ function getConnectedAgentTarget(promptNodeId, nodes, edges) {
     return null;
   }
 
-  const targetNode = nodes.find((node) => node.id === edge.target && (node.type === 'agent' || node.type === 'mcp'));
+  const targetNode = nodes.find((node) => node.id === edge.target && isAgentNodeType(node.type));
   if (!targetNode) {
     return null;
   }
@@ -373,15 +428,26 @@ function getConnectedAgentTarget(promptNodeId, nodes, edges) {
   };
 }
 
-function buildPromptInvocation(promptData = {}, connectedTargetAgent = '') {
+function buildPromptInvocation(promptData = {}, connectedTargetAgent = '', eventContext = null) {
   const prompt = (promptData.prompt || '').trim();
   if (!prompt) {
     return '';
   }
 
   const targetAgent = getPromptTargetAgent(promptData, connectedTargetAgent);
+  const promptWithContext = eventContext
+    ? [
+      'The following workspace event triggered this prompt. Use it as additional context.',
+      '```json',
+      JSON.stringify(eventContext, null, 2),
+      '```',
+      '',
+      prompt,
+    ].join('\n')
+    : prompt;
+
   if (targetAgent === 'progenitor') {
-    return prompt;
+    return promptWithContext;
   }
 
   return [
@@ -389,7 +455,7 @@ function buildPromptInvocation(promptData = {}, connectedTargetAgent = '') {
     'You are orchestrating from progenitor, so delegate the work and return the response here.',
     '',
     'Task:',
-    prompt,
+    promptWithContext,
   ].join('\n');
 }
 
@@ -451,7 +517,8 @@ export function WorkspaceProvider({ children }) {
     generateAction,
   } = useApi();
   const [nodes, setNodes] = useState([]);
-  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
+  const [viewport, setViewportState] = useState({ x: 0, y: 0, zoom: 1 });
+  const [viewportVersion, setViewportVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [widgetSchemas, setWidgetSchemas] = useState({});
@@ -479,7 +546,8 @@ export function WorkspaceProvider({ children }) {
 
     if (nextViewport && getViewportSignature(latestViewportRef.current) !== getViewportSignature(nextViewport)) {
       latestViewportRef.current = nextViewport;
-      setViewport(nextViewport);
+      setViewportState(nextViewport);
+      setViewportVersion((currentVersion) => currentVersion + 1);
     }
   }, []);
 
@@ -513,7 +581,8 @@ export function WorkspaceProvider({ children }) {
       setWidgetSchemas(schemaMap);
       setNodes(mergedNodes);
       setEdges(savedEdges);
-      setViewport(savedViewport);
+      setViewportState(savedViewport);
+      setViewportVersion((currentVersion) => currentVersion + 1);
     } catch (loadError) {
       console.error('[WorkspaceContext] Failed to load workspace:', loadError);
       setError(loadError);
@@ -561,6 +630,17 @@ export function WorkspaceProvider({ children }) {
     }, SAVE_DEBOUNCE_MS);
   }, []);
 
+  const captureViewport = useCallback((nextViewport) => {
+    if (getViewportSignature(latestViewportRef.current) === getViewportSignature(nextViewport)) {
+      return;
+    }
+
+    latestViewportRef.current = nextViewport;
+    if (!loading) {
+      persistWorkspace();
+    }
+  }, [loading, persistWorkspace]);
+
   useEffect(() => {
     latestNodesRef.current = nodes;
     const nextAgentOptions = extractAgentOptions(nodes);
@@ -578,13 +658,6 @@ export function WorkspaceProvider({ children }) {
       persistWorkspace();
     }
   }, [edges, loading, persistWorkspace]);
-
-  useEffect(() => {
-    latestViewportRef.current = viewport;
-    if (!loading) {
-      persistWorkspace();
-    }
-  }, [viewport, loading, persistWorkspace]);
 
   useEffect(() => () => {
     if (saveTimerRef.current) {
@@ -746,7 +819,7 @@ export function WorkspaceProvider({ children }) {
 
     const normalizedTarget = normalizeAgentName(targetAgent);
     const targetNode = latestNodesRef.current.find((node) => (
-      (node.type === 'agent' || node.type === 'mcp')
+      isAgentNodeType(node.type)
       && normalizeAgentName(getAgentNameFromNode(node)) === normalizedTarget
     ));
 
@@ -757,16 +830,80 @@ export function WorkspaceProvider({ children }) {
       }
 
       return addEdge({
-        id: `edge_${promptNodeId}_${targetNode.id}`,
+        id: createEdgeId(promptNodeId, targetNode.id),
         source: promptNodeId,
         target: targetNode.id,
         type: 'smoothstep',
         animated: true,
+        data: { kind: 'prompt-agent' },
       }, withoutPromptEdges);
     });
 
     updateNodeData(promptNodeId, {
       targetAgent: targetNode ? getAgentNameFromNode(targetNode) : 'progenitor',
+    });
+  }, [updateNodeData]);
+
+  const connectEventToWidget = useCallback((eventNodeId, targetNodeId) => {
+    const eventNode = latestNodesRef.current.find((node) => node.id === eventNodeId && node.type === 'event');
+    const targetNode = latestNodesRef.current.find((node) => node.id === targetNodeId);
+    if (!eventNode || !targetNode || !isEventTriggerTargetType(targetNode.type)) {
+      return;
+    }
+
+    setEdges((currentEdges) => {
+      if (currentEdges.some((edge) => edge.source === eventNodeId && edge.target === targetNodeId)) {
+        return currentEdges;
+      }
+
+      return addEdge({
+        id: createEdgeId(eventNodeId, targetNodeId),
+        source: eventNodeId,
+        target: targetNodeId,
+        type: 'smoothstep',
+        animated: true,
+        data: { kind: 'event-trigger' },
+      }, currentEdges);
+    });
+  }, []);
+
+  const removeEdges = useCallback((edgeIds) => {
+    if (!Array.isArray(edgeIds) || edgeIds.length === 0) {
+      return;
+    }
+
+    const idSet = new Set(edgeIds);
+    const currentEdges = latestEdgesRef.current;
+    const removedEdges = currentEdges.filter((edge) => idSet.has(edge.id));
+    if (removedEdges.length === 0) {
+      return;
+    }
+
+    const nextEdges = currentEdges.filter((edge) => !idSet.has(edge.id));
+    latestEdgesRef.current = nextEdges;
+    setEdges(nextEdges);
+
+    const promptIdsToReset = new Set();
+    removedEdges.forEach((edge) => {
+      const sourceNode = latestNodesRef.current.find((node) => node.id === edge.source);
+      const targetNode = latestNodesRef.current.find((node) => node.id === edge.target);
+      if (sourceNode?.type === 'prompt' && isAgentNodeType(targetNode?.type)) {
+        const stillConnected = nextEdges.some((nextEdge) => {
+          if (nextEdge.source !== edge.source) {
+            return false;
+          }
+          const nextTarget = latestNodesRef.current.find((node) => node.id === nextEdge.target);
+          return isAgentNodeType(nextTarget?.type);
+        });
+
+        if (!stillConnected) {
+          promptIdsToReset.add(edge.source);
+        }
+      }
+    });
+
+    promptIdsToReset.forEach((promptId) => {
+      updateNodeData(promptId, { targetAgent: 'progenitor' });
     });
   }, [updateNodeData]);
 
@@ -777,12 +914,15 @@ export function WorkspaceProvider({ children }) {
       return;
     }
 
-    if (sourceNode.type !== 'prompt' || !['agent', 'mcp'].includes(targetNode.type)) {
+    if (sourceNode.type === 'prompt' && isAgentNodeType(targetNode.type)) {
+      connectPromptToAgent(sourceNode.id, getAgentNameFromNode(targetNode));
       return;
     }
 
-    connectPromptToAgent(sourceNode.id, getAgentNameFromNode(targetNode));
-  }, [connectPromptToAgent]);
+    if (sourceNode.type === 'event' && isEventTriggerTargetType(targetNode.type)) {
+      connectEventToWidget(sourceNode.id, targetNode.id);
+    }
+  }, [connectEventToWidget, connectPromptToAgent]);
 
   const saveScheduleNode = useCallback(async (nodeId) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
@@ -1015,20 +1155,20 @@ export function WorkspaceProvider({ children }) {
     );
   }, []);
 
-  const runPromptNode = useCallback(async (nodeId) => {
+  const runPromptNode = useCallback(async (nodeId, options = {}) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
     if (!node) {
-      return;
+      return { ok: false, error: 'Prompt node not found.' };
     }
 
     const connectedTarget = getConnectedAgentTarget(nodeId, latestNodesRef.current, latestEdgesRef.current);
-    const prompt = buildPromptInvocation(node.data, connectedTarget?.agentName);
+    const prompt = buildPromptInvocation(node.data, connectedTarget?.agentName, options.eventContext);
     if (!prompt) {
       updateNodeData(nodeId, {
         status: 'failed',
         summaryState: 'Enter a prompt before running it.',
       });
-      return;
+      return { ok: false, error: 'Enter a prompt before running it.' };
     }
 
     updateNodeData(nodeId, { status: 'running', summaryState: '' });
@@ -1047,11 +1187,16 @@ export function WorkspaceProvider({ children }) {
         lastRunId: result.run_id || result.request_id || node.data.lastRunId,
         summaryState: getActionText(result),
       });
+      return {
+        ok: true,
+        message: getActionText(result) || 'Prompt completed.',
+      };
     } catch (runError) {
       updateNodeData(nodeId, {
         status: 'failed',
         summaryState: runError.message,
       });
+      return { ok: false, error: runError.message };
     }
   }, [runAction, updateNodeData]);
 
@@ -1109,7 +1254,7 @@ export function WorkspaceProvider({ children }) {
   const runCodeNode = useCallback(async (nodeId) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
     if (!node) {
-      return;
+      return { ok: false, error: 'Code node not found.' };
     }
 
     updateNodeData(nodeId, { status: 'running' });
@@ -1127,15 +1272,33 @@ export function WorkspaceProvider({ children }) {
         lastRunId: result.run_id || result.request_id || node.data.lastRunId,
         outputRefs: [getActionText(result)].filter(Boolean),
       });
+      return {
+        ok: true,
+        message: getActionText(result) || 'Code executed.',
+      };
     } catch (runError) {
       updateNodeData(nodeId, {
         status: 'error',
         outputRefs: [runError.message],
       });
+      return { ok: false, error: runError.message };
     }
   }, [runAction, updateNodeData]);
 
   const runScheduleNode = useCallback(async (nodeId) => {
+    const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+    if (!node || node.type !== 'schedule') {
+      return { ok: false, error: 'Schedule node not found.' };
+    }
+
+    if (!node.data?.serverManaged) {
+      updateNodeData(nodeId, {
+        lastRunStatus: 'error',
+        summaryState: 'Save the schedule before running it.',
+      });
+      return { ok: false, error: 'Save the schedule before running it.' };
+    }
+
     updateNodeData(nodeId, { lastRunStatus: 'running' });
     try {
       const result = await runAction({
@@ -1147,24 +1310,103 @@ export function WorkspaceProvider({ children }) {
         lastRunAt: new Date().toISOString(),
         summaryState: getActionText(result),
       });
+      return {
+        ok: true,
+        message: getActionText(result) || 'Schedule completed.',
+      };
     } catch (runError) {
       updateNodeData(nodeId, {
         lastRunStatus: 'error',
         summaryState: runError.message,
       });
+      return { ok: false, error: runError.message };
     }
   }, [runAction, updateNodeData]);
+
+  const runEventNode = useCallback(async (nodeId) => {
+    const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+    if (!node || node.type !== 'event') {
+      return { ok: false, error: 'Event node not found.' };
+    }
+
+    const eventPayload = buildManualEventPayload(node);
+    const linkedTargets = getLinkedEventTargets(nodeId, latestNodesRef.current, latestEdgesRef.current);
+    const initialSummary = linkedTargets.length > 0
+      ? `Running ${linkedTargets.length} linked widget${linkedTargets.length === 1 ? '' : 's'}.`
+      : `Manual trigger fired for ${eventPayload.event_type}.`;
+    const initialLogs = appendEventLog(node.data.logs, initialSummary, eventPayload.triggered_at);
+
+    updateNodeData(nodeId, {
+      triggerCount: (node.data.triggerCount || 0) + 1,
+      lastTriggeredAt: eventPayload.triggered_at,
+      lastPayload: eventPayload,
+      lastRunStatus: linkedTargets.length > 0 ? 'running' : 'completed',
+      summaryState: initialSummary,
+      logs: initialLogs,
+    });
+
+    if (linkedTargets.length === 0) {
+      return { ok: true, triggered: 0 };
+    }
+
+    const results = [];
+    for (const targetNode of linkedTargets) {
+      if (targetNode.type === 'prompt') {
+        results.push(await runPromptNode(targetNode.id, { eventContext: eventPayload }));
+        continue;
+      }
+      if (targetNode.type === 'code') {
+        results.push(await runCodeNode(targetNode.id));
+        continue;
+      }
+      if (targetNode.type === 'schedule') {
+        results.push(await runScheduleNode(targetNode.id));
+        continue;
+      }
+      results.push({
+        ok: false,
+        error: `Unsupported linked widget type: ${targetNode.type}`,
+      });
+    }
+
+    const successfulCount = results.filter((result) => result?.ok).length;
+    const failedTargets = linkedTargets.filter((_, index) => !results[index]?.ok);
+    const targetLabel = linkedTargets.map((targetNode) => formatWidgetLabel(targetNode)).join(', ');
+    const failedLabel = failedTargets.map((targetNode) => formatWidgetLabel(targetNode)).join(', ');
+    const summary = failedTargets.length > 0
+      ? `Manual trigger ran ${successfulCount}/${linkedTargets.length} linked widgets. Failed: ${failedLabel}.`
+      : `Manual trigger ran ${linkedTargets.length} linked widget${linkedTargets.length === 1 ? '' : 's'}: ${targetLabel}.`;
+
+    updateNodeData(nodeId, {
+      lastRunStatus: failedTargets.length > 0 ? 'error' : 'completed',
+      summaryState: summary,
+      logs: appendEventLog(
+        initialLogs,
+        summary,
+        new Date().toISOString(),
+        failedTargets.length > 0 ? 'error' : 'info'
+      ),
+    });
+
+    return {
+      ok: failedTargets.length === 0,
+      triggered: linkedTargets.length,
+      successfulCount,
+      failedCount: failedTargets.length,
+    };
+  }, [runCodeNode, runPromptNode, runScheduleNode, updateNodeData]);
 
   const graphValue = useMemo(() => ({
     nodes,
     edges,
     viewport,
+    viewportVersion,
     loading,
     error,
-  }), [nodes, edges, viewport, loading, error]);
+  }), [nodes, edges, viewport, viewportVersion, loading, error]);
 
   const actionsValue = useMemo(() => ({
-    setViewport,
+    captureViewport,
     onNodesChange,
     onEdgesChange,
     onConnect,
@@ -1172,7 +1414,9 @@ export function WorkspaceProvider({ children }) {
     addPromptFromLibrary,
     updateNodeData,
     connectPromptToAgent,
+    connectEventToWidget,
     removeNodes,
+    removeEdges,
     duplicateNode,
     bringToFront,
     sendToBack,
@@ -1185,8 +1429,9 @@ export function WorkspaceProvider({ children }) {
     runScheduleNode,
     saveScheduleNode,
     saveEventNode,
+    runEventNode,
   }), [
-    setViewport,
+    captureViewport,
     onNodesChange,
     onEdgesChange,
     onConnect,
@@ -1194,7 +1439,9 @@ export function WorkspaceProvider({ children }) {
     addPromptFromLibrary,
     updateNodeData,
     connectPromptToAgent,
+    connectEventToWidget,
     removeNodes,
+    removeEdges,
     duplicateNode,
     bringToFront,
     sendToBack,
@@ -1207,6 +1454,7 @@ export function WorkspaceProvider({ children }) {
     runScheduleNode,
     saveScheduleNode,
     saveEventNode,
+    runEventNode,
   ]);
 
   const metaValue = useMemo(() => ({
