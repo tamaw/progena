@@ -392,7 +392,6 @@ class StateReader:
         config_dir: Path | None = None,
         sessions_dir: Path | None = None,
         logs_dir: Path | None = None,
-        mcp_config_path: Path | None = None,
     ):
         data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(DEFAULT_DATA_DIR)))
         self.state_dir = state_dir or Path(
@@ -401,15 +400,15 @@ class StateReader:
         self.config_dir = config_dir or self.state_dir.parent / "config"
         self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
         self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
-        raw_mcp_config_path = (os.getenv("PROGENITOR_MCP_CONFIG_PATH") or "").strip()
-        self.mcp_config_path = mcp_config_path or (
-            Path(raw_mcp_config_path) if raw_mcp_config_path else self.config_dir / "mcp.json"
-        )
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
         self._watch_task: asyncio.Task | None = None
         self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
+
+    @property
+    def mcp_config_path(self) -> Path:
+        return self.config_dir / "mcp.json"
 
     def _resolved_logs_dir(self) -> Path:
         return self.logs_dir.resolve()
@@ -1190,7 +1189,7 @@ class StateReader:
             self.state_dir / "build_state.json",
             self.state_dir / "schedule.json",
             self.config_dir / "agents.json",
-            self.mcp_config_path,
+            self.config_dir / "mcp.json",
             self.config_dir / "event_widgets.json",
             self.sessions_dir / "sessions.json",
         ]

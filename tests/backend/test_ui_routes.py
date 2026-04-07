@@ -830,11 +830,9 @@ class TestWorkspaceBridgeActions:
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir
         original_config_dir = state_reader.config_dir
-        original_mcp_config_path = state_reader.mcp_config_path
         try:
             state_reader.state_dir = state_dir
             state_reader.config_dir = config_dir
-            state_reader.mcp_config_path = mcp_config_path
             state_reader.invalidate()
             response = client.patch(
                 "/api/ui/widgets/mcp:jina",
@@ -860,7 +858,6 @@ class TestWorkspaceBridgeActions:
         finally:
             state_reader.state_dir = original_state_dir
             state_reader.config_dir = original_config_dir
-            state_reader.mcp_config_path = original_mcp_config_path
             state_reader.invalidate()
 
     def test_create_schedule_writes_schedule_file(self, client, tmp_path):

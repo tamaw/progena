@@ -35,7 +35,7 @@ def client():
 
 
 @pytest.fixture
-def mock_state_files(tmp_path, monkeypatch):
+def mock_state_files(tmp_path):
     """Create mock state files that simulate a running progenitor."""
     state_dir = tmp_path / "state"
     config_dir = tmp_path / "config"
@@ -96,7 +96,6 @@ def mock_state_files(tmp_path, monkeypatch):
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
     mcp_config_path.write_text(json.dumps(mcp_data))
-    monkeypatch.setenv("PROGENITOR_MCP_CONFIG_PATH", str(mcp_config_path))
 
     # Build state - in progress
     build_state = {

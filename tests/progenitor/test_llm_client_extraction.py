@@ -283,7 +283,7 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
 @pytest.mark.asyncio
 async def test_call_mcp_tool_routes_to_server_by_alias():
     client = LLMClient.__new__(LLMClient)
-    client.mcp_config = SimpleNamespace(enabled=True)
+    client.mcp_config = SimpleNamespace(enabled_servers=[SimpleNamespace(name="jina")])
     client.mcp_tool_lookup = {
         "jina_search_web": {
             "name": "jina_search_web",

@@ -60,7 +60,9 @@ class MCPTool(BaseSystemTool):
 
         return ToolResult.ok(
             {
-                "enabled": bool(getattr(mcp_config, "enabled", False)) if mcp_config else False,
+                "enabled": bool(getattr(mcp_config, "enabled_servers", []))
+                if mcp_config
+                else False,
                 "server_count": len(runtime_servers) if isinstance(runtime_servers, dict) else 0,
                 "tool_count": len(mcp_tools),
                 "servers": configured_servers,
@@ -189,10 +191,6 @@ async def initialize_mcp_tools(
     mcp_config: MCPConfig,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     """Initialize all configured remote HTTP MCP servers and flatten their tools."""
-    if not mcp_config.enabled:
-        logger.info("MCP integration disabled")
-        return {}, []
-
     discovered_servers: list[tuple[MCPServerConfig, dict[str, Any], list[dict[str, Any]]]] = []
     for server_config in mcp_config.enabled_servers:
         runtime_server, tools = await initialize_mcp_server(server_config)
@@ -283,7 +281,7 @@ async def refresh_mcp_runtime(
     """Refresh the live MCP runtime context and sync the in-memory tool registry."""
     effective_config = mcp_config
     if reload_config:
-        effective_config = MCPConfig.from_env(config_path=mcp_config.config_path)
+        effective_config = MCPConfig.load(config_path=mcp_config.config_path)
 
     await setup_mcp_for_llm_client(llm_client, effective_config)
     entries = llm_client.get_mcp_tool_registry_entries()
