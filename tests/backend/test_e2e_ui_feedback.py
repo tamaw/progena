@@ -132,7 +132,7 @@ def mock_state_files(tmp_path):
     schedule = [
         {"id": "sched-1", "name": "Hourly galactic scan", "schedule": "0 * * * *", "enabled": True},
     ]
-    (state_dir / "schedule.json").write_text(json.dumps(schedule))
+    (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
     return state_dir
 

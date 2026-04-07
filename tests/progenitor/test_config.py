@@ -19,6 +19,7 @@ from app.progenitor.config import (
     load_mcp_servers,
     reload_config,
     resolve_mcp_config_path,
+    resolve_schedule_config_path,
     setup_logging,
 )
 from app.progenitor.llm.prompts import DEFAULT_PROMPTS_DIR
@@ -237,6 +238,12 @@ class TestMCPConfig:
         with patch.dict(os.environ, {}, clear=False):
             path = resolve_mcp_config_path()
         assert path == repo_root / "data" / "config" / "mcp.json"
+
+    def test_resolve_schedule_config_path_uses_checked_in_default(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        with patch.dict(os.environ, {}, clear=False):
+            path = resolve_schedule_config_path()
+        assert path == repo_root / "data" / "config" / "schedule.json"
 
     def test_load_mcp_servers_reads_mcp_servers_map(self, tmp_path):
         config_path = tmp_path / "mcp.json"
