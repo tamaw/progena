@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -482,6 +482,7 @@ class LLMClient:
         post = getattr(mcp_client, "post", None)
         if not callable(post) or not isinstance(endpoint, str):
             return {"error": f"MCP server '{server_name}' is not initialized"}
+        post_typed = cast(Callable[..., Awaitable[httpx.Response]], post)
 
         target_name = str(resolved_tool.get("mcp_original_name") or name)
 
@@ -501,7 +502,7 @@ class LLMClient:
         }
 
         try:
-            response = await post(endpoint, json=request)
+            response = await post_typed(endpoint, json=request)
             response.raise_for_status()
             payload = response.json()
 

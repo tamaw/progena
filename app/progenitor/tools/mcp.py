@@ -9,6 +9,7 @@ import json
 import logging
 import shlex
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -265,7 +266,8 @@ async def setup_mcp_for_llm_client(
     llm_client.mcp_config = mcp_config
     close_mcp_context = getattr(llm_client, "close_mcp_context", None)
     if callable(close_mcp_context):
-        await close_mcp_context()
+        close_mcp_context_typed = cast(Callable[[], Awaitable[None]], close_mcp_context)
+        await close_mcp_context_typed()
 
     mcp_servers, mcp_tools = await initialize_mcp_tools(mcp_config)
     llm_client.set_mcp_context(mcp_servers, mcp_tools)
