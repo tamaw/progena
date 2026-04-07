@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel
 
 from ..config import LLMConfig, MCPConfig
+from ..mcp_tool_utils import normalize_mcp_tool_definition
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
 from .response_models import (
@@ -325,27 +326,7 @@ class LLMClient:
         if tool.get("type") == "function" and "function" in tool:
             return tool
 
-        # Extract from MCP format
-        name = tool.get("name")
-        if not name:
-            return None
-
-        description = tool.get("description") or tool.get("summary") or "MCP tool"
-        parameters = (
-            tool.get("input_schema")
-            or tool.get("inputSchema")
-            or tool.get("parameters")
-            or {"type": "object", "properties": {}}
-        )
-
-        return {
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": parameters,
-            },
-        }
+        return normalize_mcp_tool_definition(tool)
 
     def _merge_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         """Merge caller-supplied tools with MCP tools, de-duplicated by name."""

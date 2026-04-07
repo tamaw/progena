@@ -5,12 +5,16 @@ Tests for Phase 4: Custom middleware for DeepAgent.
 import json
 import tempfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain.agents.middleware.types import ModelRequest
+from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.middleware import (
     AuditLoggingMiddleware,
+    DynamicMCPToolMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
@@ -46,6 +50,97 @@ class TestSecretRedactionMiddleware:
         await mw.awrap_tool_call(request, handler)
         # It should call handler with the original request (not redacted)
         handler.assert_called_once_with(request)
+
+
+class TestDynamicMCPToolMiddleware:
+    """Tests for dynamic external MCP tool injection."""
+
+    @staticmethod
+    def _base_tool(name: str = "current_time") -> StructuredTool:
+        async def _run() -> dict[str, bool]:
+            return {"ok": True}
+
+        return StructuredTool.from_function(
+            coroutine=_run,
+            name=name,
+            description=f"Tool: {name}",
+        )
+
+    @staticmethod
+    def _request(*tools: StructuredTool) -> ModelRequest[Any]:
+        return ModelRequest(
+            model=MagicMock(),
+            messages=[],
+            tools=list(tools),
+        )
+
+    async def test_injects_live_mcp_tools(self):
+        llm_client = MagicMock()
+        llm_client.mcp_tools = [
+            {
+                "name": "search_web",
+                "description": "Search the web",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        llm_client._call_mcp_tool = AsyncMock(return_value={"ok": True})
+
+        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+
+        async def handler(request):
+            return request
+
+        result = await mw.awrap_model_call(
+            self._request(self._base_tool()),
+            handler,
+        )
+
+        names = {tool.name for tool in result.tools}
+        assert {"current_time", "search_web"} == names
+
+    async def test_uses_latest_mcp_tool_snapshot_each_call(self):
+        llm_client = MagicMock()
+        llm_client._call_mcp_tool = AsyncMock(return_value={"ok": True})
+        llm_client.mcp_tools = [
+            {
+                "name": "search_web",
+                "description": "Search the web",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+
+        async def handler(request):
+            return request
+
+        first = await mw.awrap_model_call(self._request(self._base_tool()), handler)
+        llm_client.mcp_tools = [
+            {
+                "name": "read_url",
+                "description": "Read a URL",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"url": {"type": "string"}},
+                    "required": ["url"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        second = await mw.awrap_model_call(self._request(self._base_tool()), handler)
+
+        assert {tool.name for tool in first.tools} == {"current_time", "search_web"}
+        assert {tool.name for tool in second.tools} == {"current_time", "read_url"}
 
 
 class TestAuditLoggingMiddleware:
@@ -122,7 +217,9 @@ class TestAuditLoggingMiddleware:
             request = MagicMock()
             request.tool_call = {
                 "name": "shell",
-                "args": {"command": "export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz12345"},
+                "args": {
+                    "command": "export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz12345"
+                },
                 "id": "tc_3",
             }
 
@@ -208,6 +305,7 @@ class TestMetricsMiddleware:
 
         async def slow_handler(req):
             import asyncio
+
             await asyncio.sleep(0.05)
             return "done"
 
@@ -234,22 +332,41 @@ class TestMiddlewareIntegration:
 
     def test_factory_accepts_middleware_param(self):
         """create_progenitor_agent accepts log_dir param."""
+        from types import SimpleNamespace
         from unittest.mock import patch
 
         with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
             mock_create.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
-                from app.progenitor.agent.deep_agent import create_progenitor_agent
+                with patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts:
+                    mock_prompts.return_value.get_genesis_prompt.return_value = "Genesis"
+                    from app.progenitor.agent.deep_agent import create_progenitor_agent
 
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    create_progenitor_agent(log_dir=tmpdir)
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        prompts_dir = Path(tmpdir) / "prompts"
+                        prompts_dir.mkdir()
+                        fake_config = SimpleNamespace(
+                            llm=SimpleNamespace(model_default="gpt-5.2-chat"),
+                            storage=SimpleNamespace(
+                                prompts_dir=prompts_dir,
+                            ),
+                        )
+                        create_progenitor_agent(
+                            config=fake_config,
+                            checkpointer=MagicMock(),
+                            store=MagicMock(),
+                            skills_dirs=[],
+                            memory_paths=[],
+                            log_dir=tmpdir,
+                        )
 
                 # Verify middleware was passed
                 call_kwargs = mock_create.call_args.kwargs
                 assert "middleware" in call_kwargs
                 middleware = call_kwargs["middleware"]
                 types = [type(m).__name__ for m in middleware]
+                assert "DynamicMCPToolMiddleware" in types
                 assert "SecretRedactionMiddleware" in types
                 assert "AuditLoggingMiddleware" in types
                 assert "MetricsMiddleware" in types
