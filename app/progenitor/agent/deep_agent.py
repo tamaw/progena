@@ -22,7 +22,12 @@ from ..config import ProgenitorConfig, get_config
 from ..llm.prompts import PromptTemplates, resolve_skills_dir
 from .backends import create_progenitor_backend
 from .langchain_adapter import create_langchain_model
-from .middleware import AuditLoggingMiddleware, MetricsMiddleware, SecretRedactionMiddleware
+from .middleware import (
+    AuditLoggingMiddleware,
+    DynamicMCPToolMiddleware,
+    MetricsMiddleware,
+    SecretRedactionMiddleware,
+)
 from .tools_adapter import create_deepagent_tools
 
 logger = logging.getLogger(__name__)
@@ -120,6 +125,7 @@ def create_progenitor_agent(
 
     # Custom middleware stack (appended after DeepAgent's built-in middleware)
     custom_middleware = [
+        DynamicMCPToolMiddleware(llm_client=llm_client),
         SecretRedactionMiddleware(),
         AuditLoggingMiddleware(log_dir=log_dir),
         MetricsMiddleware(),
