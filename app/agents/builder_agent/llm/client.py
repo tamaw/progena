@@ -11,7 +11,10 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from pydantic import BaseModel
 
-from app.progenitor.mcp_tool_utils import normalize_mcp_tool_definition
+from app.progenitor.mcp_tool_utils import (
+    normalize_mcp_tool_definition,
+    parse_mcp_jsonrpc_response,
+)
 
 from ..config import LLMConfig, MCPConfig
 from ..tools.user_communication import EventPusher
@@ -424,15 +427,15 @@ class LLMClient:
         try:
             response = await self.mcp_client.post(self.mcp_config.base_url, json=request)
             response.raise_for_status()
-            payload = response.json()
+            payload = parse_mcp_jsonrpc_response(response.text)
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid MCP JSON-RPC response")
 
-            if isinstance(payload, dict):
-                if error := payload.get("error"):
-                    return {"error": error}
-                return cast(dict[str, Any], payload.get("result", payload))
-            return cast(dict[str, Any], payload)
+            if error := payload.get("error"):
+                return {"error": error}
+            return cast(dict[str, Any], payload.get("result", payload))
 
-        except Exception as exc:
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             logger.warning("MCP tool call failed: %s", exc)
             return {"error": f"MCP call failed: {exc}"}
 
