@@ -771,9 +771,11 @@ class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""
 
     def test_patch_schedule_widget_updates_schedule_file(self, client, tmp_path):
-        state_dir = tmp_path / "state"
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
         state_dir.mkdir(parents=True)
-        schedule_path = state_dir / "schedule.json"
+        config_dir.mkdir(parents=True)
+        schedule_path = config_dir / "schedule.json"
         schedule_path.write_text(
             '[{"id":"sched-1","name":"Daily check","message":"Run the daily review","schedule":"0 0 * * *","cron_expression":"0 0 * * *","schedule_type":"cron","enabled":true,"timezone":"UTC"}]',
             encoding="utf-8",
@@ -781,8 +783,10 @@ class TestWorkspaceBridgeActions:
 
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
         try:
             state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
             state_reader.invalidate()
             response = client.patch(
                 "/api/ui/widgets/schedule:sched-1",
@@ -801,18 +805,80 @@ class TestWorkspaceBridgeActions:
             assert "false" in updated.lower()
         finally:
             state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
+            state_reader.invalidate()
+
+    def test_patch_mcp_widget_updates_mcp_config_file(self, client, tmp_path, monkeypatch):
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
+        state_dir.mkdir(parents=True)
+        config_dir.mkdir(parents=True)
+        mcp_config_path = config_dir / "mcp.json"
+        mcp_config_path.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "jina": {
+                            "description": "Disabled web search",
+                            "enabled": False,
+                            "transport": "http",
+                            "url": "https://mcp.jina.ai/v1",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr("app.progenitor.service._service", None, raising=False)
+
+        state_reader = get_state_reader()
+        original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
+        try:
+            state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
+            state_reader.invalidate()
+            response = client.patch(
+                "/api/ui/widgets/mcp:jina",
+                json={
+                    "enabled": True,
+                    "description": "Live web search",
+                    "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["type"] == "mcp"
+            assert payload["data"]["enabled"] is True
+            assert payload["data"]["url"] == "https://mcp.jina.ai/v1?include_tags=search,read"
+
+            updated = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+            assert updated["mcpServers"]["jina"]["enabled"] is True
+            assert updated["mcpServers"]["jina"]["description"] == "Live web search"
+            assert (
+                updated["mcpServers"]["jina"]["url"]
+                == "https://mcp.jina.ai/v1?include_tags=search,read"
+            )
+        finally:
+            state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
             state_reader.invalidate()
 
     def test_create_schedule_writes_schedule_file(self, client, tmp_path):
-        state_dir = tmp_path / "state"
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
         state_dir.mkdir(parents=True)
-        schedule_path = state_dir / "schedule.json"
+        config_dir.mkdir(parents=True)
+        schedule_path = config_dir / "schedule.json"
         schedule_path.write_text("[]", encoding="utf-8")
 
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
         try:
             state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
             state_reader.invalidate()
             response = client.post(
                 "/api/ui/schedules",
@@ -838,6 +904,7 @@ class TestWorkspaceBridgeActions:
             assert "*/15 * * * *" in updated
         finally:
             state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
             state_reader.invalidate()
 
     def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):

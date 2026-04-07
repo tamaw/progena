@@ -22,6 +22,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from app.progenitor.config import (
+    load_mcp_servers,
+    resolve_mcp_config_path,
+    resolve_schedule_config_path,
+)
+
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_STATE_DIR = DEFAULT_DATA_DIR / "state"
@@ -177,6 +183,7 @@ class ToolInfo:
     kind: str = "mcp"
     status: str = "ready"
     transport: str = "mcp"
+    url: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolInfo:
@@ -187,6 +194,7 @@ class ToolInfo:
             kind=data.get("kind", "mcp"),
             status=data.get("status", "ready"),
             transport=data.get("transport", "mcp"),
+            url=data.get("url"),
         )
 
 
@@ -402,6 +410,14 @@ class StateReader:
         self._watch_task: asyncio.Task | None = None
         self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
 
+    @property
+    def mcp_config_path(self) -> Path:
+        return resolve_mcp_config_path(self.config_dir)
+
+    @property
+    def schedule_config_path(self) -> Path:
+        return resolve_schedule_config_path(self.config_dir)
+
     def _resolved_logs_dir(self) -> Path:
         return self.logs_dir.resolve()
 
@@ -461,7 +477,6 @@ class StateReader:
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
         agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
-        mcp_data = self._read_json_from_path(self.config_dir / "mcp.json") or {}
 
         agent_entries: list[dict[str, Any]] = []
         if isinstance(agents_data, dict):
@@ -486,21 +501,20 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
-        tools: list[ToolInfo] = []
-        if isinstance(mcp_data, dict):
-            raw_tools = mcp_data.get("tools")
-            if isinstance(raw_tools, list):
-                tools.extend(ToolInfo.from_dict(t) for t in raw_tools if isinstance(t, dict))
-            tool_map = {
-                str(name): cfg
-                for name, cfg in mcp_data.items()
-                if name != "tools" and isinstance(cfg, dict)
-            }
-            seen_names = {tool.name for tool in tools}
-            for name, cfg in tool_map.items():
-                if name in seen_names:
-                    continue
-                tools.append(ToolInfo.from_dict({"name": name, **cfg}))
+        tools = [
+            ToolInfo.from_dict(
+                {
+                    "name": server.name,
+                    "description": server.description or f"Remote MCP server at {server.url}",
+                    "enabled": server.enabled,
+                    "kind": "mcp_server",
+                    "status": "stopped" if server.enabled else "disabled",
+                    "transport": server.transport,
+                    "url": server.url,
+                }
+            )
+            for server in load_mcp_servers(self.mcp_config_path)
+        ]
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:
@@ -511,7 +525,9 @@ class StateReader:
         return [BacklogItem.from_dict(item) for item in backlog if isinstance(item, dict)]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        data = self._read_json("schedule.json")
+        data = self._read_json_from_path(self.schedule_config_path)
+        if data is None and not self.schedule_config_path.exists():
+            data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]
@@ -1076,8 +1092,6 @@ class StateReader:
             )
 
         for tool in tools:
-            if not tool.enabled:
-                continue
             logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
             summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
             widgets.append(
@@ -1091,6 +1105,8 @@ class StateReader:
                     "status": self._status_with_health(tool.status, health.is_running()),
                     "summary": summary,
                     "transport": tool.transport,
+                    "enabled": tool.enabled,
+                    "url": tool.url,
                     "current_run_id": health.run_id,
                     "logs": logs,
                     "updated_at": health.last_active,
@@ -1181,7 +1197,7 @@ class StateReader:
             self.state_dir / "health.json",
             self.state_dir / "current_state.json",
             self.state_dir / "build_state.json",
-            self.state_dir / "schedule.json",
+            self.schedule_config_path,
             self.config_dir / "agents.json",
             self.config_dir / "mcp.json",
             self.config_dir / "event_widgets.json",

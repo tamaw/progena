@@ -37,7 +37,7 @@ class TestStateManager:
         assert (state_dir / "build_state.json").exists()
         assert (state_dir.parent / "config" / "agents.json").exists()
         assert (state_dir.parent / "config" / "mcp.json").exists()
-        assert (state_dir / "schedule.json").exists()
+        assert (state_dir.parent / "config" / "schedule.json").exists()
 
     @pytest.mark.asyncio
     async def test_save_and_get_backlog(self, temp_dirs):
@@ -106,7 +106,7 @@ class TestStateManager:
 
         updated = backlog[0]
         # Check status - handle both enum and string
-        status_val = updated.status.value if hasattr(updated.status, 'value') else updated.status
+        status_val = updated.status.value if hasattr(updated.status, "value") else updated.status
         assert status_val == "in_progress"
         assert updated.description == "Updated description"
 
@@ -131,6 +131,31 @@ class TestStateManager:
 
         assert len(schedule) == 1
         assert schedule[0].id == "schedule-1"
+
+    @pytest.mark.asyncio
+    async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
+        """Legacy schedules under data/state are copied into config on initialize."""
+        state_dir = tmp_path / "data" / "state"
+        logs_dir = tmp_path / "logs"
+        state_dir.mkdir(parents=True)
+        logs_dir.mkdir()
+        legacy_schedule = [
+            {
+                "id": "legacy-schedule",
+                "message": "Carry forward existing schedule",
+                "cron_expression": "0 9 * * *",
+                "created_at": "2024-01-01T00:00:00Z",
+            }
+        ]
+        (state_dir / "schedule.json").write_text(json.dumps(legacy_schedule), encoding="utf-8")
+
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        migrated = json.loads(
+            (state_dir.parent / "config" / "schedule.json").read_text(encoding="utf-8")
+        )
+        assert migrated == legacy_schedule
 
     @pytest.mark.asyncio
     async def test_append_jsonl(self, temp_dirs):
@@ -222,10 +247,12 @@ class TestStateManager:
         await manager.initialize()
 
         # Make some changes
-        await manager.save_build_state({
-            "cycle_count": 5,
-            "run_id": "test-run",
-        })
+        await manager.save_build_state(
+            {
+                "cycle_count": 5,
+                "run_id": "test-run",
+            }
+        )
 
         await manager.commit_state()
 
