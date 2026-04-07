@@ -2,6 +2,7 @@
 Custom middleware for the Progenitor DeepAgent.
 
 Provides:
+- DynamicMCPToolMiddleware: Injects live external MCP tools into each DeepAgent model call
 - SecretRedactionMiddleware: Redacts API keys/secrets from tool call args and results
 - AuditLoggingMiddleware: Logs tool calls to JSONL audit trail
 - MetricsMiddleware: Tracks tool call counts and latency
@@ -18,6 +19,7 @@ from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
+    ModelRequest,
     ToolCallRequest,
 )
 from langchain_core.messages import ToolMessage
@@ -25,7 +27,69 @@ from langgraph.types import Command
 
 from app.progenitor.state.models import redact_secrets
 
+from .tools_adapter import create_dynamic_mcp_tools
+
 logger = logging.getLogger(__name__)
+
+
+def _request_tool_name(tool: Any) -> str:
+    if hasattr(tool, "name"):
+        return str(tool.name or "").strip()
+    if isinstance(tool, dict):
+        function = tool.get("function")
+        if isinstance(function, dict):
+            return str(function.get("name") or "").strip()
+        return str(tool.get("name") or "").strip()
+    return ""
+
+
+class DynamicMCPToolMiddleware(AgentMiddleware):
+    """Inject the current external MCP tool set into each DeepAgent model request."""
+
+    def __init__(self, llm_client: Any = None):
+        self._llm_client = llm_client
+        self._warned_name_collisions: set[str] = set()
+
+    def _merge_request_tools(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
+        mcp_tools = create_dynamic_mcp_tools(self._llm_client)
+        if not mcp_tools:
+            return request
+
+        existing_tools = list(request.tools or [])
+        merged_tools = list(existing_tools)
+        seen_names: set[str] = set()
+        for tool in existing_tools:
+            name = _request_tool_name(tool)
+            if name:
+                seen_names.add(name)
+
+        for tool in mcp_tools:
+            if tool.name in seen_names:
+                if tool.name not in self._warned_name_collisions:
+                    logger.warning(
+                        "Skipping dynamic MCP tool '%s' because a tool with that name already exists",
+                        tool.name,
+                    )
+                    self._warned_name_collisions.add(tool.name)
+                continue
+            seen_names.add(tool.name)
+            merged_tools.append(tool)
+
+        return request.override(tools=merged_tools)
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Any],
+    ) -> Any:
+        return handler(self._merge_request_tools(request))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[Any]],
+    ) -> Any:
+        return await handler(self._merge_request_tools(request))
 
 
 class SecretRedactionMiddleware(AgentMiddleware):
@@ -172,9 +236,7 @@ class MetricsMiddleware(AgentMiddleware):
             result = await handler(request)
             return result
         except Exception:
-            self._error_counts[tool_name] = (
-                self._error_counts.get(tool_name, 0) + 1
-            )
+            self._error_counts[tool_name] = self._error_counts.get(tool_name, 0) + 1
             raise
         finally:
             duration_ms = (time.monotonic() - start_time) * 1000

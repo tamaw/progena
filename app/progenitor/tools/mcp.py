@@ -16,6 +16,11 @@ from typing import Any, cast
 import httpx
 
 from ..config import MCPConfig, MCPServerConfig
+from ..mcp_tool_utils import (
+    get_mcp_tool_description,
+    get_mcp_tool_name,
+    get_mcp_tool_parameters,
+)
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 from .registry import normalize_tool_name
 
@@ -69,7 +74,7 @@ class MCPTool(BaseSystemTool):
                 "tools": [
                     {
                         "name": t.get("name"),
-                        "description": t.get("description") or t.get("summary"),
+                        "description": get_mcp_tool_description(t),
                         "server": t.get("mcp_server_name"),
                         "original_name": t.get("mcp_original_name") or t.get("name"),
                     }
@@ -201,8 +206,8 @@ async def initialize_mcp_tools(
     name_counts: dict[str, int] = {}
     for _server_config, _runtime_server, tools in discovered_servers:
         for tool in tools:
-            original_name = str(tool.get("name") or "").strip()
-            if not original_name:
+            original_name = get_mcp_tool_name(tool)
+            if original_name is None or get_mcp_tool_parameters(tool, require_object=True) is None:
                 continue
             name_counts[original_name] = name_counts.get(original_name, 0) + 1
 
@@ -213,8 +218,15 @@ async def initialize_mcp_tools(
     for server_config, runtime_server, tools in discovered_servers:
         server_tools: list[dict[str, Any]] = []
         for tool in tools:
-            original_name = str(tool.get("name") or "").strip()
-            if not original_name:
+            original_name = get_mcp_tool_name(tool)
+            if original_name is None:
+                continue
+            if get_mcp_tool_parameters(tool, require_object=True) is None:
+                logger.warning(
+                    "Skipping MCP tool '%s' from server '%s' because it is missing a standard object inputSchema",
+                    original_name,
+                    server_config.name,
+                )
                 continue
 
             alias = original_name
@@ -234,12 +246,11 @@ async def initialize_mcp_tools(
             aliased_tool["mcp_server_name"] = server_config.name
             aliased_tool["mcp_server_url"] = server_config.url
             if unique_alias != original_name:
-                description = str(
-                    aliased_tool.get("description") or aliased_tool.get("summary") or "MCP tool"
-                )
-                aliased_tool["description"] = (
-                    f"{description} [server: {server_config.name}, original: {original_name}]"
-                )
+                description = get_mcp_tool_description(aliased_tool)
+                if description:
+                    aliased_tool["description"] = (
+                        f"{description} [server: {server_config.name}, original: {original_name}]"
+                    )
             server_tools.append(aliased_tool)
             flattened_tools.append(aliased_tool)
 
