@@ -246,8 +246,11 @@ class ProgenitorLoop:
                     self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
                     self._state["actions_this_cycle"] = 0
 
-                    # Enable streaming mode
-                    self._streaming_enabled = True
+                    # Scheduled work is delivered via background events, not a
+                    # live IPC stream consumer. Keep capturing streamed text so
+                    # we can surface it later, but avoid filling the stream
+                    # queue with chunks that no client will ever read.
+                    self._streaming_enabled = not is_scheduled_input
                     self._response_was_streamed = False
                     self._stream_final_sent = False
                     self._streamed_response_content = ""
@@ -491,26 +494,32 @@ class ProgenitorLoop:
                             self._stream_final_sent = True
                     self._state["pending_response"] = None
                 elif self._response_was_streamed and not self._stream_final_sent:
+                    streamed_text = self._streamed_response_content
+                    if streamed_text:
+                        self._last_cycle_response = streamed_text
+                        self._state["last_cycle_response"] = streamed_text
                     # Response was already streamed by a node, just send final marker ONCE
                     if self._streaming_enabled:
                         await self.stream_final()
                     self._stream_final_sent = True
                     self._state["pending_response"] = None
 
-            # Ensure streaming clients never hang waiting for an is_final marker.
-            # Extract the last AI message from messages if nothing was streamed yet.
+            # Ensure streaming clients never hang waiting for an is_final marker
+            # and capture a final text response even when this cycle has no live
+            # stream consumer (for example scheduled tasks).
             last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
-            if self._streaming_enabled and not self._stream_final_sent:
+            if not self._stream_final_sent:
                 response_text = self._extract_message_text(last_ai_msg)
                 if response_text:
                     logger.info(
                         "Extracting AI response from messages (%d chars)", len(response_text)
                     )
-                    await self._stream_response(response_text)
+                    if self._streaming_enabled:
+                        await self._stream_response(response_text)
                     self._last_cycle_response = response_text
                     self._state["last_cycle_response"] = response_text
                     self._stream_final_sent = True
-                if not self._stream_final_sent:
+                if self._streaming_enabled and not self._stream_final_sent:
                     await self.stream_final()
                     self._stream_final_sent = True
 
@@ -680,7 +689,8 @@ class ProgenitorLoop:
         if token:
             self._response_was_streamed = True
             self._streamed_response_content += token
-            await self._send_stream_chunk(token, is_final=False)
+            if self._streaming_enabled:
+                await self._send_stream_chunk(token, is_final=False)
 
     async def _handle_message_stream_event(self, event: Any) -> None:
         """Handle LangGraph `messages` stream events for token-level output."""
