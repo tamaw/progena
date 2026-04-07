@@ -5,6 +5,7 @@ import {
   Controls,
   MiniMap,
   useReactFlow,
+  useOnViewportChange,
   ReactFlowProvider,
 } from '@xyflow/react';
 
@@ -54,6 +55,10 @@ const defaultEdgeOptions = {
 const snapGrid = [16, 16];
 const defaultViewport = { x: 0, y: 0, zoom: 1 };
 
+function getViewportSignature(viewport = {}) {
+  return `${viewport.x ?? 0}:${viewport.y ?? 0}:${viewport.zoom ?? 1}`;
+}
+
 const SIDEBAR_WIDTH_STORAGE_KEY = 'workspace.sidebar.width';
 const SIDEBAR_MIN_WIDTH_PERCENT = 18;
 const SIDEBAR_MAX_WIDTH_PERCENT = 42;
@@ -101,6 +106,7 @@ function WorkspaceInner() {
     nodes,
     edges,
     viewport,
+    viewportVersion,
     loading,
     error,
   } = useWorkspaceGraph();
@@ -109,12 +115,13 @@ function WorkspaceInner() {
     onEdgesChange,
     onConnect,
     addNode,
+    captureViewport,
     removeNodes,
+    removeEdges,
     duplicateNode,
     bringToFront,
     sendToBack,
     toggleExpanded,
-    setViewport,
     refreshWorkspace,
     syncWidgets,
   } = useWorkspaceActions();
@@ -122,6 +129,8 @@ function WorkspaceInner() {
 
   const reactFlowInstance = useReactFlow();
   const reactFlowWrapper = useRef(null);
+  const viewportSignatureRef = useRef(getViewportSignature(defaultViewport));
+  const lastAppliedViewportVersionRef = useRef(-1);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(getDefaultSidebarWidth);
   const [contextMenu, setContextMenu] = useState(null);
@@ -139,9 +148,29 @@ function WorkspaceInner() {
     [nodes, selectedNodeId]
   );
 
+  useOnViewportChange({
+    onChange: workspaceReady
+      ? (nextViewport) => {
+        viewportSignatureRef.current = getViewportSignature(nextViewport);
+        captureViewport(nextViewport);
+      }
+      : undefined,
+  });
+
   useEffect(() => {
+    if (!workspaceReady || lastAppliedViewportVersionRef.current === viewportVersion) {
+      return;
+    }
+
+    lastAppliedViewportVersionRef.current = viewportVersion;
+    const nextSignature = getViewportSignature(viewport);
+    if (viewportSignatureRef.current === nextSignature) {
+      return;
+    }
+
+    viewportSignatureRef.current = nextSignature;
     reactFlowInstance.setViewport(viewport);
-  }, [reactFlowInstance, viewport]);
+  }, [reactFlowInstance, viewport, viewportVersion, workspaceReady]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -231,14 +260,6 @@ function WorkspaceInner() {
     setDragOver(false);
   }, []);
 
-  // Track viewport changes for persistence
-  const onMoveEnd = useCallback(
-    (_, viewport) => {
-      setViewport(viewport);
-    },
-    [setViewport]
-  );
-
   // Context menu
   const onNodeContextMenu = useCallback((event, node) => {
     if (!workspaceReady) {
@@ -303,9 +324,14 @@ function WorkspaceInner() {
     setSelectedNodeId(null);
   }, []);
 
-  const onSelectionChange = useCallback(({ nodes: selectedNodes }) => {
+  const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }) => {
     if (selectedNodes?.length > 0) {
       setSelectedNodeId(selectedNodes[0].id);
+      return;
+    }
+
+    if (selectedEdges?.length > 0) {
+      setSelectedNodeId(null);
     }
   }, []);
 
@@ -323,8 +349,7 @@ function WorkspaceInner() {
     event.preventDefault();
   }, [sidebarCollapsed, sidebarWidth]);
 
-  // Keyboard shortcuts
-  const onKeyDown = useCallback(
+  const handleKeyboardShortcut = useCallback(
     (event) => {
       if (!workspaceReady) {
         return;
@@ -334,11 +359,13 @@ function WorkspaceInner() {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        const selectedNodes = nodes.filter(
-          (n) => n.selected
-        );
+        const selectedNodes = nodes.filter((node) => node.selected);
+        const selectedEdges = edges.filter((edge) => edge.selected);
+        if (selectedEdges.length > 0) {
+          removeEdges(selectedEdges.map((edge) => edge.id));
+        }
         if (selectedNodes.length > 0) {
-          removeNodes(selectedNodes.map((n) => n.id));
+          removeNodes(selectedNodes.map((node) => node.id));
         }
       }
 
@@ -350,11 +377,16 @@ function WorkspaceInner() {
         }
       }
     },
-    [workspaceReady, nodes, removeNodes, duplicateNode]
+    [workspaceReady, nodes, edges, removeNodes, removeEdges, duplicateNode]
   );
 
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyboardShortcut);
+    return () => window.removeEventListener('keydown', handleKeyboardShortcut);
+  }, [handleKeyboardShortcut]);
+
   return (
-    <div className="workspace-container" onKeyDown={onKeyDown} tabIndex={-1}>
+    <div className="workspace-container" tabIndex={-1}>
       <WorkspaceSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -391,7 +423,6 @@ function WorkspaceInner() {
           onNodesChange={workspaceReady ? onNodesChange : undefined}
           onEdgesChange={workspaceReady ? onEdgesChange : undefined}
           onConnect={workspaceReady ? onConnect : undefined}
-          onMoveEnd={workspaceReady ? onMoveEnd : undefined}
           onNodeContextMenu={workspaceReady ? onNodeContextMenu : undefined}
           onPaneContextMenu={workspaceReady ? onPaneContextMenu : undefined}
           onPaneClick={workspaceReady ? onPaneClick : undefined}
