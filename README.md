@@ -162,8 +162,7 @@ AZURE_OPENAI_ENDPOINT=https://...
 AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
 
-# Optional external MCP override
-# PROGENITOR_MCP_ENABLED=true
+# MCP auth referenced by data/config/mcp.json
 JINA_API_KEY=
 ```
 

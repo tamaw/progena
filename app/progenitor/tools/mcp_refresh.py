@@ -30,8 +30,8 @@ class MCPRefreshTool(BaseSystemTool):
             return ToolResult.fail("llm_client unavailable")
 
         mcp_config = getattr(llm_client, "mcp_config", None)
-        if not isinstance(mcp_config, MCPConfig) or not mcp_config.enabled:
-            return ToolResult.fail("MCP integration disabled")
+        if not isinstance(mcp_config, MCPConfig):
+            return ToolResult.fail("mcp_config unavailable")
 
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         persist = bool(args.get("persist", True))
@@ -44,7 +44,7 @@ class MCPRefreshTool(BaseSystemTool):
                 reload_config=True,
             )
         else:
-            refreshed_config = MCPConfig.from_env(config_path=mcp_config.config_path)
+            refreshed_config = MCPConfig.load(config_path=mcp_config.config_path)
             from .mcp import setup_mcp_for_llm_client
 
             await setup_mcp_for_llm_client(llm_client, refreshed_config)

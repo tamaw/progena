@@ -57,7 +57,7 @@ class ListToolsTool(BaseSystemTool):
 
         llm_client = getattr(context, "llm_client", None)
         mcp_config = getattr(llm_client, "mcp_config", None) if llm_client is not None else None
-        if llm_client is not None and isinstance(mcp_config, MCPConfig) and mcp_config.enabled:
+        if llm_client is not None and isinstance(mcp_config, MCPConfig):
             with suppress(Exception):
                 from .mcp import refresh_mcp_runtime
 

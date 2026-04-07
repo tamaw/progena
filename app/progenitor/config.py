@@ -8,7 +8,6 @@ import json
 import logging
 import logging.handlers
 import os
-import re
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -40,7 +39,6 @@ DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[2] / "worktrees"
 DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
-_ENV_TEMPLATE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _default_data_dir(project_root: Path | None = None) -> Path:
@@ -82,30 +80,53 @@ def _default_config_dir(project_root: Path | None = None) -> Path:
     return state_dir.parent / "config"
 
 
-def _default_mcp_config_path(project_root: Path | None = None) -> Path:
-    """Return the live MCP config path for Progenitor."""
-    return _default_config_dir(project_root) / "mcp.json"
+def resolve_mcp_config_path(config_dir: Path | str | None = None) -> Path:
+    """Resolve the live MCP config path from the active config directory."""
+    base_dir = Path(config_dir) if config_dir is not None else _default_config_dir()
+    return base_dir / "mcp.json"
 
 
-def resolve_mcp_config_path(project_root: Path | None = None) -> Path:
-    """Resolve the MCP source config path with optional env override."""
-    raw = (os.getenv("PROGENITOR_MCP_CONFIG_PATH") or "").strip()
-    return Path(raw) if raw else _default_mcp_config_path(project_root)
+def _is_valid_env_name(value: str) -> bool:
+    """Return whether a placeholder name is a valid environment variable key."""
+    if not value:
+        return False
+    if not (value[0].isalpha() or value[0] == "_"):
+        return False
+    return all(char.isalnum() or char == "_" for char in value[1:])
 
 
 def _resolve_required_env_template(value: str) -> tuple[str | None, list[str]]:
     """Resolve ${VAR} placeholders, returning missing variable names when unresolved."""
     missing: list[str] = []
+    rendered_parts: list[str] = []
+    cursor = 0
 
-    def _replace(match: re.Match[str]) -> str:
-        var_name = match.group(1)
+    while True:
+        start = value.find("${", cursor)
+        if start == -1:
+            rendered_parts.append(value[cursor:])
+            break
+
+        rendered_parts.append(value[cursor:start])
+        end = value.find("}", start + 2)
+        if end == -1:
+            rendered_parts.append(value[start:])
+            break
+
+        var_name = value[start + 2 : end]
+        if not _is_valid_env_name(var_name):
+            rendered_parts.append(value[start : end + 1])
+            cursor = end + 1
+            continue
+
         resolved = os.getenv(var_name)
         if resolved is None:
             missing.append(var_name)
-            return ""
-        return resolved
+        else:
+            rendered_parts.append(resolved)
+        cursor = end + 1
 
-    rendered = _ENV_TEMPLATE_PATTERN.sub(_replace, value)
+    rendered = "".join(rendered_parts)
     if missing:
         return None, missing
     return rendered, []
@@ -423,11 +444,9 @@ class MCPServerConfig:
 
 def load_mcp_servers(
     config_path: Path | str | None = None,
-    *,
-    project_root: Path | None = None,
 ) -> list[MCPServerConfig]:
     """Load external MCP server definitions from Progenitor's live config file."""
-    path = Path(config_path) if config_path is not None else resolve_mcp_config_path(project_root)
+    path = Path(config_path) if config_path is not None else resolve_mcp_config_path()
     if not path.exists():
         return []
 
@@ -507,60 +526,27 @@ def load_mcp_servers(
 class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
-    enabled: bool = True
-    config_path: Path = field(default_factory=_default_mcp_config_path)
+    config_path: Path = field(default_factory=resolve_mcp_config_path)
     servers: list[MCPServerConfig] = field(default_factory=list)
-    legacy_base_url: str | None = None
-    legacy_api_key: str | None = None
 
     @classmethod
-    def from_env(
+    def load(
         cls,
-        project_root: Path | None = None,
         *,
         config_path: Path | str | None = None,
     ) -> "MCPConfig":
-        """Load MCP config from the live config file with env fallbacks."""
+        """Load MCP config from the live data/config/mcp.json file."""
         resolved_config_path = (
-            Path(config_path) if config_path is not None else resolve_mcp_config_path(project_root)
+            Path(config_path) if config_path is not None else resolve_mcp_config_path()
         )
-        servers = load_mcp_servers(resolved_config_path, project_root=project_root)
-        legacy_base_url = (os.getenv("PROGENITOR_MCP_BASE_URL") or "").strip() or None
-        legacy_api_key = os.getenv("PROGENITOR_MCP_API_KEY")
-
-        if not servers and legacy_base_url:
-            headers: dict[str, str] = {}
-            if legacy_api_key:
-                headers["Authorization"] = f"Bearer {legacy_api_key}"
-            servers = [
-                MCPServerConfig(
-                    name="legacy",
-                    url=legacy_base_url,
-                    headers=headers,
-                    description="Legacy env-configured MCP server",
-                )
-            ]
-
         return cls(
-            enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
             config_path=resolved_config_path,
-            servers=servers,
-            legacy_base_url=legacy_base_url,
-            legacy_api_key=legacy_api_key,
+            servers=load_mcp_servers(resolved_config_path),
         )
-
-    @property
-    def base_url(self) -> str | None:
-        """Return the first enabled server URL for compatibility with older callers."""
-        for server in self.enabled_servers:
-            return server.url
-        return None
 
     @property
     def enabled_servers(self) -> list[MCPServerConfig]:
         """Return the remote HTTP MCP servers that should be active."""
-        if not self.enabled:
-            return []
         return [server for server in self.servers if server.enabled]
 
 
@@ -593,7 +579,7 @@ class ProgenitorConfig:
             copilot=CopilotConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             validation=ValidationConfig.from_env(),
-            mcp=MCPConfig.from_env(project_root),
+            mcp=MCPConfig.load(),
         )
 
         # Validate configuration
@@ -680,7 +666,6 @@ class ProgenitorConfig:
                 "poll_seconds": self.scheduler.poll_seconds,
             },
             "mcp": {
-                "enabled": self.mcp.enabled,
                 "config_path": str(self.mcp.config_path),
                 "servers": [
                     {

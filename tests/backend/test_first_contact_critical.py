@@ -38,7 +38,7 @@ def client():
 
 
 @pytest.fixture
-def complete_state_files(tmp_path, monkeypatch):
+def complete_state_files(tmp_path):
     """
     Create a complete set of state files simulating a fully operational
     Progenitor agent with multiple sub-agents - ready for alien inspection.
@@ -132,7 +132,6 @@ def complete_state_files(tmp_path, monkeypatch):
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
     mcp_config_path.write_text(json.dumps(mcp_data))
-    monkeypatch.setenv("PROGENITOR_MCP_CONFIG_PATH", str(mcp_config_path))
 
     # Build state - actively working on first contact
     build_state = {
@@ -428,7 +427,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         mcp_config_path = config_dir / "mcp.json"
         mcp_config_path.write_text("{this is not valid json!!!")
 
-        reader = StateReader(state_dir=state_dir, mcp_config_path=mcp_config_path)
+        reader = StateReader(state_dir=state_dir, config_dir=config_dir)
 
         # All methods should return defaults, not crash
         health = reader.get_health()

@@ -122,12 +122,12 @@ class LLMClient:
 
         Args:
             config: LLM configuration. If None, loads from environment.
-            mcp_config: MCP configuration. If None, loads from environment.
+            mcp_config: MCP configuration. If None, loads from data/config/mcp.json.
             prompts_dir: Prompt root to use for template loading.
             role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
-        self.mcp_config = mcp_config or MCPConfig.from_env()
+        self.mcp_config = mcp_config or MCPConfig.load()
         self.prompts = PromptTemplates(prompts_dir=prompts_dir)
         self.role = role
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
@@ -438,7 +438,7 @@ class LLMClient:
         if not name:
             return {"error": "Tool call missing name"}
 
-        if not self.mcp_config.enabled:
+        if not self.mcp_config.enabled_servers:
             return {"error": "MCP integration disabled"}
 
         # Extract arguments

@@ -1532,7 +1532,7 @@ async def _refresh_live_mcp_runtime(mcp_config_path: Path) -> None:
         if service is None or not service.is_initialized or service.llm_client is None:
             return
 
-        refreshed_config = MCPConfig.from_env(config_path=mcp_config_path)
+        refreshed_config = MCPConfig.load(config_path=mcp_config_path)
         service.config.mcp = refreshed_config
         await refresh_mcp_runtime(
             service.llm_client,

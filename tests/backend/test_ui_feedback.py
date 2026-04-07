@@ -493,7 +493,7 @@ class TestStateReaderFileOperations:
         (config_dir / "agents.json").write_text(json.dumps(agents_data))
         mcp_config_path.write_text(json.dumps(mcp_data))
 
-        reader = StateReader(state_dir=temp_state_dir, mcp_config_path=mcp_config_path)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
         agents, tools = reader.get_registry()
 
         assert len(agents) == 1
@@ -517,7 +517,7 @@ class TestStateReaderFileOperations:
         )
         mcp_config_path.write_text(json.dumps({"mcpServers": {}}))
 
-        reader = StateReader(state_dir=temp_state_dir, mcp_config_path=mcp_config_path)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
         agents, tools = reader.get_registry()
 
         by_name = {a.name: a.url for a in agents}
