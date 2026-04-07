@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import Connection, StreamableHttpConnection
 
 from ..config import MCPConfig, MCPServerConfig
 from ..mcp_tool_utils import (
@@ -239,6 +242,77 @@ async def initialize_mcp_tools(
     return runtime_servers, flattened_tools
 
 
+def _build_adapter_connections(mcp_config: MCPConfig) -> dict[str, Connection]:
+    connections: dict[str, Connection] = {}
+    for server in mcp_config.enabled_servers:
+        connection: StreamableHttpConnection = {
+            "transport": "streamable_http",
+            "url": server.url,
+            "headers": dict(server.headers),
+        }
+        connections[server.name] = connection
+    return connections
+
+
+def _build_mcp_tool_alias_lookup(
+    mcp_tools: list[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    aliases: dict[tuple[str, str], dict[str, Any]] = {}
+    for tool in mcp_tools:
+        server_name = str(tool.get("mcp_server_name") or "").strip()
+        original_name = str(tool.get("mcp_original_name") or tool.get("name") or "").strip()
+        if not server_name or not original_name:
+            continue
+        aliases[(server_name, original_name)] = tool
+    return aliases
+
+
+async def initialize_mcp_langchain_tools(
+    mcp_config: MCPConfig,
+    mcp_tools: list[dict[str, Any]],
+) -> list[BaseTool]:
+    """Load LangChain MCP tools using the official adapter package."""
+    connections = _build_adapter_connections(mcp_config)
+    if not connections:
+        return []
+
+    client = MultiServerMCPClient(connections)
+    alias_lookup = _build_mcp_tool_alias_lookup(mcp_tools)
+
+    async def _load_server_tools(server_name: str) -> list[BaseTool]:
+        try:
+            loaded_tools = await client.get_tools(server_name=server_name)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load LangChain MCP tools for server '%s': %s", server_name, exc
+            )
+            return []
+
+        aliased_tools: list[BaseTool] = []
+        for tool in loaded_tools:
+            original_name = str(getattr(tool, "name", "") or "").strip()
+            if not original_name:
+                continue
+
+            alias_tool = alias_lookup.get((server_name, original_name))
+            if alias_tool is not None:
+                alias_name = str(alias_tool.get("name") or original_name).strip()
+                if alias_name:
+                    tool.name = alias_name
+                alias_description = get_mcp_tool_description(alias_tool)
+                if alias_description:
+                    tool.description = alias_description
+            aliased_tools.append(tool)
+        return aliased_tools
+
+    loaded_tool_groups = await asyncio.gather(
+        *[_load_server_tools(server.name) for server in mcp_config.enabled_servers]
+    )
+    flattened_tools = [tool for tools in loaded_tool_groups for tool in tools]
+    logger.info("Loaded %d LangChain MCP tool wrapper(s)", len(flattened_tools))
+    return flattened_tools
+
+
 async def setup_mcp_for_llm_client(
     llm_client,
     mcp_config: MCPConfig,
@@ -251,7 +325,8 @@ async def setup_mcp_for_llm_client(
         await close_mcp_context_typed()
 
     mcp_servers, mcp_tools = await initialize_mcp_tools(mcp_config)
-    llm_client.set_mcp_context(mcp_servers, mcp_tools)
+    mcp_langchain_tools = await initialize_mcp_langchain_tools(mcp_config, mcp_tools)
+    llm_client.set_mcp_context(mcp_servers, mcp_tools, mcp_langchain_tools)
 
 
 async def refresh_mcp_runtime(
