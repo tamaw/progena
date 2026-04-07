@@ -9,6 +9,7 @@ import pytest
 
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import (
+    A2ATaskRecord,
     ConversationMessage,
     ScheduleEntry,
     WorkItem,
@@ -35,6 +36,7 @@ class TestStateManager:
 
         # build_state.json replaces both current_state.json and backlog.json
         assert (state_dir / "build_state.json").exists()
+        assert (state_dir / "a2a_tasks.json").exists()
         assert (state_dir.parent / "config" / "agents.json").exists()
         assert (state_dir.parent / "config" / "mcp.json").exists()
         assert (state_dir.parent / "config" / "schedule.json").exists()
@@ -133,6 +135,40 @@ class TestStateManager:
         assert schedule[0].id == "schedule-1"
 
     @pytest.mark.asyncio
+    async def test_a2a_task_persistence(self, temp_dirs):
+        """Tracked A2A task records are persisted and can be updated."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        record = A2ATaskRecord(
+            task_id="observe_123",
+            agent_name="observe_agent",
+            agent_url="http://localhost:8108",
+            context_id="ctx-123",
+            source="call_agent",
+            request_text="Inspect logs",
+        )
+
+        await manager.upsert_a2a_task(record)
+        loaded = await manager.get_a2a_task("observe_123")
+        assert loaded is not None
+        assert loaded.agent_name == "observe_agent"
+        assert loaded.status == "submitted"
+
+        updated = await manager.update_a2a_task(
+            "observe_123",
+            {
+                "status": "completed",
+                "summary": "Observe task completed.",
+            },
+        )
+        assert updated is True
+        refreshed = await manager.get_a2a_task("observe_123")
+        assert refreshed is not None
+        assert refreshed.status == "completed"
+        assert refreshed.summary == "Observe task completed."
+
     async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
         """Legacy schedules under data/state are copied into config on initialize."""
         state_dir = tmp_path / "data" / "state"

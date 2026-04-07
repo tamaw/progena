@@ -387,6 +387,7 @@ class BuilderAgentExecutor(AgentExecutor):
                 context_id=ctx_id,
                 request_text=request_text,
                 request_ctx=request_ctx,
+                event_queue=event_queue,
             )
         )
 
@@ -402,7 +403,7 @@ class BuilderAgentExecutor(AgentExecutor):
                     ),
                     timestamp=utcnow_isoformat(),
                 ),
-                final=True,
+                final=False,
             )
         )
 

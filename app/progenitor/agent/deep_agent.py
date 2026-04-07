@@ -5,9 +5,8 @@ Creates a configured DeepAgent instance that serves as the conversational
 layer, using Progenitor's Azure endpoint for model calls and wrapping
 Progenitor's custom tools.
 
-Phase 1: Basic agent with LangChain model adapter.
-Phase 2: Custom tools wrapped via tools_adapter.
-Later phases will add middleware, skills, memory, and subagents.
+Uses the LangChain model adapter plus Progenitor's wrapped tools, middleware,
+skills, memory files, and native DeepAgent subagents.
 """
 
 import logging
@@ -28,6 +27,7 @@ from .middleware import (
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
+from .subagents import create_progenitor_subagents
 from .tools_adapter import create_deepagent_tools
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,7 @@ def create_progenitor_agent(
 
     # Use the canonical genesis prompt so every conversation starts with it.
     system_prompt = PromptTemplates(prompts_dir=prompts_dir).get_genesis_prompt().strip()
+    subagents = create_progenitor_subagents(inner_loop_graph=inner_loop_graph)
 
     agent = create_deep_agent(
         name="progenitor",
@@ -164,13 +165,14 @@ def create_progenitor_agent(
         store=store,
         skills=skills_dirs,
         memory=memory_paths or None,
-        subagents=None,
+        subagents=subagents,
         middleware=custom_middleware,
         checkpointer=checkpointer,
     )
 
     logger.info(
-        "Created Progenitor DeepAgent: model=%s",
+        "Created Progenitor DeepAgent: model=%s subagents=%s",
         config.llm.model_default,
+        [subagent["name"] for subagent in subagents],
     )
     return agent

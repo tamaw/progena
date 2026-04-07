@@ -20,6 +20,7 @@ def generate_run_id() -> str:
 
 class WorkItemStatus(StrEnum):
     """Status of a work item in the backlog."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -29,6 +30,7 @@ class WorkItemStatus(StrEnum):
 
 class WorkItemType(StrEnum):
     """Type of work item."""
+
     BUILD_AGENT = "build_agent"
     BUILD_MCP = "build_mcp"  # Build FastMCP tool in app/mcp/
     BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor in app/progenitor/
@@ -42,6 +44,7 @@ class WorkItemType(StrEnum):
 
 class DecisionAction(StrEnum):
     """Actions that can be decided."""
+
     ANSWER_DIRECTLY = "answer_directly"
     BUILD_AGENT = "build_agent"
     BUILD_MCP = "build_mcp"  # Build FastMCP tool in app/mcp/
@@ -50,6 +53,7 @@ class DecisionAction(StrEnum):
 
 class BuildPhase(StrEnum):
     """Phases of the inner build loop."""
+
     OBSERVE = "observe"
     THINK = "think"
     PLAN = "plan"
@@ -64,6 +68,7 @@ class BuildPhase(StrEnum):
 
 class IterationStopReason(StrEnum):
     """Reasons why the inner loop iteration stopped."""
+
     MAX_ITERATIONS = "max_iterations"
     VERIFICATION_PASSED = "verification_passed"
     USER_INTERVENTION = "user_intervention"
@@ -78,35 +83,42 @@ class IterationStopReason(StrEnum):
 # NOTE: Patterns are carefully crafted to avoid false positives (e.g., UUIDs, hashes)
 SECRET_PATTERNS = [
     # OpenAI keys (multiple formats) - very specific prefixes
-    (r'sk-proj-[A-Za-z0-9\-_]{20,}', '[OPENAI_PROJECT_KEY_REDACTED]'),  # OpenAI project keys
-    (r'sk-[A-Za-z0-9]{20,}', '[OPENAI_KEY_REDACTED]'),  # OpenAI keys (sk- prefix)
-
+    (r"sk-proj-[A-Za-z0-9\-_]{20,}", "[OPENAI_PROJECT_KEY_REDACTED]"),  # OpenAI project keys
+    (r"sk-[A-Za-z0-9]{20,}", "[OPENAI_KEY_REDACTED]"),  # OpenAI keys (sk- prefix)
     # Azure keys - context-aware patterns only (avoid matching UUIDs/hashes)
     # Match "key": "value" or key=value patterns with Azure context
-    (r'(?i)(?:azure|az)[_-]?(?:openai)?[_-]?(?:api)?[_-]?key["\']?\s*[:=]\s*["\']?([A-Za-z0-9]{32,})', '[AZURE_KEY_REDACTED]'),
+    (
+        r'(?i)(?:azure|az)[_-]?(?:openai)?[_-]?(?:api)?[_-]?key["\']?\s*[:=]\s*["\']?([A-Za-z0-9]{32,})',
+        "[AZURE_KEY_REDACTED]",
+    ),
     # Match environment variable style AZURE_*_KEY=value
-    (r'(?i)(AZURE_[A-Z_]*KEY)\s*=\s*([A-Za-z0-9]{32,})', r'\1=[AZURE_KEY_REDACTED]'),
+    (r"(?i)(AZURE_[A-Z_]*KEY)\s*=\s*([A-Za-z0-9]{32,})", r"\1=[AZURE_KEY_REDACTED]"),
     # Only match 32-char hex strings in key/secret/credential contexts (not standalone)
-    (r'(?i)(?:key|secret|credential|token)["\']?\s*[:=]\s*["\']?([A-Fa-f0-9]{32})(?![A-Za-z0-9])', '[AZURE_KEY_REDACTED]'),
-
+    (
+        r'(?i)(?:key|secret|credential|token)["\']?\s*[:=]\s*["\']?([A-Fa-f0-9]{32})(?![A-Za-z0-9])',
+        "[AZURE_KEY_REDACTED]",
+    ),
     # GitHub tokens - very specific prefixes
-    (r'ghp_[A-Za-z0-9]{36,}', '[GITHUB_TOKEN_REDACTED]'),  # GitHub personal access tokens
-    (r'gho_[A-Za-z0-9]{36,}', '[GITHUB_OAUTH_REDACTED]'),  # GitHub OAuth tokens
-    (r'ghs_[A-Za-z0-9]{36,}', '[GITHUB_SERVER_REDACTED]'),  # GitHub server tokens
-    (r'ghu_[A-Za-z0-9]{36,}', '[GITHUB_USER_REDACTED]'),  # GitHub user tokens
-    (r'github_pat_[A-Za-z0-9_]{22,}', '[GITHUB_PAT_REDACTED]'),  # Fine-grained PATs
-
+    (r"ghp_[A-Za-z0-9]{36,}", "[GITHUB_TOKEN_REDACTED]"),  # GitHub personal access tokens
+    (r"gho_[A-Za-z0-9]{36,}", "[GITHUB_OAUTH_REDACTED]"),  # GitHub OAuth tokens
+    (r"ghs_[A-Za-z0-9]{36,}", "[GITHUB_SERVER_REDACTED]"),  # GitHub server tokens
+    (r"ghu_[A-Za-z0-9]{36,}", "[GITHUB_USER_REDACTED]"),  # GitHub user tokens
+    (r"github_pat_[A-Za-z0-9_]{22,}", "[GITHUB_PAT_REDACTED]"),  # Fine-grained PATs
     # Anthropic keys
-    (r'sk-ant-[A-Za-z0-9\-_]{20,}', '[ANTHROPIC_KEY_REDACTED]'),
-
+    (r"sk-ant-[A-Za-z0-9\-_]{20,}", "[ANTHROPIC_KEY_REDACTED]"),
     # Generic patterns - require context (key/value assignment)
-    (r'(?i)(api[_-]?key|apikey)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r'\1=[REDACTED]'),
-    (r'(?i)(secret|password|passwd|pwd|credential)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r'\1=[REDACTED]'),
-    (r'(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*', r'\1[REDACTED]'),
-
+    (r'(?i)(api[_-]?key|apikey)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r"\1=[REDACTED]"),
+    (
+        r'(?i)(secret|password|passwd|pwd|credential)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})',
+        r"\1=[REDACTED]",
+    ),
+    (r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*", r"\1[REDACTED]"),
     # AWS patterns - specific prefixes
-    (r'AKIA[A-Z0-9]{16}', '[AWS_ACCESS_KEY_REDACTED]'),
-    (r'(?i)(aws[_-]?secret[_-]?access[_-]?key)["\']?\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}', r'\1=[REDACTED]'),
+    (r"AKIA[A-Z0-9]{16}", "[AWS_ACCESS_KEY_REDACTED]"),
+    (
+        r'(?i)(aws[_-]?secret[_-]?access[_-]?key)["\']?\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}',
+        r"\1=[REDACTED]",
+    ),
 ]
 
 
@@ -120,6 +132,7 @@ def redact_secrets(text: str) -> str:
     UUIDs, hashes, and work item IDs should NOT be redacted.
     """
     import re
+
     result = text
     for pattern, replacement in SECRET_PATTERNS:
         result = re.sub(pattern, replacement, result)
@@ -133,6 +146,7 @@ class WorkItem(BaseModel):
     Each item has a type (build, a2a call, etc.) and progresses through
     status states from pending to completed/failed/blocked.
     """
+
     model_config = {"use_enum_values": True}
 
     id: str
@@ -150,7 +164,7 @@ class WorkItem(BaseModel):
     error_message: str | None = None
     result: dict[str, Any] | None = None
 
-    @field_validator('item_type', mode='before')
+    @field_validator("item_type", mode="before")
     @classmethod
     def validate_item_type(cls, v):
         """Convert string to enum if needed."""
@@ -162,10 +176,12 @@ class WorkItem(BaseModel):
             except ValueError:
                 logger.warning("Unknown WorkItemType %r, defaulting to DIRECT_ANSWER", v)
                 return WorkItemType.DIRECT_ANSWER
-        logger.warning("Unexpected WorkItem item_type type %s, defaulting to DIRECT_ANSWER", type(v).__name__)
+        logger.warning(
+            "Unexpected WorkItem item_type type %s, defaulting to DIRECT_ANSWER", type(v).__name__
+        )
         return WorkItemType.DIRECT_ANSWER
 
-    @field_validator('status', mode='before')
+    @field_validator("status", mode="before")
     @classmethod
     def validate_status(cls, v):
         """Convert string to enum if needed."""
@@ -177,7 +193,9 @@ class WorkItem(BaseModel):
             except ValueError:
                 logger.warning("Unknown WorkItemStatus %r, defaulting to PENDING", v)
                 return WorkItemStatus.PENDING
-        logger.warning("Unexpected WorkItem status type %s, defaulting to PENDING", type(v).__name__)
+        logger.warning(
+            "Unexpected WorkItem status type %s, defaulting to PENDING", type(v).__name__
+        )
         return WorkItemStatus.PENDING
 
     @property
@@ -243,6 +261,7 @@ class Decision(BaseModel):
     Captures the LLM's decision about how to handle user input,
     including whether to answer directly, delegate, or build.
     """
+
     model_config = {"use_enum_values": True}
 
     action: DecisionAction
@@ -255,6 +274,7 @@ class Decision(BaseModel):
 
 class ScheduleEntry(BaseModel):
     """A scheduled task entry."""
+
     model_config = {"use_enum_values": True}
 
     id: str
@@ -267,13 +287,14 @@ class ScheduleEntry(BaseModel):
 
 class AgentStatus(StrEnum):
     """Runtime status of an A2A agent."""
-    STOPPED = "stopped"      # Not running
-    STARTING = "starting"    # Process spawned, waiting for ready
-    RUNNING = "running"      # Healthy and accepting requests
+
+    STOPPED = "stopped"  # Not running
+    STARTING = "starting"  # Process spawned, waiting for ready
+    RUNNING = "running"  # Healthy and accepting requests
     EXECUTING = "executing"  # Currently processing a request
-    WAITING = "waiting"      # Idle, waiting for requests
-    FAILED = "failed"        # Failed to start or crashed
-    STOPPING = "stopping"    # Graceful shutdown in progress
+    WAITING = "waiting"  # Idle, waiting for requests
+    FAILED = "failed"  # Failed to start or crashed
+    STOPPING = "stopping"  # Graceful shutdown in progress
 
 
 class AgentRegistryEntry(BaseModel):
@@ -282,6 +303,7 @@ class AgentRegistryEntry(BaseModel):
     Agents are HTTP-based and expose an agent card endpoint per A2A standard.
     The registry tracks runtime status derived from stdout/stderr streams.
     """
+
     name: str
     kind: str = "a2a_agent"  # a2a_agent | mcp_server
     version: str = "0.1.0"
@@ -295,7 +317,9 @@ class AgentRegistryEntry(BaseModel):
     url: str | None = None  # Config-style URL (preferred for static registry entries)
     headers: dict[str, str] | None = None  # Optional HTTP headers for agent calls
     endpoint: str | None = None  # Base URL (e.g., http://localhost:8100)
-    agent_card_url: str | None = None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent-card.json)
+    agent_card_url: str | None = (
+        None  # Agent card endpoint (e.g., http://localhost:8100/.well-known/agent-card.json)
+    )
 
     # Runtime status (updated from process stdout/stderr)
     status: AgentStatus = AgentStatus.STOPPED
@@ -310,8 +334,87 @@ class AgentRegistryEntry(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class A2ATaskStatus(StrEnum):
+    """Normalized lifecycle states for tracked A2A tasks."""
+
+    SUBMITTED = "submitted"
+    WORKING = "working"
+    INPUT_REQUIRED = "input-required"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    AUTH_REQUIRED = "auth-required"
+    UNKNOWN = "unknown"
+
+
+TERMINAL_A2A_TASK_STATUSES = frozenset(
+    {
+        A2ATaskStatus.COMPLETED.value,
+        A2ATaskStatus.CANCELED.value,
+        A2ATaskStatus.FAILED.value,
+        A2ATaskStatus.REJECTED.value,
+    }
+)
+
+
+class A2ATaskRecord(BaseModel):
+    """Persisted metadata for an A2A task tracked by Progenitor."""
+
+    model_config = {"use_enum_values": True}
+
+    task_id: str
+    agent_name: str
+    agent_url: str | None = None
+    agent_card_url: str | None = None
+    transport: str = "http"
+    context_id: str | None = None
+    source: str = "call_agent"
+    request_text: str = ""
+    request_metadata: dict[str, Any] = Field(default_factory=dict)
+    status: A2ATaskStatus = A2ATaskStatus.SUBMITTED
+    summary: str | None = None
+    latest_message: str | None = None
+    last_error: str | None = None
+    latest_task: dict[str, Any] | None = None
+    notify_on_completion: bool = True
+    notification_sent_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    completed_at: datetime | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, v: Any) -> A2ATaskStatus:
+        """Convert raw task state strings into the normalized enum."""
+        if isinstance(v, A2ATaskStatus):
+            return v
+        if isinstance(v, str):
+            try:
+                return A2ATaskStatus(v)
+            except ValueError:
+                logger.warning("Unknown A2ATaskStatus %r, defaulting to UNKNOWN", v)
+                return A2ATaskStatus.UNKNOWN
+        logger.warning(
+            "Unexpected A2ATaskRecord status type %s, defaulting to UNKNOWN",
+            type(v).__name__,
+        )
+        return A2ATaskStatus.UNKNOWN
+
+    @property
+    def status_value(self) -> str:
+        """Return the current status value as a string."""
+        return self.status
+
+    @property
+    def is_terminal(self) -> bool:
+        """Return whether the task reached a terminal lifecycle state."""
+        return self.status_value in TERMINAL_A2A_TASK_STATUSES
+
+
 class ConversationMessage(BaseModel):
     """A message in the conversation history."""
+
     id: str
     role: str  # user | assistant | system | tool
     content: str
@@ -321,6 +424,7 @@ class ConversationMessage(BaseModel):
 
 class ValidationResult(BaseModel):
     """Result of a validation run."""
+
     success: bool
     work_item_id: str
     checks_run: list[str] = Field(default_factory=list)
@@ -334,8 +438,10 @@ class ValidationResult(BaseModel):
 # Split into focused substates for better organization and testing
 # ============================================================================
 
+
 class ConversationState(TypedDict, total=False):
     """Conversation-related state."""
+
     messages: list[ConversationMessage]
     current_input: str | None
     current_input_role: str | None
@@ -348,6 +454,7 @@ class ConversationState(TypedDict, total=False):
 
 class WorkState(TypedDict, total=False):
     """Work item and backlog state."""
+
     backlog: list[WorkItem]
     current_work_item: WorkItem | None
     current_decision: Decision | None
@@ -357,6 +464,7 @@ class WorkState(TypedDict, total=False):
 
 class SchedulingState(TypedDict, total=False):
     """Scheduling and registry state."""
+
     schedule: list[ScheduleEntry]
     new_schedule_entry: ScheduleEntry | None  # Pending entry to be added
     current_time: datetime | None
@@ -369,6 +477,7 @@ class BackgroundJobState(TypedDict, total=False):
 
     Used by the dedicated background job graph.
     """
+
     bg_had_work: bool
     bg_schedule_id: str | None
     bg_work_type: str | None  # "scheduled" | "backlog" | None
@@ -377,6 +486,7 @@ class BackgroundJobState(TypedDict, total=False):
 
 class LoopControlState(TypedDict, total=False):
     """Loop control and metadata."""
+
     cycle_count: int
     actions_this_cycle: int
     shutdown_requested: bool
@@ -389,6 +499,7 @@ class LoopControlState(TypedDict, total=False):
 
 class TaskInfo(TypedDict, total=False):
     """Build task information."""
+
     description: str  # Human-readable build description (summary)
     target_capabilities: list[str]  # Capabilities being built
     created_at: str | None  # ISO timestamp when task was created
@@ -396,6 +507,7 @@ class TaskInfo(TypedDict, total=False):
 
 class IterationInfo(TypedDict, total=False):
     """Iteration tracking."""
+
     current: int  # Current iteration number
     max: int  # Maximum iterations allowed
     start_time: float  # Timestamp when iteration started
@@ -403,6 +515,7 @@ class IterationInfo(TypedDict, total=False):
 
 class SpecInfo(TypedDict, total=False):
     """Spec document reference (content read from file, not stored here)."""
+
     file_path: str | None  # Path to spec.md file
     revision: int  # Current revision number
     created_at: str | None  # ISO timestamp
@@ -411,6 +524,7 @@ class SpecInfo(TypedDict, total=False):
 
 class ThinkPhase(TypedDict, total=False):
     """THINK phase results."""
+
     approaches: list[dict[str, Any]]  # Structured approaches
     recommended_id: str | None  # Selected approach ID
     gaps_analyzed: list[str]  # Gaps from previous iteration
@@ -419,18 +533,21 @@ class ThinkPhase(TypedDict, total=False):
 
 class ObservePhase(TypedDict, total=False):
     """OBSERVE phase results."""
+
     ideal_state: dict[str, Any] | None  # IdealState as dict for JSON serialization
     completed_at: str | None  # ISO timestamp when observe completed
 
 
 class PlanPhase(TypedDict, total=False):
     """PLAN phase results."""
+
     experiment_plan: dict[str, Any] | None  # ExperimentPlan
     completed_at: str | None  # ISO timestamp when planning completed
 
 
 class ExecutePhase(TypedDict, total=False):
     """EXECUTE phase results."""
+
     completed: bool  # Whether execution finished
     result: dict[str, Any] | None  # Compact execution result (tests, duration, status)
     completed_at: str | None  # ISO timestamp when execution completed
@@ -438,6 +555,7 @@ class ExecutePhase(TypedDict, total=False):
 
 class VerifyPhase(TypedDict, total=False):
     """VERIFY phase results."""
+
     passed: bool  # Whether verification passed
     score: float  # Verification score
     target_score: float  # Target score to pass
@@ -450,6 +568,7 @@ class BuildPhases(TypedDict, total=False):
 
     Each phase includes optional completion timestamps for traceability.
     """
+
     observe: ObservePhase
     observe_completed_at: str | None  # ISO timestamp
     think: ThinkPhase
@@ -468,6 +587,7 @@ class VerificationState(TypedDict, total=False):
     This provides a single source of truth for verification status,
     avoiding duplication across phases.verify and top-level fields.
     """
+
     current_score: float | None  # Latest verification score
     current_passed: bool | None  # Whether latest verification passed
     target_score: float  # Target score needed to pass (default 0.8)
@@ -477,6 +597,7 @@ class VerificationState(TypedDict, total=False):
 
 class BuildHistory(TypedDict, total=False):
     """Historical data accumulated across iterations."""
+
     artefacts: list[dict[str, Any]]  # Per-iteration results (iteration, score, passed)
     verification_reports: list[dict[str, Any]]  # All verification reports
     lessons_learned: list[dict[str, Any]]  # Lessons from LEARN phase
@@ -485,6 +606,7 @@ class BuildHistory(TypedDict, total=False):
 
 class BestResult(TypedDict, total=False):
     """Best result tracking for early-stop scenarios."""
+
     iteration: int  # Iteration that produced best result
     score: float  # Best score achieved
     passed: bool  # Whether that iteration passed
@@ -494,6 +616,7 @@ class BestResult(TypedDict, total=False):
 
 class ClarificationQA(TypedDict, total=False):
     """A single clarification question-answer pair."""
+
     question: str
     response: str
     asked_at: str  # ISO timestamp
@@ -502,6 +625,7 @@ class ClarificationQA(TypedDict, total=False):
 
 class ClarificationState(TypedDict, total=False):
     """Clarification handling (user interaction during build)."""
+
     needed: bool  # Whether clarification is needed
     question: str | None  # Current question to ask user
     context: str | None  # Raw context indicating need
@@ -512,6 +636,7 @@ class ClarificationState(TypedDict, total=False):
 
 class ConcurrentBuildInfo(TypedDict, total=False):
     """Tracks a single concurrent build."""
+
     work_item_id: str
     worktree_path: str
     branch_name: str
@@ -524,6 +649,7 @@ class ConcurrentBuildInfo(TypedDict, total=False):
 
 class MergeQueueItem(TypedDict, total=False):
     """Tracks a pending merge operation."""
+
     work_item_id: str
     worktree_path: str
     branch_name: str
@@ -556,6 +682,7 @@ class InnerLoopState(TypedDict, total=False):
     - user_request: build_settings["user_request"] (BuildSettings is single source of truth)
     - target_capabilities: task["target_capabilities"] (TaskInfo is single source of truth)
     """
+
     # Build control (top-level for quick access)
     build_in_progress: bool  # True while building, blocks new builds
     build_started_at: str | None  # ISO timestamp when build started
@@ -599,6 +726,7 @@ class InnerLoopState(TypedDict, total=False):
 
 class ExecutionState(TypedDict, total=False):
     """Execution phase state."""
+
     pending_tool_calls: list[dict[str, Any]]  # Tools pending execution
     work_item_completed: bool  # Whether work item is complete
     execution_result: dict[str, Any] | None  # BL-006: Structured execution result for verify
@@ -614,7 +742,7 @@ class ProgenitorState(
     LoopControlState,
     InnerLoopState,
     ExecutionState,
-    total=False
+    total=False,
 ):
     """Main state for the LangGraph.
 
@@ -628,4 +756,5 @@ class ProgenitorState(
 
     All fields are optional (total=False) to allow partial updates.
     """
+
     pass  # All fields inherited from substates

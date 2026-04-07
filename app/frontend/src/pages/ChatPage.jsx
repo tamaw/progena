@@ -121,11 +121,16 @@ function ChatPage() {
   const handleChatEvent = useCallback((event) => {
     if (!event?.data) return;
 
-    // Handle scheduled/background messages from the agent
-    // Prefer agent_message over scheduled_response as it has cleaner content
-    if (event.type === 'agent_message' || event.type === 'scheduled_response') {
+    // Handle scheduled/background messages from the agent.
+    // Prefer agent_message/agent_notification over scheduled_response as they have cleaner content.
+    if (
+      event.type === 'agent_message'
+      || event.type === 'scheduled_response'
+      || event.type === 'agent_notification'
+    ) {
       const content = event.data?.content || '';
       const metadata = event.data?.metadata || {};
+      const isNotification = event.type === 'agent_notification';
 
       // Clean up the content (remove "SAY: " prefix if present)
       let cleanContent = content;
@@ -160,7 +165,9 @@ function ChatPage() {
         setMessages(prev => [...prev, scheduledMessage]);
 
         // Show a notification
-        show('info', 'Scheduled Message',
+        show(
+          isNotification ? (metadata?.level || 'info') : 'info',
+          metadata?.title || 'Scheduled Message',
           metadata?.schedule_id
             ? `Reminder: ${cleanContent.slice(0, 50)}...`
             : cleanContent.slice(0, 100)

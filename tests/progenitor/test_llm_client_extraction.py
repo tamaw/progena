@@ -265,20 +265,32 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     )
 
     with patch(
-        "app.progenitor.tools.mcp.A2AClient.call_agent",
-        new=AsyncMock(return_value={"success": True, "result": {"ok": True}}),
-    ) as mock_call_agent:
+        "app.progenitor.nodes.node_helpers.registry.execute_system_tool",
+        new=AsyncMock(
+            return_value=(
+                {
+                    "task_id": "task-123",
+                    "agent": "builder",
+                },
+                None,
+                None,
+                False,
+            )
+        ),
+    ) as mock_execute:
         result = await LLMClient._execute_tool_call(
             client,
             {"id": "tool_1"},
             "builder",
             {"request": "hello", "context": {"caller": "test"}},
-            {"tool_registry": tool_registry},
+            {"tool_registry": tool_registry, "state_manager": MagicMock()},
         )
 
-    assert result == {"result": {"success": True, "result": {"ok": True}}}
+    assert result["result"]["task_id"] == "task-123"
     client._call_mcp_tool.assert_not_awaited()
-    mock_call_agent.assert_awaited_once()
+    mock_execute.assert_awaited_once()
+    assert mock_execute.await_args.kwargs["tool_name"] == "call_agent"
+    assert mock_execute.await_args.kwargs["tool_args"]["agent"] == "builder"
 
 
 @pytest.mark.asyncio
