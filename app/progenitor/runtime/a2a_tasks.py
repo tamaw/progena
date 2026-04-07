@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from ..state.models import A2ATaskRecord, A2ATaskStatus
@@ -152,6 +153,17 @@ def _notification_level(record: A2ATaskRecord) -> str:
     if record.status in {A2ATaskStatus.CANCELED.value, A2ATaskStatus.AUTH_REQUIRED.value}:
         return "warning"
     return "info"
+
+
+def build_completion_message(record: A2ATaskRecord) -> str:
+    """Build a user- and agent-readable completion update for a tracked task."""
+    title = _build_notification_title(record).strip()
+    body = _build_notification_body(record).strip()
+    if not title:
+        return body
+    if not body:
+        return title
+    return f"{title}\n\n{body}"
 
 
 def _build_task_record(
@@ -385,7 +397,7 @@ async def refresh_tracked_a2a_task(
 async def send_completion_notification(
     state_manager: Any, llm_client: Any, record: A2ATaskRecord
 ) -> bool:
-    """Emit a completion notification for a tracked terminal task."""
+    """Emit a completion update for a tracked terminal task."""
     push = getattr(llm_client, "_push_event", None)
     if not callable(push):
         return False
@@ -393,14 +405,15 @@ async def send_completion_notification(
     current_state = await state_manager.get_current_state()
     run_id = str(current_state.get("run_id") or "").strip() or None
     tools = UserCommunicationTools(cast(EventPusher, push), run_id=run_id)
-    await tools.notify_user(
-        title=_build_notification_title(record),
-        body=_build_notification_body(record),
-        level=_notification_level(record),
+    await tools.say_to_user(
+        message=build_completion_message(record),
+        context="a2a_task_completion",
         metadata={
             "task_id": record.task_id,
             "agent": record.agent_name,
             "a2a_status": record.status,
+            "title": _build_notification_title(record),
+            "level": _notification_level(record),
         },
     )
     await state_manager.update_a2a_task(
@@ -419,10 +432,12 @@ class A2ATaskTracker:
         llm_client: Any = None,
         *,
         poll_seconds: float = DEFAULT_A2A_POLL_SECONDS,
+        completion_callback: Callable[[A2ATaskRecord], Awaitable[None]] | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.llm_client = llm_client
         self.poll_seconds = max(1.0, poll_seconds)
+        self.completion_callback = completion_callback
 
     async def poll_once(self) -> None:
         """Refresh active tasks and notify on newly terminal ones."""
@@ -436,9 +451,18 @@ class A2ATaskTracker:
                     current.is_terminal
                     and current.notify_on_completion
                     and current.notification_sent_at is None
-                    and self.llm_client is not None
                 ):
-                    await send_completion_notification(self.state_manager, self.llm_client, current)
+                    if self.completion_callback is not None:
+                        await self.completion_callback(current)
+                    if self.llm_client is not None:
+                        await send_completion_notification(
+                            self.state_manager, self.llm_client, current
+                        )
+                    else:
+                        await self.state_manager.update_a2a_task(
+                            current.task_id,
+                            {"notification_sent_at": utcnow(), "updated_at": utcnow()},
+                        )
             except Exception as exc:
                 logger.warning("A2A task refresh failed for %s: %s", record.task_id, exc)
 
