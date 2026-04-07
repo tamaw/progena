@@ -9,7 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain.agents.middleware.types import ModelRequest
+from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.middleware import (
@@ -74,6 +74,15 @@ class TestDynamicMCPToolMiddleware:
             tools=list(tools),
         )
 
+    @staticmethod
+    def _tool_request(name: str, tool: StructuredTool | None = None) -> ToolCallRequest:
+        return ToolCallRequest(
+            tool_call={"name": name, "args": {}, "id": f"tc_{name}"},
+            tool=tool,
+            state={},
+            runtime=MagicMock(),
+        )
+
     async def test_injects_live_mcp_tools(self):
         llm_client = MagicMock()
         llm_client.mcp_langchain_tools = [self._base_tool("search_web")]
@@ -106,6 +115,36 @@ class TestDynamicMCPToolMiddleware:
 
         assert {tool.name for tool in first.tools} == {"current_time", "search_web"}
         assert {tool.name for tool in second.tools} == {"current_time", "read_url"}
+
+    async def test_binds_dynamic_tool_for_execution(self):
+        llm_client = MagicMock()
+        llm_client.mcp_langchain_tools = [self._base_tool("read_url")]
+
+        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+        request = self._tool_request("read_url")
+        handler = AsyncMock(return_value="ok")
+
+        result = await mw.awrap_tool_call(request, handler)
+
+        assert result == "ok"
+        bound_request = handler.call_args.args[0]
+        assert bound_request is not request
+        assert bound_request.tool is not None
+        assert bound_request.tool.name == "read_url"
+        assert request.tool is None
+
+    async def test_leaves_unknown_tool_unbound(self):
+        llm_client = MagicMock()
+        llm_client.mcp_langchain_tools = [self._base_tool("read_url")]
+
+        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+        request = self._tool_request("search_web")
+        handler = AsyncMock(return_value="ok")
+
+        result = await mw.awrap_tool_call(request, handler)
+
+        assert result == "ok"
+        assert handler.call_args.args[0] is request
 
 
 class TestAuditLoggingMiddleware:
