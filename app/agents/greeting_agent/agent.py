@@ -4,7 +4,6 @@ Provides a simple handler that responds to user greetings and logs metadata
 including work_item_id and a2a_context_id for traceability.
 """
 import logging
-from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +11,7 @@ class Agent:
     def __init__(self):
         pass
 
-    def handle(self, message: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def handle(self, message: str, context: dict) -> dict:
         """Handle a user message and return a greeting response.
 
         Expects context to possibly include 'work_item_id' and 'a2a_context_id'.
