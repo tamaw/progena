@@ -1,11 +1,12 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function WebFrameNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
   const { expanded } = data;
   const iframeRef = useRef(null);
   const tabs = getWidgetTabs('webframe');
