@@ -1,9 +1,4 @@
-"""
-Call Agent - Invoke an A2A agent by name or capability.
-
-This is intentionally a *generic dispatch* tool because the set of available
-agents can change during process uptime. It uses agents.json for lookup.
-"""
+"""Canonical outbound A2A tool for deployed agents."""
 
 from __future__ import annotations
 
@@ -13,10 +8,24 @@ import logging
 from collections.abc import Awaitable
 from typing import Any, cast
 
+from pydantic import BaseModel, Field
+
 from ..runtime.a2a_tasks import build_task_response, dispatch_tracked_a2a_task
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class AgentSelection(BaseModel):
+    """LLM-structured response for selecting a deployed agent."""
+
+    agent_name: str = Field(
+        description="Exact registered agent name, or 'none' if no deployed agent is suitable."
+    )
+    message: str = Field(
+        description="The complete, self-contained request to send to the selected agent."
+    )
+    reasoning: str = Field(description="One-sentence explanation of the routing choice.")
 
 
 class CallAgentTool(BaseSystemTool):
@@ -26,11 +35,22 @@ class CallAgentTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Call an A2A agent by name or capability"
+        return (
+            "Call a deployed A2A agent by name or capability, or omit agent to auto-route. "
+            "Use for external/hosted agents only; prefer DeepAgent subagents for internal work. "
+            "Defaults to async tracked dispatch; set blocking=true to wait for completion."
+        )
 
     @property
     def keywords(self) -> list[str]:
-        return ["call agent", "delegate", "run agent", "ask agent"]
+        return [
+            "call agent",
+            "invoke agent",
+            "delegate to deployed agent",
+            "run external agent",
+            "ask hosted agent",
+            "a2a",
+        ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
@@ -57,7 +77,7 @@ class CallAgentTool(BaseSystemTool):
 
         agent = str(args.get("agent") or args.get("agent_name") or args.get("name") or "").strip()
         request = str(args.get("request") or context.user_input or "").strip()
-        timeout_seconds = float(args.get("timeout_seconds") or 60.0)
+        timeout_seconds = float(args.get("timeout_seconds") or args.get("timeout") or 60.0)
         blocking_arg = args.get("blocking", False)
         blocking = (
             blocking_arg
@@ -65,10 +85,21 @@ class CallAgentTool(BaseSystemTool):
             else str(blocking_arg).strip().lower() in {"1", "true", "yes", "on"}
         )
 
-        if not agent:
-            return ToolResult.fail("Missing 'agent' (name or capability)")
         if not request:
             return ToolResult.fail("Missing 'request'")
+
+        if not agent:
+            agents = _agents_from_registry(tool_registry)
+            if not agents:
+                return ToolResult.fail("No deployed A2A agents are registered")
+            selection = await _route_agent(context, agents, request)
+            if selection.agent_name == "none":
+                return ToolResult.fail(
+                    f"No suitable deployed agent found for this task. Reason: {selection.reasoning}"
+                )
+            agent = selection.agent_name
+            request = selection.message
+            logger.info("Agent routing: %s — %s", agent, selection.reasoning)
 
         cfg: dict[str, Any] | None = None
         if hasattr(tool_registry, "find_by_name"):
@@ -89,6 +120,9 @@ class CallAgentTool(BaseSystemTool):
             request_metadata={
                 "caller": "progenitor",
                 "dispatch_mode": "blocking" if blocking else "async",
+                "routing_mode": "explicit"
+                if args.get("agent") or args.get("agent_name")
+                else "auto",
             },
             source="call_agent",
             timeout=timeout_seconds,
@@ -111,3 +145,89 @@ class CallAgentTool(BaseSystemTool):
             return ToolResult.fail(f"{agent} did not return a trackable A2A task")
 
         return ToolResult.ok(result if isinstance(result, dict) else {"result": result})
+
+
+def _agents_from_registry(tool_registry: Any) -> dict[str, dict[str, Any]]:
+    """Return registered deployed agents keyed by name."""
+    if tool_registry is None or not hasattr(tool_registry, "get_agents"):
+        return {}
+    try:
+        agents = tool_registry.get_agents()
+    except Exception:
+        logger.exception("Failed to load registered agents for routing")
+        return {}
+
+    mapped: dict[str, dict[str, Any]] = {}
+    if not isinstance(agents, list):
+        return mapped
+
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        name = str(agent.get("name") or "").strip()
+        if not name:
+            continue
+        mapped[name] = dict(agent)
+    return mapped
+
+
+def _format_agents_for_prompt(agents: dict[str, Any]) -> str:
+    """Render registered agents as compact routing context."""
+    lines: list[str] = []
+    for name, cfg in agents.items():
+        caps = ", ".join(cfg.get("capabilities", []))
+        desc = cfg.get("description", "")
+        status = cfg.get("status", "unknown")
+        lines.append(f"- **{name}** (status: {status})\n  {desc}\n  capabilities: [{caps}]")
+    return "\n".join(lines)
+
+
+async def _route_agent(
+    context: ToolContext,
+    agents: dict[str, Any],
+    request_text: str,
+) -> AgentSelection:
+    """Use the main LLM to choose the best deployed agent for a task."""
+    if context.llm_client is None:
+        return AgentSelection(
+            agent_name="none",
+            message=request_text,
+            reasoning="LLM routing unavailable because llm_client is missing.",
+        )
+
+    agents_block = _format_agents_for_prompt(agents)
+    system_prompt = (
+        "You are an agent router. Select the best deployed A2A agent for the user task and "
+        "craft a clear, complete message to send to that agent.\n"
+        "Rules:\n"
+        "- Only choose from the listed deployed agents.\n"
+        "- If no deployed agent fits, set agent_name to 'none'.\n"
+        "- The message field must be self-contained.\n"
+        "- Keep reasoning to one sentence."
+    )
+    user_prompt = (
+        f"## Available Deployed Agents\n\n{agents_block}\n\n"
+        f"## Task\n\n{request_text}\n\n"
+        "Select the best deployed agent and craft the message."
+    )
+
+    try:
+        selection = await context.llm_client.chat_structured(
+            messages=[{"role": "user", "content": user_prompt}],
+            response_model=AgentSelection,
+            schema_name="AgentSelection",
+            system_prompt=system_prompt,
+            temperature=0.2,
+            max_tokens=512,
+        )
+        return cast(AgentSelection, selection)
+    except Exception as exc:
+        logger.error("Agent routing LLM call failed: %s", exc)
+        return AgentSelection(
+            agent_name="none",
+            message=request_text,
+            reasoning=f"LLM routing failed: {exc}",
+        )
+
+
+__all__ = ["CallAgentTool"]

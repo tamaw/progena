@@ -11,7 +11,6 @@ from app.progenitor.llm.client import (
     LLMClient,
     _build_responses_endpoint,
 )
-from app.progenitor.state.models import A2ATaskRecord
 
 
 def _extract(data: dict):
@@ -265,21 +264,19 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     )
 
     with patch(
-        "app.progenitor.runtime.a2a_tasks.dispatch_tracked_a2a_task",
+        "app.progenitor.nodes.node_helpers.registry.execute_system_tool",
         new=AsyncMock(
             return_value=(
-                {"success": True, "result": {"id": "task-123"}},
-                A2ATaskRecord(
-                    task_id="task-123",
-                    agent_name="builder",
-                    agent_url="http://progenitor-agent-builder:8108",
-                    context_id="ctx-123",
-                    source="tool:builder",
-                    request_text="hello",
-                ),
+                {
+                    "task_id": "task-123",
+                    "agent": "builder",
+                },
+                None,
+                None,
+                False,
             )
         ),
-    ) as mock_dispatch:
+    ) as mock_execute:
         result = await LLMClient._execute_tool_call(
             client,
             {"id": "tool_1"},
@@ -290,4 +287,6 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
 
     assert result["result"]["task_id"] == "task-123"
     client._call_mcp_tool.assert_not_awaited()
-    mock_dispatch.assert_awaited_once()
+    mock_execute.assert_awaited_once()
+    assert mock_execute.await_args.kwargs["tool_name"] == "call_agent"
+    assert mock_execute.await_args.kwargs["tool_args"]["agent"] == "builder"

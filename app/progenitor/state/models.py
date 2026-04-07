@@ -369,7 +369,7 @@ class A2ATaskRecord(BaseModel):
     agent_card_url: str | None = None
     transport: str = "http"
     context_id: str | None = None
-    source: str = "invoke_agent"
+    source: str = "call_agent"
     request_text: str = ""
     request_metadata: dict[str, Any] = Field(default_factory=dict)
     status: A2ATaskStatus = A2ATaskStatus.SUBMITTED

@@ -48,7 +48,7 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
         agent_config={"url": "http://localhost:8107", "transport": "http"},
         request_text="Build a demo",
         request_metadata={"caller": "progenitor", "dispatch_mode": "async"},
-        source="invoke_agent",
+        source="call_agent",
         timeout=5.0,
         blocking=False,
     )
@@ -78,7 +78,7 @@ async def test_refresh_tracked_a2a_task_updates_terminal_status(monkeypatch, sta
             agent_name="observe_agent",
             agent_url="http://localhost:8108",
             context_id="ctx-1",
-            source="invoke_agent",
+            source="call_agent",
             request_text="Inspect state",
         )
     )
@@ -115,7 +115,7 @@ async def test_get_a2a_task_tool_surfaces_refresh_error(monkeypatch, state_manag
             agent_name="observe_agent",
             agent_url="http://localhost:8108",
             context_id="ctx-2",
-            source="invoke_agent",
+            source="call_agent",
             request_text="Inspect logs",
             latest_task={
                 "kind": "task",
