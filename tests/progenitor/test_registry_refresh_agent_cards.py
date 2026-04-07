@@ -16,6 +16,7 @@ class _FakeA2AClient:
             "endpoint": "http://example:8080",
         }
 
+
 @pytest.mark.asyncio
 async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
     reg_path = tmp_path / "agents.json"
@@ -49,21 +50,21 @@ async def test_refresh_agent_cards_updates_registry(tmp_path) -> None:
     saved = json.loads(reg_path.read_text(encoding="utf-8"))
     assert "agent_card" not in saved["observe_agent"]
 
+
 @pytest.mark.asyncio
-async def test_registry_and_mcp_state_are_split(tmp_path) -> None:
+async def test_runtime_mcp_tools_are_ephemeral(tmp_path) -> None:
     reg_path = tmp_path / "agents.json"
-    mcp_path = tmp_path / "mcp.json"
     reg_path.write_text(json.dumps({}), encoding="utf-8")
-    mcp_path.write_text(
-        json.dumps({"tools": [{"name": "search_tool", "kind": "mcp_server"}]}),
-        encoding="utf-8",
-    )
 
     registry = ToolRegistry(reg_path)
     await registry.load()
+    await registry.register_tool({"name": "search_tool", "kind": "mcp_server"})
 
     assert registry.get_agents() == []
-    assert registry.get_tools() == [{"name": "search_tool", "kind": "mcp_server"}]
+    tools = registry.get_tools()
+    assert len(tools) == 1
+    assert tools[0]["name"] == "search_tool"
+    assert tools[0]["kind"] == "mcp_server"
 
 
 @pytest.mark.asyncio

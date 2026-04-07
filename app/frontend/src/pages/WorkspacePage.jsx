@@ -8,17 +8,24 @@ import {
   ReactFlowProvider,
 } from '@xyflow/react';
 
+import '../styles/workspace.css';
+import '../styles/nodes.css';
 import Header from '../components/layout/Header';
 import WorkspaceSidebar from '../components/workspace/WorkspaceSidebar';
 import WorkspaceDock from '../components/workspace/WorkspaceDock';
 import NodeContextMenu from '../components/workspace/NodeContextMenu';
-import { WorkspaceProvider, useWorkspaceContext } from '../context/WorkspaceContext';
+import {
+  WorkspaceProvider,
+  useWorkspaceActions,
+  useWorkspaceGraph,
+} from '../context/WorkspaceContext';
 
 import PromptNode from '../components/workspace/nodes/PromptNode';
 import CodeNode from '../components/workspace/nodes/CodeNode';
 import WebFrameNode from '../components/workspace/nodes/WebFrameNode';
 import LabelNode from '../components/workspace/nodes/LabelNode';
 import ScheduleNode from '../components/workspace/nodes/ScheduleNode';
+import EventNode from '../components/workspace/nodes/EventNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
 import { useApi } from '../hooks/useApi';
@@ -30,6 +37,7 @@ const nodeTypes = {
   webframe: WebFrameNode,
   label: LabelNode,
   schedule: ScheduleNode,
+  event: EventNode,
   group: GroupNode,
   agent: AgentNode,
   mcp: AgentNode,
@@ -39,6 +47,12 @@ const minimapStyle = {
   height: 100,
   width: 150,
 };
+const defaultEdgeOptions = {
+  type: 'smoothstep',
+  animated: true,
+};
+const snapGrid = [16, 16];
+const defaultViewport = { x: 0, y: 0, zoom: 1 };
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'workspace.sidebar.width';
 const SIDEBAR_MIN_WIDTH_PERCENT = 18;
@@ -75,6 +89,7 @@ const minimapNodeColor = (node) => {
     case 'webframe': return '#d29922';
     case 'label': return '#8b949e';
     case 'schedule': return '#bc8cff';
+    case 'event': return '#ffa657';
     case 'group': return '#6e7681';
     case 'agent': return '#f85149';
     default: return '#8b949e';
@@ -86,6 +101,10 @@ function WorkspaceInner() {
     nodes,
     edges,
     viewport,
+    loading,
+    error,
+  } = useWorkspaceGraph();
+  const {
     onNodesChange,
     onEdgesChange,
     onConnect,
@@ -96,11 +115,9 @@ function WorkspaceInner() {
     sendToBack,
     toggleExpanded,
     setViewport,
-    loading,
-    error,
     refreshWorkspace,
     syncWidgets,
-  } = useWorkspaceContext();
+  } = useWorkspaceActions();
   const workspaceReady = !loading && !error;
 
   const reactFlowInstance = useReactFlow();
@@ -170,20 +187,10 @@ function WorkspaceInner() {
   }, [sidebarCollapsed]);
 
   const handleStatusEvent = useCallback((event) => {
-    if (!event?.data) {
+    if (event?.type !== 'widgets' || !event?.data) {
       return;
     }
-
-    if (event.type === 'widgets') {
-      syncWidgets(event.data.items || event.data.widgets || []);
-      return;
-    }
-
-    if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
-      if (Array.isArray(event.data.widgets)) {
-        syncWidgets(event.data.widgets);
-      }
-    }
+    syncWidgets(event.data.items || event.data.widgets || []);
   }, [syncWidgets]);
 
   useStatusSSE(handleStatusEvent);
@@ -403,12 +410,12 @@ function WorkspaceInner() {
           zoomOnDoubleClick={workspaceReady}
           panOnScroll={false}
           selectionMode="partial"
-          defaultEdgeOptions={{ type: 'smoothstep', animated: true }}
+          defaultEdgeOptions={defaultEdgeOptions}
           snapToGrid
-          snapGrid={[16, 16]}
+          snapGrid={snapGrid}
           minZoom={0.1}
           maxZoom={4}
-          defaultViewport={viewport}
+          defaultViewport={defaultViewport}
         >
           <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
           <Controls showInteractive={false} />

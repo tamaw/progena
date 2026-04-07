@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
@@ -10,7 +10,8 @@ const LANGUAGES = [
 ];
 
 function CodeNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runCodeNode, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, runCodeNode } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('code');
   const defaultTab = useMemo(

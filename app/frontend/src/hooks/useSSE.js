@@ -138,6 +138,7 @@ export function useStatusSSE(onEvent) {
     const url = buildUrl(baseUrl, '/api/ui/status');
     console.log('[useStatusSSE] Connecting to', url);
     const es = new EventSource(url);
+    eventSourceRef.current = es;
 
     es.onopen = () => {
       setIsConnected(true);
@@ -156,6 +157,7 @@ export function useStatusSSE(onEvent) {
     es.addEventListener('connected', handleEvent('connected'));
     es.addEventListener('status', handleEvent('status'));
     es.addEventListener('heartbeat', handleEvent('heartbeat'));
+    es.addEventListener('widgets', handleEvent('widgets'));
     es.addEventListener('shutdown', handleEvent('shutdown'));
 
     es.onmessage = handleEvent('message');

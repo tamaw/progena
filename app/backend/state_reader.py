@@ -22,6 +22,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from app.progenitor.config import (
+    load_mcp_servers,
+    resolve_mcp_config_path,
+    resolve_schedule_config_path,
+)
+
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_STATE_DIR = DEFAULT_DATA_DIR / "state"
@@ -79,6 +85,13 @@ def _normalize_log_level(value: Any) -> str:
     if level == "fatal":
         return "error"
     return level or "info"
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> datetime | None:
@@ -170,6 +183,7 @@ class ToolInfo:
     kind: str = "mcp"
     status: str = "ready"
     transport: str = "mcp"
+    url: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolInfo:
@@ -180,6 +194,7 @@ class ToolInfo:
             kind=data.get("kind", "mcp"),
             status=data.get("status", "ready"),
             transport=data.get("transport", "mcp"),
+            url=data.get("url"),
         )
 
 
@@ -257,6 +272,48 @@ class ScheduleItem:
             schedule=data.get("schedule") or data.get("cron_expression", ""),
             next_run=data.get("next_run") or data.get("last_run"),
             enabled=data.get("enabled", True),
+            raw=data,
+        )
+
+
+@dataclass
+class EventWidgetItem:
+    """A persisted workspace event trigger."""
+
+    id: str
+    name: str
+    event_type: str
+    enabled: bool
+    trigger_count: int
+    last_triggered_at: str | None
+    last_run_status: str
+    summary: str
+    last_payload: dict[str, Any] | None
+    logs: list[dict[str, Any]]
+    updated_at: str | None
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> EventWidgetItem:
+        raw_logs = data.get("logs")
+        logs = (
+            [entry for entry in raw_logs if isinstance(entry, dict)]
+            if isinstance(raw_logs, list)
+            else []
+        )
+        last_payload = data.get("last_payload")
+        return cls(
+            id=str(data.get("id", "")),
+            name=str(data.get("name") or data.get("title") or data.get("event_type") or ""),
+            event_type=str(data.get("event_type") or ""),
+            enabled=bool(data.get("enabled", True)),
+            trigger_count=_coerce_int(data.get("trigger_count"), 0),
+            last_triggered_at=data.get("last_triggered_at"),
+            last_run_status=str(data.get("last_run_status") or "idle"),
+            summary=str(data.get("summary") or data.get("event_type") or ""),
+            last_payload=last_payload if isinstance(last_payload, dict) else None,
+            logs=logs,
+            updated_at=data.get("updated_at") or data.get("created_at"),
             raw=data,
         )
 
@@ -353,6 +410,14 @@ class StateReader:
         self._watch_task: asyncio.Task | None = None
         self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
 
+    @property
+    def mcp_config_path(self) -> Path:
+        return resolve_mcp_config_path(self.config_dir)
+
+    @property
+    def schedule_config_path(self) -> Path:
+        return resolve_schedule_config_path(self.config_dir)
+
     def _resolved_logs_dir(self) -> Path:
         return self.logs_dir.resolve()
 
@@ -412,7 +477,6 @@ class StateReader:
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
         agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
-        mcp_data = self._read_json_from_path(self.config_dir / "mcp.json") or {}
 
         agent_entries: list[dict[str, Any]] = []
         if isinstance(agents_data, dict):
@@ -437,21 +501,20 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
-        tools: list[ToolInfo] = []
-        if isinstance(mcp_data, dict):
-            raw_tools = mcp_data.get("tools")
-            if isinstance(raw_tools, list):
-                tools.extend(ToolInfo.from_dict(t) for t in raw_tools if isinstance(t, dict))
-            tool_map = {
-                str(name): cfg
-                for name, cfg in mcp_data.items()
-                if name != "tools" and isinstance(cfg, dict)
-            }
-            seen_names = {tool.name for tool in tools}
-            for name, cfg in tool_map.items():
-                if name in seen_names:
-                    continue
-                tools.append(ToolInfo.from_dict({"name": name, **cfg}))
+        tools = [
+            ToolInfo.from_dict(
+                {
+                    "name": server.name,
+                    "description": server.description or f"Remote MCP server at {server.url}",
+                    "enabled": server.enabled,
+                    "kind": "mcp_server",
+                    "status": "stopped" if server.enabled else "disabled",
+                    "transport": server.transport,
+                    "url": server.url,
+                }
+            )
+            for server in load_mcp_servers(self.mcp_config_path)
+        ]
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:
@@ -462,10 +525,18 @@ class StateReader:
         return [BacklogItem.from_dict(item) for item in backlog if isinstance(item, dict)]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        data = self._read_json("schedule.json")
+        data = self._read_json_from_path(self.schedule_config_path)
+        if data is None and not self.schedule_config_path.exists():
+            data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]
+
+    def get_event_widgets(self) -> list[EventWidgetItem]:
+        data = self._read_json_from_path(self.config_dir / "event_widgets.json")
+        if not data or not isinstance(data, list):
+            return []
+        return [EventWidgetItem.from_dict(item) for item in data if isinstance(item, dict)]
 
     def get_build_state(self) -> dict[str, Any]:
         data = self._read_json("build_state.json")
@@ -992,6 +1063,7 @@ class StateReader:
         health = self.get_health()
         agents, tools = self.get_registry()
         schedule = self.get_schedule()
+        event_widgets = self.get_event_widgets()
 
         widgets: list[dict[str, Any]] = []
         for agent in agents:
@@ -1020,8 +1092,6 @@ class StateReader:
             )
 
         for tool in tools:
-            if not tool.enabled:
-                continue
             logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
             summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
             widgets.append(
@@ -1035,36 +1105,62 @@ class StateReader:
                     "status": self._status_with_health(tool.status, health.is_running()),
                     "summary": summary,
                     "transport": tool.transport,
+                    "enabled": tool.enabled,
+                    "url": tool.url,
                     "current_run_id": health.run_id,
                     "logs": logs,
                     "updated_at": health.last_active,
                 }
             )
 
-        for item in schedule:
+        for schedule_item in schedule:
             widgets.append(
                 {
-                    "id": f"schedule:{item.id}",
+                    "id": f"schedule:{schedule_item.id}",
                     "type": "schedule",
-                    "name": item.name,
-                    "title": item.name or item.id,
-                    "description": item.raw.get("user_request") or item.name,
-                    "status": "enabled" if item.enabled else "disabled",
-                    "summary": item.raw.get("message") or item.name,
-                    "instruction": item.raw.get("instruction") or item.raw.get("message") or "",
-                    "user_request": item.raw.get("user_request") or "",
-                    "schedule_id": item.id,
-                    "schedule_type": item.raw.get("schedule_type", "cron"),
-                    "expression": item.schedule,
-                    "enabled": item.enabled,
-                    "next_run_at": item.raw.get("next_run_at") or item.next_run,
-                    "last_run_at": item.raw.get("last_run"),
-                    "last_run_status": item.raw.get("last_run_status", "idle"),
-                    "timezone": item.raw.get("timezone", "UTC"),
+                    "name": schedule_item.name,
+                    "title": schedule_item.name or schedule_item.id,
+                    "description": schedule_item.raw.get("user_request") or schedule_item.name,
+                    "status": "enabled" if schedule_item.enabled else "disabled",
+                    "summary": schedule_item.raw.get("message") or schedule_item.name,
+                    "instruction": schedule_item.raw.get("instruction")
+                    or schedule_item.raw.get("message")
+                    or "",
+                    "user_request": schedule_item.raw.get("user_request") or "",
+                    "schedule_id": schedule_item.id,
+                    "schedule_type": schedule_item.raw.get("schedule_type", "cron"),
+                    "expression": schedule_item.schedule,
+                    "enabled": schedule_item.enabled,
+                    "next_run_at": schedule_item.raw.get("next_run_at") or schedule_item.next_run,
+                    "last_run_at": schedule_item.raw.get("last_run"),
+                    "last_run_status": schedule_item.raw.get("last_run_status", "idle"),
+                    "timezone": schedule_item.raw.get("timezone", "UTC"),
                     "logs": self._normalize_widget_logs(
-                        self.get_logs_for_widget(item.id, limit=20), limit=20
+                        self.get_logs_for_widget(schedule_item.id, limit=20), limit=20
                     ),
-                    "updated_at": item.raw.get("updated_at") or item.raw.get("created_at"),
+                    "updated_at": schedule_item.raw.get("updated_at")
+                    or schedule_item.raw.get("created_at"),
+                }
+            )
+
+        for event_widget in event_widgets:
+            widgets.append(
+                {
+                    "id": f"event:{event_widget.id}",
+                    "type": "event",
+                    "name": event_widget.name,
+                    "title": event_widget.name or event_widget.event_type,
+                    "description": event_widget.raw.get("description") or event_widget.event_type,
+                    "status": "enabled" if event_widget.enabled else "disabled",
+                    "summary": event_widget.summary or event_widget.event_type,
+                    "event_type": event_widget.event_type,
+                    "enabled": event_widget.enabled,
+                    "trigger_count": event_widget.trigger_count,
+                    "last_triggered_at": event_widget.last_triggered_at,
+                    "last_run_status": event_widget.last_run_status,
+                    "last_payload": event_widget.last_payload,
+                    "logs": self._normalize_widget_logs(event_widget.logs, limit=20),
+                    "updated_at": event_widget.updated_at,
                 }
             )
 
@@ -1101,9 +1197,10 @@ class StateReader:
             self.state_dir / "health.json",
             self.state_dir / "current_state.json",
             self.state_dir / "build_state.json",
-            self.state_dir / "schedule.json",
+            self.schedule_config_path,
             self.config_dir / "agents.json",
             self.config_dir / "mcp.json",
+            self.config_dir / "event_widgets.json",
             self.sessions_dir / "sessions.json",
         ]
 
