@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { NodeResizer } from '@xyflow/react';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
@@ -65,6 +65,7 @@ function CodeNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon code">&lt;&gt;</div>
