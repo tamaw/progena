@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from langchain_core.messages import AIMessageChunk
 
-from ..state.models import redact_secrets
-from .a2a_tasks import A2ATaskTracker
+from ..state.models import A2ATaskRecord, ConversationMessage, redact_secrets
+from .a2a_tasks import A2ATaskTracker, build_completion_message
 from .scheduler import Scheduler
 from .time_utils import utcnow, utcnow_isoformat
 
@@ -151,7 +151,11 @@ class ProgenitorLoop:
         if self._is_scheduler_enabled():
             scheduler_task = asyncio.create_task(self._scheduler_loop())
             logger.info("Scheduler loop started")
-        self._a2a_task_tracker = A2ATaskTracker(self.state_manager, self.llm_client)
+        self._a2a_task_tracker = A2ATaskTracker(
+            self.state_manager,
+            self.llm_client,
+            completion_callback=self._record_completed_a2a_task,
+        )
         self._a2a_task_poller = asyncio.create_task(self._a2a_task_tracker.run())
         poller_task = self._a2a_task_poller
 
@@ -1018,6 +1022,46 @@ class ProgenitorLoop:
                 self._input_queue.maxsize,
             )
             return False
+
+    async def _record_completed_a2a_task(self, record: A2ATaskRecord) -> None:
+        """Persist a terminal A2A task update into the active conversation state."""
+        metadata = {
+            "type": "a2a_task_completion",
+            "task_id": record.task_id,
+            "agent": record.agent_name,
+            "a2a_status": record.status,
+            "source": record.source,
+        }
+        content = build_completion_message(record)
+
+        async with self._graph_lock:
+            messages = list(self._state.get("messages", []))
+            for existing in messages:
+                existing_metadata = (
+                    existing.get("metadata")
+                    if isinstance(existing, dict)
+                    else getattr(existing, "metadata", None)
+                )
+                if not isinstance(existing_metadata, dict):
+                    continue
+                if (
+                    existing_metadata.get("type") == metadata["type"]
+                    and existing_metadata.get("task_id") == record.task_id
+                    and existing_metadata.get("a2a_status") == record.status
+                ):
+                    return
+
+            message = ConversationMessage(
+                id=str(uuid.uuid4()),
+                role="tool",
+                content=content,
+                timestamp=utcnow(),
+                metadata=metadata,
+            )
+            await self.state_manager.log_conversation(message)
+            messages.append(message)
+            await self.state_manager.save_messages(messages)
+            self._state["messages"] = messages
 
     async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from the agent."""
