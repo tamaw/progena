@@ -24,7 +24,9 @@ async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None
     fake_loop = _FakeLoop()
 
     with patch("app.progenitor.agent.tools_adapter.get_current_loop", return_value=fake_loop):
-        tools = create_deepagent_tools(tool_registry=MagicMock(), llm_client=MagicMock(), state_manager=None)
+        tools = create_deepagent_tools(
+            tool_registry=MagicMock(), llm_client=MagicMock(), state_manager=None
+        )
 
         new_conv = next(t for t in tools if t.name == "new_conversation")
         result = await new_conv.ainvoke({"request": "reset the conversation"})
@@ -119,3 +121,49 @@ async def test_loop_preserves_persisted_run_id_on_startup(tmp_path: Path) -> Non
     await loop.run_forever()
 
     assert loop._state["run_id"] == "run_persisted"
+
+
+@pytest.mark.asyncio
+async def test_loop_reset_conversation_rotates_run_id_persists_state_and_drains_queues(
+    tmp_path: Path,
+) -> None:
+    from app.progenitor.runtime.loop import ProgenitorLoop
+
+    state_manager = MagicMock()
+    state_manager.save_current_state = AsyncMock()
+    state_manager.state_dir = tmp_path
+
+    loop = ProgenitorLoop(
+        graph=MagicMock(),
+        state_manager=state_manager,
+        config=cast(Any, _MockConfig()),
+    )
+    loop._update_health_file = AsyncMock()  # type: ignore[method-assign]
+    loop._state = {
+        "run_id": "run_old",
+        "cycle_count": 4,
+        "actions_this_cycle": 1,
+        "shutdown_requested": False,
+        "messages": [{"role": "user", "content": "hello"}],
+        "tool_calls": [{"tool_name": "read_url"}],
+        "attachments": ["att_1"],
+        "current_input": "stale input",
+        "pending_response": "stale response",
+    }
+    loop._input_queue.put_nowait("stale queued input")
+    loop._output_queue.put_nowait("stale queued output")
+    loop._stream_queue.put_nowait({"type": "stream_chunk", "content": "stale", "is_final": False})
+
+    result = await loop.reset_conversation()
+
+    assert result["previous_run_id"] == "run_old"
+    assert result["new_run_id"] == loop._state["run_id"]
+    assert loop._state["messages"] == []
+    assert loop._state["tool_calls"] == []
+    assert loop._state["attachments"] == []
+    assert loop._state["current_input"] is None
+    assert loop._state["pending_response"] is None
+    assert loop._input_queue.empty()
+    assert loop._output_queue.empty()
+    assert loop._stream_queue.empty()
+    state_manager.save_current_state.assert_awaited_once()

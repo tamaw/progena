@@ -13,6 +13,7 @@ spawning a subprocess, providing:
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from ..progenitor.config import ProgenitorConfig
 from ..progenitor.service import ProgenitorService, get_service
@@ -104,6 +105,20 @@ class ServiceProgenitorClient:
         async for chunk in service.handle_message_stream(message, request_id):
             yield chunk
 
+    async def reset_conversation(
+        self,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Reset the persisted conversation thread used by the service."""
+        _ = request_id
+        if not self._service or not self._service.is_initialized:
+            await self.start()
+        service = self._service
+        if service is None:
+            raise RuntimeError("Progenitor service failed to start")
+
+        return await service.reset_conversation()
+
     @property
     def is_running(self) -> bool:
         """Check if the service is running."""
@@ -113,6 +128,7 @@ class ServiceProgenitorClient:
         """Get last heartbeat timestamp (for compatibility)."""
         # In-process service doesn't need heartbeats
         import time
+
         return time.time() if self.is_running else None
 
     def queue_depth(self) -> int:

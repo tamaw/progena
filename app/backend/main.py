@@ -56,6 +56,7 @@ from .models import (
 from .session import (
     SessionConfig,
     SessionManager,
+    SessionState,
     SettingsManager,
     get_session_from_request,
     set_session_cookie,
@@ -1150,10 +1151,8 @@ async def get_attachment(attachment_id: str):
 # ============================================================================
 
 
-@app.get("/v1/session")
-async def get_session(request: Request):
-    """Get current session state."""
-    session = await get_session_from_request(request, session_manager)
+def _session_response(session: SessionState) -> dict[str, Any]:
+    """Serialize session state for the HTTP API."""
     return {
         "session_id": session.session_id,
         "created_at": session.created_at.isoformat(),
@@ -1162,18 +1161,96 @@ async def get_session(request: Request):
         "preferences": session.preferences.model_dump(),
         "message_count": session.message_count,
         "pending_attachments": session.pending_attachments,
+        "conversation_id": session.conversation_id,
     }
+
+
+def _reset_request_id(request: Request, action: str) -> str:
+    """Build a request ID for control-path resets."""
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        return f"{request_id}:{action}"
+    return f"{action}-{uuid.uuid4().hex[:12]}"
+
+
+def _apply_reset_to_session(session: SessionState, reset_result: dict[str, Any]) -> None:
+    """Sync backend session bookkeeping with a fresh Progenitor conversation."""
+    run_id = reset_result.get("run_id") or reset_result.get("new_run_id")
+    session.conversation_id = run_id if isinstance(run_id, str) and run_id else None
+    session.message_count = 0
+    session.pending_attachments.clear()
+    session.touch()
+
+
+async def _reset_runtime_conversation(request: Request, action: str) -> dict[str, Any]:
+    """Reset Progenitor's live conversation thread and surface errors clearly."""
+    if client is None:
+        raise HTTPException(status_code=503, detail="Client not initialized")
+
+    request_id = _reset_request_id(request, action)
+    try:
+        return await client.reset_conversation(request_id=request_id)
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Conversation reset failed (%s): %s", request_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reset agent conversation")
+
+
+async def _create_session_response(
+    request: Request,
+    response: Response,
+    *,
+    replace_existing: bool,
+) -> dict[str, Any]:
+    """Create a fresh backend session aligned to a fresh Progenitor conversation."""
+    cookie_name = session_manager.config.cookie_name
+    session_id = request.cookies.get(cookie_name)
+    if session_id and replace_existing:
+        await session_manager.delete_session(session_id)
+
+    user_id = getattr(request.state, "user_id", None)
+    if replace_existing and user_id:
+        existing_user_session = await session_manager.get_session_by_user(user_id)
+        if existing_user_session:
+            await session_manager.delete_session(existing_user_session.session_id)
+
+    reset_result = await _reset_runtime_conversation(request, "session-reset")
+    conversation_history.clear()
+
+    session = await session_manager.create_session(user_id=user_id)
+    _apply_reset_to_session(session, reset_result)
+    set_session_cookie(response, session)
+    return _session_response(session)
+
+
+@app.get("/v1/session")
+async def get_session(request: Request, response: Response):
+    """Get current session state."""
+    cookie_name = session_manager.config.cookie_name
+    session_id = request.cookies.get(cookie_name)
+
+    if session_id:
+        existing_session = await session_manager.get_session(session_id)
+        if existing_session is not None:
+            return _session_response(existing_session)
+
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        existing_user_session = await session_manager.get_session_by_user(user_id)
+        if existing_user_session is not None:
+            set_session_cookie(response, existing_user_session)
+            return _session_response(existing_user_session)
+
+    return await _create_session_response(request, response, replace_existing=False)
 
 
 @app.post("/v1/session")
 async def create_new_session(request: Request, response: Response):
     """Create a new session."""
-    session = await session_manager.create_session()
-    set_session_cookie(response, session)
-    return {
-        "session_id": session.session_id,
-        "created_at": session.created_at.isoformat(),
-    }
+    return await _create_session_response(request, response, replace_existing=True)
 
 
 @app.patch("/v1/session/preferences")
@@ -1266,10 +1343,21 @@ async def get_conversation_message(message_id: str):
 
 
 @app.delete("/v1/conversation")
-async def clear_conversation():
+async def clear_conversation(request: Request):
     """Clear conversation history."""
+    reset_result = await _reset_runtime_conversation(request, "conversation-clear")
     conversation_history.clear()
-    return {"status": "cleared"}
+
+    session_id = request.cookies.get(session_manager.config.cookie_name)
+    if session_id:
+        session = await session_manager.get_session(session_id)
+        if session is not None:
+            _apply_reset_to_session(session, reset_result)
+
+    return {
+        "status": "cleared",
+        "conversation_id": reset_result.get("run_id") or reset_result.get("new_run_id"),
+    }
 
 
 # ============================================================================

@@ -17,7 +17,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import IO, cast
+from typing import IO, Any, cast
 
 from .config import ChatServerConfig
 
@@ -111,7 +111,7 @@ class ProgenitorClient:
                 if time_since_heartbeat > HEARTBEAT_INTERVAL * 3:
                     logger.warning(
                         "No activity from Progenitor in %.1fs, checking health...",
-                        time_since_heartbeat
+                        time_since_heartbeat,
                     )
 
             except asyncio.CancelledError:
@@ -128,10 +128,7 @@ class ProgenitorClient:
     async def _attempt_restart(self) -> bool:
         """Attempt to restart the Progenitor process (CR-001)."""
         if self._restart_count >= self._max_restarts:
-            logger.error(
-                "Max restart attempts (%d) reached, giving up",
-                self._max_restarts
-            )
+            logger.error("Max restart attempts (%d) reached, giving up", self._max_restarts)
             return False
 
         self._restart_count += 1
@@ -139,7 +136,7 @@ class ProgenitorClient:
             "Restart attempt %d/%d after %.1fs delay",
             self._restart_count,
             self._max_restarts,
-            self._restart_delay
+            self._restart_delay,
         )
 
         await asyncio.sleep(self._restart_delay)
@@ -192,21 +189,11 @@ class ProgenitorClient:
                 self._process.terminate()
 
                 # Use configurable timeout (CR-001: CQ-011 fix)
-                stop_timeout = getattr(
-                    self.config,
-                    'progenitor_stop_timeout',
-                    5
-                )
+                stop_timeout = getattr(self.config, "progenitor_stop_timeout", 5)
                 try:
-                    await asyncio.wait_for(
-                        self._process.wait(),
-                        timeout=stop_timeout
-                    )
+                    await asyncio.wait_for(self._process.wait(), timeout=stop_timeout)
                 except TimeoutError:
-                    logger.warning(
-                        "Progenitor did not terminate in %ds, killing...",
-                        stop_timeout
-                    )
+                    logger.warning("Progenitor did not terminate in %ds, killing...", stop_timeout)
                     self._process.kill()
                 self._process = None
                 self._started = False
@@ -364,14 +351,17 @@ class ProgenitorClient:
                     f"Progenitor did not respond within {self.config.progenitor_timeout}s"
                 )
 
+    async def reset_conversation(self, request_id: str | None = None) -> dict[str, Any]:
+        """Reset the active conversation thread.
+
+        The legacy subprocess client does not support structured control messages.
+        """
+        raise RuntimeError("Conversation reset requires the IPC or service client")
+
     @property
     def is_running(self) -> bool:
         """Check if Progenitor is running."""
-        return (
-            self._started
-            and self._process is not None
-            and self._process.returncode is None
-        )
+        return self._started and self._process is not None and self._process.returncode is None
 
     def get_status(self) -> dict:
         """Get detailed client status (CR-001)."""
@@ -380,8 +370,7 @@ class ProgenitorClient:
             "started": self._started,
             "pid": self._process.pid if self._process else None,
             "last_heartbeat_ago": (
-                time.time() - self._last_heartbeat
-                if self._last_heartbeat > 0 else None
+                time.time() - self._last_heartbeat if self._last_heartbeat > 0 else None
             ),
             "restart_count": self._restart_count,
             "max_restarts": self._max_restarts,

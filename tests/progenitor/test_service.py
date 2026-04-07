@@ -13,9 +13,14 @@ class StubStateManager:
 
     def __init__(self, run_id: str = "run-123"):
         self.run_id = run_id
+        self.saved_state: dict[str, Any] | None = None
 
     async def get_current_state(self) -> dict[str, Any]:
         return {"run_id": self.run_id}
+
+    async def save_current_state(self, state: dict[str, Any]) -> None:
+        self.saved_state = state
+        self.run_id = state["run_id"]
 
 
 class StubGraph:
@@ -55,3 +60,29 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
     assert len(messages) == 1
     assert isinstance(messages[0], HumanMessage)
     assert messages[0].content == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_reset_conversation_rotates_persisted_thread_id() -> None:
+    """Service reset should persist a new conversation run ID."""
+    state_manager = StubStateManager(run_id="persisted-run")
+
+    service = object.__new__(ProgenitorService)
+    service._initialized = True
+    service._message_count = 3
+    service._session_id = "session-1"
+    service.state_manager = state_manager
+    service.graph = None
+    service.llm_client = None
+    service.tool_registry = None
+    service.project_root = None
+    service.config = None
+    service._lock = None
+
+    result = await service.reset_conversation()
+
+    assert result["previous_run_id"] == "persisted-run"
+    assert state_manager.saved_state is not None
+    assert state_manager.saved_state["run_id"] == result["new_run_id"]
+    assert state_manager.saved_state["messages"] == []
+    assert service.message_count == 0

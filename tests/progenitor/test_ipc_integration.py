@@ -20,6 +20,14 @@ class MockLoopRunner:
         self._output_queue = asyncio.Queue()
         self._stream_queue = asyncio.Queue()
         self._response = "Mock response"
+        self._reset_calls = 0
+        self._reset_response = {
+            "reset": True,
+            "run_id": "run_reset",
+            "new_run_id": "run_reset",
+            "previous_run_id": "run_previous",
+            "messages_cleared": 2,
+        }
         self._cycle_complete_event = asyncio.Event()
         # Auto-set event for mocking
         self._cycle_complete_event.set()
@@ -34,24 +42,23 @@ class MockLoopRunner:
         # Also put streaming chunks (for streaming handler)
         if self._auto_stream:
             # Split response into words like the real loop does
-            words = self._response.split(' ')
+            words = self._response.split(" ")
             for i, word in enumerate(words):
-                is_last = (i == len(words) - 1)
-                chunk = word if is_last else word + ' '
-                await self._stream_queue.put({
-                    "type": "stream_chunk",
-                    "content": chunk,
-                    "is_final": is_last,
-                })
+                is_last = i == len(words) - 1
+                chunk = word if is_last else word + " "
+                await self._stream_queue.put(
+                    {
+                        "type": "stream_chunk",
+                        "content": chunk,
+                        "is_final": is_last,
+                    }
+                )
 
     async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from queue."""
         try:
             if timeout:
-                return await asyncio.wait_for(
-                    self._output_queue.get(),
-                    timeout=timeout
-                )
+                return await asyncio.wait_for(self._output_queue.get(), timeout=timeout)
             return self._output_queue.get_nowait()
         except (TimeoutError, asyncio.QueueEmpty):
             return None
@@ -60,10 +67,7 @@ class MockLoopRunner:
         """Get stream chunk from queue."""
         try:
             if timeout:
-                return await asyncio.wait_for(
-                    self._stream_queue.get(),
-                    timeout=timeout
-                )
+                return await asyncio.wait_for(self._stream_queue.get(), timeout=timeout)
             return self._stream_queue.get_nowait()
         except (TimeoutError, asyncio.QueueEmpty):
             return None
@@ -86,6 +90,17 @@ class MockLoopRunner:
         if timeout:
             await asyncio.sleep(timeout)
         return None
+
+    async def reset_conversation(self) -> dict[str, str | int | bool | None]:
+        """Reset the mock conversation."""
+        self._reset_calls += 1
+        while not self._input_queue.empty():
+            self._input_queue.get_nowait()
+        while not self._output_queue.empty():
+            self._output_queue.get_nowait()
+        while not self._stream_queue.empty():
+            self._stream_queue.get_nowait()
+        return self._reset_response
 
 
 @pytest.fixture
@@ -157,9 +172,7 @@ class TestIPCServerBasic:
         assert ipc_server.client_count == 0
 
         # Connect a client
-        reader, writer = await asyncio.open_connection(
-            "127.0.0.1", ipc_server.port
-        )
+        reader, writer = await asyncio.open_connection("127.0.0.1", ipc_server.port)
 
         # Wait for connection to be processed
         await asyncio.sleep(0.2)
@@ -237,16 +250,11 @@ class TestIPCCommunication:
         assert response == "Hello back!"
 
     @pytest.mark.asyncio
-    async def test_send_message_with_request_id(
-        self, ipc_client, ipc_server, mock_loop_runner
-    ):
+    async def test_send_message_with_request_id(self, ipc_client, ipc_server, mock_loop_runner):
         """Test that request ID is preserved."""
         mock_loop_runner.set_response("Response")
 
-        response = await ipc_client.send_message(
-            "Test message",
-            request_id="custom_req_id"
-        )
+        response = await ipc_client.send_message("Test message", request_id="custom_req_id")
 
         assert response == "Response"
 
@@ -258,9 +266,15 @@ class TestIPCCommunication:
         assert initial is not None
 
     @pytest.mark.asyncio
-    async def test_multiple_messages(
-        self, ipc_client, ipc_server, mock_loop_runner
-    ):
+    async def test_reset_conversation_roundtrip(self, ipc_client, mock_loop_runner):
+        """Test explicit conversation reset requests."""
+        result = await ipc_client.reset_conversation(request_id="reset_1")
+
+        assert result["new_run_id"] == "run_reset"
+        assert mock_loop_runner._reset_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_messages(self, ipc_client, ipc_server, mock_loop_runner):
         """Test sending multiple messages sequentially."""
         responses = []
 
@@ -276,11 +290,13 @@ class TestIPCCommunication:
         self, ipc_client, ipc_server, mock_loop_runner
     ):
         """A timed-out prior request must not leak stream chunks into the next response."""
-        await mock_loop_runner._stream_queue.put({
-            "type": "stream_chunk",
-            "content": "stale response",
-            "is_final": True,
-        })
+        await mock_loop_runner._stream_queue.put(
+            {
+                "type": "stream_chunk",
+                "content": "stale response",
+                "is_final": True,
+            }
+        )
         mock_loop_runner.set_response("fresh response")
 
         response = await ipc_client.send_message("Hello after timeout", request_id="fresh_req")
@@ -292,9 +308,7 @@ class TestIPCStreaming:
     """Tests for streaming responses."""
 
     @pytest.mark.asyncio
-    async def test_stream_response(
-        self, ipc_client, ipc_server, mock_loop_runner
-    ):
+    async def test_stream_response(self, ipc_client, ipc_server, mock_loop_runner):
         """Test streaming response."""
         # Disable auto streaming so we can manually control chunks
         mock_loop_runner._auto_stream = False

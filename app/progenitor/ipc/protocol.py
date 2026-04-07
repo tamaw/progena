@@ -9,7 +9,9 @@ Wire Format:
 
 Message Types:
     - user_message: Input from user
+    - reset_conversation: Reset the live conversation thread
     - assistant_message: Complete response from Progenitor
+    - reset_conversation_ack: Conversation reset completed
     - stream_chunk: Streaming response chunk
     - stream_end: End of streaming response
     - heartbeat: Keep-alive ping
@@ -40,11 +42,13 @@ class MessageType(StrEnum):
 
     # Request messages (client -> server)
     USER_MESSAGE = "user_message"
+    RESET_CONVERSATION = "reset_conversation"
     HEARTBEAT = "heartbeat"
     SHUTDOWN = "shutdown"
 
     # Response messages (server -> client)
     ASSISTANT_MESSAGE = "assistant_message"
+    RESET_CONVERSATION_ACK = "reset_conversation_ack"
     STREAM_CHUNK = "stream_chunk"
     STREAM_END = "stream_end"
     HEARTBEAT_ACK = "heartbeat_ack"
@@ -128,9 +132,7 @@ def encode_message(message: IPCMessage | dict[str, Any]) -> bytes:
     json_bytes = json.dumps(payload).encode(ENCODING)
 
     if len(json_bytes) > MAX_MESSAGE_SIZE:
-        raise ValueError(
-            f"Message size {len(json_bytes)} exceeds maximum {MAX_MESSAGE_SIZE}"
-        )
+        raise ValueError(f"Message size {len(json_bytes)} exceeds maximum {MAX_MESSAGE_SIZE}")
 
     # Length prefix (4 bytes, big-endian)
     header = struct.pack(">I", len(json_bytes))
@@ -171,9 +173,7 @@ async def read_message(
     try:
         # Read header
         if timeout:
-            header = await asyncio.wait_for(
-                reader.readexactly(HEADER_SIZE), timeout=timeout
-            )
+            header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=timeout)
         else:
             header = await reader.readexactly(HEADER_SIZE)
 
@@ -185,9 +185,7 @@ async def read_message(
 
         # Read payload
         if timeout:
-            payload = await asyncio.wait_for(
-                reader.readexactly(length), timeout=timeout
-            )
+            payload = await asyncio.wait_for(reader.readexactly(length), timeout=timeout)
         else:
             payload = await reader.readexactly(length)
 
@@ -237,6 +235,14 @@ def user_message(
     )
 
 
+def reset_conversation_message(request_id: str | None = None) -> IPCMessage:
+    """Create a conversation reset request."""
+    return IPCMessage(
+        type=MessageType.RESET_CONVERSATION,
+        request_id=request_id,
+    )
+
+
 def assistant_message(
     content: str,
     request_id: str | None = None,
@@ -247,6 +253,19 @@ def assistant_message(
         content=content,
         request_id=request_id,
         is_final=True,
+    )
+
+
+def reset_conversation_ack(
+    request_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> IPCMessage:
+    """Create a conversation reset acknowledgment."""
+    return IPCMessage(
+        type=MessageType.RESET_CONVERSATION_ACK,
+        request_id=request_id,
+        is_final=True,
+        metadata=metadata,
     )
 
 
@@ -324,6 +343,7 @@ def agent_event(
         IPCMessage with type AGENT_EVENT.
     """
     from ..runtime.time_utils import utcnow_isoformat
+
     return IPCMessage(
         type=MessageType.AGENT_EVENT,
         event_type=event_type,

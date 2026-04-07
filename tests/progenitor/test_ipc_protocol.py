@@ -23,6 +23,8 @@ from app.progenitor.ipc.protocol import (
     heartbeat_ack,
     read_message,
     ready_message,
+    reset_conversation_ack,
+    reset_conversation_message,
     shutdown_message,
     stream_chunk,
     stream_end,
@@ -181,6 +183,23 @@ class TestConvenienceFunctions:
         assert msg.type == MessageType.ASSISTANT_MESSAGE
         assert msg.content == "Response"
         assert msg.is_final is True
+
+    def test_reset_conversation_message(self):
+        """Test reset_conversation_message convenience function."""
+        msg = reset_conversation_message(request_id="req_1")
+        assert msg.type == MessageType.RESET_CONVERSATION
+        assert msg.request_id == "req_1"
+
+    def test_reset_conversation_ack(self):
+        """Test reset_conversation_ack convenience function."""
+        msg = reset_conversation_ack(
+            request_id="req_1",
+            metadata={"run_id": "run_new"},
+        )
+        assert msg.type == MessageType.RESET_CONVERSATION_ACK
+        assert msg.request_id == "req_1"
+        assert msg.is_final is True
+        assert msg.metadata == {"run_id": "run_new"}
 
     def test_stream_chunk(self):
         """Test stream_chunk convenience function."""

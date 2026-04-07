@@ -100,15 +100,21 @@ class IPCProgenitorClient:
                     metadata = event.get("metadata", {})
                     timestamp = event.get("timestamp")
 
-                    logger.info("Forwarding event to SSE: type=%s, content=%s",
-                               event_type, content[:100] if content else "")
+                    logger.info(
+                        "Forwarding event to SSE: type=%s, content=%s",
+                        event_type,
+                        content[:100] if content else "",
+                    )
 
                     try:
-                        callback(event_type, {
-                            "content": content,
-                            "metadata": metadata,
-                            "timestamp": timestamp,
-                        })
+                        callback(
+                            event_type,
+                            {
+                                "content": content,
+                                "metadata": metadata,
+                                "timestamp": timestamp,
+                            },
+                        )
                     except Exception as e:
                         logger.warning("Error in event callback: %s", e)
 
@@ -204,14 +210,23 @@ class IPCProgenitorClient:
         async for chunk in self._ipc_client.send_message_stream(message, request_id):
             yield chunk
 
+    async def reset_conversation(
+        self,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Reset the live Progenitor conversation thread."""
+        if not self._started:
+            await self.start()
+
+        if not self._ipc_client:
+            raise RuntimeError("IPC client not initialized")
+
+        return await self._ipc_client.reset_conversation(request_id=request_id)
+
     @property
     def is_running(self) -> bool:
         """Check if the client is running."""
-        return (
-            self._started
-            and self._ipc_client is not None
-            and self._ipc_client.is_connected
-        )
+        return self._started and self._ipc_client is not None and self._ipc_client.is_connected
 
     def last_heartbeat(self) -> float | None:
         """Get last heartbeat timestamp."""
@@ -247,6 +262,7 @@ class IPCProgenitorClient:
         self._event_callback = callback
         # Also update the underlying IPC client if it exists
         if self._ipc_client and callback:
+
             async def forward_event(event: dict) -> None:
                 """Forward events from IPC to SSE broadcast."""
                 event_type = event.get("event_type", "unknown")
@@ -254,22 +270,30 @@ class IPCProgenitorClient:
                 metadata = event.get("metadata", {})
                 timestamp = event.get("timestamp")
 
-                logger.info("Forwarding event to SSE: type=%s, content=%s",
-                           event_type, content[:100] if content else "")
+                logger.info(
+                    "Forwarding event to SSE: type=%s, content=%s",
+                    event_type,
+                    content[:100] if content else "",
+                )
 
                 try:
-                    callback(event_type, {
-                        "content": content,
-                        "metadata": metadata,
-                        "timestamp": timestamp,
-                    })
+                    callback(
+                        event_type,
+                        {
+                            "content": content,
+                            "metadata": metadata,
+                            "timestamp": timestamp,
+                        },
+                    )
                 except Exception as e:
                     logger.warning("Error in event callback: %s", e)
 
             self._ipc_client.set_event_callback(forward_event)
 
 
-def get_ipc_client(config: ChatServerConfig, event_callback: EventCallback | None = None) -> IPCProgenitorClient:
+def get_ipc_client(
+    config: ChatServerConfig, event_callback: EventCallback | None = None
+) -> IPCProgenitorClient:
     """Create an IPC-based Progenitor client.
 
     Args:

@@ -24,6 +24,7 @@ from .protocol import (
     MessageType,
     heartbeat,
     read_message,
+    reset_conversation_message,
     shutdown_message,
     user_message,
     write_message,
@@ -180,17 +181,13 @@ class IPCClient:
             )
 
             await asyncio.sleep(delay)
-            self._reconnect_delay = min(
-                self._reconnect_delay * 2, RECONNECT_DELAY_MAX
-            )
+            self._reconnect_delay = min(self._reconnect_delay * 2, RECONNECT_DELAY_MAX)
 
             if await self.connect():
                 logger.info("Reconnected to Progenitor IPC server (attempt %d)", attempt)
                 return
 
-        raise ConnectionError(
-            f"Failed to reconnect after {self.max_reconnect_attempts} attempts"
-        )
+        raise ConnectionError(f"Failed to reconnect after {self.max_reconnect_attempts} attempts")
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats and poll for events."""
@@ -276,8 +273,11 @@ class IPCClient:
                             break
 
                     if self._missed_heartbeats > 0:
-                        logger.debug("Heartbeat issue (miss %d/%d)",
-                                    self._missed_heartbeats, HEARTBEAT_MISS_THRESHOLD)
+                        logger.debug(
+                            "Heartbeat issue (miss %d/%d)",
+                            self._missed_heartbeats,
+                            HEARTBEAT_MISS_THRESHOLD,
+                        )
                         if self._missed_heartbeats >= HEARTBEAT_MISS_THRESHOLD:
                             logger.warning("Too many missed heartbeats, connection may be stale")
                             # Don't disconnect yet - let the next request attempt reconnect
@@ -466,6 +466,69 @@ class IPCClient:
                     self._streaming = False
                     self._request_in_progress = False
 
+    async def reset_conversation(
+        self,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Reset the live Progenitor conversation thread."""
+        for attempt in range(2):
+            await self._ensure_connected()
+
+            self._request_in_progress = True
+            self._streaming = False
+            self._missed_heartbeats = 0
+
+            async with self._lock:
+                if not self._writer or not self._reader:
+                    self._request_in_progress = False
+                    raise ConnectionError("Not connected")
+
+                try:
+                    await write_message(
+                        self._writer,
+                        reset_conversation_message(request_id),
+                    )
+
+                    while True:
+                        msg = await read_message(self._reader, timeout=self.timeout)
+
+                        if msg is None:
+                            self._connected = False
+                            raise ConnectionError("Connection closed during conversation reset")
+
+                        self._last_activity = time.time()
+
+                        if msg.type == MessageType.AGENT_EVENT:
+                            await self._handle_event(msg)
+                            continue
+
+                        if msg.type == MessageType.ERROR:
+                            raise RuntimeError(f"Progenitor error: {msg.content}")
+
+                        if msg.type == MessageType.RESET_CONVERSATION_ACK:
+                            return msg.metadata or {}
+
+                        raise RuntimeError(
+                            f"Unexpected IPC message during conversation reset: {msg.type}"
+                        )
+
+                except TimeoutError:
+                    raise TimeoutError(f"Conversation reset timed out after {self.timeout}s")
+                except ConnectionError:
+                    self._connected = False
+                    if attempt == 0 and self.auto_reconnect:
+                        logger.warning("Connection lost during conversation reset, retrying")
+                        continue
+                    raise
+                except Exception as e:
+                    if "Connection" in str(type(e).__name__):
+                        self._connected = False
+                    raise
+                finally:
+                    self._request_in_progress = False
+
+        raise ConnectionError("Failed to reset conversation after retries")
+
     async def request_shutdown(self) -> None:
         """Request the Progenitor server to shutdown."""
         if not self._connected or not self._writer:
@@ -492,8 +555,7 @@ class IPCClient:
             "host": self.host,
             "port": self.port,
             "last_activity_ago": (
-                time.time() - self._last_activity
-                if self._last_activity > 0 else None
+                time.time() - self._last_activity if self._last_activity > 0 else None
             ),
             "reconnect_count": self._reconnect_count,
             "max_reconnect_attempts": self.max_reconnect_attempts,
@@ -524,10 +586,10 @@ class IPCClient:
         """
         try:
             if timeout:
-                return cast(dict[str, Any] | None, await asyncio.wait_for(
-                    self._event_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    dict[str, Any] | None,
+                    await asyncio.wait_for(self._event_queue.get(), timeout=timeout),
+                )
             return cast(dict[str, Any] | None, await self._event_queue.get())
         except TimeoutError:
             return None

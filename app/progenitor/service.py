@@ -32,6 +32,7 @@ from .config import ProgenitorConfig, get_config
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .state.manager import StateManager
+from .state.models import build_new_conversation_state
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,27 @@ class ProgenitorService:
                 exc_info=True,
             )
             raise
+
+    async def reset_conversation(self) -> dict[str, Any]:
+        """Reset the persisted conversation thread used by service mode."""
+        if not self._initialized:
+            await self.initialize()
+
+        if self.state_manager is None:
+            raise RuntimeError("State manager not initialized")
+
+        current_state = await self.state_manager.get_current_state()
+        reset_state, reset_result = build_new_conversation_state(current_state)
+        await self.state_manager.save_current_state(reset_state)
+        self._message_count = 0
+
+        logger.info(
+            "Service conversation reset (previous_run_id=%s, new_run_id=%s, messages_cleared=%d)",
+            reset_result["previous_run_id"],
+            reset_result["new_run_id"],
+            reset_result["messages_cleared"],
+        )
+        return reset_result
 
     @property
     def is_initialized(self) -> bool:
