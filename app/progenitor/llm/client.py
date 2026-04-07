@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel
 
 from ..config import LLMConfig, MCPConfig
-from ..mcp_tool_utils import normalize_mcp_tool_definition
+from ..mcp_tool_utils import normalize_mcp_tool_definition, parse_mcp_jsonrpc_response
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
 from .response_models import (
@@ -485,13 +485,13 @@ class LLMClient:
         try:
             response = await post_typed(endpoint, json=request)
             response.raise_for_status()
-            payload = response.json()
+            payload = parse_mcp_jsonrpc_response(response.text)
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid MCP JSON-RPC response")
 
-            if isinstance(payload, dict):
-                if error := payload.get("error"):
-                    return {"error": error}
-                return cast(dict[str, Any], payload.get("result", payload))
-            return cast(dict[str, Any], payload)
+            if error := payload.get("error"):
+                return {"error": error}
+            return cast(dict[str, Any], payload.get("result", payload))
 
         except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             logger.warning("MCP tool call failed: %s", exc)

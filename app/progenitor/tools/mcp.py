@@ -20,6 +20,7 @@ from ..mcp_tool_utils import (
     get_mcp_tool_description,
     get_mcp_tool_name,
     get_mcp_tool_parameters,
+    parse_mcp_jsonrpc_response,
 )
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 from .registry import normalize_tool_name
@@ -96,35 +97,6 @@ ALLOWED_COMMAND_PREFIXES = (
 )
 
 
-def _parse_jsonrpc_response(text: str) -> dict[str, Any] | None:
-    """Parse either JSON or SSE('data: {json}') JSON-RPC responses."""
-    raw = (text or "").strip()
-    if not raw:
-        return None
-
-    if raw.startswith("{"):
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return None
-        return cast(dict[str, Any], data) if isinstance(data, dict) else None
-
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("data:"):
-            continue
-        payload = stripped[len("data:") :].strip()
-        if not payload:
-            continue
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            return None
-        return cast(dict[str, Any], data) if isinstance(data, dict) else None
-
-    return None
-
-
 async def initialize_mcp_server(
     server_config: MCPServerConfig,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -171,7 +143,7 @@ async def initialize_mcp_server(
         response = await mcp_client.post(server_config.url, json=list_request)
         response.raise_for_status()
 
-        parsed = _parse_jsonrpc_response(response.text) or {}
+        parsed = parse_mcp_jsonrpc_response(response.text) or {}
         result = parsed.get("result", parsed) if isinstance(parsed, dict) else {}
         tools = result.get("tools", []) if isinstance(result, dict) else []
         tool_list = cast(list[dict[str, Any]], tools if isinstance(tools, list) else [])
@@ -465,8 +437,10 @@ class MCPClient:
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response,
             ):
-                result = await response.json()
-                return cast(dict[str, Any], result.get("result", result))
+                parsed = parse_mcp_jsonrpc_response(await response.text())
+                if not isinstance(parsed, dict):
+                    raise ValueError("Invalid MCP JSON-RPC response")
+                return cast(dict[str, Any], parsed.get("result", parsed))
         except Exception as e:
             return {"error": str(e)}
 

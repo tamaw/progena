@@ -34,6 +34,15 @@ def _tool_model_name(name: str, suffix: str = "Input") -> str:
     return "".join(part.capitalize() for part in base.split("_")) + suffix
 
 
+_SCALAR_JSON_SCHEMA_TYPES: dict[str, Any] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "null": type(None),
+}
+
+
 def _union_annotations(annotations: list[Any]) -> Any:
     unique: list[Any] = []
     seen: set[str] = set()
@@ -158,16 +167,10 @@ def _json_schema_to_annotation(schema: dict[str, Any], model_name: str) -> Any:
             ]
         )
 
-    if schema_type == "string":
-        return str
-    if schema_type == "integer":
-        return int
-    if schema_type == "number":
-        return float
-    if schema_type == "boolean":
-        return bool
-    if schema_type == "null":
-        return type(None)
+    if isinstance(schema_type, str):
+        scalar_annotation = _SCALAR_JSON_SCHEMA_TYPES.get(schema_type)
+        if scalar_annotation is not None:
+            return scalar_annotation
     if schema_type == "array":
         item_schema = (
             cast(dict[str, Any], schema.get("items"))
