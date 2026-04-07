@@ -14,7 +14,10 @@ from typing import Any, cast
 
 import httpx
 
-from app.progenitor.mcp_tool_utils import get_mcp_tool_description
+from app.progenitor.mcp_tool_utils import (
+    get_mcp_tool_description,
+    parse_mcp_jsonrpc_response,
+)
 
 from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -78,36 +81,6 @@ async def initialize_mcp_tools(
         logger.info("MCP integration disabled")
         return None, []
 
-    def _parse_jsonrpc_response(text: str) -> dict[str, Any] | None:
-        """Parse either JSON or SSE('data: {json}') JSON-RPC responses."""
-        raw = (text or "").strip()
-        if not raw:
-            return None
-
-        # Plain JSON
-        if raw.startswith("{"):
-            try:
-                data = json.loads(raw)
-                return cast(dict[str, Any], data) if isinstance(data, dict) else None
-            except Exception:
-                return None
-
-        # SSE: find first data: line
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line.startswith("data:"):
-                continue
-            payload = line[len("data:") :].strip()
-            if not payload:
-                continue
-            try:
-                data = json.loads(payload)
-                return cast(dict[str, Any], data) if isinstance(data, dict) else None
-            except Exception:
-                return None
-
-        return None
-
     try:
         headers = {
             "Content-Type": "application/json",
@@ -150,7 +123,7 @@ async def initialize_mcp_tools(
         response = await mcp_client.post(mcp_config.base_url, json=list_request)
         response.raise_for_status()
 
-        parsed = _parse_jsonrpc_response(response.text) or {}
+        parsed = parse_mcp_jsonrpc_response(response.text) or {}
         result = parsed.get("result", parsed) if isinstance(parsed, dict) else {}
 
         tools = result.get("tools", []) if isinstance(result, dict) else []
@@ -330,8 +303,10 @@ class MCPClient:
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response,
             ):
-                result = await response.json()
-                return cast(dict[str, Any], result.get("result", result))
+                parsed = parse_mcp_jsonrpc_response(await response.text())
+                if not isinstance(parsed, dict):
+                    raise ValueError("Invalid MCP JSON-RPC response")
+                return cast(dict[str, Any], parsed.get("result", parsed))
         except Exception as e:
             return {"error": str(e)}
 

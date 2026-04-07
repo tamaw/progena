@@ -76,19 +76,7 @@ class TestDynamicMCPToolMiddleware:
 
     async def test_injects_live_mcp_tools(self):
         llm_client = MagicMock()
-        llm_client.mcp_tools = [
-            {
-                "name": "search_web",
-                "description": "Search the web",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            }
-        ]
-        llm_client._call_mcp_tool = AsyncMock(return_value={"ok": True})
+        llm_client.mcp_langchain_tools = [self._base_tool("search_web")]
 
         mw = DynamicMCPToolMiddleware(llm_client=llm_client)
 
@@ -105,19 +93,7 @@ class TestDynamicMCPToolMiddleware:
 
     async def test_uses_latest_mcp_tool_snapshot_each_call(self):
         llm_client = MagicMock()
-        llm_client._call_mcp_tool = AsyncMock(return_value={"ok": True})
-        llm_client.mcp_tools = [
-            {
-                "name": "search_web",
-                "description": "Search the web",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            }
-        ]
+        llm_client.mcp_langchain_tools = [self._base_tool("search_web")]
 
         mw = DynamicMCPToolMiddleware(llm_client=llm_client)
 
@@ -125,18 +101,7 @@ class TestDynamicMCPToolMiddleware:
             return request
 
         first = await mw.awrap_model_call(self._request(self._base_tool()), handler)
-        llm_client.mcp_tools = [
-            {
-                "name": "read_url",
-                "description": "Read a URL",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"url": {"type": "string"}},
-                    "required": ["url"],
-                    "additionalProperties": False,
-                },
-            }
-        ]
+        llm_client.mcp_langchain_tools = [self._base_tool("read_url")]
         second = await mw.awrap_model_call(self._request(self._base_tool()), handler)
 
         assert {tool.name for tool in first.tools} == {"current_time", "search_web"}
