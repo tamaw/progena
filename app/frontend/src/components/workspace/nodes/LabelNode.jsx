@@ -1,11 +1,11 @@
 import { memo, useCallback } from 'react';
 import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions } from '../../../context/WorkspaceContext';
 
 const VARIANTS = ['title', 'note', 'caption', 'warning'];
 
 function LabelNode({ id, data, selected }) {
-  const { updateNodeData } = useWorkspaceContext();
+  const { updateNodeData } = useWorkspaceActions();
 
   const onTextChange = useCallback((e) => {
     updateNodeData(id, { text: e.target.value });

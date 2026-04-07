@@ -105,6 +105,7 @@ app/
   mcp/                  # MCP servers
 .env                    # Local environment configuration
 data/
+  config/               # Runtime-managed config (agents, MCP, schedules)
   state/                # Persisted state (JSON)
   sessions/             # Session persistence
   attachments/          # Uploaded file cache/data
@@ -117,10 +118,10 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 ### State Files
 
 - `data/state/current_state.json` - Conversation state (messages, tool calls)
-- `data/state/schedule.json` - Scheduled tasks
+- `data/config/schedule.json` - Scheduled tasks
 - `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
 - `data/config/agents.json` - Agent registry
-- `data/config/mcp.json` - MCP tool registry
+- `data/config/mcp.json` - Progenitor external MCP server configuration
 
 ### Log Files
 
@@ -130,7 +131,24 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 
 ## Configuration
 
-Configuration is sourced from environment variables. See `.env.example` for defaults.
+Configuration is sourced from environment variables plus live config files under `data/config/`. See `.env.example` for defaults.
+
+Progenitor loads external MCP servers from `data/config/mcp.json`. The default file includes a disabled Jina remote MCP example for web search and page reading:
+
+```json
+{
+  "mcpServers": {
+    "jina": {
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+      "headers": {
+        "Authorization": "Bearer ${JINA_API_KEY}"
+      }
+    }
+  }
+}
+```
 
 ```dotenv
 # Runtime
@@ -144,6 +162,9 @@ PROGENITOR_LLM_PROVIDER=azure
 AZURE_OPENAI_ENDPOINT=https://...
 AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
+
+# MCP auth referenced by data/config/mcp.json
+JINA_API_KEY=
 ```
 
 ## Usage

@@ -607,6 +607,7 @@ body.workspace-resizing * {
 .workspace-dock-icon.webframe { background: rgba(210, 153, 34, 0.18); color: #d29922; }
 .workspace-dock-icon.label { background: rgba(139, 148, 158, 0.18); color: #8b949e; }
 .workspace-dock-icon.schedule { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
+.workspace-dock-icon.event { background: rgba(255, 166, 87, 0.18); color: #ffa657; }
 .workspace-dock-icon.group { background: rgba(110, 118, 129, 0.18); color: #6e7681; }
 .workspace-dock-icon.agent { background: rgba(248, 81, 73, 0.18); color: #f85149; }
 

@@ -209,6 +209,7 @@ jobs:
         env:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_TIMEZONE: ${{ vars.PROGENITOR_TIMEZONE }}
           GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}

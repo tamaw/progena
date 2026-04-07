@@ -116,7 +116,7 @@ pytest tests/progenitor/ --cov=app.progenitor
 #### Config Files
 - `current_state.json`: User session state
 - `build_state.json`: Build backlog and results
-- `schedule.json`: Scheduled tasks
+- `data/config/schedule.json`: Scheduled tasks
 
 ### Key Patterns
 

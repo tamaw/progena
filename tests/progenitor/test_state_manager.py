@@ -39,7 +39,7 @@ class TestStateManager:
         assert (state_dir / "a2a_tasks.json").exists()
         assert (state_dir.parent / "config" / "agents.json").exists()
         assert (state_dir.parent / "config" / "mcp.json").exists()
-        assert (state_dir / "schedule.json").exists()
+        assert (state_dir.parent / "config" / "schedule.json").exists()
 
     @pytest.mark.asyncio
     async def test_save_and_get_backlog(self, temp_dirs):
@@ -168,6 +168,30 @@ class TestStateManager:
         assert refreshed is not None
         assert refreshed.status == "completed"
         assert refreshed.summary == "Observe task completed."
+
+    async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
+        """Legacy schedules under data/state are copied into config on initialize."""
+        state_dir = tmp_path / "data" / "state"
+        logs_dir = tmp_path / "logs"
+        state_dir.mkdir(parents=True)
+        logs_dir.mkdir()
+        legacy_schedule = [
+            {
+                "id": "legacy-schedule",
+                "message": "Carry forward existing schedule",
+                "cron_expression": "0 9 * * *",
+                "created_at": "2024-01-01T00:00:00Z",
+            }
+        ]
+        (state_dir / "schedule.json").write_text(json.dumps(legacy_schedule), encoding="utf-8")
+
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        migrated = json.loads(
+            (state_dir.parent / "config" / "schedule.json").read_text(encoding="utf-8")
+        )
+        assert migrated == legacy_schedule
 
     @pytest.mark.asyncio
     async def test_append_jsonl(self, temp_dirs):

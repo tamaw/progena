@@ -3,25 +3,37 @@
 Progenitor's system tools live under `app/progenitor/tools/` as `BaseSystemTool`
 implementations. The DeepAgent needs to expose these as LangChain tools so the
 LLM can invoke them directly during a conversation (e.g. `current_time`).
+
+External MCP tools are loaded via langchain-mcp-adapters and surfaced directly
+to DeepAgent as LangChain tools.
 """
 
 import contextlib
 import inspect
 from typing import Any, cast
 
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool
 
 from ..nodes.node_helpers.registry import get_all_system_tools
 from ..runtime.loop import get_current_loop
 from ..tools.protocol import ToolContext
 
 
+def create_dynamic_mcp_tools(llm_client: Any = None) -> list[BaseTool]:
+    """Return the live MCP tools loaded through langchain-mcp-adapters."""
+    raw_tools = getattr(llm_client, "mcp_langchain_tools", None)
+    if not isinstance(raw_tools, list):
+        return []
+    return [tool for tool in raw_tools if isinstance(tool, BaseTool)]
+
+
 def create_deepagent_tools(
     tool_registry: Any = None,
     llm_client: Any = None,
     state_manager: Any = None,
- ) -> list:
-    """Create DeepAgent-compatible tools (system tools + DeepAgent-only helpers)."""
+) -> list[StructuredTool]:
+    """Create DeepAgent-compatible system tools."""
+
     def _wrap_system_tool(system_tool: Any) -> StructuredTool:
         async def _execute_wrapped_tool(
             request: str = "",
@@ -29,7 +41,9 @@ def create_deepagent_tools(
         ) -> dict[str, Any]:
             # External deploy pipelines can update agents.json; reload best-effort so new
             # agents/tools show up without requiring a restart.
-            load_registry = getattr(tool_registry, "load", None) if tool_registry is not None else None
+            load_registry = (
+                getattr(tool_registry, "load", None) if tool_registry is not None else None
+            )
             if callable(load_registry):
                 with contextlib.suppress(Exception):
                     maybe = load_registry()
@@ -63,7 +77,11 @@ def create_deepagent_tools(
                 # automatically merge ToolResult.state_updates like our node path).
                 if result.state_updates and isinstance(state, dict):
                     state.update(result.state_updates)
-                    update_state = getattr(state_manager, "update_current_state", None) if state_manager else None
+                    update_state = (
+                        getattr(state_manager, "update_current_state", None)
+                        if state_manager
+                        else None
+                    )
                     if callable(update_state) and inspect.iscoroutinefunction(update_state):
                         with contextlib.suppress(Exception):
                             await update_state(result.state_updates)
@@ -74,7 +92,9 @@ def create_deepagent_tools(
                 "should_retry_slow_path": bool(getattr(result, "should_retry_slow_path", False)),
             }
 
-        async def _run(request: str = "", tool_args: dict[str, Any] | None = None) -> dict[str, Any]:
+        async def _run(
+            request: str = "", tool_args: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
             return await _execute_wrapped_tool(request=request, tool_args=tool_args)
 
         async def _run_call_agent(
@@ -96,7 +116,9 @@ def create_deepagent_tools(
                 merged_args.setdefault("context", context)
             return await _execute_wrapped_tool(request=request, tool_args=merged_args)
 
-        coroutine_fn = _run_call_agent if str(getattr(system_tool, "name", "")) == "call_agent" else _run
+        coroutine_fn = (
+            _run_call_agent if str(getattr(system_tool, "name", "")) == "call_agent" else _run
+        )
 
         return StructuredTool.from_function(
             coroutine=coroutine_fn,
@@ -104,5 +126,4 @@ def create_deepagent_tools(
             description=str(getattr(system_tool, "description", "Progenitor system tool")),
         )
 
-    # System tools (dynamic discovery under app/progenitor/tools/)
     return [_wrap_system_tool(system_tool) for system_tool in get_all_system_tools()]

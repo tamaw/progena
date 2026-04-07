@@ -1,13 +1,24 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useMemo,
+} from 'react';
 import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
 import { useApi } from '../hooks/useApi';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/indexedDb';
 
-const WorkspaceContext = createContext(null);
+const WorkspaceGraphContext = createContext(null);
+const WorkspaceActionsContext = createContext(null);
+const WorkspaceMetaContext = createContext(null);
 
 const SAVE_DEBOUNCE_MS = 500;
-const SERVER_NODE_TYPES = new Set(['agent', 'mcp', 'schedule']);
+const SERVER_NODE_TYPES = new Set(['agent', 'mcp', 'schedule', 'event']);
+const DEFAULT_EVENT_TYPE = 'kanban.card.created';
 
 const defaultNodeSizes = {
   prompt: { width: 320, height: 200 },
@@ -15,6 +26,7 @@ const defaultNodeSizes = {
   webframe: { width: 480, height: 360 },
   label: { width: 200, height: 60 },
   schedule: { width: 300, height: 180 },
+  event: { width: 320, height: 200 },
   group: { width: 600, height: 400 },
   agent: { width: 320, height: 200 },
   mcp: { width: 320, height: 200 },
@@ -71,6 +83,19 @@ const defaultNodeData = {
     isSaving: false,
     saveError: null,
   }),
+  event: () => ({
+    eventType: DEFAULT_EVENT_TYPE,
+    enabled: true,
+    triggerCount: 0,
+    lastTriggeredAt: null,
+    lastRunStatus: 'idle',
+    lastPayload: null,
+    isUnsaved: false,
+    isSaving: false,
+    saveError: null,
+    summaryState: `Waiting for ${DEFAULT_EVENT_TYPE}`,
+    logs: [],
+  }),
   group: () => ({
     childIds: [],
     description: '',
@@ -99,6 +124,7 @@ const typeLabels = {
   webframe: 'Web Frame',
   label: 'Label',
   schedule: 'Schedule',
+  event: 'Event',
   group: 'Group',
   agent: 'Agent',
   mcp: 'MCP',
@@ -156,6 +182,30 @@ function mapWidgetToNodeData(widget, existingData = {}) {
   const title = widget.title || widget.name || existingData.title || widget.id;
   const summary = widget.summary || widget.description || existingData.summaryState || '';
   const logs = normalizeLogs(widget.logs || widget.data?.logs || existingData.logs);
+
+  if (widget.type === 'event') {
+    const eventType = widget.data?.event_type || widget.event_type || existingData.eventType || DEFAULT_EVENT_TYPE;
+    return {
+      ...defaultNodeData.event(),
+      ...existingData,
+      ...widget.data,
+      title,
+      summaryState: widget.summary || existingData.summaryState || buildEventWaitingSummary(eventType),
+      logs,
+      serverManaged: true,
+      status: widget.status || existingData.status || 'idle',
+      eventType,
+      enabled: widget.data?.enabled ?? widget.enabled ?? existingData.enabled ?? true,
+      triggerCount: widget.data?.trigger_count ?? widget.trigger_count ?? existingData.triggerCount ?? 0,
+      lastTriggeredAt: widget.data?.last_triggered_at || widget.last_triggered_at || existingData.lastTriggeredAt || null,
+      lastRunStatus: widget.data?.last_run_status || widget.last_run_status || existingData.lastRunStatus || 'idle',
+      lastPayload: widget.data?.last_payload ?? widget.last_payload ?? existingData.lastPayload ?? null,
+      isUnsaved: false,
+      isSaving: false,
+      saveError: null,
+      updatedAt: timestamp,
+    };
+  }
 
   if (widget.type === 'schedule') {
     return {
@@ -217,6 +267,10 @@ function getActionText(payload) {
   );
 }
 
+function buildEventWaitingSummary(eventType = DEFAULT_EVENT_TYPE) {
+  return `Waiting for ${eventType}`;
+}
+
 function dedupeNodeValues(values) {
   return [...new Set(
     values
@@ -227,6 +281,65 @@ function dedupeNodeValues(values) {
 
 function normalizeAgentName(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function getViewportSignature(viewport = {}) {
+  return `${viewport.x ?? 0}:${viewport.y ?? 0}:${viewport.zoom ?? 1}`;
+}
+
+function areStringArraysEqual(currentValues, nextValues) {
+  return currentValues.length === nextValues.length
+    && currentValues.every((value, index) => value === nextValues[index]);
+}
+
+function extractAgentOptions(nodes) {
+  const values = new Set(['progenitor']);
+  nodes
+    .filter((node) => node.type === 'agent' || node.type === 'mcp')
+    .forEach((node) => {
+      const value = node.data?.agentId || node.data?.title;
+      if (value) {
+        values.add(value);
+      }
+    });
+
+  return [...values];
+}
+
+function createPersistedGraph(nodes, edges) {
+  return {
+    nodes: nodes.map((node) => {
+      const {
+        selected: _selected,
+        dragging: _dragging,
+        resizing: _resizing,
+        positionAbsolute: _positionAbsolute,
+        measured: _measured,
+        ...persistedNode
+      } = node;
+      return persistedNode;
+    }),
+    edges: edges.map((edge) => {
+      const { selected: _selected, ...persistedEdge } = edge;
+      return persistedEdge;
+    }),
+  };
+}
+
+function areWorkspaceNodesEquivalent(currentNode, nextNode) {
+  return currentNode.id === nextNode.id
+    && currentNode.type === nextNode.type
+    && currentNode.zIndex === nextNode.zIndex
+    && currentNode.selected === nextNode.selected
+    && currentNode.position?.x === nextNode.position?.x
+    && currentNode.position?.y === nextNode.position?.y
+    && JSON.stringify(currentNode.style || {}) === JSON.stringify(nextNode.style || {})
+    && JSON.stringify(currentNode.data || {}) === JSON.stringify(nextNode.data || {});
+}
+
+function haveSameNodeReferences(currentNodes, nextNodes) {
+  return currentNodes.length === nextNodes.length
+    && currentNodes.every((node, index) => node === nextNodes[index]);
 }
 
 function getAgentNameFromNode(node) {
@@ -284,7 +397,14 @@ function buildServerNodes(widgets, existingNodes) {
   const existingMap = new Map(existingNodes.map((node) => [node.id, node]));
 
   return widgets.map((widget, index) => {
-    return buildServerNode(widget, existingMap.get(widget.id), index);
+    const existingNode = existingMap.get(widget.id);
+    const nextNode = buildServerNode(widget, existingNode, index);
+
+    if (existingNode && areWorkspaceNodesEquivalent(existingNode, nextNode)) {
+      return existingNode;
+    }
+
+    return nextNode;
   });
 }
 
@@ -315,7 +435,8 @@ function mergeNodes(savedNodes, widgets) {
   const serverNodes = buildServerNodes(widgets, savedNodes);
   const serverIds = new Set(serverNodes.map((node) => node.id));
   const localNodes = savedNodes.filter((node) => !isServerNode(node) || !serverIds.has(node.id));
-  return [...localNodes, ...serverNodes];
+  const mergedNodes = [...localNodes, ...serverNodes];
+  return haveSameNodeReferences(savedNodes, mergedNodes) ? savedNodes : mergedNodes;
 }
 
 export function WorkspaceProvider({ children }) {
@@ -325,6 +446,7 @@ export function WorkspaceProvider({ children }) {
     getWidgetSchemas,
     updateWidget,
     createSchedule,
+    createEvent,
     runAction,
     generateAction,
   } = useApi();
@@ -333,11 +455,14 @@ export function WorkspaceProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [widgetSchemas, setWidgetSchemas] = useState({});
+  const [agentOptions, setAgentOptions] = useState(['progenitor']);
   const saveTimerRef = useRef(null);
   const patchTimersRef = useRef(new Map());
   const latestNodesRef = useRef([]);
   const latestEdgesRef = useRef([]);
   const latestViewportRef = useRef({ x: 0, y: 0, zoom: 1 });
+  const lastSavedGraphSignatureRef = useRef('');
+  const lastSavedViewportSignatureRef = useRef(getViewportSignature({ x: 0, y: 0, zoom: 1 }));
   const [edges, setEdges] = useState([]);
 
   const mergeWidgetNodes = useCallback((widgetPayload, nextViewport = null) => {
@@ -352,7 +477,7 @@ export function WorkspaceProvider({ children }) {
       return mergedNodes;
     });
 
-    if (nextViewport) {
+    if (nextViewport && getViewportSignature(latestViewportRef.current) !== getViewportSignature(nextViewport)) {
       latestViewportRef.current = nextViewport;
       setViewport(nextViewport);
     }
@@ -378,10 +503,13 @@ export function WorkspaceProvider({ children }) {
         ((schemasPayload?.schemas) || []).map((schema) => [schema.type, schema])
       );
       const mergedNodes = mergeNodes(savedNodes, widgetList);
+      const persistedGraph = createPersistedGraph(mergedNodes, savedEdges);
 
       latestNodesRef.current = mergedNodes;
       latestEdgesRef.current = savedEdges;
       latestViewportRef.current = savedViewport;
+      lastSavedGraphSignatureRef.current = JSON.stringify(persistedGraph);
+      lastSavedViewportSignatureRef.current = getViewportSignature(savedViewport);
       setWidgetSchemas(schemaMap);
       setNodes(mergedNodes);
       setEdges(savedEdges);
@@ -394,6 +522,7 @@ export function WorkspaceProvider({ children }) {
     }
   }, [getWidgetSchemas, getWidgets, getWorkspace]);
 
+  const getWidgetSchema = useCallback((type) => widgetSchemas[type] || null, [widgetSchemas]);
   const getWidgetTabs = useCallback((type) => widgetSchemas[type]?.tabs || [], [widgetSchemas]);
   const getWidgetDefaultTab = useCallback((type) => widgetSchemas[type]?.default_tab || null, [widgetSchemas]);
 
@@ -405,33 +534,57 @@ export function WorkspaceProvider({ children }) {
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const persistWorkspace = useCallback((currentNodes, currentEdges, currentViewport) => {
+  const persistWorkspace = useCallback(() => {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
     }
     saveTimerRef.current = setTimeout(() => {
+      const nextGraph = createPersistedGraph(latestNodesRef.current, latestEdgesRef.current);
+      const nextGraphSignature = JSON.stringify(nextGraph);
+      const nextViewport = latestViewportRef.current;
+      const nextViewportSignature = getViewportSignature(nextViewport);
+
+      if (
+        lastSavedGraphSignatureRef.current === nextGraphSignature
+        && lastSavedViewportSignatureRef.current === nextViewportSignature
+      ) {
+        return;
+      }
+
+      lastSavedGraphSignatureRef.current = nextGraphSignature;
+      lastSavedViewportSignatureRef.current = nextViewportSignature;
       saveWorkspaceState({
-        nodes: currentNodes,
-        edges: currentEdges,
-        viewport: currentViewport,
+        nodes: nextGraph.nodes,
+        edges: nextGraph.edges,
+        viewport: nextViewport,
       });
     }, SAVE_DEBOUNCE_MS);
   }, []);
 
   useEffect(() => {
     latestNodesRef.current = nodes;
-  }, [nodes]);
+    const nextAgentOptions = extractAgentOptions(nodes);
+    setAgentOptions((currentValues) => (
+      areStringArraysEqual(currentValues, nextAgentOptions) ? currentValues : nextAgentOptions
+    ));
+    if (!loading) {
+      persistWorkspace();
+    }
+  }, [nodes, loading, persistWorkspace]);
 
   useEffect(() => {
     latestEdgesRef.current = edges;
-  }, [edges]);
+    if (!loading) {
+      persistWorkspace();
+    }
+  }, [edges, loading, persistWorkspace]);
 
   useEffect(() => {
     latestViewportRef.current = viewport;
     if (!loading) {
-      persistWorkspace(nodes, edges, viewport);
+      persistWorkspace();
     }
-  }, [nodes, edges, viewport, loading, persistWorkspace]);
+  }, [viewport, loading, persistWorkspace]);
 
   useEffect(() => () => {
     if (saveTimerRef.current) {
@@ -440,7 +593,7 @@ export function WorkspaceProvider({ children }) {
     patchTimersRef.current.forEach((timerId) => clearTimeout(timerId));
   }, []);
 
-  const scheduleWidgetPatch = useCallback((nodeId, updates) => {
+  const queueWidgetPatch = useCallback((nodeId, updates) => {
     const existing = patchTimersRef.current.get(nodeId);
     if (existing) {
       clearTimeout(existing);
@@ -479,6 +632,21 @@ export function WorkspaceProvider({ children }) {
         title: overrides.title || 'New Schedule',
         expanded: overrides.expanded ?? true,
         isUnsaved: true,
+      };
+    }
+    if (type === 'event' && !newNode.data.serverManaged) {
+      newNode.style = {
+        ...newNode.style,
+        width: Math.max(defaultNodeSizes.event.width, 480),
+        height: Math.max(defaultNodeSizes.event.height, 400),
+      };
+      newNode.data = {
+        ...newNode.data,
+        title: overrides.title || 'New Event',
+        expanded: overrides.expanded ?? true,
+        enabled: overrides.enabled ?? true,
+        isUnsaved: true,
+        summaryState: overrides.summaryState || buildEventWaitingSummary(overrides.eventType || newNode.data.eventType),
       };
     }
     setNodes((currentNodes) => [...currentNodes, newNode]);
@@ -520,17 +688,34 @@ export function WorkspaceProvider({ children }) {
           return node;
         }
 
+        let nextDataUpdates = dataUpdates;
+        if (
+          node.type === 'event'
+          && Object.prototype.hasOwnProperty.call(dataUpdates, 'eventType')
+          && dataUpdates.summaryState === undefined
+        ) {
+          const currentEventType = node.data?.eventType || DEFAULT_EVENT_TYPE;
+          const nextEventType = dataUpdates.eventType || currentEventType;
+          const currentSummary = node.data?.summaryState || '';
+          if (!currentSummary || currentSummary === buildEventWaitingSummary(currentEventType)) {
+            nextDataUpdates = {
+              ...dataUpdates,
+              summaryState: buildEventWaitingSummary(nextEventType),
+            };
+          }
+        }
+
         const updatedNode = {
           ...node,
           data: {
             ...node.data,
-            ...dataUpdates,
+            ...nextDataUpdates,
             updatedAt: new Date().toISOString(),
           },
         };
 
         if (node.type === 'schedule' && node.data?.serverManaged) {
-          scheduleWidgetPatch(nodeId, {
+          queueWidgetPatch(nodeId, {
             name: updatedNode.data.title,
             instruction: updatedNode.data.instruction,
             enabled: updatedNode.data.enabled,
@@ -540,10 +725,18 @@ export function WorkspaceProvider({ children }) {
           });
         }
 
+        if (node.type === 'event' && node.data?.serverManaged) {
+          queueWidgetPatch(nodeId, {
+            name: updatedNode.data.title,
+            enabled: updatedNode.data.enabled,
+            event_type: updatedNode.data.eventType,
+          });
+        }
+
         return updatedNode;
       })
     );
-  }, [scheduleWidgetPatch]);
+  }, [queueWidgetPatch]);
 
   const connectPromptToAgent = useCallback((promptNodeId, targetAgent) => {
     const promptNode = latestNodesRef.current.find((node) => node.id === promptNodeId && node.type === 'prompt');
@@ -665,6 +858,77 @@ export function WorkspaceProvider({ children }) {
       )));
     }
   }, [createSchedule, updateNodeData]);
+
+  const saveEventNode = useCallback(async (nodeId) => {
+    const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+    if (!node || node.type !== 'event' || node.data?.serverManaged) {
+      return;
+    }
+
+    const title = (node.data.title || '').trim();
+    const eventType = (node.data.eventType || '').trim();
+
+    if (!title || !eventType) {
+      updateNodeData(nodeId, {
+        saveError: 'Name and event type are required before saving.',
+      });
+      return;
+    }
+
+    setNodes((currentNodes) => currentNodes.map((entry) => (
+      entry.id === nodeId
+        ? {
+          ...entry,
+          data: {
+            ...entry.data,
+            isSaving: true,
+            saveError: null,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+        : entry
+    )));
+
+    try {
+      const widget = await createEvent({
+        name: title,
+        event_type: eventType,
+        enabled: node.data.enabled,
+      });
+
+      setNodes((currentNodes) => {
+        const existingNode = currentNodes.find((entry) => entry.id === nodeId) || node;
+        const remainingNodes = currentNodes.filter((entry) => entry.id !== nodeId);
+        const serverNode = buildServerNode(
+          widget,
+          {
+            ...existingNode,
+            id: widget.id,
+            data: {
+              ...existingNode.data,
+              expanded: existingNode.data.expanded,
+            },
+          },
+          remainingNodes.length,
+        );
+        return [...remainingNodes, serverNode];
+      });
+    } catch (saveError) {
+      setNodes((currentNodes) => currentNodes.map((entry) => (
+        entry.id === nodeId
+          ? {
+            ...entry,
+            data: {
+              ...entry.data,
+              isSaving: false,
+              saveError: saveError.message,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+          : entry
+      )));
+    }
+  }, [createEvent, updateNodeData]);
 
   const removeNodes = useCallback((nodeIds) => {
     const idSet = new Set(nodeIds);
@@ -891,52 +1155,98 @@ export function WorkspaceProvider({ children }) {
     }
   }, [runAction, updateNodeData]);
 
+  const graphValue = useMemo(() => ({
+    nodes,
+    edges,
+    viewport,
+    loading,
+    error,
+  }), [nodes, edges, viewport, loading, error]);
+
+  const actionsValue = useMemo(() => ({
+    setViewport,
+    onNodesChange,
+    onEdgesChange,
+    onConnect,
+    addNode,
+    addPromptFromLibrary,
+    updateNodeData,
+    connectPromptToAgent,
+    removeNodes,
+    duplicateNode,
+    bringToFront,
+    sendToBack,
+    toggleExpanded,
+    refreshWorkspace,
+    syncWidgets,
+    runPromptNode,
+    generateFromPromptNode,
+    runCodeNode,
+    runScheduleNode,
+    saveScheduleNode,
+    saveEventNode,
+  }), [
+    setViewport,
+    onNodesChange,
+    onEdgesChange,
+    onConnect,
+    addNode,
+    addPromptFromLibrary,
+    updateNodeData,
+    connectPromptToAgent,
+    removeNodes,
+    duplicateNode,
+    bringToFront,
+    sendToBack,
+    toggleExpanded,
+    refreshWorkspace,
+    syncWidgets,
+    runPromptNode,
+    generateFromPromptNode,
+    runCodeNode,
+    runScheduleNode,
+    saveScheduleNode,
+    saveEventNode,
+  ]);
+
+  const metaValue = useMemo(() => ({
+    agentOptions,
+    getWidgetSchema,
+    getWidgetTabs,
+    getWidgetDefaultTab,
+  }), [agentOptions, getWidgetSchema, getWidgetTabs, getWidgetDefaultTab]);
+
   return (
-    <WorkspaceContext.Provider
-      value={{
-        nodes,
-        edges,
-        setNodes,
-        setEdges,
-        viewport,
-        setViewport,
-        loading,
-        error,
-        onNodesChange,
-        onEdgesChange,
-        onConnect,
-        addNode,
-        addPromptFromLibrary,
-        updateNodeData,
-        connectPromptToAgent,
-        removeNodes,
-        duplicateNode,
-        bringToFront,
-        sendToBack,
-        toggleExpanded,
-        refreshWorkspace,
-        syncWidgets,
-        runPromptNode,
-        generateFromPromptNode,
-        runCodeNode,
-        runScheduleNode,
-        saveScheduleNode,
-        getWidgetTabs,
-        getWidgetDefaultTab,
-      }}
-    >
-      {children}
-    </WorkspaceContext.Provider>
+    <WorkspaceGraphContext.Provider value={graphValue}>
+      <WorkspaceActionsContext.Provider value={actionsValue}>
+        <WorkspaceMetaContext.Provider value={metaValue}>
+          {children}
+        </WorkspaceMetaContext.Provider>
+      </WorkspaceActionsContext.Provider>
+    </WorkspaceGraphContext.Provider>
   );
 }
 
-export function useWorkspaceContext() {
-  const context = useContext(WorkspaceContext);
+export function useWorkspaceGraph() {
+  const context = useContext(WorkspaceGraphContext);
   if (!context) {
-    throw new Error('useWorkspaceContext must be used within a WorkspaceProvider');
+    throw new Error('useWorkspaceGraph must be used within a WorkspaceProvider');
   }
   return context;
 }
 
+export function useWorkspaceActions() {
+  const context = useContext(WorkspaceActionsContext);
+  if (!context) {
+    throw new Error('useWorkspaceActions must be used within a WorkspaceProvider');
+  }
+  return context;
+}
 
-
+export function useWorkspaceMeta() {
+  const context = useContext(WorkspaceMetaContext);
+  if (!context) {
+    throw new Error('useWorkspaceMeta must be used within a WorkspaceProvider');
+  }
+  return context;
+}

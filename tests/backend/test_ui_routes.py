@@ -101,6 +101,28 @@ class TestUIRoutes:
         assert "items" in data
         assert "total" in data
 
+    def test_widget_schemas_include_event_widget(self, client):
+        response = client.get("/api/ui/widget-schemas")
+
+        assert response.status_code == 200
+        schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
+        assert "event" in schemas
+        event_schema = schemas["event"]
+        identity_section = next(
+            section for section in event_schema["sections"] if section["id"] == "identity"
+        )
+        event_type_field = next(
+            field for field in identity_section["fields"] if field["key"] == "eventType"
+        )
+        assert event_type_field["control"] == "select"
+        assert {option["value"] for option in event_type_field["options"]} == {
+            "kanban.card.created",
+            "kanban.card.updated",
+            "kanban.card.moved",
+            "kanban.card.deleted",
+            "kanban.card.status_changed",
+        }
+
     def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
         prompts_dir = tmp_path / "data" / "prompts"
         (prompts_dir / "builder_agent").mkdir(parents=True)
@@ -749,9 +771,11 @@ class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""
 
     def test_patch_schedule_widget_updates_schedule_file(self, client, tmp_path):
-        state_dir = tmp_path / "state"
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
         state_dir.mkdir(parents=True)
-        schedule_path = state_dir / "schedule.json"
+        config_dir.mkdir(parents=True)
+        schedule_path = config_dir / "schedule.json"
         schedule_path.write_text(
             '[{"id":"sched-1","name":"Daily check","message":"Run the daily review","schedule":"0 0 * * *","cron_expression":"0 0 * * *","schedule_type":"cron","enabled":true,"timezone":"UTC"}]',
             encoding="utf-8",
@@ -759,8 +783,10 @@ class TestWorkspaceBridgeActions:
 
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
         try:
             state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
             state_reader.invalidate()
             response = client.patch(
                 "/api/ui/widgets/schedule:sched-1",
@@ -779,18 +805,80 @@ class TestWorkspaceBridgeActions:
             assert "false" in updated.lower()
         finally:
             state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
+            state_reader.invalidate()
+
+    def test_patch_mcp_widget_updates_mcp_config_file(self, client, tmp_path, monkeypatch):
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
+        state_dir.mkdir(parents=True)
+        config_dir.mkdir(parents=True)
+        mcp_config_path = config_dir / "mcp.json"
+        mcp_config_path.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "jina": {
+                            "description": "Disabled web search",
+                            "enabled": False,
+                            "transport": "http",
+                            "url": "https://mcp.jina.ai/v1",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr("app.progenitor.service._service", None, raising=False)
+
+        state_reader = get_state_reader()
+        original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
+        try:
+            state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
+            state_reader.invalidate()
+            response = client.patch(
+                "/api/ui/widgets/mcp:jina",
+                json={
+                    "enabled": True,
+                    "description": "Live web search",
+                    "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["type"] == "mcp"
+            assert payload["data"]["enabled"] is True
+            assert payload["data"]["url"] == "https://mcp.jina.ai/v1?include_tags=search,read"
+
+            updated = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+            assert updated["mcpServers"]["jina"]["enabled"] is True
+            assert updated["mcpServers"]["jina"]["description"] == "Live web search"
+            assert (
+                updated["mcpServers"]["jina"]["url"]
+                == "https://mcp.jina.ai/v1?include_tags=search,read"
+            )
+        finally:
+            state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
             state_reader.invalidate()
 
     def test_create_schedule_writes_schedule_file(self, client, tmp_path):
-        state_dir = tmp_path / "state"
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
         state_dir.mkdir(parents=True)
-        schedule_path = state_dir / "schedule.json"
+        config_dir.mkdir(parents=True)
+        schedule_path = config_dir / "schedule.json"
         schedule_path.write_text("[]", encoding="utf-8")
 
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
         try:
             state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
             state_reader.invalidate()
             response = client.post(
                 "/api/ui/schedules",
@@ -816,7 +904,164 @@ class TestWorkspaceBridgeActions:
             assert "*/15 * * * *" in updated
         finally:
             state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
             state_reader.invalidate()
+
+    def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):
+        response = client.post(
+            "/api/ui/events",
+            json={
+                "name": "Card created trigger",
+                "event_type": "kanban.card.created",
+                "enabled": True,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "event"
+        assert payload["title"] == "Card created trigger"
+        assert payload["data"]["event_type"] == "kanban.card.created"
+        assert payload["data"]["trigger_count"] == 0
+
+        event_path = kanban_state_reader.config_dir / "event_widgets.json"
+        stored = json.loads(event_path.read_text(encoding="utf-8"))
+        assert stored[0]["name"] == "Card created trigger"
+        assert stored[0]["event_type"] == "kanban.card.created"
+        assert stored[0]["enabled"] is True
+
+        widgets = client.get("/api/ui/widgets").json()["items"]
+        assert any(widget["id"] == payload["id"] for widget in widgets)
+
+    def test_patch_event_widget_updates_config_file(self, client, kanban_state_reader):
+        event_path = kanban_state_reader.config_dir / "event_widgets.json"
+        event_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "evt-1",
+                        "name": "Created trigger",
+                        "event_type": "kanban.card.created",
+                        "enabled": True,
+                        "trigger_count": 0,
+                        "last_run_status": "idle",
+                        "logs": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        kanban_state_reader.invalidate(event_path)
+
+        response = client.patch(
+            "/api/ui/widgets/event:evt-1",
+            json={
+                "name": "Deleted trigger",
+                "event_type": "kanban.card.deleted",
+                "enabled": False,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "event"
+        assert payload["data"]["event_type"] == "kanban.card.deleted"
+        assert payload["data"]["enabled"] is False
+
+        stored = json.loads(event_path.read_text(encoding="utf-8"))
+        assert stored[0]["name"] == "Deleted trigger"
+        assert stored[0]["event_type"] == "kanban.card.deleted"
+        assert stored[0]["enabled"] is False
+
+    def test_kanban_create_and_update_events_trigger_matching_widgets(
+        self, client, kanban_state_reader
+    ):
+        created_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Created", "event_type": "kanban.card.created"},
+        ).json()
+        updated_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Updated", "event_type": "kanban.card.updated"},
+        ).json()
+
+        created_card = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Evented card", "summary": "Initial summary"},
+        ).json()
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        created_data = widgets[created_widget["id"]]["data"]
+        assert created_data["trigger_count"] == 1
+        assert created_data["last_payload"]["card"]["id"] == created_card["id"]
+        assert created_data["last_payload"]["event_type"] == "kanban.card.created"
+
+        update_response = client.patch(
+            f"/api/ui/kanban/cards/{created_card['id']}",
+            json={"summary": "Updated summary"},
+        )
+
+        assert update_response.status_code == 200
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        updated_data = widgets[updated_widget["id"]]["data"]
+        assert updated_data["trigger_count"] == 1
+        assert updated_data["last_payload"]["card"]["id"] == created_card["id"]
+        assert updated_data["last_payload"]["changed_fields"] == ["summary"]
+        assert updated_data["last_payload"]["event_type"] == "kanban.card.updated"
+
+    def test_kanban_move_status_and_delete_events_trigger_matching_widgets(
+        self, client, kanban_state_reader
+    ):
+        moved_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Moved", "event_type": "kanban.card.moved"},
+        ).json()
+        status_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Status", "event_type": "kanban.card.status_changed"},
+        ).json()
+        deleted_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Deleted", "event_type": "kanban.card.deleted"},
+        ).json()
+
+        first = client.post("/api/ui/kanban/cards", json={"title": "First card"}).json()
+        second = client.post("/api/ui/kanban/cards", json={"title": "Second card"}).json()
+
+        move_response = client.patch(
+            f"/api/ui/kanban/cards/{second['id']}",
+            json={"position": 0},
+        )
+        assert move_response.status_code == 200
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        moved_data = widgets[moved_widget["id"]]["data"]
+        assert moved_data["trigger_count"] == 1
+        assert moved_data["last_payload"]["card"]["id"] == second["id"]
+        assert moved_data["last_payload"]["from"]["position"] == 1
+        assert moved_data["last_payload"]["to"]["position"] == 0
+
+        status_response = client.patch(
+            f"/api/ui/kanban/cards/{first['id']}",
+            json={"status": "running"},
+        )
+        assert status_response.status_code == 200
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        status_data = widgets[status_widget["id"]]["data"]
+        assert status_data["trigger_count"] == 1
+        assert status_data["last_payload"]["card"]["id"] == first["id"]
+        assert status_data["last_payload"]["from_status"] == "idle"
+        assert status_data["last_payload"]["to_status"] == "running"
+
+        delete_response = client.delete(f"/api/ui/kanban/cards/{first['id']}")
+        assert delete_response.status_code == 204
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        deleted_data = widgets[deleted_widget["id"]]["data"]
+        assert deleted_data["trigger_count"] == 1
+        assert deleted_data["last_payload"]["card"]["id"] == first["id"]
+        assert deleted_data["last_payload"]["event_type"] == "kanban.card.deleted"
 
     def test_run_and_generate_actions_use_existing_client(self, client):
         from app.backend import main as backend_main

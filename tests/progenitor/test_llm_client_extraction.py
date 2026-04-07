@@ -1,5 +1,6 @@
 """Tests for LLM client helpers and message handling."""
 
+import json
 from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -290,3 +291,83 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     mock_execute.assert_awaited_once()
     assert mock_execute.await_args.kwargs["tool_name"] == "call_agent"
     assert mock_execute.await_args.kwargs["tool_args"]["agent"] == "builder"
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_parses_sse_result():
+    client = LLMClient.__new__(LLMClient)
+    client.mcp_config = SimpleNamespace(enabled_servers=[SimpleNamespace(name="jina")])
+    client.mcp_tool_lookup = {
+        "jina_read_url": {
+            "name": "jina_read_url",
+            "mcp_original_name": "read_url",
+            "mcp_server_name": "jina",
+        }
+    }
+    client.mcp_tools = list(client.mcp_tool_lookup.values())
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.text = 'event: message\ndata: {"result":{"content":[{"type":"text","text":"ok"}]}}\n\n'
+    response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+    mcp_client = AsyncMock()
+    mcp_client.post.return_value = response
+    client.mcp_servers = {
+        "jina": {
+            "client": mcp_client,
+            "url": "https://mcp.jina.ai/v1",
+        }
+    }
+
+    result = await LLMClient._call_mcp_tool(
+        client,
+        {
+            "name": "jina_read_url",
+            "arguments": {"url": "https://example.com"},
+            "call_id": "call-1",
+        },
+    )
+
+    assert result == {"content": [{"type": "text", "text": "ok"}]}
+    mcp_client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_routes_to_server_by_alias():
+    client = LLMClient.__new__(LLMClient)
+    client.mcp_config = SimpleNamespace(enabled_servers=[SimpleNamespace(name="jina")])
+    client.mcp_tool_lookup = {
+        "jina_search_web": {
+            "name": "jina_search_web",
+            "mcp_original_name": "search_web",
+            "mcp_server_name": "jina",
+        }
+    }
+    client.mcp_tools = list(client.mcp_tool_lookup.values())
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.text = '{"result":{"items":["ok"]}}'
+    response.json.return_value = {"result": {"items": ["ok"]}}
+    mcp_client = AsyncMock()
+    mcp_client.post.return_value = response
+    client.mcp_servers = {
+        "jina": {
+            "client": mcp_client,
+            "url": "https://mcp.jina.ai/v1",
+        }
+    }
+
+    result = await LLMClient._call_mcp_tool(
+        client,
+        {
+            "name": "jina_search_web",
+            "arguments": {"query": "latest ai"},
+            "call_id": "call-1",
+        },
+    )
+
+    assert result == {"items": ["ok"]}
+    mcp_client.post.assert_awaited_once()
+    assert mcp_client.post.await_args.args[0] == "https://mcp.jina.ai/v1"
+    payload = mcp_client.post.await_args.kwargs["json"]
+    assert payload["params"]["name"] == "search_web"
+    assert payload["params"]["arguments"] == {"query": "latest ai"}

@@ -3,8 +3,9 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.tools import StructuredTool
 
-from app.progenitor.agent.tools_adapter import create_deepagent_tools
+from app.progenitor.agent.tools_adapter import create_deepagent_tools, create_dynamic_mcp_tools
 from app.progenitor.state.models import A2ATaskRecord
 
 
@@ -23,6 +24,22 @@ def _tracked_task(agent_name: str = "Builder Agent") -> A2ATaskRecord:
     )
 
 
+def _mcp_tool(name: str) -> StructuredTool:
+    async def _run(query: str = "", url: str = "") -> dict[str, str | bool]:
+        result: dict[str, str | bool] = {"ok": True}
+        if query:
+            result["query"] = query
+        if url:
+            result["url"] = url
+        return result
+
+    return StructuredTool.from_function(
+        coroutine=_run,
+        name=name,
+        description=f"Tool: {name}",
+    )
+
+
 def test_core_only_tools_present() -> None:
     tools = create_deepagent_tools()
     names = {t.name for t in tools}
@@ -33,10 +50,8 @@ def test_core_only_tools_present() -> None:
         "list_agents",
         "call_agent",
         "get_a2a_task",
-        "mcp_call",
         "mcp_refresh",
     }.issubset(names)
-    # System tools are dynamically discovered from app/progenitor/tools/.
     assert {"current_time", "list_tools"}.issubset(names)
     assert len(names) == len(tools)
 
@@ -77,6 +92,7 @@ async def test_call_agent_uses_registry_and_a2a(monkeypatch) -> None:
     result = await t.ainvoke(
         {"tool_args": {"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0}}
     )
+
     assert result["task_id"] == "task-123"
     assert result["agent"] == "Builder Agent"
     dispatch_mock.assert_awaited_once()
@@ -169,3 +185,26 @@ async def test_call_agent_accepts_agent_name_alias(monkeypatch) -> None:
     result = await t.ainvoke({"agent_name": "Builder Agent", "request": "hello"})
     assert result["task_id"] == "task-123"
     dispatch_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mcp_tools_return_live_adapter_snapshot() -> None:
+    llm_client = MagicMock()
+    llm_client.mcp_langchain_tools = [_mcp_tool("search_web")]
+
+    tools = create_dynamic_mcp_tools(llm_client)
+    tool = _tool_by_name(tools, "search_web")
+
+    result = await tool.ainvoke({"query": "langgraph"})
+
+    assert result["ok"] is True
+    assert result["query"] == "langgraph"
+
+
+def test_dynamic_mcp_tools_skip_non_tool_entries() -> None:
+    llm_client = MagicMock()
+    llm_client.mcp_langchain_tools = [{"name": "not-a-tool"}, _mcp_tool("read_url")]
+
+    tools = create_dynamic_mcp_tools(llm_client)
+
+    assert [tool.name for tool in tools] == ["read_url"]

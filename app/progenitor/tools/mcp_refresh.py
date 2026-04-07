@@ -1,15 +1,11 @@
 """
-MCP Refresh - Refresh MCP tool list and optionally persist to agents/mcp config files.
+MCP Refresh - Refresh live MCP tool discovery from data/config/mcp.json.
 """
 
-from __future__ import annotations
-
-import contextlib
 import logging
-from typing import Any, cast
 
 from ..config import MCPConfig
-from .mcp import setup_mcp_for_llm_client
+from .mcp import refresh_mcp_runtime
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -22,7 +18,7 @@ class MCPRefreshTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Refresh MCP tool list and optionally persist to config files"
+        return "Refresh MCP tool discovery from configured external MCP servers"
 
     @property
     def keywords(self) -> list[str]:
@@ -34,24 +30,28 @@ class MCPRefreshTool(BaseSystemTool):
             return ToolResult.fail("llm_client unavailable")
 
         mcp_config = getattr(llm_client, "mcp_config", None)
-        if not isinstance(mcp_config, MCPConfig) or not mcp_config.enabled:
-            return ToolResult.fail("MCP integration disabled")
+        if not isinstance(mcp_config, MCPConfig):
+            return ToolResult.fail("mcp_config unavailable")
 
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         persist = bool(args.get("persist", True))
 
-        await setup_mcp_for_llm_client(llm_client, mcp_config)
+        if persist:
+            await refresh_mcp_runtime(
+                llm_client,
+                context.tool_registry,
+                mcp_config,
+                reload_config=True,
+            )
+        else:
+            refreshed_config = MCPConfig.load(config_path=mcp_config.config_path)
+            from .mcp import setup_mcp_for_llm_client
 
-        tool_registry = context.tool_registry
-        if persist and tool_registry and hasattr(tool_registry, "register_tool"):
-            entries = getattr(llm_client, "get_mcp_tool_registry_entries", None)
-            if callable(entries):
-                with contextlib.suppress(Exception):
-                    raw_entries = entries()
-                    for entry in cast(list[dict[str, Any]], raw_entries or []):
-                        await tool_registry.register_tool(entry)
+            await setup_mcp_for_llm_client(llm_client, refreshed_config)
 
-        return ToolResult.ok({
-            "success": True,
-            "tool_count": len(getattr(llm_client, "mcp_tools", None) or []),
-        })
+        return ToolResult.ok(
+            {
+                "success": True,
+                "tool_count": len(getattr(llm_client, "mcp_tools", None) or []),
+            }
+        )

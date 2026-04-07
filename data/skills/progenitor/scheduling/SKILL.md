@@ -34,7 +34,7 @@ Each scheduled task has:
 ## Managing Tasks
 - **List**: Use `list_schedule` to see all tasks
 - **Disable**: Tasks can be disabled without deletion
-- **Review**: Check `schedule.json` for the full schedule state
+- **Review**: Check `data/config/schedule.json` for the full schedule state
 
 ## Confirmation Pattern
 After scheduling, always confirm:
@@ -45,4 +45,4 @@ After scheduling, always confirm:
 ## Troubleshooting
 - If a task didn't fire: check `next_run` vs current time
 - If time parsing fails: use explicit ISO format as fallback
-- Schedule state persists in `data/schedule.json`
+- Schedule state persists in `data/config/schedule.json`

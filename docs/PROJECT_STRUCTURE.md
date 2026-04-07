@@ -54,7 +54,7 @@ Most runtime data is created while the system is running.
 ```text
 data/
 ├── state/         # Runtime checkpoints, schedules, and health data
-├── config/        # Runtime-managed registry/config data
+├── config/        # Runtime-managed agent registry and MCP config data
 ├── sessions/      # Backend session persistence
 ├── attachments/   # Uploaded file storage
 ├── prompts/       # Checked-in markdown prompt templates by agent
@@ -62,6 +62,9 @@ data/
 
 logs/              # Runtime and backend logs
 ```
+
+Live Progenitor MCP server definitions live in `data/config/mcp.json` so the backend
+and runtime can share the same mutable config file.
 
 ## Docker assets
 

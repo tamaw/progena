@@ -459,7 +459,7 @@ class TestStateReaderFileOperations:
         assert health.pid == 9999
 
     def test_read_registry_file(self, temp_state_dir):
-        """Test reading agents.json and mcp.json with agents and tools."""
+        """Test reading agents.json and the Progenitor MCP source config."""
         agents_data = {
             "agents": [
                 {
@@ -478,20 +478,22 @@ class TestStateReaderFileOperations:
             ]
         }
         mcp_data = {
-            "tools": [
-                {
-                    "name": "tool-1",
+            "mcpServers": {
+                "tool-1": {
                     "description": "A tool",
                     "enabled": True,
+                    "transport": "http",
+                    "url": "https://example.com/mcp",
                 }
-            ]
+            }
         }
         config_dir = temp_state_dir.parent / "config"
+        mcp_config_path = config_dir / "mcp.json"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "agents.json").write_text(json.dumps(agents_data))
-        (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
+        mcp_config_path.write_text(json.dumps(mcp_data))
 
-        reader = StateReader(state_dir=temp_state_dir)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
         agents, tools = reader.get_registry()
 
         assert len(agents) == 1
@@ -502,6 +504,7 @@ class TestStateReaderFileOperations:
     def test_read_registry_merges_legacy_and_map(self, temp_state_dir):
         """Map entries should be visible even if legacy list is present."""
         config_dir = temp_state_dir.parent / "config"
+        mcp_config_path = config_dir / "mcp.json"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "agents.json").write_text(
             json.dumps(
@@ -512,9 +515,9 @@ class TestStateReaderFileOperations:
                 }
             )
         )
-        (config_dir / "mcp.json").write_text(json.dumps({"tools": []}))
+        mcp_config_path.write_text(json.dumps({"mcpServers": {}}))
 
-        reader = StateReader(state_dir=temp_state_dir)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
         agents, tools = reader.get_registry()
 
         by_name = {a.name: a.url for a in agents}
@@ -551,9 +554,11 @@ class TestStateReaderFileOperations:
         schedule = [
             {"id": "sched-1", "name": "Daily check", "schedule": "0 0 * * *", "enabled": True}
         ]
-        (temp_state_dir / "schedule.json").write_text(json.dumps(schedule))
+        config_dir = temp_state_dir.parent / "config"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
-        reader = StateReader(state_dir=temp_state_dir)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
         snapshot = reader.get_snapshot()
 
         assert snapshot.health.status == "running"
