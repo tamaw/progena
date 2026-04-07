@@ -3,12 +3,29 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.tools_adapter import create_deepagent_tools, create_dynamic_mcp_tools
 
 
 def _tool_by_name(tools, name: str):
     return next(t for t in tools if t.name == name)
+
+
+def _mcp_tool(name: str) -> StructuredTool:
+    async def _run(query: str = "", url: str = "") -> dict[str, str | bool]:
+        result: dict[str, str | bool] = {"ok": True}
+        if query:
+            result["query"] = query
+        if url:
+            result["url"] = url
+        return result
+
+    return StructuredTool.from_function(
+        coroutine=_run,
+        name=name,
+        description=f"Tool: {name}",
+    )
 
 
 def test_core_only_tools_present() -> None:
@@ -154,106 +171,23 @@ async def test_call_agent_accepts_agent_name_alias(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dynamic_mcp_tool_uses_live_schema_args() -> None:
+async def test_dynamic_mcp_tools_return_live_adapter_snapshot() -> None:
     llm_client = MagicMock()
-    llm_client.mcp_tools = [
-        {
-            "name": "search_web",
-            "description": "Search the web",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "anyOf": [
-                            {"type": "string"},
-                            {"type": "array", "items": {"type": "string"}},
-                        ],
-                        "description": "Search query",
-                    },
-                    "num": {
-                        "type": "number",
-                        "default": 30,
-                        "description": "Result count",
-                    },
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        }
-    ]
-    llm_client._call_mcp_tool = AsyncMock(return_value={"ok": True})
+    llm_client.mcp_langchain_tools = [_mcp_tool("search_web")]
 
     tools = create_dynamic_mcp_tools(llm_client)
     tool = _tool_by_name(tools, "search_web")
 
-    result = await tool.ainvoke({"query": ["langgraph", "deepagents"]})
+    result = await tool.ainvoke({"query": "langgraph"})
 
-    assert result == {"ok": True}
-    llm_client._call_mcp_tool.assert_awaited_once_with(
-        {
-            "name": "search_web",
-            "arguments": {
-                "query": ["langgraph", "deepagents"],
-                "num": 30,
-            },
-        }
-    )
+    assert result["ok"] is True
+    assert result["query"] == "langgraph"
 
 
-@pytest.mark.asyncio
-async def test_dynamic_mcp_tool_omits_unset_optional_args() -> None:
+def test_dynamic_mcp_tools_skip_non_tool_entries() -> None:
     llm_client = MagicMock()
-    llm_client.mcp_tools = [
-        {
-            "name": "read_url",
-            "description": "Read a URL",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "anyOf": [
-                            {"type": "string"},
-                            {"type": "array", "items": {"type": "string"}},
-                        ],
-                    },
-                    "withAllLinks": {"type": "boolean"},
-                    "withAllImages": {"type": "boolean"},
-                },
-                "required": ["url"],
-                "additionalProperties": False,
-            },
-        }
-    ]
-    llm_client._call_mcp_tool = AsyncMock(return_value={"ok": True})
-
-    tools = create_dynamic_mcp_tools(llm_client)
-    tool = _tool_by_name(tools, "read_url")
-
-    await tool.ainvoke({"url": ["https://example.com", "https://example.org"]})
-
-    llm_client._call_mcp_tool.assert_awaited_once_with(
-        {
-            "name": "read_url",
-            "arguments": {
-                "url": ["https://example.com", "https://example.org"],
-            },
-        }
-    )
-
-
-def test_dynamic_mcp_tools_skip_non_standard_schema_fallbacks() -> None:
-    llm_client = MagicMock()
-    llm_client.mcp_tools = [
-        {
-            "name": "legacy_style_tool",
-            "description": "Legacy fallback schema",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-            },
-        }
-    ]
+    llm_client.mcp_langchain_tools = [{"name": "not-a-tool"}, _mcp_tool("read_url")]
 
     tools = create_dynamic_mcp_tools(llm_client)
 
-    assert tools == []
+    assert [tool.name for tool in tools] == ["read_url"]
