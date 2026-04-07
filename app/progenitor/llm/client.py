@@ -463,17 +463,17 @@ class LLMClient:
         if system_tool_context:
             from ..nodes.node_helpers.registry import execute_system_tool, get_system_tool
 
+            tool_registry = system_tool_context.get("tool_registry")
+            state_manager = system_tool_context.get("state_manager")
+            state = system_tool_context.get("state")
+            default_user_input = system_tool_context.get("default_user_input", "")
+            tool_user_input = str(tool_args.get("request") or default_user_input or "")
+
             if (
                 callable(get_system_tool)
                 and callable(execute_system_tool)
                 and get_system_tool(tool_name)
             ):
-                tool_registry = system_tool_context.get("tool_registry")
-                state_manager = system_tool_context.get("state_manager")
-                state = system_tool_context.get("state")
-                default_user_input = system_tool_context.get("default_user_input", "")
-                tool_user_input = str(tool_args.get("request") or default_user_input or "")
-
                 data_out, err, state_updates, _retry = await execute_system_tool(
                     tool_name=tool_name,
                     tool_registry=tool_registry,
@@ -494,7 +494,6 @@ class LLMClient:
                 return {"result": data_out}
 
             # If it isn't a system tool, allow direct A2A agent invocation by name.
-            tool_registry = system_tool_context.get("tool_registry")
             if tool_registry is not None and hasattr(tool_registry, "find_by_name"):
                 try:
                     agent_cfg = tool_registry.find_by_name(tool_name)
@@ -522,52 +521,25 @@ class LLMClient:
                     and agent_type != "mcp_tool"
                     and agent_kind != "mcp_tool"
                 ):
-                    from ..runtime.a2a_tasks import build_task_response, dispatch_tracked_a2a_task
+                    forwarded_args = dict(tool_args)
+                    forwarded_args.setdefault("agent", str(agent_cfg.get("name") or tool_name))
 
-                    req = str(tool_args.get("request") or "")
-                    ctx = (
-                        cast(dict[str, Any], tool_args.get("context"))
-                        if isinstance(tool_args.get("context"), dict)
-                        else {}
-                    )
-                    state_manager = system_tool_context.get("state_manager")
-                    if state_manager is None:
-                        return {"error": "state_manager unavailable; cannot track A2A tasks"}
-
-                    blocking_arg = tool_args.get("blocking", False)
-                    blocking = (
-                        blocking_arg
-                        if isinstance(blocking_arg, bool)
-                        else str(blocking_arg).strip().lower() in {"1", "true", "yes", "on"}
-                    )
-                    result, tracked_task = await dispatch_tracked_a2a_task(
+                    data_out, err, state_updates, _retry = await execute_system_tool(
+                        tool_name="call_agent",
+                        tool_registry=tool_registry,
+                        llm_client=self,
+                        state=state,
                         state_manager=state_manager,
-                        agent_name=str(agent_cfg.get("name") or tool_name),
-                        agent_config=agent_cfg,
-                        request_text=req,
-                        request_metadata={
-                            **ctx,
-                            "caller": "progenitor",
-                            "dispatch_mode": "blocking" if blocking else "async",
-                        },
-                        source=f"tool:{tool_name}",
-                        timeout=60.0,
-                        blocking=blocking,
-                        notify_on_completion=not blocking,
+                        user_input=tool_user_input,
+                        tool_args=forwarded_args,
                     )
-                    if isinstance(result, dict) and not result.get("success"):
-                        return {"error": str(result.get("error"))}
-                    if tracked_task is not None:
-                        payload = build_task_response(tracked_task)
-                        if not blocking:
-                            payload["message"] = (
-                                f"Task submitted to '{tool_name}' (task_id: {tracked_task.task_id}). "
-                                "Use get_a2a_task to check progress and final results."
-                            )
-                        return {"result": payload}
-                    if not blocking:
-                        return {"error": f"{tool_name} did not return a trackable A2A task"}
-                    return {"result": result}
+                    if state_updates and isinstance(system_tool_context.get("state_updates"), dict):
+                        system_tool_context["state_updates"].update(state_updates)
+                    if state_updates and isinstance(state, dict):
+                        state.update(state_updates)
+                    if err:
+                        return {"error": err}
+                    return {"result": data_out}
 
         # Default: call MCP tool
         return await self._call_mcp_tool({**tool_call, "arguments": tool_args})

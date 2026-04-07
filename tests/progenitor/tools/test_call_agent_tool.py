@@ -1,20 +1,11 @@
-"""
-Tests for InvokeAgentTool - generic async A2A dispatcher.
-
-Verifies:
-1. Tool metadata and auto-discovery
-2. Async A2A dispatch returns task_id immediately
-3. Unknown agent fails hard (no fallbacks)
-4. Missing user_input fails validation
-5. Async dispatch propagates caller correlation IDs
-"""
+"""Tests for CallAgentTool - canonical outbound A2A dispatcher."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.progenitor.state.models import A2ATaskRecord
-from app.progenitor.tools.invoke_agent import InvokeAgentTool
+from app.progenitor.tools.call_agent import AgentSelection, CallAgentTool
 from app.progenitor.tools.protocol import ToolContext
 
 
@@ -24,32 +15,26 @@ def _tracked_task(agent_name: str = "builder_agent") -> A2ATaskRecord:
         agent_name=agent_name,
         agent_url="http://localhost:8107",
         context_id="ctx-xyz",
-        source="invoke_agent",
+        source="call_agent",
         request_text="Build it",
     )
 
 
-class TestInvokeAgentTool:
-    """Tests for InvokeAgentTool."""
+class TestCallAgentTool:
+    """Tests for CallAgentTool."""
 
     def test_tool_properties(self):
-        """Tool metadata is correct."""
-        tool = InvokeAgentTool()
-        assert tool.name == "invoke_agent"
+        tool = CallAgentTool()
+        assert tool.name == "call_agent"
         assert "A2A" in tool.description or "agent" in tool.description.lower()
         assert isinstance(tool.keywords, list)
         assert len(tool.keywords) > 0
 
     @pytest.mark.asyncio
-    async def test_execute_missing_user_input(self):
-        """Fails when user_input is empty."""
-        tool = InvokeAgentTool()
+    async def test_execute_missing_request(self):
+        tool = CallAgentTool()
         mock_registry = MagicMock()
-        mock_registry.find_by_name.return_value = {
-            "url": "http://localhost:8108",
-            "transport": "http",
-            "status": "running",
-        }
+        mock_registry.get_agents.return_value = []
         context = ToolContext(
             user_input="",
             tool_args={"agent": "builder"},
@@ -62,9 +47,9 @@ class TestInvokeAgentTool:
 
     @pytest.mark.asyncio
     async def test_execute_unknown_agent_fails(self):
-        """Fails hard when agent is not in registry (no fallbacks)."""
-        tool = InvokeAgentTool()
+        tool = CallAgentTool()
         mock_registry = MagicMock()
+        mock_registry.get_agents.return_value = [{"name": "builder_agent"}]
         mock_registry.find_by_name.return_value = None
         mock_registry.find_agent_by_capability.return_value = None
         context = ToolContext(
@@ -79,43 +64,61 @@ class TestInvokeAgentTool:
         assert "nonexistent_agent" in (result.error or "")
 
     @pytest.mark.asyncio
-    async def test_execute_falls_back_to_agents_json_when_registry_misses(self):
-        tool = InvokeAgentTool()
+    async def test_execute_auto_routes_when_agent_missing(self):
+        tool = CallAgentTool()
         mock_registry = MagicMock()
-        mock_registry.find_by_name.return_value = None
-        mock_registry.find_agent_by_capability.return_value = None
+        mock_registry.get_agents.return_value = [
+            {
+                "name": "builder_agent",
+                "url": "http://localhost:8107",
+                "transport": "http",
+                "status": "running",
+                "capabilities": ["build"],
+                "description": "Build and modify code.",
+            }
+        ]
+        mock_registry.find_by_name.return_value = {
+            "name": "builder_agent",
+            "url": "http://localhost:8107",
+            "transport": "http",
+            "status": "running",
+        }
+        mock_llm = MagicMock()
+        mock_llm.chat_structured = AsyncMock(
+            return_value=AgentSelection(
+                agent_name="builder_agent",
+                message="Build the requested feature.",
+                reasoning="It is the only matching deployed build agent.",
+            )
+        )
         context = ToolContext(
-            user_input="Fix typo in README",
-            tool_args={"agent": "builder", "timeout": 1},
+            user_input="Build the requested feature",
             tool_registry=mock_registry,
-            llm_client=MagicMock(),
+            llm_client=mock_llm,
             state_manager=MagicMock(),
         )
-        with (
-            patch(
-                "app.progenitor.tools.invoke_agent._load_agents",
-                return_value={"builder": {"url": "http://localhost:8108", "status": "running"}},
+
+        with patch(
+            "app.progenitor.tools.call_agent.dispatch_tracked_a2a_task",
+            new_callable=AsyncMock,
+            return_value=(
+                {"success": True, "result": {"id": "builder_agent_abc123"}},
+                _tracked_task(),
             ),
-            patch(
-                "app.progenitor.tools.invoke_agent.dispatch_tracked_a2a_task",
-                new_callable=AsyncMock,
-                return_value=(
-                    {"success": True, "result": {"id": "builder_abc123"}},
-                    _tracked_task("builder"),
-                ),
-            ),
-        ):
+        ) as dispatch_mock:
             result = await tool.execute(context)
 
         assert result.success
-        assert result.data is not None
-        assert result.data["agent"] == "builder"
+        kwargs = dispatch_mock.await_args.kwargs
+        assert kwargs["agent_name"] == "builder_agent"
+        assert kwargs["request_text"] == "Build the requested feature."
+        assert kwargs["request_metadata"]["routing_mode"] == "auto"
 
     @pytest.mark.asyncio
     async def test_execute_dispatches_and_returns_task_id(self):
-        """Returns task_id immediately without waiting for agent response."""
-        tool = InvokeAgentTool()
+        tool = CallAgentTool()
         mock_registry = MagicMock()
+        mock_registry.get_agents.return_value = [{"name": "builder"}]
         mock_registry.find_by_name.return_value = {
             "url": "http://localhost:8108",
             "transport": "http",
@@ -129,7 +132,7 @@ class TestInvokeAgentTool:
             state_manager=MagicMock(),
         )
         with patch(
-            "app.progenitor.tools.invoke_agent.dispatch_tracked_a2a_task",
+            "app.progenitor.tools.call_agent.dispatch_tracked_a2a_task",
             new_callable=AsyncMock,
             return_value=(
                 {"success": True, "result": {"id": "builder_abc123"}},
@@ -146,18 +149,18 @@ class TestInvokeAgentTool:
 
 
 def test_tool_auto_discovery():
-    """invoke_agent is auto-discovered by the tool registry."""
     from app.progenitor.nodes.node_helpers.registry import get_system_tool
 
-    tool = get_system_tool("invoke_agent")
+    tool = get_system_tool("call_agent")
     assert tool is not None
-    assert tool.name == "invoke_agent"
+    assert tool.name == "call_agent"
 
 
 @pytest.mark.asyncio
 async def test_execute_dispatches_async_metadata():
-    tool = InvokeAgentTool()
+    tool = CallAgentTool()
     mock_registry = MagicMock()
+    mock_registry.get_agents.return_value = [{"name": "builder_agent"}]
     mock_registry.find_by_name.return_value = {
         "url": "http://localhost:8108",
         "transport": "http",
@@ -172,7 +175,7 @@ async def test_execute_dispatches_async_metadata():
     )
 
     with patch(
-        "app.progenitor.tools.invoke_agent.dispatch_tracked_a2a_task",
+        "app.progenitor.tools.call_agent.dispatch_tracked_a2a_task",
         new_callable=AsyncMock,
         return_value=({"success": True, "result": {"id": "builder_agent_abc123"}}, _tracked_task()),
     ) as dispatch_mock:
@@ -182,3 +185,4 @@ async def test_execute_dispatches_async_metadata():
     kwargs = dispatch_mock.await_args.kwargs
     assert kwargs["request_metadata"]["dispatch_mode"] == "async"
     assert kwargs["request_metadata"]["caller"] == "progenitor"
+    assert kwargs["request_metadata"]["routing_mode"] == "explicit"

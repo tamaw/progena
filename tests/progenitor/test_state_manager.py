@@ -146,7 +146,7 @@ class TestStateManager:
             agent_name="observe_agent",
             agent_url="http://localhost:8108",
             context_id="ctx-123",
-            source="invoke_agent",
+            source="call_agent",
             request_text="Inspect logs",
         )
 

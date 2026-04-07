@@ -67,6 +67,10 @@ class TestResearchSubagent:
         result = create_research_subagent()
         assert "research" in result["description"].lower()
 
+    def test_inherits_parent_tools(self):
+        result = create_research_subagent()
+        assert "tools" not in result
+
 
 class TestCreateProgenitorSubagents:
     """Tests for the combined subagent factory."""
@@ -98,8 +102,12 @@ class TestSubagentWiring:
     """Test subagents are wired into the factory."""
 
     def test_factory_passes_subagents(self):
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_subagents") as mock_subagents,
+        ):
             mock_create.return_value = MagicMock()
+            mock_subagents.return_value = [{"name": "researcher"}]
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.deep_agent import create_progenitor_agent
@@ -108,11 +116,16 @@ class TestSubagentWiring:
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert "subagents" in call_kwargs
-                assert call_kwargs["subagents"] is None
+                assert call_kwargs["subagents"] == [{"name": "researcher"}]
+                mock_subagents.assert_called_once_with(inner_loop_graph=None)
 
     def test_factory_with_inner_loop(self):
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_subagents") as mock_subagents,
+        ):
             mock_create.return_value = MagicMock()
+            mock_subagents.return_value = [{"name": "build-agent"}]
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.deep_agent import create_progenitor_agent
@@ -121,4 +134,5 @@ class TestSubagentWiring:
                 create_progenitor_agent(inner_loop_graph=mock_graph)
 
                 call_kwargs = mock_create.call_args.kwargs
-                assert call_kwargs["subagents"] is None
+                assert call_kwargs["subagents"] == [{"name": "build-agent"}]
+                mock_subagents.assert_called_once_with(inner_loop_graph=mock_graph)
