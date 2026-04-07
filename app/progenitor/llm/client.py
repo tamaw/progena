@@ -9,10 +9,11 @@ from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from ..config import LLMConfig, MCPConfig
-from ..mcp_tool_utils import normalize_mcp_tool_definition
+from ..mcp_tool_utils import normalize_mcp_tool_definition, parse_mcp_jsonrpc_response
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
 from .response_models import (
@@ -150,6 +151,7 @@ class LLMClient:
         self.mcp_servers: dict[str, dict[str, Any]] = {}
         self.mcp_client: httpx.AsyncClient | None = None
         self.mcp_tools: list[dict[str, Any]] = []
+        self.mcp_langchain_tools: list[BaseTool] = []
         self.mcp_tool_lookup: dict[str, dict[str, Any]] = {}
 
         # Optional event pusher for realtime progress updates via IPC
@@ -199,6 +201,7 @@ class LLMClient:
         self.mcp_servers = {}
         self.mcp_client = None
         self.mcp_tools = []
+        self.mcp_langchain_tools = []
         self.mcp_tool_lookup = {}
 
     async def __aenter__(self):
@@ -277,6 +280,7 @@ class LLMClient:
         self,
         mcp_servers: dict[str, dict[str, Any]] | None,
         mcp_tools: list[dict[str, Any]] | None = None,
+        mcp_langchain_tools: list[BaseTool] | None = None,
     ) -> None:
         """Set MCP server runtime metadata and tool list for tool calling."""
         self.mcp_servers = mcp_servers or {}
@@ -289,6 +293,7 @@ class LLMClient:
         )
         self.mcp_client = cast(httpx.AsyncClient | None, first_client)
         self.mcp_tools = mcp_tools or []
+        self.mcp_langchain_tools = mcp_langchain_tools or []
         self.mcp_tool_lookup = {}
         for tool in self.mcp_tools:
             name = str(tool.get("name") or "").strip()
@@ -485,13 +490,13 @@ class LLMClient:
         try:
             response = await post_typed(endpoint, json=request)
             response.raise_for_status()
-            payload = response.json()
+            payload = parse_mcp_jsonrpc_response(response.text)
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid MCP JSON-RPC response")
 
-            if isinstance(payload, dict):
-                if error := payload.get("error"):
-                    return {"error": error}
-                return cast(dict[str, Any], payload.get("result", payload))
-            return cast(dict[str, Any], payload)
+            if error := payload.get("error"):
+                return {"error": error}
+            return cast(dict[str, Any], payload.get("result", payload))
 
         except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             logger.warning("MCP tool call failed: %s", exc)
