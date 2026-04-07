@@ -157,20 +157,6 @@ function mergeEntries(currentEntries, incomingEntries) {
   return freshEntries.length > 0 ? [...freshEntries, ...currentEntries] : currentEntries;
 }
 
-function hasActiveFilters({ group, filePath, search, level }) {
-  return Boolean(group || filePath || search || level);
-}
-
-function getDefaultSelection(groups) {
-  for (const group of groups || []) {
-    const firstFile = (group.options || [])[0];
-    if (firstFile) {
-      return { group: group.id || '', file: firstFile.id || '' };
-    }
-  }
-  return { group: '', file: '' };
-}
-
 function findVisibleRange(items, scrollTop, viewportHeight) {
   if (!items.length) {
     return [0, -1];

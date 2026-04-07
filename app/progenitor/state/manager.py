@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import aiofiles
 
+from ..config import default_mcp_config_payload, default_schedule_config_payload
 from ..runtime.time_utils import utcnow_isoformat
 from .models import (
     ConversationMessage,
@@ -55,9 +56,10 @@ else:
 class StateManager:
     """Manages persistence of Progenitor state with file locking.
 
-    State is split into two files:
+    Core runtime data is split across state and config files:
     - build_state.json: Agent build process only (inner loop, LLM messages, verification)
-    - current_state.json: Progenitor agent operational state (chat, schedule, tool calls)
+    - current_state.json: Progenitor agent operational state (chat, tool calls)
+    - schedule.json: Scheduled tasks stored in data/config
 
     Provides:
     - Atomic writes for crash safety
@@ -101,7 +103,7 @@ class StateManager:
     def _core_file_path(self, name: str) -> Path:
         """Resolve absolute path for a core state/config file."""
         filename = self.CORE_FILES[name]
-        if name in {"registry", "mcp"}:
+        if name in {"registry", "mcp", "schedule"}:
             return self.config_dir / filename
         return self.state_dir / filename
 
@@ -157,6 +159,19 @@ class StateManager:
         """Ensure all state files exist with defaults."""
         # Clean up any stale temp files from previous failed writes
         self._cleanup_stale_temp_files()
+
+        schedule_default = default_schedule_config_payload()
+        legacy_schedule_path = self.state_dir / self.CORE_FILES["schedule"]
+        schedule_path = self._core_file_path("schedule")
+        if not schedule_path.exists() and legacy_schedule_path.exists():
+            legacy_schedule = await self._read_json(legacy_schedule_path)
+            if isinstance(legacy_schedule, list):
+                logger.info(
+                    "Migrating legacy schedule config from %s to %s",
+                    legacy_schedule_path,
+                    schedule_path,
+                )
+                schedule_default = legacy_schedule
 
         defaults = {
             # build_state.json - Agent builds ONLY (inner loop)
@@ -240,7 +255,7 @@ class StateManager:
                 "shutdown_requested": False,
                 "last_checkpoint": None,
                 "messages": [],  # Chat history (user ↔ progenitor)
-                # NOTE: schedule is stored in schedule.json (system feature, not user session)
+                # NOTE: schedule is stored in data/config/schedule.json
                 "attachments": [],  # Attachment path links
                 "tool_calls": [],  # Session tool calls
                 "current_input": None,
@@ -249,8 +264,8 @@ class StateManager:
                 "current_build_request": None,  # Reference to active build (id only)
             },
             "registry": {},
-            "mcp": {"tools": []},
-            "schedule": [],
+            "mcp": default_mcp_config_payload(),
+            "schedule": schedule_default,
         }
 
         for name, filename in self.CORE_FILES.items():
@@ -466,26 +481,26 @@ class StateManager:
                 break
         await self.save_backlog(backlog)
 
-    # Schedule management (stored in schedule.json - system feature, not user session)
+    # Schedule management (stored in data/config/schedule.json)
     async def get_schedule(self) -> list[ScheduleEntry]:
-        """Get scheduled tasks from schedule.json.
+        """Get scheduled tasks from data/config/schedule.json.
 
         Schedule is a system feature that persists beyond user sessions.
         It is stored separately from current_state.json.
         """
         async with self._file_lock("schedule"):
-            data = await self._read_json(self.state_dir / self.CORE_FILES["schedule"])
+            data = await self._read_json(self._core_file_path("schedule"))
             return [ScheduleEntry(**item) for item in (data or [])]
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
-        """Save scheduled tasks to schedule.json.
+        """Save scheduled tasks to data/config/schedule.json.
 
         Schedule is a system feature that persists beyond user sessions.
         It is stored separately from current_state.json.
         """
         async with self._file_lock("schedule"):
             data = [item.model_dump() for item in schedule]
-            await self._atomic_write_json(self.state_dir / self.CORE_FILES["schedule"], data)
+            await self._atomic_write_json(self._core_file_path("schedule"), data)
             self._state_cache["schedule"] = data
 
     # SpecDoc management (persistent spec artifact in build_state.json)
@@ -690,12 +705,12 @@ class StateManager:
         await self.save_messages(messages)
 
     # ==========================================================================
-    # Schedule Management - Convenience methods using schedule.json
-    # (Schedule is a system feature stored in schedule.json, not current_state)
+    # Schedule Management - Convenience methods using data/config/schedule.json
+    # (Schedule is a system feature stored separately from current_state)
     # ==========================================================================
 
     async def add_schedule_entry(self, entry) -> None:
-        """Add a schedule entry to schedule.json.
+        """Add a schedule entry to data/config/schedule.json.
 
         Args:
             entry: ScheduleEntry object or dict with schedule data.
@@ -722,7 +737,7 @@ class StateManager:
         )
 
     async def remove_schedule_entry(self, schedule_id: str) -> bool:
-        """Remove a schedule entry from schedule.json by ID.
+        """Remove a schedule entry from data/config/schedule.json by ID.
 
         Args:
             schedule_id: The ID of the schedule entry to remove.
@@ -746,7 +761,7 @@ class StateManager:
         return False
 
     async def update_schedule_entry(self, schedule_id: str, updates: dict) -> bool:
-        """Update a schedule entry in schedule.json.
+        """Update a schedule entry in data/config/schedule.json.
 
         Args:
             schedule_id: The ID of the schedule entry to update.

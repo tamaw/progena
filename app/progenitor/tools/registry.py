@@ -1,7 +1,7 @@
 """
 Tool and Agent Registry for Progenitor.
 
-Maintains agents.json with agent manifests and mcp.json with MCP tools.
+Maintains agents.json with agent manifests and in-memory MCP tool state.
 Provides capability discovery and lookup for routing decisions.
 Tracks runtime status of HTTP-based A2A agents.
 """
@@ -56,12 +56,12 @@ class ToolRegistry:
 
     def __init__(self, registry_path: Path | str, host: str = "localhost") -> None:
         self.registry_path: Path = Path(registry_path)
-        self.mcp_path: Path = self.registry_path.with_name("mcp.json")
         self.host = host  # Host for agent endpoints
         self._registry: RegistryData = {"agents": [], "tools": []}
 
     async def load(self) -> None:
         """Load registry from disk."""
+        runtime_tools = list(self._registry.get("tools", []))
         if self.registry_path.exists():
             try:
                 with open(self.registry_path) as f:
@@ -89,28 +89,17 @@ class ToolRegistry:
                             agents.append({"name": name, **cfg})
                 self._registry = {
                     "agents": agents if isinstance(agents, list) else [],
-                    "tools": [],
+                    "tools": runtime_tools,
                 }
             except (OSError, json.JSONDecodeError) as e:
                 logger.error("Failed to load registry: %s. Starting fresh.", e)
-                self._registry = {"agents": [], "tools": []}
+                self._registry = {"agents": [], "tools": runtime_tools}
         else:
             logger.info("No existing registry found, creating new one")
-
-        if self.mcp_path.exists():
-            try:
-                with open(self.mcp_path) as f:
-                    mcp_data = json.load(f)
-                tools = mcp_data.get("tools", []) if isinstance(mcp_data, dict) else []
-                self._registry["tools"] = tools if isinstance(tools, list) else []
-            except (OSError, json.JSONDecodeError) as e:
-                logger.error("Failed to load MCP state: %s. Starting with no MCP tools.", e)
-                self._registry["tools"] = []
-        else:
-            self._registry["tools"] = []
+            self._registry = {"agents": [], "tools": runtime_tools}
 
         logger.info(
-            "Loaded registry with %d agents and %d tools",
+            "Loaded registry with %d agents and %d runtime tools",
             len(self._registry.get("agents", [])),
             len(self._registry.get("tools", [])),
         )
@@ -128,9 +117,7 @@ class ToolRegistry:
             agent_map[name] = {k: v for k, v in agent.items() if k not in {"name", "agent_card"}}
         with open(self.registry_path, "w") as f:
             json.dump(agent_map, f, indent=2, default=str)
-        with open(self.mcp_path, "w") as f:
-            json.dump({"tools": self._registry.get("tools", [])}, f, indent=2, default=str)
-        logger.info("Saved registry to %s and MCP state to %s", self.registry_path, self.mcp_path)
+        logger.info("Saved registry to %s", self.registry_path)
 
     async def clear_agents(self) -> None:
         """No-op: agent registry entries are append/update-only."""
@@ -151,7 +138,7 @@ class ToolRegistry:
     def get_local_mcp_tools(self) -> list[dict[str, Any]]:
         """Discover local FastMCP tools under app/mcp/.
 
-        These are HTTP MCP tools that may not be registered in agents/mcp state.
+        These are HTTP MCP tools that may not be present in the runtime MCP tool cache.
         """
         tools_dir = Path(__file__).resolve().parents[3] / "app" / "mcp"
         if not tools_dir.exists():
@@ -302,7 +289,7 @@ class ToolRegistry:
         await self.save()
 
     async def register_tool(self, entry: dict[str, Any]) -> None:
-        """Register a new MCP tool."""
+        """Register a new runtime MCP tool."""
         # Remove existing with same name
         self._registry["tools"] = [
             t for t in self._registry.get("tools", []) if t.get("name") != entry.get("name")
@@ -310,7 +297,21 @@ class ToolRegistry:
 
         entry["updated_at"] = utcnow().isoformat()
         self._registry["tools"].append(entry)
-        await self.save()
+
+    def set_runtime_tools(self, entries: list[dict[str, Any]]) -> None:
+        """Replace the in-memory runtime MCP tool cache."""
+        deduped: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+        updated_at = utcnow().isoformat()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            deduped.append({**entry, "updated_at": updated_at})
+        self._registry["tools"] = deduped
 
     async def unregister(self, name: str) -> bool:
         """Unregister an agent or tool by name."""
@@ -329,7 +330,7 @@ class ToolRegistry:
             or len(self._registry.get("tools", [])) < original_tools
         )
 
-        if removed:
+        if len(self._registry.get("agents", [])) < original_agents:
             await self.save()
 
         return removed

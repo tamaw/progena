@@ -3,12 +3,12 @@ Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
 
-Reads real state data from data/state/ and data/config/:
+Reads real state data from data/state/, data/config/, and live backend-managed config:
 - health.json: Agent health status
-- agents.json + mcp.json: Registered agents and tools
+- agents.json + data/config/mcp.json: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
-- schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
+- data/config/schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
 """
 
 import asyncio
@@ -277,6 +277,8 @@ class WidgetPatchRequest(BaseModel):
 
     enabled: bool | None = None
     name: str | None = None
+    description: str | None = None
+    url: str | None = None
     instruction: str | None = None
     schedule_type: str | None = None
     expression: str | None = None
@@ -1072,12 +1074,31 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                         WidgetFieldSchemaResponse(key="title", label="Title"),
                         WidgetFieldSchemaResponse(key="agentId", label="Tool"),
                         WidgetFieldSchemaResponse(key="transport", label="Transport"),
+                        WidgetFieldSchemaResponse(key="url", label="URL", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="config",
+                    label="Configuration",
+                    fields=[
+                        WidgetFieldSchemaResponse(
+                            key="description",
+                            label="Description",
+                            control="textarea",
+                            editable=True,
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
                     id="status",
                     label="Status",
                     fields=[
+                        WidgetFieldSchemaResponse(
+                            key="enabled",
+                            label="Enabled",
+                            control="boolean",
+                            editable=True,
+                        ),
                         WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
                         WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
                         WidgetFieldSchemaResponse(
@@ -1489,6 +1510,50 @@ def _atomic_write_json(filepath: Path, data: object) -> None:
         raise
 
 
+def _read_mcp_config(state_reader: StateReader) -> tuple[Path, dict]:
+    """Read the live MCP config, normalizing the top-level mcpServers map."""
+    mcp_config_path = state_reader.mcp_config_path
+    raw = state_reader._read_json_from_path(mcp_config_path)  # noqa: SLF001 - shared helper
+    data = raw if isinstance(raw, dict) else {}
+    raw_servers = data.get("mcpServers")
+    if not isinstance(raw_servers, dict):
+        data["mcpServers"] = {}
+    return mcp_config_path, data
+
+
+def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
+    """Read the live schedule config, falling back to the legacy state path while migrating."""
+    schedule_path = state_reader.schedule_config_path
+    raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
+    if raw is None and not schedule_path.exists():
+        raw = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
+    if raw is None:
+        return schedule_path, []
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=500, detail="Schedule state is invalid")
+    return schedule_path, raw
+
+
+async def _refresh_live_mcp_runtime(mcp_config_path: Path) -> None:
+    """Best-effort refresh for the in-process Progenitor service after config edits."""
+    with contextlib.suppress(Exception):
+        from app.progenitor import service as progenitor_service
+        from app.progenitor.config import MCPConfig
+        from app.progenitor.tools.mcp import refresh_mcp_runtime
+
+        service = progenitor_service._service
+        if service is None or not service.is_initialized or service.llm_client is None:
+            return
+
+        refreshed_config = MCPConfig.load(config_path=mcp_config_path)
+        service.config.mcp = refreshed_config
+        await refresh_mcp_runtime(
+            service.llm_client,
+            service.tool_registry,
+            refreshed_config,
+        )
+
+
 def _broadcast_widget_refresh(state_reader) -> None:
     """Notify status listeners that backend-derived widgets changed."""
     broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
@@ -1519,7 +1584,7 @@ def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]
 
         for trigger in triggers:
             event_type = trigger.get("event_type")
-            if widget.get("event_type") != event_type:
+            if not isinstance(event_type, str) or widget.get("event_type") != event_type:
                 continue
 
             timestamp = str(trigger.get("timestamp") or utcnow().isoformat())
@@ -1686,10 +1751,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     state_reader = get_state_reader()
     if widget_id.startswith("schedule:"):
         schedule_id = widget_id.split(":", 1)[1]
-        schedule_path = state_reader.state_dir / "schedule.json"
-        schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
-        if not isinstance(schedule_data, list):
-            raise HTTPException(status_code=404, detail="Schedule state not found")
+        schedule_path, schedule_data = _read_schedule_config(state_reader)
 
         updated = None
         for entry in schedule_data:
@@ -1801,9 +1863,64 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         _broadcast_widget_refresh(state_reader)
         return _widget_to_response(refreshed)
 
-    raise HTTPException(
-        status_code=400, detail="Only schedule and event widgets are mutable from the backend"
+    if not widget_id.startswith("mcp:"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only schedule, event, and MCP widgets are mutable from the backend",
+        )
+
+    server_name = widget_id.split(":", 1)[1]
+    mcp_config_path, mcp_data = _read_mcp_config(state_reader)
+    raw_servers = mcp_data.get("mcpServers")
+    if not isinstance(raw_servers, dict):
+        raw_servers = {}
+        mcp_data["mcpServers"] = raw_servers
+
+    server = raw_servers.get(server_name)
+    if not isinstance(server, dict):
+        raise HTTPException(status_code=404, detail="Widget not found")
+
+    requested_name = (body.name or "").strip()
+    if requested_name and requested_name != server_name:
+        raise HTTPException(status_code=400, detail="Renaming MCP servers is not supported")
+
+    if body.enabled is not None:
+        server["enabled"] = body.enabled
+    if body.description is not None:
+        server["description"] = body.description
+    if body.url is not None:
+        url = body.url.strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="MCP server URL is required")
+        server["url"] = url
+
+    _atomic_write_json(mcp_config_path, mcp_data)
+    state_reader.invalidate(mcp_config_path)
+    await _refresh_live_mcp_runtime(mcp_config_path)
+
+    refreshed = next(
+        (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
     )
+    if refreshed is None:
+        enabled = bool(server.get("enabled", True))
+        description = str(server.get("description") or "")
+        refreshed = {
+            "id": widget_id,
+            "type": "mcp",
+            "name": server_name,
+            "title": server_name,
+            "description": description,
+            "status": "enabled" if enabled else "disabled",
+            "summary": description or f"MCP {server_name}",
+            "enabled": enabled,
+            "url": server.get("url"),
+            "transport": server.get("transport", "http"),
+            "logs": [],
+            "updated_at": None,
+        }
+
+    _broadcast_widget_refresh(state_reader)
+    return _widget_to_response(refreshed)
 
 
 @router.get("/schedules", response_model=ScheduleResponse)
@@ -1814,7 +1931,7 @@ async def get_schedules():
 
 @router.post("/schedules", response_model=WidgetResponse)
 async def create_schedule(body: ScheduleCreateRequest):
-    """Create a new schedule entry by writing directly to schedule.json."""
+    """Create a new schedule entry by writing directly to data/config/schedule.json."""
     name = body.name.strip()
     instruction = body.instruction.strip()
     if not name:
@@ -1823,12 +1940,7 @@ async def create_schedule(body: ScheduleCreateRequest):
         raise HTTPException(status_code=400, detail="Schedule task is required")
 
     state_reader = get_state_reader()
-    schedule_path = state_reader.state_dir / "schedule.json"
-    schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
-    if schedule_data is None:
-        schedule_data = []
-    if not isinstance(schedule_data, list):
-        raise HTTPException(status_code=500, detail="Schedule state is invalid")
+    schedule_path, schedule_data = _read_schedule_config(state_reader)
 
     created_at = utcnow().isoformat()
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
