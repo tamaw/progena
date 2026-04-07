@@ -614,13 +614,14 @@ class ObserveExecutor(AgentExecutor):
                 context_id=ctx_id,
                 request_text=request_text,
                 request_ctx=request_ctx,
+                event_queue=event_queue,
             )
         )
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id,
                 context_id=ctx_id,
-                final=True,
+                final=False,
                 status=TaskStatus(
                     state=TaskState.submitted,
                     message=_text_msg(f"Task accepted (id={task_id}): {request_text[:120]}"),

@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from a2a.types import Message, Part, Role, TaskState, TaskStatus, TaskStatusUpdateEvent, TextPart
+
 if TYPE_CHECKING:
     from .agent import ObserveAgent
 
@@ -57,10 +59,19 @@ class _QueuedTask:
     context_id: str
     request_text: str
     request_ctx: dict[str, Any]
+    event_queue: Any
 
 
 def _resolve_log_path(log_path: Path | None) -> Path:
     return log_path if log_path is not None else get_task_log_path()
+
+
+def _task_message(text: str) -> Message:
+    return Message(
+        message_id=str(datetime.now(UTC).timestamp()),
+        role=Role.agent,
+        parts=[Part(root=TextPart(text=text))],
+    )
 
 
 def append_task_record(record: TaskRecord, log_path: Path | None = None) -> None:
@@ -206,12 +217,49 @@ class ObserveTaskQueue:
             status = "failure"
             logger.info("ObserveTaskQueue: starting task_id=%s", task.task_id)
             try:
+                await task.event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        task_id=task.task_id,
+                        context_id=task.context_id,
+                        final=False,
+                        status=TaskStatus(
+                            state=TaskState.working,
+                            message=_task_message("Observe task is running."),
+                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        ),
+                    )
+                )
                 response_text = await self._service.process(task.request_text, task.request_ctx)
                 status = "success"
             except Exception as exc:
                 error = str(exc)
                 logger.exception("ObserveTaskQueue: task failed task_id=%s", task.task_id)
+                await task.event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        task_id=task.task_id,
+                        context_id=task.context_id,
+                        final=True,
+                        status=TaskStatus(
+                            state=TaskState.failed,
+                            message=_task_message(error or "Observe task failed."),
+                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        ),
+                    )
+                )
             finally:
+                if status == "success":
+                    await task.event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            task_id=task.task_id,
+                            context_id=task.context_id,
+                            final=True,
+                            status=TaskStatus(
+                                state=TaskState.completed,
+                                message=_task_message(response_text or "Observe task completed."),
+                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                            ),
+                        )
+                    )
                 append_task_record(
                     TaskRecord(
                         task_id=task.task_id,

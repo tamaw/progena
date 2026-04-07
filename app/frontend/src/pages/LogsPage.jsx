@@ -502,7 +502,7 @@ function LogsPage() {
       return;
     }
 
-    if (['agent', 'agent_message', 'scheduled_response', 'task', 'alert', 'shutdown', 'message'].includes(event?.type)) {
+    if (['agent', 'agent_message', 'agent_notification', 'scheduled_response', 'task', 'alert', 'shutdown', 'message'].includes(event?.type)) {
       queueIncrementalRefresh();
     }
   }, [loadLogs, queueIncrementalRefresh]);
