@@ -19,6 +19,7 @@ import CodeNode from '../components/workspace/nodes/CodeNode';
 import WebFrameNode from '../components/workspace/nodes/WebFrameNode';
 import LabelNode from '../components/workspace/nodes/LabelNode';
 import ScheduleNode from '../components/workspace/nodes/ScheduleNode';
+import EventNode from '../components/workspace/nodes/EventNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
 import { useApi } from '../hooks/useApi';
@@ -30,6 +31,7 @@ const nodeTypes = {
   webframe: WebFrameNode,
   label: LabelNode,
   schedule: ScheduleNode,
+  event: EventNode,
   group: GroupNode,
   agent: AgentNode,
   mcp: AgentNode,
@@ -75,6 +77,7 @@ const minimapNodeColor = (node) => {
     case 'webframe': return '#d29922';
     case 'label': return '#8b949e';
     case 'schedule': return '#bc8cff';
+    case 'event': return '#ffa657';
     case 'group': return '#6e7681';
     case 'agent': return '#f85149';
     default: return '#8b949e';

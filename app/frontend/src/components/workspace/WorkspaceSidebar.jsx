@@ -9,6 +9,7 @@ const typeLabels = {
   webframe: 'Web Frame',
   label: 'Label',
   schedule: 'Schedule',
+  event: 'Event',
   group: 'Group',
   agent: 'Agent',
   mcp: 'MCP',
