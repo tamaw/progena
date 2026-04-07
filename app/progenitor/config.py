@@ -86,6 +86,12 @@ def resolve_mcp_config_path(config_dir: Path | str | None = None) -> Path:
     return base_dir / "mcp.json"
 
 
+def resolve_schedule_config_path(config_dir: Path | str | None = None) -> Path:
+    """Resolve the live schedule config path from the active config directory."""
+    base_dir = Path(config_dir) if config_dir is not None else _default_config_dir()
+    return base_dir / "schedule.json"
+
+
 def _is_valid_env_name(value: str) -> bool:
     """Return whether a placeholder name is a valid environment variable key."""
     if not value:
@@ -147,6 +153,11 @@ def default_mcp_config_payload() -> dict[str, Any]:
             }
         }
     }
+
+
+def default_schedule_config_payload() -> list[Any]:
+    """Return the default schedule configuration written to data/config/schedule.json."""
+    return []
 
 
 @dataclass

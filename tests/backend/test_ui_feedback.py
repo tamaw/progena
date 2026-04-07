@@ -554,9 +554,11 @@ class TestStateReaderFileOperations:
         schedule = [
             {"id": "sched-1", "name": "Daily check", "schedule": "0 0 * * *", "enabled": True}
         ]
-        (temp_state_dir / "schedule.json").write_text(json.dumps(schedule))
+        config_dir = temp_state_dir.parent / "config"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
-        reader = StateReader(state_dir=temp_state_dir)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
         snapshot = reader.get_snapshot()
 
         assert snapshot.health.status == "running"

@@ -105,6 +105,7 @@ app/
   mcp/                  # MCP servers
 .env                    # Local environment configuration
 data/
+  config/               # Runtime-managed config (agents, MCP, schedules)
   state/                # Persisted state (JSON)
   sessions/             # Session persistence
   attachments/          # Uploaded file cache/data
@@ -117,7 +118,7 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 ### State Files
 
 - `data/state/current_state.json` - Conversation state (messages, tool calls)
-- `data/state/schedule.json` - Scheduled tasks
+- `data/config/schedule.json` - Scheduled tasks
 - `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
 - `data/config/agents.json` - Agent registry
 - `data/config/mcp.json` - Progenitor external MCP server configuration

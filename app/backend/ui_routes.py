@@ -8,7 +8,7 @@ Reads real state data from data/state/, data/config/, and live backend-managed c
 - agents.json + data/config/mcp.json: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
-- schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
+- data/config/schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
 """
 
 import asyncio
@@ -1521,6 +1521,19 @@ def _read_mcp_config(state_reader: StateReader) -> tuple[Path, dict]:
     return mcp_config_path, data
 
 
+def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
+    """Read the live schedule config, falling back to the legacy state path while migrating."""
+    schedule_path = state_reader.schedule_config_path
+    raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
+    if raw is None and not schedule_path.exists():
+        raw = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
+    if raw is None:
+        return schedule_path, []
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=500, detail="Schedule state is invalid")
+    return schedule_path, raw
+
+
 async def _refresh_live_mcp_runtime(mcp_config_path: Path) -> None:
     """Best-effort refresh for the in-process Progenitor service after config edits."""
     with contextlib.suppress(Exception):
@@ -1738,10 +1751,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     state_reader = get_state_reader()
     if widget_id.startswith("schedule:"):
         schedule_id = widget_id.split(":", 1)[1]
-        schedule_path = state_reader.state_dir / "schedule.json"
-        schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
-        if not isinstance(schedule_data, list):
-            raise HTTPException(status_code=404, detail="Schedule state not found")
+        schedule_path, schedule_data = _read_schedule_config(state_reader)
 
         updated = None
         for entry in schedule_data:
@@ -1921,7 +1931,7 @@ async def get_schedules():
 
 @router.post("/schedules", response_model=WidgetResponse)
 async def create_schedule(body: ScheduleCreateRequest):
-    """Create a new schedule entry by writing directly to schedule.json."""
+    """Create a new schedule entry by writing directly to data/config/schedule.json."""
     name = body.name.strip()
     instruction = body.instruction.strip()
     if not name:
@@ -1930,12 +1940,7 @@ async def create_schedule(body: ScheduleCreateRequest):
         raise HTTPException(status_code=400, detail="Schedule task is required")
 
     state_reader = get_state_reader()
-    schedule_path = state_reader.state_dir / "schedule.json"
-    schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
-    if schedule_data is None:
-        schedule_data = []
-    if not isinstance(schedule_data, list):
-        raise HTTPException(status_code=500, detail="Schedule state is invalid")
+    schedule_path, schedule_data = _read_schedule_config(state_reader)
 
     created_at = utcnow().isoformat()
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"

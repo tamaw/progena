@@ -54,9 +54,10 @@ else:
 class StateManager:
     """Manages persistence of Progenitor state with file locking.
 
-    State is split into two files:
+    Core runtime data is split across state and config files:
     - build_state.json: Agent build process only (inner loop, LLM messages, verification)
-    - current_state.json: Progenitor agent operational state (chat, schedule, tool calls)
+    - current_state.json: Progenitor agent operational state (chat, tool calls)
+    - schedule.json: Scheduled tasks stored in data/config
 
     Provides:
     - Atomic writes for crash safety
@@ -99,7 +100,7 @@ class StateManager:
 
     def _path_for(self, name: str) -> Path:
         """Resolve core file path, routing registry files to config dir."""
-        if name in {"registry", "mcp"}:
+        if name in {"registry", "mcp", "schedule"}:
             return self.config_dir / self.CORE_FILES[name]
         return self.state_dir / self.CORE_FILES[name]
 
@@ -155,6 +156,19 @@ class StateManager:
         """Ensure all state files exist with defaults."""
         # Clean up any stale temp files from previous failed writes
         self._cleanup_stale_temp_files()
+
+        schedule_default: list[Any] = []
+        legacy_schedule_path = self.state_dir / self.CORE_FILES["schedule"]
+        schedule_path = self._path_for("schedule")
+        if not schedule_path.exists() and legacy_schedule_path.exists():
+            legacy_schedule = await self._read_json(legacy_schedule_path)
+            if isinstance(legacy_schedule, list):
+                logger.info(
+                    "Migrating legacy schedule config from %s to %s",
+                    legacy_schedule_path,
+                    schedule_path,
+                )
+                schedule_default = legacy_schedule
 
         defaults = {
             # build_state.json - Agent builds ONLY (inner loop)
@@ -238,7 +252,7 @@ class StateManager:
                 "shutdown_requested": False,
                 "last_checkpoint": None,
                 "messages": [],  # Chat history (user ↔ progenitor)
-                # NOTE: schedule is stored in schedule.json (system feature, not user session)
+                # NOTE: schedule is stored in data/config/schedule.json
                 "attachments": [],  # Attachment path links
                 "tool_calls": [],  # Session tool calls
                 "current_input": None,
@@ -248,7 +262,7 @@ class StateManager:
             },
             "registry": {},
             "mcp": {"tools": []},
-            "schedule": [],
+            "schedule": schedule_default,
         }
 
         for name, filename in self.CORE_FILES.items():
@@ -441,26 +455,26 @@ class StateManager:
                 break
         await self.save_backlog(backlog)
 
-    # Schedule management (stored in schedule.json - system feature, not user session)
+    # Schedule management (stored in data/config/schedule.json)
     async def get_schedule(self) -> list[ScheduleEntry]:
-        """Get scheduled tasks from schedule.json.
+        """Get scheduled tasks from data/config/schedule.json.
 
         Schedule is a system feature that persists beyond user sessions.
         It is stored separately from current_state.json.
         """
         async with self._file_lock("schedule"):
-            data = await self._read_json(self.state_dir / self.CORE_FILES["schedule"])
+            data = await self._read_json(self._path_for("schedule"))
             return [ScheduleEntry(**item) for item in (data or [])]
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
-        """Save scheduled tasks to schedule.json.
+        """Save scheduled tasks to data/config/schedule.json.
 
         Schedule is a system feature that persists beyond user sessions.
         It is stored separately from current_state.json.
         """
         async with self._file_lock("schedule"):
             data = [item.model_dump() for item in schedule]
-            await self._atomic_write_json(self.state_dir / self.CORE_FILES["schedule"], data)
+            await self._atomic_write_json(self._path_for("schedule"), data)
             self._state_cache["schedule"] = data
 
     # SpecDoc management (persistent spec artifact in build_state.json)

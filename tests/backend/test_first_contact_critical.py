@@ -192,7 +192,7 @@ def complete_state_files(tmp_path):
             "next_run": None,
         },
     ]
-    (state_dir / "schedule.json").write_text(json.dumps(schedule))
+    (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
     return state_dir
 
@@ -417,7 +417,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         state_dir.mkdir()
 
         # Write corrupt JSON to all files
-        corrupt_files = ["health.json", "build_state.json", "schedule.json"]
+        corrupt_files = ["health.json", "build_state.json"]
 
         for filename in corrupt_files:
             (state_dir / filename).write_text("{this is not valid json!!!")
@@ -426,6 +426,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         (config_dir / "agents.json").write_text("{this is not valid json!!!")
         mcp_config_path = config_dir / "mcp.json"
         mcp_config_path.write_text("{this is not valid json!!!")
+        (config_dir / "schedule.json").write_text("{this is not valid json!!!")
 
         reader = StateReader(state_dir=state_dir, config_dir=config_dir)
 

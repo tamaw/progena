@@ -22,7 +22,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from app.progenitor.config import load_mcp_servers
+from app.progenitor.config import (
+    load_mcp_servers,
+    resolve_mcp_config_path,
+    resolve_schedule_config_path,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -408,7 +412,11 @@ class StateReader:
 
     @property
     def mcp_config_path(self) -> Path:
-        return self.config_dir / "mcp.json"
+        return resolve_mcp_config_path(self.config_dir)
+
+    @property
+    def schedule_config_path(self) -> Path:
+        return resolve_schedule_config_path(self.config_dir)
 
     def _resolved_logs_dir(self) -> Path:
         return self.logs_dir.resolve()
@@ -517,7 +525,9 @@ class StateReader:
         return [BacklogItem.from_dict(item) for item in backlog if isinstance(item, dict)]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        data = self._read_json("schedule.json")
+        data = self._read_json_from_path(self.schedule_config_path)
+        if data is None and not self.schedule_config_path.exists():
+            data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]
@@ -1187,7 +1197,7 @@ class StateReader:
             self.state_dir / "health.json",
             self.state_dir / "current_state.json",
             self.state_dir / "build_state.json",
-            self.state_dir / "schedule.json",
+            self.schedule_config_path,
             self.config_dir / "agents.json",
             self.config_dir / "mcp.json",
             self.config_dir / "event_widgets.json",
