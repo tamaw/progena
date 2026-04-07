@@ -8,11 +8,17 @@ import {
   ReactFlowProvider,
 } from '@xyflow/react';
 
+import '../styles/workspace.css';
+import '../styles/nodes.css';
 import Header from '../components/layout/Header';
 import WorkspaceSidebar from '../components/workspace/WorkspaceSidebar';
 import WorkspaceDock from '../components/workspace/WorkspaceDock';
 import NodeContextMenu from '../components/workspace/NodeContextMenu';
-import { WorkspaceProvider, useWorkspaceContext } from '../context/WorkspaceContext';
+import {
+  WorkspaceProvider,
+  useWorkspaceActions,
+  useWorkspaceGraph,
+} from '../context/WorkspaceContext';
 
 import PromptNode from '../components/workspace/nodes/PromptNode';
 import CodeNode from '../components/workspace/nodes/CodeNode';
@@ -41,6 +47,12 @@ const minimapStyle = {
   height: 100,
   width: 150,
 };
+const defaultEdgeOptions = {
+  type: 'smoothstep',
+  animated: true,
+};
+const snapGrid = [16, 16];
+const defaultViewport = { x: 0, y: 0, zoom: 1 };
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'workspace.sidebar.width';
 const SIDEBAR_MIN_WIDTH_PERCENT = 18;
@@ -89,6 +101,10 @@ function WorkspaceInner() {
     nodes,
     edges,
     viewport,
+    loading,
+    error,
+  } = useWorkspaceGraph();
+  const {
     onNodesChange,
     onEdgesChange,
     onConnect,
@@ -99,11 +115,9 @@ function WorkspaceInner() {
     sendToBack,
     toggleExpanded,
     setViewport,
-    loading,
-    error,
     refreshWorkspace,
     syncWidgets,
-  } = useWorkspaceContext();
+  } = useWorkspaceActions();
   const workspaceReady = !loading && !error;
 
   const reactFlowInstance = useReactFlow();
@@ -173,20 +187,10 @@ function WorkspaceInner() {
   }, [sidebarCollapsed]);
 
   const handleStatusEvent = useCallback((event) => {
-    if (!event?.data) {
+    if (event?.type !== 'widgets' || !event?.data) {
       return;
     }
-
-    if (event.type === 'widgets') {
-      syncWidgets(event.data.items || event.data.widgets || []);
-      return;
-    }
-
-    if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
-      if (Array.isArray(event.data.widgets)) {
-        syncWidgets(event.data.widgets);
-      }
-    }
+    syncWidgets(event.data.items || event.data.widgets || []);
   }, [syncWidgets]);
 
   useStatusSSE(handleStatusEvent);
@@ -406,12 +410,12 @@ function WorkspaceInner() {
           zoomOnDoubleClick={workspaceReady}
           panOnScroll={false}
           selectionMode="partial"
-          defaultEdgeOptions={{ type: 'smoothstep', animated: true }}
+          defaultEdgeOptions={defaultEdgeOptions}
           snapToGrid
-          snapGrid={[16, 16]}
+          snapGrid={snapGrid}
           minZoom={0.1}
           maxZoom={4}
-          defaultViewport={viewport}
+          defaultViewport={defaultViewport}
         >
           <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
           <Controls showInteractive={false} />

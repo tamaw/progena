@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
@@ -37,7 +37,8 @@ function formatEventLabel(eventType) {
 }
 
 function EventNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, saveEventNode, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, saveEventNode } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
   const isSaving = Boolean(data.isSaving && !data.serverManaged);
