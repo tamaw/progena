@@ -138,11 +138,19 @@ def _responses_function_tool(
     description: str,
     parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    schema = dict(parameters or {"type": "object", "properties": {}, "required": []})
-    schema.setdefault("type", "object")
-    schema.setdefault("properties", {})
-    schema.setdefault("required", [])
-    schema.setdefault("additionalProperties", False)
+    schema: dict[str, Any] = (
+        dict(parameters)
+        if parameters is not None
+        else {"type": "object", "properties": {}, "required": []}
+    )
+    if "type" not in schema:
+        schema["type"] = "object"
+    if "properties" not in schema:
+        schema["properties"] = {}
+    if "required" not in schema:
+        schema["required"] = []
+    if "additionalProperties" not in schema:
+        schema["additionalProperties"] = False
     return {
         "type": "function",
         "name": name,
