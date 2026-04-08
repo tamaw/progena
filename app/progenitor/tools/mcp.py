@@ -622,8 +622,6 @@ class A2AClient:
         request: str,
         context: dict[str, Any] | None = None,
         timeout: float = 60.0,
-        task_id: str | None = None,
-        context_id: str | None = None,
         blocking: bool = False,
         history_length: int | None = None,
     ) -> dict[str, Any]:
@@ -665,8 +663,6 @@ class A2AClient:
                     role=Role.user,
                     parts=[Part(root=TextPart(text=request or ""))],
                     message_id=uuid.uuid4().hex,
-                    task_id=task_id,
-                    context_id=context_id,
                     metadata=context or {},
                 )
                 configuration = MessageSendConfiguration(
