@@ -6,6 +6,7 @@ import { useWorkspaceActions, useWorkspaceMeta } from '../../context/WorkspaceCo
 const typeLabels = {
   prompt: 'Prompt',
   code: 'Code',
+  user: 'User',
   webframe: 'Web Frame',
   label: 'Label',
   schedule: 'Schedule',

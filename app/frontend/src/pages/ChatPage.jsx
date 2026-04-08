@@ -175,6 +175,15 @@ function ChatPage() {
       }
     }
 
+    if (event.type === 'agent_notification') {
+      const metadata = event.data?.metadata || {};
+      show(
+        metadata?.level || 'info',
+        metadata?.title || 'Notification',
+        event.data?.content || ''
+      );
+    }
+
     // Handle alerts
     if (event.type === 'alert') {
       show(event.data?.type || 'info', event.data?.title || 'Alert', event.data?.message || '');
