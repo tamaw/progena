@@ -340,8 +340,8 @@ class BuilderAgentExecutor(AgentExecutor):
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         request_ctx = _extract_context(context.message)
-        task_id = str(request_ctx.get("a2a_task_id") or context.task_id or uuid.uuid4())
-        ctx_id = str(request_ctx.get("a2a_context_id") or context.context_id or uuid.uuid4())
+        task_id = str(context.task_id or request_ctx.get("a2a_task_id") or uuid.uuid4())
+        ctx_id = str(context.context_id or request_ctx.get("a2a_context_id") or uuid.uuid4())
         request_ctx["a2a_task_id"] = task_id
         request_ctx["a2a_context_id"] = ctx_id
 

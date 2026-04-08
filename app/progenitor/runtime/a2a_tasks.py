@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -280,34 +279,34 @@ async def dispatch_tracked_a2a_task(
 ) -> tuple[dict[str, Any], A2ATaskRecord | None]:
     """Submit an A2A task and persist the returned task snapshot when available."""
     metadata = dict(request_metadata or {})
-    task_id = (
-        str(metadata.get("a2a_task_id") or "").strip() or f"{agent_name}_{uuid.uuid4().hex[:12]}"
-    )
-    context_id = str(metadata.get("a2a_context_id") or "").strip() or uuid.uuid4().hex
-    metadata["a2a_task_id"] = task_id
-    metadata["a2a_context_id"] = context_id
+    metadata.pop("a2a_task_id", None)
+    metadata.pop("a2a_context_id", None)
 
     response = await A2AClient().call_agent(
         agent_config=agent_config,
         request=request_text,
         context=metadata,
         timeout=timeout,
-        task_id=task_id,
-        context_id=context_id,
         blocking=blocking,
     )
 
     task_record: A2ATaskRecord | None = None
     payload = response.get("result") if isinstance(response, dict) else None
     if response.get("success") and is_task_payload(payload):
+        task_payload = cast(dict[str, Any], payload)
+        tracked_metadata = dict(metadata)
+        tracked_metadata["a2a_task_id"] = str(task_payload.get("id") or "")
+        payload_context_id = str(task_payload.get("contextId") or "").strip()
+        if payload_context_id:
+            tracked_metadata["a2a_context_id"] = payload_context_id
         task_record = await upsert_tracked_task_from_payload(
             state_manager,
-            task_payload=cast(dict[str, Any], payload),
+            task_payload=task_payload,
             agent_name=agent_name,
             agent_config=agent_config,
             source=source,
             request_text=request_text,
-            request_metadata=metadata,
+            request_metadata=tracked_metadata,
             notify_on_completion=notify_on_completion,
         )
 
