@@ -176,7 +176,9 @@ async def test_execute_enqueues_and_returns_submitted(
 
 
 @pytest.mark.asyncio
-async def test_execute_prefers_metadata_task_ids(executor, mock_event_queue, mock_context_build):
+async def test_execute_prefers_request_context_task_ids(
+    executor, mock_event_queue, mock_context_build
+):
     queue = AsyncMock()
     queue.enqueue = AsyncMock()
     mock_context_build.message.metadata = {
@@ -191,6 +193,8 @@ async def test_execute_prefers_metadata_task_ids(executor, mock_event_queue, moc
         await executor.execute(mock_context_build, mock_event_queue)
 
     queued_task = queue.enqueue.await_args.args[0]
-    assert queued_task.task_id == "remote-task-123"
-    assert queued_task.context_id == "remote-ctx-456"
+    assert queued_task.task_id == "task-test-002"
+    assert queued_task.context_id == "ctx-test-002"
+    assert queued_task.request_ctx["a2a_task_id"] == "task-test-002"
+    assert queued_task.request_ctx["a2a_context_id"] == "ctx-test-002"
     assert queued_task.event_queue is mock_event_queue

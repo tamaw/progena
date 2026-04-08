@@ -30,6 +30,17 @@ def _first_env(*keys: str, default: str | None = None) -> str | None:
     return default
 
 
+def _default_project_root(file_path: Path | None = None) -> Path:
+    """Resolve the builder-agent project root for both repo and packaged layouts."""
+    resolved = (file_path or Path(__file__)).resolve()
+    parents = resolved.parents
+    if len(parents) > 3:
+        return parents[3]
+    if len(parents) > 1:
+        return parents[1]
+    return parents[0]
+
+
 # ---------------------------------------------------------------------------
 # Backward-compatible default constants
 #
@@ -42,11 +53,22 @@ DEFAULT_MAX_OUTER_ITERATIONS = 10
 DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
 DEFAULT_VERIFICATION_TARGET_SCORE = 0.8
 DEFAULT_MAX_CONVERSATION_HISTORY = 10
-DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
-DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
-DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[3] / "worktrees"
-DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
+_DEFAULT_PROJECT_ROOT = _default_project_root()
+DEFAULT_PROJECT_DATA_DIR = Path(
+    _first_env("PROGENITOR_DATA_DIR") or str(_DEFAULT_PROJECT_ROOT / "data")
+)
+DEFAULT_PROJECT_STATE_DIR = Path(
+    _first_env("PROGENITOR_STATE_DIR") or str(DEFAULT_PROJECT_DATA_DIR / "state")
+)
+DEFAULT_PROJECT_LOG_DIR = Path(
+    _first_env("PROGENITOR_LOG_DIR") or str(_DEFAULT_PROJECT_ROOT / "logs")
+)
+DEFAULT_PROJECT_WORKTREE_DIR = Path(
+    _first_env("PROGENITOR_WORKTREE_DIR") or str(_DEFAULT_PROJECT_ROOT / "worktrees")
+)
+DEFAULT_PROJECT_PROMPTS_DIR = Path(
+    _first_env("PROGENITOR_PROMPTS_DIR") or str(DEFAULT_PROJECT_DATA_DIR / "prompts")
+)
 
 
 def _default_data_dir(project_root: Path | None = None) -> Path:
