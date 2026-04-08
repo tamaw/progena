@@ -133,6 +133,33 @@ def _text_msg(text: str) -> Message:
     )
 
 
+def _responses_function_tool(
+    name: str,
+    description: str,
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    schema: dict[str, Any] = (
+        dict(parameters)
+        if parameters is not None
+        else {"type": "object", "properties": {}, "required": []}
+    )
+    if "type" not in schema:
+        schema["type"] = "object"
+    if "properties" not in schema:
+        schema["properties"] = {}
+    if "required" not in schema:
+        schema["required"] = []
+    if "additionalProperties" not in schema:
+        schema["additionalProperties"] = False
+    return {
+        "type": "function",
+        "name": name,
+        "description": description,
+        "parameters": schema,
+        "strict": True,
+    }
+
+
 def _extract_request_text(message: Message | None) -> str:
     if not message:
         return ""
@@ -271,79 +298,59 @@ class ObserveAgent:
 
     def _tool_defs(self) -> list[dict[str, Any]]:
         return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_state_files",
-                    "description": "List files under the mounted state directory.",
-                    "parameters": {"type": "object", "properties": {}, "required": []},
+            _responses_function_tool(
+                "list_state_files",
+                "List files under the mounted state directory.",
+            ),
+            _responses_function_tool(
+                "list_log_files",
+                "List files under the mounted logs directory. Paths may include nested directories.",
+            ),
+            _responses_function_tool(
+                "read_state_json",
+                "Read a JSON file from the mounted state directory.",
+                {
+                    "type": "object",
+                    "properties": {"filename": {"type": "string"}},
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_log_files",
-                    "description": "List files under the mounted logs directory. Paths may include nested directories.",
-                    "parameters": {"type": "object", "properties": {}, "required": []},
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_state_json",
-                    "description": "Read a JSON file from the mounted state directory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"filename": {"type": "string"}},
-                        "required": ["filename"],
+            ),
+            _responses_function_tool(
+                "read_state_text_tail",
+                "Read the tail of a state file as text.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "max_bytes": {"type": "integer", "default": 131072},
                     },
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_state_text_tail",
-                    "description": "Read the tail of a state file as text.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "max_bytes": {"type": "integer", "default": 131072},
-                        },
-                        "required": ["filename"],
+            ),
+            _responses_function_tool(
+                "read_log_jsonl_tail",
+                "Read the tail of a JSONL log file from the mounted logs directory.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "limit": {"type": "integer", "default": 50},
                     },
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_log_jsonl_tail",
-                    "description": "Read the tail of a JSONL log file from the mounted logs directory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "limit": {"type": "integer", "default": 50},
-                        },
-                        "required": ["filename"],
+            ),
+            _responses_function_tool(
+                "read_log_text_tail",
+                "Read the tail of a log file from the mounted logs directory.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "max_bytes": {"type": "integer", "default": 262144},
                     },
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_log_text_tail",
-                    "description": "Read the tail of a log file from the mounted logs directory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "max_bytes": {"type": "integer", "default": 262144},
-                        },
-                        "required": ["filename"],
-                    },
-                },
-            },
+            ),
         ]
 
     def _execute_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -568,7 +575,7 @@ class ObserveAgent:
 
 
 class ObserveExecutor(AgentExecutor):
-    """A2A executor that immediately accepts tasks and runs them in the background."""
+    """A2A executor that emits a submitted state, then continues task execution."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or str(uuid.uuid4())
@@ -608,15 +615,6 @@ class ObserveExecutor(AgentExecutor):
             )
             return
 
-        await _task_queue.enqueue(
-            _QueuedTask(
-                task_id=task_id,
-                context_id=ctx_id,
-                request_text=request_text,
-                request_ctx=request_ctx,
-                event_queue=event_queue,
-            )
-        )
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id,
@@ -627,6 +625,15 @@ class ObserveExecutor(AgentExecutor):
                     message=_text_msg(f"Task accepted (id={task_id}): {request_text[:120]}"),
                     timestamp=_utc_now_iso(),
                 ),
+            )
+        )
+        await _task_queue.enqueue(
+            _QueuedTask(
+                task_id=task_id,
+                context_id=ctx_id,
+                request_text=request_text,
+                request_ctx=request_ctx,
+                event_queue=event_queue,
             )
         )
 
