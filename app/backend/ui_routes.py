@@ -416,6 +416,7 @@ class ActionRunRequest(BaseModel):
     content: str | None = None
     input: str | None = None
     language: str | None = None
+    broadcast_response: bool = True
 
 
 class ActionGenerateRequest(BaseModel):
@@ -1021,6 +1022,77 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                         WidgetFieldSchemaResponse(key="lastTriggeredAt", label="Last Triggered"),
                         WidgetFieldSchemaResponse(key="lastRunStatus", label="Last Run Status"),
                         WidgetFieldSchemaResponse(key="saveError", label="Save Error"),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="user",
+            default_tab="details",
+            tabs=[
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="messageType",
+                            label="Message Type",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="say_to_user", label="say_to_user"),
+                                WidgetFieldOptionResponse(value="notify_user", label="notify_user"),
+                                WidgetFieldOptionResponse(
+                                    value="user_communication", label="user_communication"
+                                ),
+                            ],
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="notificationTitle",
+                            label="Notification Title",
+                            editable=True,
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="level",
+                            label="Notification Level",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="info", label="Info"),
+                                WidgetFieldOptionResponse(value="warning", label="Warning"),
+                                WidgetFieldOptionResponse(value="error", label="Error"),
+                                WidgetFieldOptionResponse(value="success", label="Success"),
+                            ],
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="content",
+                    label="Content",
+                    fields=[
+                        WidgetFieldSchemaResponse(
+                            key="message",
+                            label="Message / Body",
+                            control="textarea",
+                            editable=True,
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="status",
+                    label="Status",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="lastSentAt", label="Last Sent"),
+                        WidgetFieldSchemaResponse(
+                            key="summaryState", label="Summary", control="textarea"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -2304,14 +2376,15 @@ async def action_run(body: ActionRunRequest):
         raise HTTPException(status_code=400, detail="No run payload provided")
 
     response = await chat_main.client.send_message("\n\n".join(segments))
-    broadcast_chat_event(
-        "agent_message",
-        {
-            "content": response,
-            "metadata": {"widget_id": body.widget_id, "action": "run"},
-            "timestamp": time.time(),
-        },
-    )
+    if body.broadcast_response:
+        broadcast_chat_event(
+            "agent_message",
+            {
+                "content": response,
+                "metadata": {"widget_id": body.widget_id, "action": "run"},
+                "timestamp": time.time(),
+            },
+        )
     _broadcast_widget_refresh(get_state_reader())
     return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
 
@@ -3182,6 +3255,7 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
     This stream receives:
     - scheduled_response: Scheduled task responses
     - agent_message: Agent-initiated messages
+    - agent_notification: Agent notifications
     - alert: System alerts
     - task: Task status updates
     - agent: Agent activity updates
@@ -3311,6 +3385,7 @@ async def events_stream():
     Connect to receive real-time notifications about:
     - scheduled_response: Scheduled task responses
     - agent_message: Agent-initiated messages (talk to user)
+    - agent_notification: Agent notifications (toast/alert style)
     - alert: System alerts requiring attention
     - task: Task status updates
     - agent: Agent activity updates
@@ -3325,6 +3400,7 @@ async def events_stream():
     Example event types:
     - scheduled_response: {"content": "...", "metadata": {...}, "timestamp": ...}
     - agent_message: {"content": "...", "metadata": {...}, "timestamp": ...}
+    - agent_notification: {"content": "...", "metadata": {...}, "timestamp": ...}
     - alert: {"id": "...", "type": "...", "title": "...", "message": "...", "urgent": false}
     """
     return StreamingResponse(
@@ -3388,6 +3464,7 @@ def broadcast_chat_event(event_type: str, data: dict):
     Use for IPC-related events like:
     - scheduled_response
     - agent_message
+    - agent_notification
     - alert
     - task
     - agent

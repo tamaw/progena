@@ -21,10 +21,12 @@ const SERVER_NODE_TYPES = new Set(['agent', 'mcp', 'schedule', 'event']);
 const DEFAULT_EVENT_TYPE = 'kanban.card.created';
 const EVENT_TRIGGER_TARGET_TYPES = new Set(['prompt', 'code', 'schedule']);
 const MAX_EVENT_LOG_ENTRIES = 25;
+const DEFAULT_USER_MESSAGE_TYPE = 'say_to_user';
 
 const defaultNodeSizes = {
   prompt: { width: 320, height: 200 },
   code: { width: 400, height: 280 },
+  user: { width: 360, height: 240 },
   webframe: { width: 480, height: 360 },
   label: { width: 200, height: 60 },
   schedule: { width: 300, height: 180 },
@@ -53,6 +55,14 @@ const defaultNodeData = {
     originPromptId: null,
     lastRunId: null,
     outputRefs: [],
+  }),
+  user: () => ({
+    messageType: DEFAULT_USER_MESSAGE_TYPE,
+    message: '',
+    notificationTitle: '',
+    level: 'info',
+    lastSentAt: null,
+    summaryState: '',
   }),
   webframe: () => ({
     sourceType: 'html',
@@ -123,6 +133,7 @@ const defaultNodeData = {
 const typeLabels = {
   prompt: 'Prompt',
   code: 'Code',
+  user: 'User',
   webframe: 'Web Frame',
   label: 'Label',
   schedule: 'Schedule',
@@ -457,6 +468,75 @@ function buildPromptInvocation(promptData = {}, connectedTargetAgent = '', event
     'Task:',
     promptWithContext,
   ].join('\n');
+}
+
+function buildUserMessageInstruction(userData = {}) {
+  const messageType = userData.messageType || DEFAULT_USER_MESSAGE_TYPE;
+  const message = String(userData.message || '').trim();
+
+  if (!message) {
+    return { error: 'Enter a message before sending it.' };
+  }
+
+  if (messageType === 'notify_user') {
+    const notificationTitle = String(userData.notificationTitle || '').trim();
+    const level = String(userData.level || 'info').trim() || 'info';
+    if (!notificationTitle) {
+      return { error: 'Enter a notification title before sending it.' };
+    }
+
+    return {
+      delivery: 'notify_user',
+      level,
+      previewTitle: notificationTitle,
+      previewMessage: message,
+      prompt: [
+        'Use the `notify_user` tool exactly once with these exact arguments.',
+        'Do not call any other tools.',
+        'After the tool call, reply with exactly: sent',
+        '```json',
+        JSON.stringify({
+          title: notificationTitle,
+          body: message,
+          level,
+        }, null, 2),
+        '```',
+      ].join('\n'),
+    };
+  }
+
+  if (messageType === 'user_communication') {
+    return {
+      delivery: 'user_communication',
+      level: 'info',
+      previewTitle: 'user_communication',
+      previewMessage: message,
+      prompt: [
+        'Use the `user_communication` tool exactly once.',
+        'Do not call any other tools.',
+        'Pass this exact raw input string to the tool.',
+        '```text',
+        `user_communication: ${message}`,
+        '```',
+        'After the tool call, reply with exactly: sent',
+      ].join('\n'),
+    };
+  }
+
+  return {
+    delivery: 'say_to_user',
+    level: 'info',
+    previewTitle: 'say_to_user',
+    previewMessage: message,
+    prompt: [
+      'Use the `say_to_user` tool exactly once with these exact arguments.',
+      'Do not call any other tools.',
+      'After the tool call, reply with exactly: sent',
+      '```json',
+      JSON.stringify({ message }, null, 2),
+      '```',
+    ].join('\n'),
+  };
 }
 
 function buildServerNodes(widgets, existingNodes) {
@@ -1285,6 +1365,56 @@ export function WorkspaceProvider({ children }) {
     }
   }, [runAction, updateNodeData]);
 
+  const runUserNode = useCallback(async (nodeId) => {
+    const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+    if (!node || node.type !== 'user') {
+      return { ok: false, error: 'User node not found.' };
+    }
+
+    const instruction = buildUserMessageInstruction(node.data);
+    if (instruction.error) {
+      updateNodeData(nodeId, {
+        status: 'failed',
+        summaryState: instruction.error,
+      });
+      return { ok: false, error: instruction.error };
+    }
+
+    updateNodeData(nodeId, { status: 'running', summaryState: '' });
+
+    try {
+      const result = await runAction({
+        widget_id: nodeId,
+        prompt: instruction.prompt,
+        broadcast_response: false,
+      });
+      const responseText = getActionText(result);
+      const summary = responseText && responseText !== 'sent'
+        ? `Sent via ${instruction.delivery}. ${responseText}`
+        : `Sent via ${instruction.delivery}.`;
+
+      updateNodeData(nodeId, {
+        status: 'success',
+        lastSentAt: new Date().toISOString(),
+        summaryState: summary,
+      });
+
+      return {
+        ok: true,
+        delivery: instruction.delivery,
+        previewTitle: instruction.previewTitle,
+        previewMessage: instruction.previewMessage,
+        level: instruction.level,
+      };
+    } catch (runError) {
+      updateNodeData(nodeId, {
+        status: 'failed',
+        summaryState: runError.message,
+      });
+      return { ok: false, error: runError.message };
+    }
+  }, [runAction, updateNodeData]);
+
   const runScheduleNode = useCallback(async (nodeId) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
     if (!node || node.type !== 'schedule') {
@@ -1426,6 +1556,7 @@ export function WorkspaceProvider({ children }) {
     runPromptNode,
     generateFromPromptNode,
     runCodeNode,
+    runUserNode,
     runScheduleNode,
     saveScheduleNode,
     saveEventNode,
@@ -1451,6 +1582,7 @@ export function WorkspaceProvider({ children }) {
     runPromptNode,
     generateFromPromptNode,
     runCodeNode,
+    runUserNode,
     runScheduleNode,
     saveScheduleNode,
     saveEventNode,
