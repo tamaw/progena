@@ -29,12 +29,15 @@ import ScheduleNode from '../components/workspace/nodes/ScheduleNode';
 import EventNode from '../components/workspace/nodes/EventNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
+import UserNode from '../components/workspace/nodes/UserNode';
+import { useNotifications } from '../context/NotificationContext';
 import { useApi } from '../hooks/useApi';
-import { useStatusSSE } from '../hooks/useSSE';
+import { useEventsSSE, useStatusSSE } from '../hooks/useSSE';
 
 const nodeTypes = {
   prompt: PromptNode,
   code: CodeNode,
+  user: UserNode,
   webframe: WebFrameNode,
   label: LabelNode,
   schedule: ScheduleNode,
@@ -91,6 +94,7 @@ const minimapNodeColor = (node) => {
   switch (node.type) {
     case 'prompt': return '#58a6ff';
     case 'code': return '#3fb950';
+    case 'user': return '#39c5cf';
     case 'webframe': return '#d29922';
     case 'label': return '#8b949e';
     case 'schedule': return '#bc8cff';
@@ -102,6 +106,7 @@ const minimapNodeColor = (node) => {
 };
 
 function WorkspaceInner() {
+  const { show } = useNotifications();
   const {
     nodes,
     edges,
@@ -222,7 +227,27 @@ function WorkspaceInner() {
     syncWidgets(event.data.items || event.data.widgets || []);
   }, [syncWidgets]);
 
+  const handleChatEvent = useCallback((event) => {
+    if (!event?.data) {
+      return;
+    }
+
+    if (event.type === 'agent_message') {
+      const tool = event.data?.metadata?.tool;
+      if (tool === 'say_to_user' || tool === 'user_communication') {
+        show('info', tool === 'say_to_user' ? 'Say to User' : 'User Communication', event.data?.content || '');
+      }
+      return;
+    }
+
+    if (event.type === 'agent_notification') {
+      const metadata = event.data?.metadata || {};
+      show(metadata.level || 'info', metadata.title || 'Notification', event.data?.content || '');
+    }
+  }, [show]);
+
   useStatusSSE(handleStatusEvent);
+  useEventsSSE(handleChatEvent);
 
   // Handle drop from sidebar
   const onDrop = useCallback(
