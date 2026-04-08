@@ -68,11 +68,61 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
     assert saved is not None
     assert saved.agent_name == "builder_agent"
     assert saved.request_text == "Build a demo"
+    assert saved.request_metadata["a2a_task_id"] == "builder_task_1"
+    assert saved.request_metadata["a2a_context_id"] == "ctx-1"
 
     kwargs = fake_client.call_agent.await_args.kwargs
     assert kwargs["context"]["dispatch_mode"] == "async"
-    assert kwargs["context"]["a2a_task_id"] == kwargs["task_id"]
-    assert kwargs["context"]["a2a_context_id"] == kwargs["context_id"]
+    assert "a2a_task_id" not in kwargs["context"]
+    assert "a2a_context_id" not in kwargs["context"]
+    assert "task_id" not in kwargs
+    assert "context_id" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_dispatch_tracked_a2a_task_ignores_client_supplied_ids(
+    monkeypatch, state_manager
+) -> None:
+    fake_client = MagicMock()
+    fake_client.call_agent = AsyncMock(
+        return_value={
+            "success": True,
+            "result": {
+                "kind": "task",
+                "id": "observe_task_2",
+                "contextId": "ctx-2",
+                "status": {
+                    "state": "submitted",
+                    "message": {"parts": [{"kind": "text", "text": "Task accepted."}]},
+                },
+            },
+        }
+    )
+    monkeypatch.setattr("app.progenitor.runtime.a2a_tasks.A2AClient", lambda: fake_client)
+
+    response, tracked_task = await dispatch_tracked_a2a_task(
+        state_manager=state_manager,
+        agent_name="observe_agent",
+        agent_config={"url": "http://localhost:8108", "transport": "http"},
+        request_text="Inspect state",
+        request_metadata={
+            "caller": "progenitor",
+            "a2a_task_id": "client-task",
+            "a2a_context_id": "client-ctx",
+        },
+        source="call_agent",
+        timeout=5.0,
+        blocking=False,
+    )
+
+    assert response["success"] is True
+    assert tracked_task is not None
+    assert tracked_task.task_id == "observe_task_2"
+    assert tracked_task.request_metadata["a2a_task_id"] == "observe_task_2"
+    assert tracked_task.request_metadata["a2a_context_id"] == "ctx-2"
+
+    kwargs = fake_client.call_agent.await_args.kwargs
+    assert kwargs["context"] == {"caller": "progenitor"}
 
 
 @pytest.mark.asyncio

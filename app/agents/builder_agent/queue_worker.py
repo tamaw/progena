@@ -16,11 +16,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 from a2a.types import Message, Part, Role, TaskState, TaskStatus, TaskStatusUpdateEvent, TextPart
 
+from .config import _default_project_root
+
 if TYPE_CHECKING:
     from .runtime.background_build import BuildResult
 
 logger = logging.getLogger(__name__)
-DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+DEFAULT_PROJECT_LOG_DIR = _default_project_root() / "logs"
 
 
 def _require_agent_name() -> str:
