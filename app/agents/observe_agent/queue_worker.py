@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -152,7 +151,7 @@ def sync_wait_for_completion(
 
 
 class ObserveTaskQueue:
-    """In-process asyncio queue for background observe requests."""
+    """Concurrency-limited runner and task logger for observe requests."""
 
     def __init__(
         self,
@@ -161,114 +160,116 @@ class ObserveTaskQueue:
         log_path: Path | None = None,
     ) -> None:
         self._service = service
-        self._queue: asyncio.Queue[_QueuedTask] = asyncio.Queue()
-        self._semaphore = asyncio.Semaphore(max_concurrent)
-        self._worker_task: asyncio.Task[None] | None = None
+        self._semaphore = asyncio.Semaphore(max(1, max_concurrent))
         self._log_path = _resolve_log_path(log_path)
-        self._queued_task_ids: set[str] = set()
-        self._cancelled_task_ids: set[str] = set()
+        self._active_task_ids: set[str] = set()
+        self._started = False
 
     def start(self) -> None:
-        if self._worker_task is None or self._worker_task.done():
-            self._worker_task = asyncio.ensure_future(self._dequeue_loop())
-            logger.info("ObserveTaskQueue: worker started")
+        if self._started:
+            return
+        self._started = True
+        logger.info("ObserveTaskQueue: runner ready")
 
     async def stop(self, drain_timeout: float = 5.0) -> None:
-        if self._worker_task is not None and not self._worker_task.done():
-            self._worker_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
-                await asyncio.wait_for(asyncio.shield(self._worker_task), timeout=drain_timeout)
-            self._worker_task = None
-            logger.info("ObserveTaskQueue: worker stopped")
+        del drain_timeout
+        if not self._started:
+            return
+        self._started = False
+        logger.info("ObserveTaskQueue: runner stopped")
 
     async def enqueue(self, task: _QueuedTask) -> None:
-        self._queued_task_ids.add(task.task_id)
-        await self._queue.put(task)
+        self._active_task_ids.add(task.task_id)
         logger.debug("ObserveTaskQueue: enqueued task_id=%s", task.task_id)
-
-    async def cancel(self, task_id: str) -> bool:
-        if task_id in self._queued_task_ids:
-            self._cancelled_task_ids.add(task_id)
-            return True
-        return False
-
-    async def _dequeue_loop(self) -> None:
-        while True:
-            try:
-                task = await self._queue.get()
-                self._queued_task_ids.discard(task.task_id)
-                if task.task_id in self._cancelled_task_ids:
-                    self._cancelled_task_ids.discard(task.task_id)
-                    self._queue.task_done()
-                    logger.info("ObserveTaskQueue: skipped cancelled task_id=%s", task.task_id)
-                    continue
-                asyncio.ensure_future(self._run_task(task))
-                self._queue.task_done()
-            except asyncio.CancelledError:
-                logger.info("ObserveTaskQueue: dequeue loop cancelled")
-                break
-            except Exception:
-                logger.exception("ObserveTaskQueue: unexpected dequeue loop error")
-
-    async def _run_task(self, task: _QueuedTask) -> None:
-        async with self._semaphore:
-            response_text: str | None = None
-            error: str | None = None
-            status = "failure"
-            logger.info("ObserveTaskQueue: starting task_id=%s", task.task_id)
-            try:
-                await task.event_queue.enqueue_event(
-                    TaskStatusUpdateEvent(
+        started = False
+        try:
+            async with self._semaphore:
+                started = True
+                await self._run_task(task)
+        except asyncio.CancelledError:
+            if not started:
+                append_task_record(
+                    TaskRecord(
                         task_id=task.task_id,
                         context_id=task.context_id,
-                        final=False,
-                        status=TaskStatus(
-                            state=TaskState.working,
-                            message=_task_message("Observe task is running."),
-                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                        ),
-                    )
+                        status="cancelled",
+                        response_text=None,
+                        error="Cancelled before execution.",
+                        timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    ),
+                    log_path=self._log_path,
                 )
-                response_text = await self._service.process(task.request_text, task.request_ctx)
-                status = "success"
-            except Exception as exc:
-                error = str(exc)
-                logger.exception("ObserveTaskQueue: task failed task_id=%s", task.task_id)
+                logger.info("ObserveTaskQueue: cancelled before start task_id=%s", task.task_id)
+            raise
+        finally:
+            self._active_task_ids.discard(task.task_id)
+
+    async def cancel(self, task_id: str) -> bool:
+        return task_id in self._active_task_ids
+
+    async def _run_task(self, task: _QueuedTask) -> None:
+        response_text: str | None = None
+        error: str | None = None
+        status = "failure"
+        logger.info("ObserveTaskQueue: starting task_id=%s", task.task_id)
+        try:
+            await task.event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task.task_id,
+                    context_id=task.context_id,
+                    final=False,
+                    status=TaskStatus(
+                        state=TaskState.working,
+                        message=_task_message("Observe task is running."),
+                        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+            )
+            response_text = await self._service.process(task.request_text, task.request_ctx)
+            status = "success"
+        except asyncio.CancelledError:
+            status = "cancelled"
+            error = "Cancelled."
+            logger.info("ObserveTaskQueue: task cancelled task_id=%s", task.task_id)
+            raise
+        except Exception as exc:
+            error = str(exc)
+            logger.exception("ObserveTaskQueue: task failed task_id=%s", task.task_id)
+            await task.event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task.task_id,
+                    context_id=task.context_id,
+                    final=True,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=_task_message(error or "Observe task failed."),
+                        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+            )
+        finally:
+            if status == "success":
                 await task.event_queue.enqueue_event(
                     TaskStatusUpdateEvent(
                         task_id=task.task_id,
                         context_id=task.context_id,
                         final=True,
                         status=TaskStatus(
-                            state=TaskState.failed,
-                            message=_task_message(error or "Observe task failed."),
+                            state=TaskState.completed,
+                            message=_task_message(response_text or "Observe task completed."),
                             timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                         ),
                     )
                 )
-            finally:
-                if status == "success":
-                    await task.event_queue.enqueue_event(
-                        TaskStatusUpdateEvent(
-                            task_id=task.task_id,
-                            context_id=task.context_id,
-                            final=True,
-                            status=TaskStatus(
-                                state=TaskState.completed,
-                                message=_task_message(response_text or "Observe task completed."),
-                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                            ),
-                        )
-                    )
-                append_task_record(
-                    TaskRecord(
-                        task_id=task.task_id,
-                        context_id=task.context_id,
-                        status=status,
-                        response_text=response_text,
-                        error=error,
-                        timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    ),
-                    log_path=self._log_path,
-                )
-                logger.info("ObserveTaskQueue: finished task_id=%s status=%s", task.task_id, status)
+            append_task_record(
+                TaskRecord(
+                    task_id=task.task_id,
+                    context_id=task.context_id,
+                    status=status,
+                    response_text=response_text,
+                    error=error,
+                    timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                ),
+                log_path=self._log_path,
+            )
+            logger.info("ObserveTaskQueue: finished task_id=%s status=%s", task.task_id, status)
