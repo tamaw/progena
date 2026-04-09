@@ -1,7 +1,6 @@
 """Root conftest: ensure worktree packages and prompts resolve correctly before any imports."""
 
 import os
-import sys
 from pathlib import Path
 
 # Execute at module import time (when conftest.py is first loaded by pytest)
