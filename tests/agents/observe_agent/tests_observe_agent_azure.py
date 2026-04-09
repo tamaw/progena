@@ -39,7 +39,7 @@ class _FakeAsyncClient:
     def __init__(self, post_fn, **kwargs: Any) -> None:
         self._post_fn = post_fn
 
-    async def __aenter__(self) -> "_FakeAsyncClient":
+    async def __aenter__(self) -> _FakeAsyncClient:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -91,9 +91,8 @@ async def test_post_responses_logs_body_on_400(
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(fake_post, **kw))
 
-    with caplog.at_level(logging.ERROR, logger="app.agents.observe_agent.agent"):
-        with pytest.raises(httpx.HTTPStatusError):
-            await azure_agent._post_responses({"model": "gpt-5-mini", "input": []})
+    with caplog.at_level(logging.ERROR, logger="app.agents.observe_agent.agent"), pytest.raises(httpx.HTTPStatusError):
+        await azure_agent._post_responses({"model": "gpt-5-mini", "input": []})
 
     error_messages = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
     assert any(
