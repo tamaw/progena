@@ -127,10 +127,11 @@ def test_observe_agent_tool_defs_match_responses_api_schema(tmp_path: Path) -> N
         assert isinstance(parameters, dict)
         assert parameters.get("type") == "object"
         assert parameters.get("additionalProperties") is False
+        assert parameters.get("required") == list((parameters.get("properties") or {}).keys())
 
 
 @pytest.mark.asyncio
-async def test_post_responses_maps_model_to_deployment_for_azure_custom_domains(
+async def test_post_responses_keeps_model_for_azure_custom_domains(
     azure_agent: ObserveAgent, monkeypatch
 ) -> None:
     captured: list[dict[str, Any]] = []
@@ -144,8 +145,8 @@ async def test_post_responses_maps_model_to_deployment_for_azure_custom_domains(
     await azure_agent._post_responses({"model": "gpt-5-mini", "input": []})
 
     assert len(captured) == 1
-    assert captured[0]["deployment"] == "gpt-5-mini"
-    assert "model" not in captured[0]
+    assert captured[0]["model"] == "gpt-5-mini"
+    assert "deployment" not in captured[0]
 
 
 @pytest.mark.asyncio
