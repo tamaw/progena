@@ -14,6 +14,11 @@ from typing import Any, cast
 
 import httpx
 
+from app.progenitor.mcp_tool_utils import (
+    get_mcp_tool_description,
+    parse_mcp_jsonrpc_response,
+)
+
 from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -40,19 +45,22 @@ class MCPTool(BaseSystemTool):
         mcp_config = getattr(llm_client, "mcp_config", None)
         mcp_tools = getattr(llm_client, "mcp_tools", None) or []
 
-        return ToolResult.ok({
-            "enabled": bool(getattr(mcp_config, "enabled", False)) if mcp_config else False,
-            "base_url": getattr(mcp_config, "base_url", None) if mcp_config else None,
-            "tool_count": len(mcp_tools),
-            "tools": [
-                {
-                    "name": t.get("name"),
-                    "description": t.get("description") or t.get("summary"),
-                }
-                for t in mcp_tools
-                if isinstance(t, dict)
-            ],
-        })
+        return ToolResult.ok(
+            {
+                "enabled": bool(getattr(mcp_config, "enabled", False)) if mcp_config else False,
+                "base_url": getattr(mcp_config, "base_url", None) if mcp_config else None,
+                "tool_count": len(mcp_tools),
+                "tools": [
+                    {
+                        "name": t.get("name"),
+                        "description": get_mcp_tool_description(t),
+                    }
+                    for t in mcp_tools
+                    if isinstance(t, dict)
+                ],
+            }
+        )
+
 
 # Allowlist of safe command prefixes for MCP servers
 # Commands must start with one of these to be executed
@@ -72,36 +80,6 @@ async def initialize_mcp_tools(
     if not mcp_config.enabled:
         logger.info("MCP integration disabled")
         return None, []
-
-    def _parse_jsonrpc_response(text: str) -> dict[str, Any] | None:
-        """Parse either JSON or SSE('data: {json}') JSON-RPC responses."""
-        raw = (text or "").strip()
-        if not raw:
-            return None
-
-        # Plain JSON
-        if raw.startswith("{"):
-            try:
-                data = json.loads(raw)
-                return cast(dict[str, Any], data) if isinstance(data, dict) else None
-            except Exception:
-                return None
-
-        # SSE: find first data: line
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line.startswith("data:"):
-                continue
-            payload = line[len("data:"):].strip()
-            if not payload:
-                continue
-            try:
-                data = json.loads(payload)
-                return cast(dict[str, Any], data) if isinstance(data, dict) else None
-            except Exception:
-                return None
-
-        return None
 
     try:
         headers = {
@@ -145,7 +123,7 @@ async def initialize_mcp_tools(
         response = await mcp_client.post(mcp_config.base_url, json=list_request)
         response.raise_for_status()
 
-        parsed = _parse_jsonrpc_response(response.text) or {}
+        parsed = parse_mcp_jsonrpc_response(response.text) or {}
         result = parsed.get("result", parsed) if isinstance(parsed, dict) else {}
 
         tools = result.get("tools", []) if isinstance(result, dict) else []
@@ -195,7 +173,7 @@ def _validate_command(command: str | list[str]) -> list[str]:
     # Extract just the executable name (handle paths like /usr/bin/python)
     executable_name = Path(executable).name.lower()
     # Remove common extensions
-    if executable_name.endswith('.exe'):
+    if executable_name.endswith(".exe"):
         executable_name = executable_name[:-4]
 
     if not any(executable_name.startswith(prefix) for prefix in ALLOWED_COMMAND_PREFIXES):
@@ -316,21 +294,28 @@ class MCPClient:
                 headers["Authorization"] = f"Bearer {mcp_config.api_key}"
 
         try:
-            async with aiohttp.ClientSession() as session, session.post(
-                endpoint,
-                json=request,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                result = await response.json()
-                return cast(dict[str, Any], result.get("result", result))
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    endpoint,
+                    json=request,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response,
+            ):
+                parsed = parse_mcp_jsonrpc_response(await response.text())
+                if not isinstance(parsed, dict):
+                    raise ValueError("Invalid MCP JSON-RPC response")
+                return cast(dict[str, Any], parsed.get("result", parsed))
         except Exception as e:
             return {"error": str(e)}
 
     async def list_tools(self, tool_config: dict[str, Any]) -> list[dict[str, Any]]:
         """List available tools from an MCP server."""
         result = await self.call_tool(tool_config, "tools/list")
-        return cast(list[dict[str, Any]], result.get("tools", []) if isinstance(result, dict) else [])
+        return cast(
+            list[dict[str, Any]], result.get("tools", []) if isinstance(result, dict) else []
+        )
 
     async def healthcheck(self, tool_config: dict[str, Any]) -> bool:
         """Check if an MCP server is healthy."""
@@ -378,7 +363,10 @@ class A2AClient:
             }
 
         if transport != "http":
-            return {"success": False, "error": f"Unsupported transport: {transport}. Only 'http' is supported."}
+            return {
+                "success": False,
+                "error": f"Unsupported transport: {transport}. Only 'http' is supported.",
+            }
         endpoint = agent_config.get("endpoint")
         if not endpoint:
             return {"success": False, "error": "No HTTP endpoint configured for agent"}
@@ -463,10 +451,13 @@ class A2AClient:
                 return None
 
         try:
-            async with aiohttp.ClientSession() as session, session.get(
-                agent_card_url,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    agent_card_url,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as response,
+            ):
                 if response.status == 200:
                     return cast(dict[str, Any], await response.json())
         except Exception as e:

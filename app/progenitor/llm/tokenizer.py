@@ -30,8 +30,7 @@ try:
     logger.info("tiktoken available - using accurate token counting")
 except ImportError:
     logger.warning(
-        "tiktoken not installed - using estimated token counts. "
-        "Install with: pip install tiktoken"
+        "tiktoken not installed - using estimated token counts. Install with: pip install tiktoken"
     )
 
 
@@ -226,7 +225,7 @@ def truncate_to_tokens(
         return suffix
 
     truncated_tokens = tokens[:keep_tokens]
-    return encoding.decode(truncated_tokens) + suffix
+    return str(encoding.decode(truncated_tokens)) + suffix
 
 
 def is_tiktoken_available() -> bool:
@@ -249,10 +248,12 @@ def get_token_stats(text: str, model: str | None = None) -> dict:
         Dictionary with token statistics.
     """
     if not text:
+        empty_count = 0
+        empty_ratio = 0.0
         return {
-            "token_count": 0,
-            "char_count": 0,
-            "chars_per_token": 0.0,
+            "token_count": empty_count,
+            "char_count": empty_count,
+            "chars_per_token": empty_ratio,
             "using_tiktoken": _TIKTOKEN_AVAILABLE,
             "model": model,
         }

@@ -28,7 +28,8 @@ progenitor/
 │   ├── frontend/       # React/Vite UI
 │   ├── agents/         # Agent implementations
 │   └── mcp/            # MCP server integrations
-├── prompts/
+├── data/
+│   ├── prompts/
 │   └── skills/         # DeepAgent SKILL.md files
 ├── tests/              # Test suites
 └── docs/               # Documentation
@@ -56,7 +57,7 @@ progenitor/
 - Always activate venv before Python commands
 - Mock mode available: `$env:PROGENITOR_MOCK_LLM = "true"`
 - Backend runs on `:8000`, Frontend on `:5173`
-- State persists in JSON files: `current_state.json`, `build_state.json`, `schedule.json`
+- State persists in JSON files: `current_state.json`, `build_state.json`, and `data/config/schedule.json`
 
 ### Repo Safety Policy (Copilot)
 - **Do not merge PRs**. Create PRs and wait for human approval/merge.
@@ -65,6 +66,6 @@ progenitor/
 
 ### References
 - Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
-- Loop Specification: `docs/loop.spec.md`
+- System Specification: `docs/SPEC.md`
 - Backend Details: `docs/BACKEND.md`
 - Project Structure: `docs/PROJECT_STRUCTURE.md`

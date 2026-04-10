@@ -1,68 +1,114 @@
 # Backend API
 
-The backend is a FastAPI service that exposes OpenAI-compatible APIs and bridges requests to the Progenitor runtime.
+## What is running
 
-## Runtime Topology
+The backend is the FastAPI app in `app/backend/main.py`.
 
-- Frontend (`app/frontend`) runs separately and proxies API calls to backend (`:8000`)
-- Backend communicates with Progenitor primarily through IPC (socket)
-- Progenitor hosts the perpetual loop and IPC server
+Current behavior:
+- API-only service: it does **not** serve frontend assets.
+- Uses the IPC client in `app/backend/ipc_client.py` to talk to a separately running Progenitor runtime.
+- Mounts UI-specific routes from `app/backend/ui_routes.py` under `/api/ui`.
+- Initializes session management, SSE status watching, and optional Telegram integration during lifespan startup.
 
-## Main Files
+`app/backend/client.py` still exists, but `app/backend/main.py` currently wires up the IPC client path, not the legacy subprocess client.
 
-- `app/backend/main.py` - FastAPI app and API routes
-- `app/backend/config.py` - Environment-based server config
-- `app/backend/ipc_client.py` - IPC client used by backend
-- `app/backend/client.py` - Legacy subprocess client
-- `app/progenitor/ipc/` - IPC protocol and server implementation
+## Runtime dependency
 
-## Local Development
+The backend expects Progenitor to be reachable over socket IPC:
+- `CHAT_SERVER_IPC_HOST` (default `127.0.0.1`)
+- `CHAT_SERVER_IPC_PORT` (default `9500`)
 
-Always activate virtual environment first:
+The backend does not start Progenitor for you. In local development, start the runtime separately.
 
-```powershell
-& .\.venv\Scripts\Activate.ps1
-```
+## Active endpoint surface
 
-Start Progenitor runtime:
+### Health and operations
+- `GET /health` - simple health status (`healthy` or `draining`)
+- `GET /health/detailed` - uptime, client status, rate limiter, shutdown info, memory, config summary
+- `GET /ready` - readiness probe; fails if backend is shutting down or client setup did not complete
+- `GET /live` - liveness probe
+- `GET /health/features` - feature-manager status (sessions, attachments, conversation, shutdown)
+
+`/ready` is a backend-local check; it does not perform a live IPC handshake to Progenitor.
+
+### Chat API
+- `GET /v1/models` - advertises the configured backend model name
+- `POST /v1/responses` - primary OpenAI-style endpoint used by the frontend
+  - request shape: `{ "model": "...", "input": <string|message[]>, "stream": <bool> }`
+  - streaming returns Server-Sent Events with `response.output_text.delta` and `response.completed`
+- `POST /chat` - simple non-OpenAI helper endpoint for manual testing
+
+The backend does **not** currently implement `/v1/chat/completions`.
+
+### Attachments
+- `POST /v1/attachments`
+- `GET /v1/attachments/{attachment_id}`
+
+Uploads are parsed through `app/backend/attachments.py`. Extracted attachment content is cached in memory for the running backend process; the configured `data/attachments/` directory is created, but this code path does not currently persist uploads there.
+
+### Session and settings
+- `GET /v1/session`
+- `POST /v1/session`
+- `PATCH /v1/session/preferences`
+- `GET /v1/session/settings/export`
+- `POST /v1/session/settings/import`
+
+Sessions use the `progenitor_session` cookie and are persisted by `SessionManager` in `data/sessions/sessions.json`.
+
+### Conversation history
+- `GET /v1/conversation`
+- `GET /v1/conversation/{message_id}`
+- `DELETE /v1/conversation`
+
+Conversation history is maintained in backend memory; it is not restored from disk on startup.
+
+### UI routes (`/api/ui/*`)
+
+The frontend relies on additional routes in `app/backend/ui_routes.py`, including:
+- status snapshot and SSE streams: `/api/ui/status/snapshot`, `/api/ui/status`, `/api/ui/events`
+- state views: `/api/ui/loops`, `/api/ui/agents`, `/api/ui/backlog`, `/api/ui/schedule`, `/api/ui/workspace`
+- UI config/content: `/api/ui/widgets`, `/api/ui/widget-schemas`, `/api/ui/prompts*`
+- logs and exports: `/api/ui/logs*`
+- Telegram status/testing: `/api/ui/telegram/*`
+
+These routes read repo/runtime state from files under `data/state/`, `data/config/`, and `logs/` via `app/backend/state_reader.py`.
+
+## Important environment variables
+
+Backend-specific:
+- `CHAT_SERVER_HOST`
+- `CHAT_SERVER_PORT`
+- `CHAT_SERVER_PROGENITOR_TIMEOUT`
+- `CHAT_SERVER_PROGENITOR_STOP_TIMEOUT`
+- `CHAT_SERVER_IPC_HOST`
+- `CHAT_SERVER_IPC_PORT`
+- `CHAT_SERVER_MODEL_NAME`
+- `CHAT_SERVER_RATE_LIMIT_ENABLED`
+- `CHAT_SERVER_RATE_LIMIT_PER_MINUTE`
+- `CHAT_SERVER_RATE_LIMIT_PER_HOUR`
+
+Optional Telegram integration:
+- `TELEGRAM_ENABLED`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `TELEGRAM_ALLOWED_USERS`
+- `TELEGRAM_POLLING_ENABLED`
+
+The backend also depends on the Progenitor runtime's LLM configuration being valid because requests are forwarded to that runtime.
+
+## Local development
 
 ```bash
+source .venv/bin/activate
+export AGENT_NAME=progenitor
 python -m app.progenitor.main
 ```
 
-Start backend API:
+In another shell:
 
 ```bash
+source .venv/bin/activate
 python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-## Core Endpoints
-
-- `GET /health` - Service health summary
-- `GET /ready` - Readiness check
-- `GET /live` - Liveness check
-- `GET /v1/models` - OpenAI-compatible model listing
-- `POST /v1/responses` - Primary response API
-- `POST /chat` - Simplified chat endpoint
-- `POST /v1/attachments` - Upload and register attachments
-- `GET /v1/attachments/{attachment_id}` - Attachment metadata/status
-- `GET /v1/session` / `POST /v1/session` - Session retrieval/update
-- `GET /v1/conversation` - Retrieve conversation history
-
-Additional UI-specific routes are mounted under `/api/ui/*`.
-
-## Key Environment Variables
-
-- `CHAT_SERVER_HOST` (default `0.0.0.0`)
-- `CHAT_SERVER_PORT` (default `8000`)
-- `CHAT_SERVER_PROGENITOR_TIMEOUT` (default `300`)
-- `CHAT_SERVER_IPC_HOST` (default `127.0.0.1`)
-- `CHAT_SERVER_IPC_PORT` (default `9500`)
-- `CHAT_SERVER_MODEL_NAME` (default `progenitor-v1`)
-- `CHAT_SERVER_RATE_LIMIT_ENABLED` (default `true`)
-- `CHAT_SERVER_STREAM_ENABLED` (default `true`)
-
-## Notes
-
-- `POST /v1/responses` is the preferred OpenAI-style endpoint for this project.
-- Legacy subprocess communication remains available for compatibility but IPC is the primary path.
+The frontend dev server proxies `/api`, `/v1`, and health endpoints to this backend.

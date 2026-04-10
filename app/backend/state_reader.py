@@ -20,9 +20,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from app.progenitor.config import (
+    load_mcp_servers,
+    resolve_mcp_config_path,
+    resolve_schedule_config_path,
+)
 
 logger = logging.getLogger(__name__)
+DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DEFAULT_STATE_DIR = DEFAULT_DATA_DIR / "state"
+DEFAULT_LOGS_DIR = Path(__file__).resolve().parents[2] / "logs"
 PLAIN_LOG_LINE_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
     r"\s+-\s+(?P<logger>.*?)\s+-\s+(?P<level>[A-Z]+)\s+-\s+(?P<message>.*)$"
@@ -78,6 +87,13 @@ def _normalize_log_level(value: Any) -> str:
     return level or "info"
 
 
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> datetime | None:
     if not value:
         return None
@@ -92,14 +108,16 @@ def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> date
 
 
 def _entry_identity(entry: dict[str, Any]) -> str:
-    payload = "|".join([
-        str(entry.get("relative_path", "")),
-        str(entry.get("timestamp", "")),
-        str(entry.get("level", "")),
-        str(entry.get("source", "")),
-        str(entry.get("message", "")),
-    ])
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    payload = "|".join(
+        [
+            str(entry.get("relative_path", "")),
+            str(entry.get("timestamp", "")),
+            str(entry.get("level", "")),
+            str(entry.get("source", "")),
+            str(entry.get("message", "")),
+        ]
+    )
+    return hashlib.sha1(payload.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 @dataclass
@@ -165,6 +183,7 @@ class ToolInfo:
     kind: str = "mcp"
     status: str = "ready"
     transport: str = "mcp"
+    url: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolInfo:
@@ -175,6 +194,7 @@ class ToolInfo:
             kind=data.get("kind", "mcp"),
             status=data.get("status", "ready"),
             transport=data.get("transport", "mcp"),
+            url=data.get("url"),
         )
 
 
@@ -257,6 +277,48 @@ class ScheduleItem:
 
 
 @dataclass
+class EventWidgetItem:
+    """A persisted workspace event trigger."""
+
+    id: str
+    name: str
+    event_type: str
+    enabled: bool
+    trigger_count: int
+    last_triggered_at: str | None
+    last_run_status: str
+    summary: str
+    last_payload: dict[str, Any] | None
+    logs: list[dict[str, Any]]
+    updated_at: str | None
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> EventWidgetItem:
+        raw_logs = data.get("logs")
+        logs = (
+            [entry for entry in raw_logs if isinstance(entry, dict)]
+            if isinstance(raw_logs, list)
+            else []
+        )
+        last_payload = data.get("last_payload")
+        return cls(
+            id=str(data.get("id", "")),
+            name=str(data.get("name") or data.get("title") or data.get("event_type") or ""),
+            event_type=str(data.get("event_type") or ""),
+            enabled=bool(data.get("enabled", True)),
+            trigger_count=_coerce_int(data.get("trigger_count"), 0),
+            last_triggered_at=data.get("last_triggered_at"),
+            last_run_status=str(data.get("last_run_status") or "idle"),
+            summary=str(data.get("summary") or data.get("event_type") or ""),
+            last_payload=last_payload if isinstance(last_payload, dict) else None,
+            logs=logs,
+            updated_at=data.get("updated_at") or data.get("created_at"),
+            raw=data,
+        )
+
+
+@dataclass
 class LoopInfo:
     """Information about a processing loop (Planner/Executor)."""
 
@@ -286,11 +348,13 @@ class BuildInfo:
         return cls(
             in_progress=data.get("build_in_progress", False),
             phase=data.get("build_phase"),
-            task_description=data.get("build_task_description") or data.get("task", {}).get("description"),
+            task_description=data.get("build_task_description")
+            or data.get("task", {}).get("description"),
             started_at=data.get("build_started_at"),
             iteration=data.get("iteration", {}).get("current", 0),
             score=verification.get("current_score", verify_phase.get("score", 0.0)),
-            message_count=len(data.get("build_messages", [])) + len(data.get("history", {}).get("messages", [])),
+            message_count=len(data.get("build_messages", []))
+            + len(data.get("history", {}).get("messages", [])),
         )
 
 
@@ -333,15 +397,26 @@ class StateReader:
         sessions_dir: Path | None = None,
         logs_dir: Path | None = None,
     ):
-        self.state_dir = state_dir or Path("data/state")
+        data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(DEFAULT_DATA_DIR)))
+        self.state_dir = state_dir or Path(
+            os.getenv("PROGENITOR_STATE_DIR", str(data_dir / "state"))
+        )
         self.config_dir = config_dir or self.state_dir.parent / "config"
         self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
-        self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", "logs"))
+        self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot], None]] = []
         self._watch_task: asyncio.Task | None = None
         self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
+
+    @property
+    def mcp_config_path(self) -> Path:
+        return resolve_mcp_config_path(self.config_dir)
+
+    @property
+    def schedule_config_path(self) -> Path:
+        return resolve_schedule_config_path(self.config_dir)
 
     def _resolved_logs_dir(self) -> Path:
         return self.logs_dir.resolve()
@@ -402,7 +477,6 @@ class StateReader:
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
         agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
-        mcp_data = self._read_json_from_path(self.config_dir / "mcp.json") or {}
 
         agent_entries: list[dict[str, Any]] = []
         if isinstance(agents_data, dict):
@@ -427,21 +501,20 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
-        tools: list[ToolInfo] = []
-        if isinstance(mcp_data, dict):
-            raw_tools = mcp_data.get("tools")
-            if isinstance(raw_tools, list):
-                tools.extend(ToolInfo.from_dict(t) for t in raw_tools if isinstance(t, dict))
-            tool_map = {
-                str(name): cfg
-                for name, cfg in mcp_data.items()
-                if name != "tools" and isinstance(cfg, dict)
-            }
-            seen_names = {tool.name for tool in tools}
-            for name, cfg in tool_map.items():
-                if name in seen_names:
-                    continue
-                tools.append(ToolInfo.from_dict({"name": name, **cfg}))
+        tools = [
+            ToolInfo.from_dict(
+                {
+                    "name": server.name,
+                    "description": server.description or f"Remote MCP server at {server.url}",
+                    "enabled": server.enabled,
+                    "kind": "mcp_server",
+                    "status": "stopped" if server.enabled else "disabled",
+                    "transport": server.transport,
+                    "url": server.url,
+                }
+            )
+            for server in load_mcp_servers(self.mcp_config_path)
+        ]
         return agents, tools
 
     def get_backlog(self) -> list[BacklogItem]:
@@ -452,10 +525,18 @@ class StateReader:
         return [BacklogItem.from_dict(item) for item in backlog if isinstance(item, dict)]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        data = self._read_json("schedule.json")
+        data = self._read_json_from_path(self.schedule_config_path)
+        if data is None and not self.schedule_config_path.exists():
+            data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]
+
+    def get_event_widgets(self) -> list[EventWidgetItem]:
+        data = self._read_json_from_path(self.config_dir / "event_widgets.json")
+        if not data or not isinstance(data, list):
+            return []
+        return [EventWidgetItem.from_dict(item) for item in data if isinstance(item, dict)]
 
     def get_build_state(self) -> dict[str, Any]:
         data = self._read_json("build_state.json")
@@ -478,7 +559,11 @@ class StateReader:
         latest = None
         latest_session_id = None
         for session in sessions:
-            session_last = session.get("last_activity") or session.get("updated_at") or session.get("created_at")
+            session_last = (
+                session.get("last_activity")
+                or session.get("updated_at")
+                or session.get("created_at")
+            )
             if session_last and (latest is None or str(session_last) > str(latest)):
                 latest = str(session_last)
                 latest_session_id = session.get("session_id") or session.get("id")
@@ -502,7 +587,9 @@ class StateReader:
             return str(logs[0].get("message") or fallback)
         return fallback
 
-    def _normalize_widget_logs(self, entries: list[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
+    def _normalize_widget_logs(
+        self, entries: list[dict[str, Any]], limit: int = 20
+    ) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         for entry in entries[:limit]:
             normalized.append(
@@ -540,7 +627,9 @@ class StateReader:
                 name="Executor",
                 status=executor_status,
                 last_activity=health.last_active,
-                current_task=f"Executing ({actions} actions)" if executor_status == "active" else None,
+                current_task=f"Executing ({actions} actions)"
+                if executor_status == "active"
+                else None,
             ),
         ]
 
@@ -683,7 +772,12 @@ class StateReader:
                 or payload.get("created_at")
                 or self._path_fallback_timestamp(path)
             )
-            message = payload.get("message") or payload.get("msg") or payload.get("content") or json.dumps(payload)
+            message = (
+                payload.get("message")
+                or payload.get("msg")
+                or payload.get("content")
+                or json.dumps(payload)
+            )
             entry = {
                 "timestamp": str(timestamp),
                 "time": str(timestamp),
@@ -792,7 +886,9 @@ class StateReader:
                     if folder_path.is_file():
                         return [folder_path]
                     files = [path for path in folder_path.rglob("*") if path.is_file()]
-                    files.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+                    files.sort(
+                        key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True
+                    )
                     return files
             return []
 
@@ -802,7 +898,8 @@ class StateReader:
 
         source_lc = source.lower()
         return [
-            path for path in files
+            path
+            for path in files
             if self._entry_matches_source(
                 {
                     "relative_path": self._relative_log_path(path),
@@ -837,7 +934,9 @@ class StateReader:
         if search and search_mode == "regex":
             regex = re.compile(search, re.IGNORECASE)
 
-        candidate_files = self._candidate_log_files(source=source, folder=folder, file_path=file_path)
+        candidate_files = self._candidate_log_files(
+            source=source, folder=folder, file_path=file_path
+        )
 
         for path in candidate_files:
             lines = self._read_text_lines(path, limit=None)
@@ -874,7 +973,9 @@ class StateReader:
                         continue
                 entries.append(entry)
 
-        entries.sort(key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True)
+        entries.sort(
+            key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
+        )
         return entries
 
     def query_logs(
@@ -906,7 +1007,9 @@ class StateReader:
         returned_entries = entries
 
         if after:
-            cursor_index = next((index for index, entry in enumerate(entries) if entry.get("id") == after), None)
+            cursor_index = next(
+                (index for index, entry in enumerate(entries) if entry.get("id") == after), None
+            )
             if cursor_index is None:
                 cursor_found = False
             else:
@@ -932,7 +1035,8 @@ class StateReader:
         limit: int = 500,
         source: str | None = None,
     ) -> list[dict[str, Any]]:
-        return self.query_logs(level=level, search=search, limit=limit, source=source)["entries"]
+        logs = self.query_logs(level=level, search=search, limit=limit, source=source)
+        return cast(list[dict[str, Any]], logs["entries"])
 
     def get_logs_for_widget(self, widget_name: str, limit: int = 40) -> list[dict[str, Any]]:
         normalized = _normalize_name(widget_name)
@@ -950,13 +1054,16 @@ class StateReader:
                 entry = self._line_to_entry(line, source, path)
                 if entry:
                     matches.append(entry)
-        matches.sort(key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True)
+        matches.sort(
+            key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
+        )
         return matches[:limit]
 
     def get_widgets(self) -> list[dict[str, Any]]:
         health = self.get_health()
         agents, tools = self.get_registry()
         schedule = self.get_schedule()
+        event_widgets = self.get_event_widgets()
 
         widgets: list[dict[str, Any]] = []
         for agent in agents:
@@ -964,9 +1071,8 @@ class StateReader:
                 continue
             logs = self._normalize_widget_logs(self.get_logs_for_widget(agent.name))
             status = self._status_with_health(agent.status, health.is_running())
-            summary = (
-                agent.status_message
-                or self._summary_from_logs(logs, agent.description or f"{agent.name} is {status}")
+            summary = agent.status_message or self._summary_from_logs(
+                logs, agent.description or f"{agent.name} is {status}"
             )
             widgets.append(
                 {
@@ -986,8 +1092,6 @@ class StateReader:
             )
 
         for tool in tools:
-            if not tool.enabled:
-                continue
             logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
             summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
             widgets.append(
@@ -1001,34 +1105,62 @@ class StateReader:
                     "status": self._status_with_health(tool.status, health.is_running()),
                     "summary": summary,
                     "transport": tool.transport,
+                    "enabled": tool.enabled,
+                    "url": tool.url,
                     "current_run_id": health.run_id,
                     "logs": logs,
                     "updated_at": health.last_active,
                 }
             )
 
-        for item in schedule:
+        for schedule_item in schedule:
             widgets.append(
                 {
-                    "id": f"schedule:{item.id}",
+                    "id": f"schedule:{schedule_item.id}",
                     "type": "schedule",
-                    "name": item.name,
-                    "title": item.name or item.id,
-                    "description": item.raw.get("user_request") or item.name,
-                    "status": "enabled" if item.enabled else "disabled",
-                    "summary": item.raw.get("message") or item.name,
-                    "instruction": item.raw.get("instruction") or item.raw.get("message") or "",
-                    "user_request": item.raw.get("user_request") or "",
-                    "schedule_id": item.id,
-                    "schedule_type": item.raw.get("schedule_type", "cron"),
-                    "expression": item.schedule,
-                    "enabled": item.enabled,
-                    "next_run_at": item.raw.get("next_run_at") or item.next_run,
-                    "last_run_at": item.raw.get("last_run"),
-                    "last_run_status": item.raw.get("last_run_status", "idle"),
-                    "timezone": item.raw.get("timezone", "UTC"),
-                    "logs": self._normalize_widget_logs(self.get_logs_for_widget(item.id, limit=20), limit=20),
-                    "updated_at": item.raw.get("updated_at") or item.raw.get("created_at"),
+                    "name": schedule_item.name,
+                    "title": schedule_item.name or schedule_item.id,
+                    "description": schedule_item.raw.get("user_request") or schedule_item.name,
+                    "status": "enabled" if schedule_item.enabled else "disabled",
+                    "summary": schedule_item.raw.get("message") or schedule_item.name,
+                    "instruction": schedule_item.raw.get("instruction")
+                    or schedule_item.raw.get("message")
+                    or "",
+                    "user_request": schedule_item.raw.get("user_request") or "",
+                    "schedule_id": schedule_item.id,
+                    "schedule_type": schedule_item.raw.get("schedule_type", "cron"),
+                    "expression": schedule_item.schedule,
+                    "enabled": schedule_item.enabled,
+                    "next_run_at": schedule_item.raw.get("next_run_at") or schedule_item.next_run,
+                    "last_run_at": schedule_item.raw.get("last_run"),
+                    "last_run_status": schedule_item.raw.get("last_run_status", "idle"),
+                    "timezone": schedule_item.raw.get("timezone", "UTC"),
+                    "logs": self._normalize_widget_logs(
+                        self.get_logs_for_widget(schedule_item.id, limit=20), limit=20
+                    ),
+                    "updated_at": schedule_item.raw.get("updated_at")
+                    or schedule_item.raw.get("created_at"),
+                }
+            )
+
+        for event_widget in event_widgets:
+            widgets.append(
+                {
+                    "id": f"event:{event_widget.id}",
+                    "type": "event",
+                    "name": event_widget.name,
+                    "title": event_widget.name or event_widget.event_type,
+                    "description": event_widget.raw.get("description") or event_widget.event_type,
+                    "status": "enabled" if event_widget.enabled else "disabled",
+                    "summary": event_widget.summary or event_widget.event_type,
+                    "event_type": event_widget.event_type,
+                    "enabled": event_widget.enabled,
+                    "trigger_count": event_widget.trigger_count,
+                    "last_triggered_at": event_widget.last_triggered_at,
+                    "last_run_status": event_widget.last_run_status,
+                    "last_payload": event_widget.last_payload,
+                    "logs": self._normalize_widget_logs(event_widget.logs, limit=20),
+                    "updated_at": event_widget.updated_at,
                 }
             )
 
@@ -1040,7 +1172,9 @@ class StateReader:
             "timestamp": snapshot.timestamp,
             "sessions": {
                 "total": snapshot.sessions.total if snapshot.sessions else 0,
-                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_session_id": snapshot.sessions.latest_session_id
+                if snapshot.sessions
+                else None,
                 "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
             },
             "health": {
@@ -1063,9 +1197,10 @@ class StateReader:
             self.state_dir / "health.json",
             self.state_dir / "current_state.json",
             self.state_dir / "build_state.json",
-            self.state_dir / "schedule.json",
+            self.schedule_config_path,
             self.config_dir / "agents.json",
             self.config_dir / "mcp.json",
+            self.config_dir / "event_widgets.json",
             self.sessions_dir / "sessions.json",
         ]
 
@@ -1126,7 +1261,11 @@ class StateReader:
                 for s in snapshot.schedule
             ],
             "loops": [
-                {"name": loop_item.name, "status": loop_item.status, "current_task": loop_item.current_task}
+                {
+                    "name": loop_item.name,
+                    "status": loop_item.status,
+                    "current_task": loop_item.current_task,
+                }
                 for loop_item in snapshot.loops
             ],
             "cycle_count": snapshot.cycle_count,
@@ -1134,7 +1273,9 @@ class StateReader:
             "messages_count": snapshot.messages_count,
             "sessions": {
                 "total": snapshot.sessions.total if snapshot.sessions else 0,
-                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_session_id": snapshot.sessions.latest_session_id
+                if snapshot.sessions
+                else None,
                 "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
             },
             "widgets": self.get_widgets(),
@@ -1211,7 +1352,9 @@ class StateReader:
             return True
         if len(new.backlog) != len(old.backlog):
             return True
-        return (new.sessions.total if new.sessions else 0) != (old.sessions.total if old.sessions else 0)
+        return (new.sessions.total if new.sessions else 0) != (
+            old.sessions.total if old.sessions else 0
+        )
 
 
 _state_reader: StateReader | None = None

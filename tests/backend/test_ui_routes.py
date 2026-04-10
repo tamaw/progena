@@ -101,13 +101,38 @@ class TestUIRoutes:
         assert "items" in data
         assert "total" in data
 
+    def test_widget_schemas_include_event_widget(self, client):
+        response = client.get("/api/ui/widget-schemas")
+
+        assert response.status_code == 200
+        schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
+        assert "event" in schemas
+        event_schema = schemas["event"]
+        identity_section = next(
+            section for section in event_schema["sections"] if section["id"] == "identity"
+        )
+        event_type_field = next(
+            field for field in identity_section["fields"] if field["key"] == "eventType"
+        )
+        assert event_type_field["control"] == "select"
+        assert {option["value"] for option in event_type_field["options"]} == {
+            "kanban.card.created",
+            "kanban.card.updated",
+            "kanban.card.moved",
+            "kanban.card.deleted",
+            "kanban.card.status_changed",
+        }
+
     def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
-        prompts_dir = tmp_path / "prompts"
+        prompts_dir = tmp_path / "data" / "prompts"
         (prompts_dir / "builder_agent").mkdir(parents=True)
         (prompts_dir / "progenitor" / "nested").mkdir(parents=True)
         (prompts_dir / "builder_agent" / "think.md").write_text("builder content", encoding="utf-8")
-        (prompts_dir / "progenitor" / "nested" / "decide.md").write_text("progenitor content", encoding="utf-8")
-        monkeypatch.setenv("PROGENITOR_PROMPTS_DIR", str(prompts_dir))
+        (prompts_dir / "progenitor" / "nested" / "decide.md").write_text(
+            "progenitor content", encoding="utf-8"
+        )
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
 
         response = client.get("/api/ui/prompts")
 
@@ -118,16 +143,19 @@ class TestUIRoutes:
             "builder_agent/think.md",
             "progenitor/nested/decide.md",
         }
-        builder_prompt = next(prompt for prompt in data["prompts"] if prompt["path"] == "builder_agent/think.md")
+        builder_prompt = next(
+            prompt for prompt in data["prompts"] if prompt["path"] == "builder_agent/think.md"
+        )
         assert builder_prompt["primary_agent"] == "builder_agent"
         assert "builder_agent" in builder_prompt["associated_agents"]
 
     def test_prompts_endpoint_updates_prompt_content(self, client, tmp_path, monkeypatch):
-        prompts_dir = tmp_path / "prompts"
+        prompts_dir = tmp_path / "data" / "prompts"
         (prompts_dir / "builder_agent").mkdir(parents=True)
         prompt_path = prompts_dir / "builder_agent" / "think.md"
         prompt_path.write_text("before", encoding="utf-8")
-        monkeypatch.setenv("PROGENITOR_PROMPTS_DIR", str(prompts_dir))
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
 
         response = client.put(
             "/api/ui/prompts/content",
@@ -313,8 +341,6 @@ class TestDashboardRoutes:
         assert response.status_code == 404
 
 
-
-
 class TestLogsEndpoint:
     """Tests for /api/ui/logs endpoint."""
 
@@ -354,7 +380,9 @@ class TestLogsEndpoint:
         response = client.get("/api/ui/logs?search=test")
         assert response.status_code == 200
 
-    def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(self, client, kanban_state_reader):
+    def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(
+        self, client, kanban_state_reader
+    ):
         """Test grouped source metadata and parsed timestamps from plain-text logs."""
         builder_dir = kanban_state_reader.logs_dir / "builder"
         builder_dir.mkdir(parents=True, exist_ok=True)
@@ -381,22 +409,45 @@ class TestLogsEndpoint:
         assert any(option["id"] == "progenitor.log" for option in groups["root"]["options"])
         assert any(option["id"] == "builder/builder.log" for option in groups["builder"]["options"])
 
-        builder_entry = next(entry for entry in data["entries"] if entry["relative_path"] == "builder/builder.log")
+        builder_entry = next(
+            entry for entry in data["entries"] if entry["relative_path"] == "builder/builder.log"
+        )
         assert builder_entry["timestamp"] == "2026-03-08 00:33:35"
         assert builder_entry["source"] == "app.agents.builder_progenitor.agent"
 
-    def test_logs_json_supports_incremental_cursor_and_regex_search(self, client, kanban_state_reader):
+    def test_logs_json_supports_incremental_cursor_and_regex_search(
+        self, client, kanban_state_reader
+    ):
         """Test cursor-based incremental fetches and regex search."""
         base_time = datetime.now(UTC).replace(microsecond=0)
         (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
-            "\n".join([
-                json.dumps({"message": "alpha ready", "timestamp": (base_time - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"), "level": "info"}),
-                json.dumps({"message": "beta failed", "timestamp": base_time.isoformat().replace("+00:00", "Z"), "level": "error"}),
-            ]) + "\n",
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "message": "alpha ready",
+                            "timestamp": (base_time - timedelta(minutes=1))
+                            .isoformat()
+                            .replace("+00:00", "Z"),
+                            "level": "info",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "message": "beta failed",
+                            "timestamp": base_time.isoformat().replace("+00:00", "Z"),
+                            "level": "error",
+                        }
+                    ),
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
 
-        full_response = client.get("/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0")
+        full_response = client.get(
+            "/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0"
+        )
         assert full_response.status_code == 200
         full_data = full_response.json()
         assert full_data["total"] == 2
@@ -415,11 +466,32 @@ class TestLogsEndpoint:
         range_start = range_end - timedelta(days=1)
         old_date = range_start - timedelta(days=1)
         (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
-            "\n".join([
-                json.dumps({"message": "old entry", "timestamp": f"{old_date.isoformat()}T10:00:00Z", "level": "info"}),
-                json.dumps({"message": "in range", "timestamp": f"{range_start.isoformat()}T10:00:00Z", "level": "warning"}),
-                json.dumps({"message": "boundary end", "timestamp": f"{range_end.isoformat()}T23:59:00Z", "level": "error"}),
-            ]) + "\n",
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "message": "old entry",
+                            "timestamp": f"{old_date.isoformat()}T10:00:00Z",
+                            "level": "info",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "message": "in range",
+                            "timestamp": f"{range_start.isoformat()}T10:00:00Z",
+                            "level": "warning",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "message": "boundary end",
+                            "timestamp": f"{range_end.isoformat()}T23:59:00Z",
+                            "level": "error",
+                        }
+                    ),
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -429,7 +501,10 @@ class TestLogsEndpoint:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["date_range"] == {"start": range_start.isoformat(), "end": range_end.isoformat()}
+        assert data["date_range"] == {
+            "start": range_start.isoformat(),
+            "end": range_end.isoformat(),
+        }
         assert [entry["message"] for entry in data["entries"]] == ["boundary end", "in range"]
         assert {entry["level"] for entry in data["entries"]} == {"warn", "error"}
 
@@ -437,7 +512,8 @@ class TestLogsEndpoint:
         """Test export endpoint returns attachment headers."""
         timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
-            json.dumps({"message": "decision made", "timestamp": timestamp, "level": "info"}) + "\n",
+            json.dumps({"message": "decision made", "timestamp": timestamp, "level": "info"})
+            + "\n",
             encoding="utf-8",
         )
 
@@ -607,8 +683,6 @@ class TestUIAccessibility:
         pass
 
 
-
-
 class TestSSEConnection:
     """Tests for Server-Sent Events connectivity."""
 
@@ -620,8 +694,16 @@ class TestSSEConnection:
 
         # These fields are used by SSE status updates
         required_fields = [
-            "connected", "server_status", "progenitor_running", "uptime_seconds",
-            "version", "cycle_count", "agents", "backlog", "schedule", "loops"
+            "connected",
+            "server_status",
+            "progenitor_running",
+            "uptime_seconds",
+            "version",
+            "cycle_count",
+            "agents",
+            "backlog",
+            "schedule",
+            "loops",
         ]
 
         for field in required_fields:
@@ -669,7 +751,9 @@ class TestSplitSSEEndpoints:
         paths = openapi.get("paths", {})
         # The SSE stream endpoint has the same path as the snapshot but different handler
         # The snapshot is registered first, so check both handlers exist
-        assert "/api/ui/status" in paths or "/api/ui/status/snapshot" in paths, "Status endpoint should be registered"
+        assert "/api/ui/status" in paths or "/api/ui/status/snapshot" in paths, (
+            "Status endpoint should be registered"
+        )
 
     def test_broadcast_functions_exist(self):
         """Test that the broadcast functions are available."""
@@ -677,6 +761,7 @@ class TestSplitSSEEndpoints:
             broadcast_chat_event,
             broadcast_status_event,
         )
+
         # Just verify they're callable
         assert callable(broadcast_chat_event)
         assert callable(broadcast_status_event)
@@ -686,9 +771,11 @@ class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""
 
     def test_patch_schedule_widget_updates_schedule_file(self, client, tmp_path):
-        state_dir = tmp_path / "state"
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
         state_dir.mkdir(parents=True)
-        schedule_path = state_dir / "schedule.json"
+        config_dir.mkdir(parents=True)
+        schedule_path = config_dir / "schedule.json"
         schedule_path.write_text(
             '[{"id":"sched-1","name":"Daily check","message":"Run the daily review","schedule":"0 0 * * *","cron_expression":"0 0 * * *","schedule_type":"cron","enabled":true,"timezone":"UTC"}]',
             encoding="utf-8",
@@ -696,8 +783,10 @@ class TestWorkspaceBridgeActions:
 
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
         try:
             state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
             state_reader.invalidate()
             response = client.patch(
                 "/api/ui/widgets/schedule:sched-1",
@@ -716,18 +805,80 @@ class TestWorkspaceBridgeActions:
             assert "false" in updated.lower()
         finally:
             state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
+            state_reader.invalidate()
+
+    def test_patch_mcp_widget_updates_mcp_config_file(self, client, tmp_path, monkeypatch):
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
+        state_dir.mkdir(parents=True)
+        config_dir.mkdir(parents=True)
+        mcp_config_path = config_dir / "mcp.json"
+        mcp_config_path.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "jina": {
+                            "description": "Disabled web search",
+                            "enabled": False,
+                            "transport": "http",
+                            "url": "https://mcp.jina.ai/v1",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr("app.progenitor.service._service", None, raising=False)
+
+        state_reader = get_state_reader()
+        original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
+        try:
+            state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
+            state_reader.invalidate()
+            response = client.patch(
+                "/api/ui/widgets/mcp:jina",
+                json={
+                    "enabled": True,
+                    "description": "Live web search",
+                    "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["type"] == "mcp"
+            assert payload["data"]["enabled"] is True
+            assert payload["data"]["url"] == "https://mcp.jina.ai/v1?include_tags=search,read"
+
+            updated = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+            assert updated["mcpServers"]["jina"]["enabled"] is True
+            assert updated["mcpServers"]["jina"]["description"] == "Live web search"
+            assert (
+                updated["mcpServers"]["jina"]["url"]
+                == "https://mcp.jina.ai/v1?include_tags=search,read"
+            )
+        finally:
+            state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
             state_reader.invalidate()
 
     def test_create_schedule_writes_schedule_file(self, client, tmp_path):
-        state_dir = tmp_path / "state"
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
         state_dir.mkdir(parents=True)
-        schedule_path = state_dir / "schedule.json"
+        config_dir.mkdir(parents=True)
+        schedule_path = config_dir / "schedule.json"
         schedule_path.write_text("[]", encoding="utf-8")
 
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir
+        original_config_dir = state_reader.config_dir
         try:
             state_reader.state_dir = state_dir
+            state_reader.config_dir = config_dir
             state_reader.invalidate()
             response = client.post(
                 "/api/ui/schedules",
@@ -744,14 +895,173 @@ class TestWorkspaceBridgeActions:
             payload = response.json()
             assert payload["type"] == "schedule"
             assert payload["title"] == "Morning Check-in"
-            assert payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
+            assert (
+                payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
+            )
             updated = schedule_path.read_text(encoding="utf-8")
             assert "Morning Check-in" in updated
             assert "Summarize overnight alerts and prep the inbox." in updated
             assert "*/15 * * * *" in updated
         finally:
             state_reader.state_dir = original_state_dir
+            state_reader.config_dir = original_config_dir
             state_reader.invalidate()
+
+    def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):
+        response = client.post(
+            "/api/ui/events",
+            json={
+                "name": "Card created trigger",
+                "event_type": "kanban.card.created",
+                "enabled": True,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "event"
+        assert payload["title"] == "Card created trigger"
+        assert payload["data"]["event_type"] == "kanban.card.created"
+        assert payload["data"]["trigger_count"] == 0
+
+        event_path = kanban_state_reader.config_dir / "event_widgets.json"
+        stored = json.loads(event_path.read_text(encoding="utf-8"))
+        assert stored[0]["name"] == "Card created trigger"
+        assert stored[0]["event_type"] == "kanban.card.created"
+        assert stored[0]["enabled"] is True
+
+        widgets = client.get("/api/ui/widgets").json()["items"]
+        assert any(widget["id"] == payload["id"] for widget in widgets)
+
+    def test_patch_event_widget_updates_config_file(self, client, kanban_state_reader):
+        event_path = kanban_state_reader.config_dir / "event_widgets.json"
+        event_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "evt-1",
+                        "name": "Created trigger",
+                        "event_type": "kanban.card.created",
+                        "enabled": True,
+                        "trigger_count": 0,
+                        "last_run_status": "idle",
+                        "logs": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        kanban_state_reader.invalidate(event_path)
+
+        response = client.patch(
+            "/api/ui/widgets/event:evt-1",
+            json={
+                "name": "Deleted trigger",
+                "event_type": "kanban.card.deleted",
+                "enabled": False,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "event"
+        assert payload["data"]["event_type"] == "kanban.card.deleted"
+        assert payload["data"]["enabled"] is False
+
+        stored = json.loads(event_path.read_text(encoding="utf-8"))
+        assert stored[0]["name"] == "Deleted trigger"
+        assert stored[0]["event_type"] == "kanban.card.deleted"
+        assert stored[0]["enabled"] is False
+
+    def test_kanban_create_and_update_events_trigger_matching_widgets(
+        self, client, kanban_state_reader
+    ):
+        created_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Created", "event_type": "kanban.card.created"},
+        ).json()
+        updated_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Updated", "event_type": "kanban.card.updated"},
+        ).json()
+
+        created_card = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Evented card", "summary": "Initial summary"},
+        ).json()
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        created_data = widgets[created_widget["id"]]["data"]
+        assert created_data["trigger_count"] == 1
+        assert created_data["last_payload"]["card"]["id"] == created_card["id"]
+        assert created_data["last_payload"]["event_type"] == "kanban.card.created"
+
+        update_response = client.patch(
+            f"/api/ui/kanban/cards/{created_card['id']}",
+            json={"summary": "Updated summary"},
+        )
+
+        assert update_response.status_code == 200
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        updated_data = widgets[updated_widget["id"]]["data"]
+        assert updated_data["trigger_count"] == 1
+        assert updated_data["last_payload"]["card"]["id"] == created_card["id"]
+        assert updated_data["last_payload"]["changed_fields"] == ["summary"]
+        assert updated_data["last_payload"]["event_type"] == "kanban.card.updated"
+
+    def test_kanban_move_status_and_delete_events_trigger_matching_widgets(
+        self, client, kanban_state_reader
+    ):
+        moved_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Moved", "event_type": "kanban.card.moved"},
+        ).json()
+        status_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Status", "event_type": "kanban.card.status_changed"},
+        ).json()
+        deleted_widget = client.post(
+            "/api/ui/events",
+            json={"name": "Deleted", "event_type": "kanban.card.deleted"},
+        ).json()
+
+        first = client.post("/api/ui/kanban/cards", json={"title": "First card"}).json()
+        second = client.post("/api/ui/kanban/cards", json={"title": "Second card"}).json()
+
+        move_response = client.patch(
+            f"/api/ui/kanban/cards/{second['id']}",
+            json={"position": 0},
+        )
+        assert move_response.status_code == 200
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        moved_data = widgets[moved_widget["id"]]["data"]
+        assert moved_data["trigger_count"] == 1
+        assert moved_data["last_payload"]["card"]["id"] == second["id"]
+        assert moved_data["last_payload"]["from"]["position"] == 1
+        assert moved_data["last_payload"]["to"]["position"] == 0
+
+        status_response = client.patch(
+            f"/api/ui/kanban/cards/{first['id']}",
+            json={"status": "running"},
+        )
+        assert status_response.status_code == 200
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        status_data = widgets[status_widget["id"]]["data"]
+        assert status_data["trigger_count"] == 1
+        assert status_data["last_payload"]["card"]["id"] == first["id"]
+        assert status_data["last_payload"]["from_status"] == "idle"
+        assert status_data["last_payload"]["to_status"] == "running"
+
+        delete_response = client.delete(f"/api/ui/kanban/cards/{first['id']}")
+        assert delete_response.status_code == 204
+
+        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
+        deleted_data = widgets[deleted_widget["id"]]["data"]
+        assert deleted_data["trigger_count"] == 1
+        assert deleted_data["last_payload"]["card"]["id"] == first["id"]
+        assert deleted_data["last_payload"]["event_type"] == "kanban.card.deleted"
 
     def test_run_and_generate_actions_use_existing_client(self, client):
         from app.backend import main as backend_main

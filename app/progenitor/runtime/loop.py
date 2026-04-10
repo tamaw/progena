@@ -26,7 +26,8 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from langchain_core.messages import AIMessageChunk
 
-from ..state.models import redact_secrets
+from ..state.models import A2ATaskRecord, ConversationMessage, redact_secrets
+from .a2a_tasks import A2ATaskTracker, build_completion_message
 from .scheduler import Scheduler
 from .time_utils import utcnow, utcnow_isoformat
 
@@ -66,15 +67,9 @@ class ProgenitorLoop:
 
         # Bounded queues to prevent memory exhaustion
         runtime = config.runtime
-        self._input_queue: asyncio.Queue = asyncio.Queue(
-            maxsize=runtime.max_input_queue_size
-        )
-        self._output_queue: asyncio.Queue = asyncio.Queue(
-            maxsize=runtime.max_output_queue_size
-        )
-        self._stream_queue: asyncio.Queue = asyncio.Queue(
-            maxsize=runtime.max_stream_queue_size
-        )
+        self._input_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_input_queue_size)
+        self._output_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_output_queue_size)
+        self._stream_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_stream_queue_size)
         # Event queue for pushing background events to clients
         # Events include: backlog updates, scheduled task triggers, work progress
         self._event_queue: asyncio.Queue = asyncio.Queue(
@@ -91,7 +86,9 @@ class ProgenitorLoop:
         self._streaming_enabled = False
         self._response_was_streamed = False
         self._stream_final_sent = False
-        self._streamed_response_content: str = ""  # Accumulated streamed text for saving to messages
+        self._streamed_response_content: str = (
+            ""  # Accumulated streamed text for saving to messages
+        )
 
         # Captures the most recent pending_response emitted by the graph during a cycle.
         # Used for background job cycles where we don't stream to the client.
@@ -103,6 +100,8 @@ class ProgenitorLoop:
 
         # Shared state for the loop (protected by _graph_lock)
         self._state: dict[str, Any] = {}
+        self._a2a_task_tracker: A2ATaskTracker | None = None
+        self._a2a_task_poller: asyncio.Task[None] | None = None
 
     async def run_forever(self) -> None:
         """Run the perpetual loop.
@@ -148,14 +147,26 @@ class ProgenitorLoop:
         # Core-only input handling plus scheduler dispatch loop.
         input_task = asyncio.create_task(self._input_handler_loop(run_id))
         scheduler_task: asyncio.Task | None = None
+        poller_task: asyncio.Task[None] | None = None
         if self._is_scheduler_enabled():
             scheduler_task = asyncio.create_task(self._scheduler_loop())
             logger.info("Scheduler loop started")
+        self._a2a_task_tracker = A2ATaskTracker(
+            self.state_manager,
+            self.llm_client,
+            completion_callback=self._record_completed_a2a_task,
+        )
+        self._a2a_task_poller = asyncio.create_task(self._a2a_task_tracker.run())
+        poller_task = self._a2a_task_poller
 
         try:
             if scheduler_task:
                 done, pending = await asyncio.wait(
-                    [input_task, scheduler_task],
+                    [
+                        task
+                        for task in [input_task, scheduler_task, poller_task]
+                        if task is not None
+                    ],
                     return_when=asyncio.FIRST_EXCEPTION,
                 )
                 for task in pending:
@@ -167,7 +178,10 @@ class ProgenitorLoop:
                     if exc:
                         raise exc
             else:
-                await input_task
+                await asyncio.gather(
+                    input_task,
+                    poller_task,
+                )
         except asyncio.CancelledError:
             logger.info("Loop cancelled by signal")
             input_task.cancel()
@@ -177,6 +191,15 @@ class ProgenitorLoop:
                 scheduler_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await scheduler_task
+            if poller_task:
+                poller_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poller_task
+        finally:
+            if poller_task and not poller_task.done():
+                poller_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poller_task
 
         # Final checkpoint
         await self._checkpoint_state(self._state)
@@ -205,12 +228,12 @@ class ProgenitorLoop:
                         last_health = now
                     continue
 
-                logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
+                logger.info(
+                    "Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input
+                )
                 is_scheduled_input = user_input.startswith(SCHEDULED_INPUT_PREFIX)
                 scheduled_message = (
-                    user_input[len(SCHEDULED_INPUT_PREFIX):].strip()
-                    if is_scheduled_input
-                    else ""
+                    user_input[len(SCHEDULED_INPUT_PREFIX) :].strip() if is_scheduled_input else ""
                 )
 
                 # Acquire lock to run graph cycle
@@ -223,8 +246,11 @@ class ProgenitorLoop:
                     self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
                     self._state["actions_this_cycle"] = 0
 
-                    # Enable streaming mode
-                    self._streaming_enabled = True
+                    # Scheduled work is delivered via background events, not a
+                    # live IPC stream consumer. Keep capturing streamed text so
+                    # we can surface it later, but avoid filling the stream
+                    # queue with chunks that no client will ever read.
+                    self._streaming_enabled = not is_scheduled_input
                     self._response_was_streamed = False
                     self._stream_final_sent = False
                     self._streamed_response_content = ""
@@ -235,7 +261,9 @@ class ProgenitorLoop:
                     except Exception as e:
                         # Prevent clients from hanging on failures: emit a final chunk + mark cycle complete.
                         safe_error = redact_secrets(str(e))
-                        logger.error("Graph cycle failed for user input: %s", safe_error, exc_info=True)
+                        logger.error(
+                            "Graph cycle failed for user input: %s", safe_error, exc_info=True
+                        )
                         await self._push_event("error", safe_error)
 
                         if self._streaming_enabled and not self._stream_final_sent:
@@ -248,13 +276,19 @@ class ProgenitorLoop:
                         self._last_cycle_response = f"Error: {safe_error}"
                         self._state["last_cycle_response"] = self._last_cycle_response
                         await self._checkpoint_state(self._state)
-                        await self._update_health_file(self._state, status="error", error=safe_error)
+                        await self._update_health_file(
+                            self._state, status="error", error=safe_error
+                        )
                     finally:
                         # Background scheduled work is processed through the same input
                         # path as user messages, so emit an explicit completion event here.
                         if is_scheduled_input:
-                            response_text = str(self._state.get("last_cycle_response") or "").strip()
-                            result_status = "completed" if response_text else "completed_no_response"
+                            response_text = str(
+                                self._state.get("last_cycle_response") or ""
+                            ).strip()
+                            result_status = (
+                                "completed" if response_text else "completed_no_response"
+                            )
                             await self._push_event(
                                 "scheduled_response",
                                 response_text or "(no response)",
@@ -394,6 +428,7 @@ class ProgenitorLoop:
         # Passing the full self._state would flood the model with all accumulated messages.
         if current_input:
             from langchain_core.messages import HumanMessage
+
             graph_input: dict = {"messages": [HumanMessage(content=current_input)]}
         else:
             graph_input = {}
@@ -424,7 +459,11 @@ class ProgenitorLoop:
 
                 # Process graph events
                 for node_name, node_output in event.items():
-                    output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
+                    output_info = (
+                        list(node_output.keys())
+                        if isinstance(node_output, dict)
+                        else type(node_output)
+                    )
                     logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
                     if isinstance(node_output, dict):
                         if "messages" in node_output:
@@ -442,7 +481,10 @@ class ProgenitorLoop:
                     self._last_cycle_response = pending_text
                     self._state["last_cycle_response"] = pending_text
                     if self._streaming_enabled:
-                        if self._response_was_streamed and pending_text == self._streamed_response_content:
+                        if (
+                            self._response_was_streamed
+                            and pending_text == self._streamed_response_content
+                        ):
                             if not self._stream_final_sent:
                                 await self.stream_final()
                                 self._stream_final_sent = True
@@ -452,28 +494,38 @@ class ProgenitorLoop:
                             self._stream_final_sent = True
                     self._state["pending_response"] = None
                 elif self._response_was_streamed and not self._stream_final_sent:
+                    streamed_text = self._streamed_response_content
+                    if streamed_text:
+                        self._last_cycle_response = streamed_text
+                        self._state["last_cycle_response"] = streamed_text
                     # Response was already streamed by a node, just send final marker ONCE
                     if self._streaming_enabled:
                         await self.stream_final()
                     self._stream_final_sent = True
                     self._state["pending_response"] = None
 
-            # Ensure streaming clients never hang waiting for an is_final marker.
-            # Extract the last AI message from messages if nothing was streamed yet.
+            # Ensure streaming clients never hang waiting for an is_final marker
+            # and capture a final text response even when this cycle has no live
+            # stream consumer (for example scheduled tasks).
             last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
-            if self._streaming_enabled and not self._stream_final_sent:
+            if not self._stream_final_sent:
                 response_text = self._extract_message_text(last_ai_msg)
                 if response_text:
-                    logger.info("Extracting AI response from messages (%d chars)", len(response_text))
-                    await self._stream_response(response_text)
+                    logger.info(
+                        "Extracting AI response from messages (%d chars)", len(response_text)
+                    )
+                    if self._streaming_enabled:
+                        await self._stream_response(response_text)
                     self._last_cycle_response = response_text
                     self._state["last_cycle_response"] = response_text
                     self._stream_final_sent = True
-                if not self._stream_final_sent:
+                if self._streaming_enabled and not self._stream_final_sent:
                     await self.stream_final()
                     self._stream_final_sent = True
 
-            reasoning_trace = self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+            reasoning_trace = (
+                self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+            )
             self._last_reasoning_trace = reasoning_trace
             self._state["last_reasoning_trace"] = reasoning_trace
             if reasoning_trace:
@@ -500,10 +552,7 @@ class ProgenitorLoop:
             raise
 
     async def _push_event(
-        self,
-        event_type: str,
-        content: str = "",
-        metadata: dict[str, Any] | None = None
+        self, event_type: str, content: str = "", metadata: dict[str, Any] | None = None
     ) -> None:
         """Push an event to clients via the event queue.
 
@@ -533,7 +582,7 @@ class ProgenitorLoop:
                 "Event queue full (%d/%d), dropping event: %s",
                 self._event_queue.qsize(),
                 self._event_queue.maxsize,
-                event_type
+                event_type,
             )
 
     async def get_event(self, timeout: float | None = None) -> dict[str, Any] | None:
@@ -547,10 +596,10 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                return cast(dict[str, Any] | None, await asyncio.wait_for(
-                    self._event_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    dict[str, Any] | None,
+                    await asyncio.wait_for(self._event_queue.get(), timeout=timeout),
+                )
             return cast(dict[str, Any] | None, await self._event_queue.get())
         except TimeoutError:
             return None
@@ -563,10 +612,7 @@ class ProgenitorLoop:
         # Cap timeout to ensure health gets updated frequently
         effective_timeout = min(timeout, 30.0)
         try:
-            return await asyncio.wait_for(
-                self._input_queue.get(),
-                timeout=effective_timeout
-            )
+            return await asyncio.wait_for(self._input_queue.get(), timeout=effective_timeout)
         except TimeoutError:
             return None
 
@@ -583,7 +629,7 @@ class ProgenitorLoop:
             logger.warning(
                 "Output queue full (%d/%d), dropping message",
                 self._output_queue.qsize(),
-                self._output_queue.maxsize
+                self._output_queue.maxsize,
             )
 
     async def _signal_cycle_complete(self) -> None:
@@ -606,10 +652,7 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                await asyncio.wait_for(
-                    self._cycle_complete_event.wait(),
-                    timeout=timeout
-                )
+                await asyncio.wait_for(self._cycle_complete_event.wait(), timeout=timeout)
             else:
                 await self._cycle_complete_event.wait()
             # Clear the event for the next cycle
@@ -646,7 +689,8 @@ class ProgenitorLoop:
         if token:
             self._response_was_streamed = True
             self._streamed_response_content += token
-            await self._send_stream_chunk(token, is_final=False)
+            if self._streaming_enabled:
+                await self._send_stream_chunk(token, is_final=False)
 
     async def _handle_message_stream_event(self, event: Any) -> None:
         """Handle LangGraph `messages` stream events for token-level output."""
@@ -670,8 +714,7 @@ class ProgenitorLoop:
         try:
             parameters = inspect.signature(astream).parameters.values()
             return any(
-                parameter.name == "stream_mode"
-                or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                parameter.name == "stream_mode" or parameter.kind == inspect.Parameter.VAR_KEYWORD
                 for parameter in parameters
             )
         except (TypeError, ValueError):
@@ -689,26 +732,30 @@ class ProgenitorLoop:
             is_final: Whether this is the final chunk (signals stream end).
         """
         try:
-            self._stream_queue.put_nowait({
-                "type": "stream_chunk",
-                "content": chunk,
-                "is_final": is_final,
-            })
+            self._stream_queue.put_nowait(
+                {
+                    "type": "stream_chunk",
+                    "content": chunk,
+                    "is_final": is_final,
+                }
+            )
         except asyncio.QueueFull:
             logger.warning(
                 "Stream queue full (%d/%d), dropping chunk",
                 self._stream_queue.qsize(),
-                self._stream_queue.maxsize
+                self._stream_queue.maxsize,
             )
 
     async def _send_stream_end(self) -> None:
         """Signal the end of a streaming response."""
         try:
-            self._stream_queue.put_nowait({
-                "type": "stream_end",
-                "content": "",
-                "is_final": True,
-            })
+            self._stream_queue.put_nowait(
+                {
+                    "type": "stream_end",
+                    "content": "",
+                    "is_final": True,
+                }
+            )
         except asyncio.QueueFull:
             logger.warning("Stream queue full, could not send stream end marker")
 
@@ -720,10 +767,10 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                return cast(dict[str, Any] | None, await asyncio.wait_for(
-                    self._stream_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    dict[str, Any] | None,
+                    await asyncio.wait_for(self._stream_queue.get(), timeout=timeout),
+                )
             return cast(dict[str, Any] | None, await self._stream_queue.get())
         except TimeoutError:
             return None
@@ -928,8 +975,12 @@ class ProgenitorLoop:
                 "type": msg.get("type"),
                 "role": msg.get("role"),
                 "keys": sorted(msg.keys()),
-                "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
-                "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
+                "additional_kwargs_keys": sorted(additional.keys())
+                if isinstance(additional, dict)
+                else [],
+                "response_metadata_keys": sorted(metadata.keys())
+                if isinstance(metadata, dict)
+                else [],
                 "content_type": type(content).__name__,
             }
 
@@ -939,7 +990,9 @@ class ProgenitorLoop:
         return {
             "type": getattr(msg, "type", None),
             "role": getattr(msg, "role", None),
-            "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
+            "additional_kwargs_keys": sorted(additional.keys())
+            if isinstance(additional, dict)
+            else [],
             "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
             "content_type": type(content).__name__,
         }
@@ -966,32 +1019,67 @@ class ProgenitorLoop:
                 await self._input_queue.put(message)
             else:
                 # Wait with timeout
-                await asyncio.wait_for(
-                    self._input_queue.put(message),
-                    timeout=timeout
-                )
+                await asyncio.wait_for(self._input_queue.put(message), timeout=timeout)
             return True
         except asyncio.QueueFull:
             logger.warning("Input queue full, message rejected (non-blocking)")
             raise
         except TimeoutError:
             logger.warning(
-                "Input queue full, message rejected after %.1fs timeout. "
-                "Queue size: %d/%d",
+                "Input queue full, message rejected after %.1fs timeout. Queue size: %d/%d",
                 timeout,
                 self._input_queue.qsize(),
-                self._input_queue.maxsize
+                self._input_queue.maxsize,
             )
             return False
+
+    async def _record_completed_a2a_task(self, record: A2ATaskRecord) -> None:
+        """Persist a terminal A2A task update into the active conversation state."""
+        metadata = {
+            "type": "a2a_task_completion",
+            "task_id": record.task_id,
+            "agent": record.agent_name,
+            "a2a_status": record.status,
+            "source": record.source,
+        }
+        content = build_completion_message(record)
+
+        async with self._graph_lock:
+            messages = list(self._state.get("messages", []))
+            for existing in messages:
+                existing_metadata = (
+                    existing.get("metadata")
+                    if isinstance(existing, dict)
+                    else getattr(existing, "metadata", None)
+                )
+                if not isinstance(existing_metadata, dict):
+                    continue
+                if (
+                    existing_metadata.get("type") == metadata["type"]
+                    and existing_metadata.get("task_id") == record.task_id
+                    and existing_metadata.get("a2a_status") == record.status
+                ):
+                    return
+
+            message = ConversationMessage(
+                id=str(uuid.uuid4()),
+                role="tool",
+                content=content,
+                timestamp=utcnow(),
+                metadata=metadata,
+            )
+            await self.state_manager.log_conversation(message)
+            messages.append(message)
+            await self.state_manager.save_messages(messages)
+            self._state["messages"] = messages
 
     async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from the agent."""
         try:
             if timeout:
-                return cast(str | None, await asyncio.wait_for(
-                    self._output_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    str | None, await asyncio.wait_for(self._output_queue.get(), timeout=timeout)
+                )
             return cast(str | None, await self._output_queue.get())
         except TimeoutError:
             return None
@@ -1054,8 +1142,12 @@ class ProgenitorLoop:
             "pid": __import__("os").getpid(),
             "idle_cycles": state.get("idle_cycles", 0),
             "current_backoff_seconds": state.get("current_backoff_seconds"),
-            "message_count": len(state.get("messages") or []) if isinstance(state.get("messages"), list) else 0,
-            "agent_count": len(state.get("agents") or []) if isinstance(state.get("agents"), list) else 0,
+            "message_count": len(state.get("messages") or [])
+            if isinstance(state.get("messages"), list)
+            else 0,
+            "agent_count": len(state.get("agents") or [])
+            if isinstance(state.get("agents"), list)
+            else 0,
             "queues": self.get_queue_stats(),
         }
 

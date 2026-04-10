@@ -11,6 +11,7 @@ In production an AsyncSqliteSaver writes checkpoints to disk so that an
 interrupted build can be inspected or resumed.  In tests / when no DB path
 is supplied we fall back to MemorySaver.
 """
+
 import logging
 from pathlib import Path
 from typing import Any, cast
@@ -97,6 +98,7 @@ def create_inner_loop_graph(
     # not present in the image).  Fall back to file-relative traversal for local dev:
     # graph.py lives at app/agents/builder_agent/graph.py → parents[3] = repo root.
     import os as _os  # local import to avoid polluting module namespace
+
     _project_root_env = _os.getenv("PROGENITOR_PROJECT_ROOT")
     if _project_root_env:
         project_root = Path(_project_root_env)
@@ -159,9 +161,14 @@ def create_inner_loop_graph(
         "observe": _wrap_node("observe", observe.create_node(llm_client, state_manager, config)),
         "think": _wrap_node("think", think.create_node(llm_client, state_manager)),
         "plan": _wrap_node("plan", plan.create_node(llm_client, state_manager)),
-        "build": _wrap_node("build", build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager, git_manager)),
+        "build": _wrap_node(
+            "build",
+            build.create_node(llm_client, copilot_cli, worktrees_dir, state_manager, git_manager),
+        ),
         "merge": _wrap_node("merge", merge.create_node(llm_client, git_manager, state_manager)),
-        "execute": _wrap_node("execute", execute.create_node(tool_registry, state_manager, project_root)),
+        "execute": _wrap_node(
+            "execute", execute.create_node(tool_registry, state_manager, project_root)
+        ),
         "verify": _wrap_node("verify", verify.create_node(llm_client, state_manager)),
         "publish": _wrap_node("publish", publish.create_node(state_manager, worktrees_dir)),
         "learn": _wrap_node("learn", learn.create_node(llm_client, state_manager)),
@@ -169,7 +176,7 @@ def create_inner_loop_graph(
 
     builder = StateGraph(ProgenitorState)
     for name, node_fn in nodes.items():
-        builder.add_node(name, node_fn)  # type: ignore[call-overload]
+        builder.add_node(name, node_fn)
 
     builder.set_entry_point("observe")
 

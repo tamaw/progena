@@ -3,12 +3,13 @@ Tests for Phase 5: Skills system.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
-SKILLS_DIR = Path("prompts/skills")
+SKILLS_DIR = Path("data/skills/progenitor")
 
 
 class TestSkillFiles:
@@ -17,11 +18,11 @@ class TestSkillFiles:
     def _get_skill_dirs(self):
         """Get all skill directories."""
         if not SKILLS_DIR.is_dir():
-            pytest.skip("prompts/skills/ not found")
+            pytest.skip("data/skills/progenitor/ not found")
         return [d for d in SKILLS_DIR.iterdir() if d.is_dir()]
 
     def test_skills_directory_exists(self):
-        assert SKILLS_DIR.is_dir(), "prompts/skills/ directory should exist"
+        assert SKILLS_DIR.is_dir(), "data/skills/progenitor/ directory should exist"
 
     def test_all_skills_have_skill_md(self):
         for skill_dir in self._get_skill_dirs():
@@ -60,18 +61,25 @@ class TestSkillFiles:
     def test_skill_names_valid_format(self):
         """Skill names must be lowercase alphanumeric with hyphens."""
         import re
+
         for skill_dir in self._get_skill_dirs():
             content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
             parts = content.split("---", 2)
             frontmatter = yaml.safe_load(parts[1])
             name = frontmatter["name"]
-            assert re.match(r'^[a-z0-9][a-z0-9-]*$', name), (
+            assert re.match(r"^[a-z0-9][a-z0-9-]*$", name), (
                 f"Invalid skill name '{name}' — must be lowercase with hyphens"
             )
 
     def test_expected_skills_exist(self):
         """All planned skills should be present."""
-        expected = {"build-agent", "scheduling", "git-workflow", "self-improvement", "agent-architecture"}
+        expected = {
+            "build-agent",
+            "scheduling",
+            "git-workflow",
+            "self-improvement",
+            "agent-architecture",
+        }
         actual = {d.name for d in self._get_skill_dirs()}
         missing = expected - actual
         assert not missing, f"Missing expected skills: {missing}"
@@ -81,6 +89,13 @@ class TestSkillsWiring:
     """Test that skills are wired into the DeepAgent factory."""
 
     def test_factory_passes_skills_to_create_deep_agent(self):
+        fake_config = SimpleNamespace(
+            llm=SimpleNamespace(model_default="test-model"),
+            storage=SimpleNamespace(
+                state_dir=Path("data/state"),
+                prompts_dir=Path("data/prompts"),
+            ),
+        )
         with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
             mock_create.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
@@ -88,23 +103,36 @@ class TestSkillsWiring:
                 from app.progenitor.agent.deep_agent import create_progenitor_agent
 
                 create_progenitor_agent(
-                    skills_dirs=["prompts/skills/"],
+                    config=fake_config,
+                    checkpointer=MagicMock(),
+                    skills_dirs=["data/skills/progenitor"],
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert "skills" in call_kwargs
-                assert call_kwargs["skills"] == ["prompts/skills/"]
+                assert call_kwargs["skills"] == ["data/skills/progenitor"]
 
     def test_factory_auto_discovers_skills_dir(self):
-        """When no skills_dirs given, auto-discovers from prompts/skills/."""
+        """When no skills_dirs given, auto-discovers from data/skills/progenitor/."""
+        fake_config = SimpleNamespace(
+            llm=SimpleNamespace(model_default="test-model"),
+            storage=SimpleNamespace(
+                state_dir=Path("data/state"),
+                prompts_dir=Path("data/prompts"),
+            ),
+        )
         with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
             mock_create.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.deep_agent import create_progenitor_agent
 
-                # Use project root (which has prompts/skills/)
-                create_progenitor_agent(project_root=".")
+                # Use project root (which has data/skills/progenitor/)
+                create_progenitor_agent(
+                    config=fake_config,
+                    checkpointer=MagicMock(),
+                    project_root=".",
+                )
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert call_kwargs.get("skills") is not None

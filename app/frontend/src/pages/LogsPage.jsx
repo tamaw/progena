@@ -157,20 +157,6 @@ function mergeEntries(currentEntries, incomingEntries) {
   return freshEntries.length > 0 ? [...freshEntries, ...currentEntries] : currentEntries;
 }
 
-function hasActiveFilters({ group, filePath, search, level }) {
-  return Boolean(group || filePath || search || level);
-}
-
-function getDefaultSelection(groups) {
-  for (const group of groups || []) {
-    const firstFile = (group.options || [])[0];
-    if (firstFile) {
-      return { group: group.id || '', file: firstFile.id || '' };
-    }
-  }
-  return { group: '', file: '' };
-}
-
 function findVisibleRange(items, scrollTop, viewportHeight) {
   if (!items.length) {
     return [0, -1];
@@ -516,7 +502,7 @@ function LogsPage() {
       return;
     }
 
-    if (['agent', 'agent_message', 'scheduled_response', 'task', 'alert', 'shutdown', 'message'].includes(event?.type)) {
+    if (['agent', 'agent_message', 'agent_notification', 'scheduled_response', 'task', 'alert', 'shutdown', 'message'].includes(event?.type)) {
       queueIncrementalRefresh();
     }
   }, [loadLogs, queueIncrementalRefresh]);

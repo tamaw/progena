@@ -32,9 +32,12 @@ def list_components(base: str) -> list[str]:
 
 def get_changed_files(event_name: str) -> tuple[list[str], bool]:
     if event_name == "workflow_dispatch":
-        has_origin_main = run_git(
-            "show-ref", "--verify", "--quiet", "refs/remotes/origin/main", check=False
-        ).returncode == 0
+        has_origin_main = (
+            run_git(
+                "show-ref", "--verify", "--quiet", "refs/remotes/origin/main", check=False
+            ).returncode
+            == 0
+        )
         if not has_origin_main:
             run_git("fetch", "origin", "main")
         diff = run_git("diff", "--name-only", "origin/main...HEAD", check=False)
@@ -66,8 +69,6 @@ def main() -> int:
     changed_files: list[str] = []
     if not deploy_all:
         changed_files, deploy_all = get_changed_files(event_name)
-        if any(path.startswith("docker/runner/") for path in changed_files):
-            deploy_all = True
 
     if deploy_all:
         agents = list_components("app/agents")
@@ -77,9 +78,19 @@ def main() -> int:
         mcps_set = set()
         for path in changed_files:
             parts = path.split("/")
-            if len(parts) >= 3 and parts[0] == "app" and parts[1] == "agents" and Path("app", "agents", parts[2]).is_dir():
+            if (
+                len(parts) >= 3
+                and parts[0] == "app"
+                and parts[1] == "agents"
+                and Path("app", "agents", parts[2]).is_dir()
+            ):
                 agents_set.add(parts[2])
-            if len(parts) >= 3 and parts[0] == "app" and parts[1] == "mcp" and Path("app", "mcp", parts[2]).is_dir():
+            if (
+                len(parts) >= 3
+                and parts[0] == "app"
+                and parts[1] == "mcp"
+                and Path("app", "mcp", parts[2]).is_dir()
+            ):
                 mcps_set.add(parts[2])
         agents = sorted(agents_set)
         mcps = sorted(mcps_set)

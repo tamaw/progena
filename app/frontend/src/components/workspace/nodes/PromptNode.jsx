@@ -1,18 +1,16 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
-function buildTargetOptions(data, nodes) {
+function buildTargetOptions(data, agentOptions) {
   return [...new Set(
     [
       data.targetAgent,
       data.primaryAgent,
       ...(data.associatedAgents || []),
-      ...nodes
-        .filter((node) => node.type === 'agent' || node.type === 'mcp')
-        .map((node) => node.data?.agentId || node.data?.title || ''),
+      ...agentOptions,
       'progenitor',
     ]
       .map((value) => (typeof value === 'string' ? value.trim() : ''))
@@ -28,18 +26,20 @@ function formatAgentLabel(value) {
 
 function PromptNode({ id, data, selected }) {
   const {
-    nodes,
     connectPromptToAgent,
     updateNodeData,
     toggleExpanded,
     runPromptNode,
     generateFromPromptNode,
+  } = useWorkspaceActions();
+  const {
+    agentOptions,
     getWidgetTabs,
     getWidgetDefaultTab,
-  } = useWorkspaceContext();
+  } = useWorkspaceMeta();
   const { expanded } = data;
   const associatedAgents = data.associatedAgents || [];
-  const targetAgentOptions = buildTargetOptions(data, nodes);
+  const targetAgentOptions = buildTargetOptions(data, agentOptions);
   const activeTargetAgent = data.targetAgent || targetAgentOptions[0] || 'progenitor';
   const tabs = getWidgetTabs('prompt');
   const defaultTab = useMemo(

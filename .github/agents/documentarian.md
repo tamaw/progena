@@ -30,7 +30,7 @@ progenitor/
 ├── CHANGELOG.md                   # Version history
 ├── docs/
 │   ├── ARCHITECTURE_DIAGRAM.md    # System architecture
-│   ├── loop.spec.md               # Loop specification
+│   ├── SPEC.md                    # Main system specification
 │   ├── BACKEND.md                 # Backend details
 │   ├── PROJECT_STRUCTURE.md       # Code organization
 │   └── ...
@@ -65,7 +65,7 @@ Brief description of what this does.
 ## Quick Start
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 python -m app.progenitor.main
 ```
 
@@ -149,14 +149,14 @@ await asyncio.sleep(min(backoff * 2, MAX_BACKOFF))
 ```python
 def create_node(state_manager: StateManager, llm_client: LLMClient = None) -> Callable:
     """Creates a node that processes user messages.
-    
+
     Args:
         state_manager: Manager for persistent state
         llm_client: Optional LLM client for API calls
-        
+
     Returns:
         Async callable that processes ProgenitorState
-        
+
     Raises:
         ValueError: If state_manager is None
     """

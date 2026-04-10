@@ -79,6 +79,7 @@ def create_research_subagent() -> SubAgent:
 
     Delegates research tasks to a subagent with context isolation,
     so research results are summarized before returning to the main agent.
+    Tool access is inherited from the main DeepAgent.
     """
     return SubAgent(
         name="researcher",
@@ -93,7 +94,6 @@ def create_research_subagent() -> SubAgent:
             "and synthesize findings. Always cite your sources (file paths, "
             "line numbers). Return a structured summary."
         ),
-        tools=[],  # Will inherit filesystem tools from parent
     )
 
 
