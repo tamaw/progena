@@ -145,10 +145,11 @@ def _responses_function_tool(
     )
     if "type" not in schema:
         schema["type"] = "object"
-    if "properties" not in schema:
-        schema["properties"] = {}
-    if "required" not in schema:
-        schema["required"] = []
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        schema["properties"] = properties
+    schema["required"] = list(properties.keys())
     if "additionalProperties" not in schema:
         schema["additionalProperties"] = False
     return {
@@ -386,13 +387,6 @@ class ObserveAgent:
     def _responses_endpoint(self) -> str:
         return _build_responses_endpoint(self.config.llm.base_url)
 
-    def _is_azure_endpoint(self) -> bool:
-        parsed = urlsplit(self.config.llm.base_url or "")
-        path = (parsed.path or "").rstrip("/")
-        return (
-            path == "/openai" or path.startswith("/openai/") or "azure.com" in parsed.netloc.lower()
-        )
-
     def _build_graph(self):
         async def prepare(state: ObserveGraphState) -> dict[str, Any]:
             request = (state.get("request") or "").strip() or (
@@ -517,11 +511,6 @@ class ObserveAgent:
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self._responses_endpoint()
         send_payload = dict(payload)
-        if self._is_azure_endpoint():
-            deployment = send_payload.get("deployment") or send_payload.get("model")
-            if deployment:
-                send_payload["deployment"] = deployment
-            send_payload.pop("model", None)
         start = time.monotonic()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(60.0), headers=self._responses_headers()
@@ -537,7 +526,7 @@ class ObserveAgent:
             data = cast(dict[str, Any], response.json())
         logger.info(
             "Observe responses call succeeded model=%s duration_ms=%.1f",
-            send_payload.get("deployment") or payload.get("model"),
+            payload.get("model"),
             (time.monotonic() - start) * 1000,
         )
         return data
