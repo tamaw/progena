@@ -7,6 +7,7 @@ on:
       - 'app/agents/**'
       - 'app/mcp/**'
       - '.github/workflows/agents.yml'
+      - '.github/workflows/mcp.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,9 +50,7 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install -r requirements.lock.txt
-          pip install ruff
-          pip install -e . --no-deps
+          pip install -e ".[dev]"
 
       - name: Lint backend (ruff)
         continue-on-error: true
@@ -81,9 +80,7 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install -r requirements.lock.txt
-          pip install ruff pyright
-          pip install -e . --no-deps
+          pip install -e ".[dev]"
 
       - uses: actions/setup-node@v4
         with:
@@ -137,7 +134,8 @@ jobs:
   build-and-push:
     runs-on: self-hosted
     needs: [backend, progenitor, frontend]
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    # Keep push-based image publishing on main, but allow explicit manual dispatches from a branch.
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -199,7 +197,8 @@ jobs:
     runs-on: self-hosted
     environment: cronix
     needs: [build-and-push]
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    # Keep push-based deploys on main, but allow explicit manual dispatches from a branch.
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -210,6 +209,7 @@ jobs:
         env:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_TIMEZONE: ${{ vars.PROGENITOR_TIMEZONE }}
           GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
@@ -224,38 +224,28 @@ jobs:
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
           PROGENITOR_HOST_WORKTREES_DIR: /var/lib/progenitor/worktrees
           PROGENITOR_HOST_TMP_DIR: /var/lib/progenitor/tmp
-          PROGENITOR_HOST_PROMPTS_DIR: /var/lib/progenitor/prompts
         run: |
+          PROMPTS_HOST_DIR="${PROGENITOR_HOST_DATA_DIR}/prompts"
+          SKILLS_HOST_DIR="${PROGENITOR_HOST_DATA_DIR}/skills"
+          ASSET_SYNC_CONTAINER="progenitor-asset-sync"
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
-          docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
-          if command -v sudo >/dev/null 2>&1; then
-            sudo mkdir -p \
-              "${PROGENITOR_HOST_DATA_DIR}" \
-              "${PROGENITOR_HOST_LOGS_DIR}" \
-              "${PROGENITOR_HOST_WORKTREES_DIR}" \
-              "${PROGENITOR_HOST_TMP_DIR}" \
-              "${PROGENITOR_HOST_PROMPTS_DIR}"
-            sudo chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
-          else
-            mkdir -p \
-              "${PROGENITOR_HOST_DATA_DIR}" \
-              "${PROGENITOR_HOST_LOGS_DIR}" \
-              "${PROGENITOR_HOST_WORKTREES_DIR}" \
-              "${PROGENITOR_HOST_TMP_DIR}" \
-              "${PROGENITOR_HOST_PROMPTS_DIR}"
-            chown -R "$(id -u):$(id -g)" /var/lib/progenitor || true
-          fi
-          # Keep prompt bind mount populated; empty host dir masks image prompts at /app/prompts.
-          if command -v sudo >/dev/null 2>&1; then
-            sudo rm -rf "${PROGENITOR_HOST_PROMPTS_DIR:?}/"*
-            sudo cp -a prompts/. "${PROGENITOR_HOST_PROMPTS_DIR}/"
-            sudo chown -R "$(id -u):$(id -g)" "${PROGENITOR_HOST_PROMPTS_DIR}" || true
-          else
-            rm -rf "${PROGENITOR_HOST_PROMPTS_DIR:?}/"*
-            cp -a prompts/. "${PROGENITOR_HOST_PROMPTS_DIR}/"
-            chown -R "$(id -u):$(id -g)" "${PROGENITOR_HOST_PROMPTS_DIR}" || true
-          fi
+          docker rm -f progenitor progenitor-backend progenitor-frontend "${ASSET_SYNC_CONTAINER}" 2>/dev/null || true
+          # The self-hosted runner runs in Docker, so writing /var/lib/... from the job filesystem does
+          # not populate the Docker host bind mounts used by the deployed containers. Sync prompt assets
+          # through a helper container that mounts the real host data/log paths seen by the daemon.
+          docker create --name "${ASSET_SYNC_CONTAINER}" \
+            -v "${PROGENITOR_HOST_DATA_DIR}:/app/data" \
+            -v "${PROGENITOR_HOST_LOGS_DIR}:/app/logs" \
+            alpine:3.20 \
+            sh -c 'mkdir -p /app/data/prompts /app/data/skills /app/logs && tail -f /dev/null' >/dev/null
+          docker start "${ASSET_SYNC_CONTAINER}" >/dev/null
+          docker exec "${ASSET_SYNC_CONTAINER}" sh -c \
+            'find /app/data/prompts -mindepth 1 -maxdepth 1 -exec rm -rf {} + && \
+             find /app/data/skills -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
+          docker cp data/prompts/. "${ASSET_SYNC_CONTAINER}:/app/data/prompts/"
+          docker cp data/skills/. "${ASSET_SYNC_CONTAINER}:/app/data/skills/"
+          docker rm -f "${ASSET_SYNC_CONTAINER}" >/dev/null
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull
           docker compose -f docker/docker-compose.progenitor.yml up -d

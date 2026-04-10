@@ -1,11 +1,12 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function AgentNode({ id, data, selected }) {
-  const { toggleExpanded, refreshWorkspace, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { toggleExpanded, refreshWorkspace } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
   const { expanded } = data;
   const widgetKind = data.widgetKind || 'agent';
   const icon = widgetKind === 'mcp' ? 'M' : 'A';

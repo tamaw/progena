@@ -62,13 +62,15 @@ async def _run_gh(
             await process.communicate()
             return {"returncode": -1, "stdout": "", "stderr": f"Timed out after {timeout}s"}
 
-        result = {
+        result: dict[str, str | int | None] = {
             "returncode": process.returncode,
             "stdout": stdout.decode() if stdout else "",
             "stderr": stderr.decode() if stderr else "",
         }
         if process.returncode != 0:
-            logger.warning("GH: Command failed (%s): %s", process.returncode, str(result["stderr"])[:300])
+            logger.warning(
+                "GH: Command failed (%s): %s", process.returncode, str(result["stderr"])[:300]
+            )
         return result
     except FileNotFoundError:
         msg = "gh CLI not found. Install from https://cli.github.com/"
@@ -83,6 +85,7 @@ async def _run_gh(
 # Git push helper (uses git directly, not gh)
 # ---------------------------------------------------------------------------
 
+
 async def gh_push_branch(branch: str, cwd: Path, remote: str = "origin") -> tuple[bool, str]:
     """Push a branch to the remote.
 
@@ -95,7 +98,11 @@ async def gh_push_branch(branch: str, cwd: Path, remote: str = "origin") -> tupl
         (success, message) tuple.
     """
     process = await asyncio.create_subprocess_exec(
-        "git", "push", "--set-upstream", remote, branch,
+        "git",
+        "push",
+        "--set-upstream",
+        remote,
+        branch,
         cwd=cwd,
         env=os.environ.copy(),
         stdout=asyncio.subprocess.PIPE,
@@ -119,6 +126,7 @@ async def gh_push_branch(branch: str, cwd: Path, remote: str = "origin") -> tupl
 # ---------------------------------------------------------------------------
 # PR lifecycle
 # ---------------------------------------------------------------------------
+
 
 async def gh_pr_create(
     title: str,
@@ -167,8 +175,10 @@ async def gh_pr_status(cwd: Path | None = None) -> dict:
     """
     result = await _run_gh(
         [
-            "pr", "status",
-            "--json", "number,title,state,url,statusCheckRollup",
+            "pr",
+            "status",
+            "--json",
+            "number,title,state,url,statusCheckRollup",
         ],
         cwd=cwd,
     )
@@ -197,10 +207,14 @@ async def gh_pr_list(
     """
     result = await _run_gh(
         [
-            "pr", "list",
-            "--state", state,
-            "--limit", str(limit),
-            "--json", "number,title,state,url,headRefName",
+            "pr",
+            "list",
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,state,url,headRefName",
         ],
         cwd=cwd,
     )
@@ -243,6 +257,7 @@ async def gh_pr_merge(
 # ---------------------------------------------------------------------------
 # High-level helper used by the publish node
 # ---------------------------------------------------------------------------
+
 
 async def gh_create_pr_from_worktree(
     worktree_path: Path,

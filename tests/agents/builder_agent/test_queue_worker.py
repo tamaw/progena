@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from a2a.types import TaskState
 
 os.environ.setdefault("AGENT_NAME", "builder_agent")
 
@@ -29,7 +30,13 @@ def test_default_task_log_path_uses_agent_name(monkeypatch: pytest.MonkeyPatch) 
 
     reloaded = importlib.reload(queue_worker)
     try:
-        assert reloaded.get_task_log_path().as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
+        expected = (
+            Path(__file__).resolve().parents[3]
+            / "logs"
+            / "custom_builder"
+            / "custom_builder_tasks.jsonl"
+        )
+        assert reloaded.get_task_log_path() == expected
     finally:
         importlib.reload(queue_worker)
 
@@ -69,8 +76,12 @@ def test_append_task_record_and_poll(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_queue_executes_and_logs_completion(tmp_path: Path) -> None:
     log_path = tmp_path / "tasks.jsonl"
+    event_queue = AsyncMock()
+    event_queue.enqueue_event = AsyncMock()
 
-    async def handler(task_id: str, context_id: str, request_text: str, request_ctx: dict[str, str]) -> BuildResult:
+    async def handler(
+        task_id: str, context_id: str, request_text: str, request_ctx: dict[str, str]
+    ) -> BuildResult:
         assert task_id == "task-2"
         assert context_id == "ctx-2"
         assert request_text == "Build something"
@@ -94,6 +105,7 @@ async def test_queue_executes_and_logs_completion(tmp_path: Path) -> None:
                 context_id="ctx-2",
                 request_text="Build something",
                 request_ctx={"a2a_task_id": "task-2"},
+                event_queue=event_queue,
             )
         )
 
@@ -109,6 +121,8 @@ async def test_queue_executes_and_logs_completion(tmp_path: Path) -> None:
         assert record["phase_completed"] == "pr"
         assert record["build_id"] == "build-2"
         assert record["pr_url"] == "https://github.com/org/repo/pull/2"
+        states = [call.args[0].status.state for call in event_queue.enqueue_event.call_args_list]
+        assert states == [TaskState.working, TaskState.completed]
     finally:
         await queue.stop()
 
@@ -118,6 +132,8 @@ async def test_cancel_marks_queued_task_without_running_handler(tmp_path: Path) 
     log_path = tmp_path / "tasks.jsonl"
     handler = AsyncMock()
     queue = BuilderTaskQueue(handler, log_path=log_path)
+    event_queue = AsyncMock()
+    event_queue.enqueue_event = AsyncMock()
 
     await queue.enqueue(
         _QueuedTask(
@@ -125,6 +141,7 @@ async def test_cancel_marks_queued_task_without_running_handler(tmp_path: Path) 
             context_id="ctx-queued",
             request_text="Build later",
             request_ctx={},
+            event_queue=event_queue,
         )
     )
 
@@ -140,8 +157,12 @@ async def test_cancel_running_task_cancels_active_coroutine(tmp_path: Path) -> N
     log_path = tmp_path / "tasks.jsonl"
     started = asyncio.Event()
     released = asyncio.Event()
+    event_queue = AsyncMock()
+    event_queue.enqueue_event = AsyncMock()
 
-    async def handler(task_id: str, context_id: str, request_text: str, request_ctx: dict[str, str]) -> BuildResult:
+    async def handler(
+        task_id: str, context_id: str, request_text: str, request_ctx: dict[str, str]
+    ) -> BuildResult:
         del task_id, context_id, request_text, request_ctx
         started.set()
         await released.wait()
@@ -162,6 +183,7 @@ async def test_cancel_running_task_cancels_active_coroutine(tmp_path: Path) -> N
                 context_id="ctx-running",
                 request_text="Build now",
                 request_ctx={},
+                event_queue=event_queue,
             )
         )
         await asyncio.wait_for(started.wait(), timeout=2.0)
@@ -172,13 +194,17 @@ async def test_cancel_running_task_cancels_active_coroutine(tmp_path: Path) -> N
         record = None
         for _ in range(30):
             await asyncio.sleep(0.1)
-            record = sync_wait_for_completion("running-task", timeout_seconds=0.0, log_path=log_path)
+            record = sync_wait_for_completion(
+                "running-task", timeout_seconds=0.0, log_path=log_path
+            )
             if record is not None:
                 break
 
         assert record is not None
         assert record["status"] == "cancelled"
         assert record["phase_completed"] == "cancelled"
+        states = [call.args[0].status.state for call in event_queue.enqueue_event.call_args_list]
+        assert states[-1] == TaskState.canceled
     finally:
         released.set()
         await queue.stop()

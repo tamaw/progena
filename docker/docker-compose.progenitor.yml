@@ -4,6 +4,7 @@
 x-progenitor-llm-env: &progenitor-llm-env
   AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
   AZURE_OPENAI_BASE_URL: ${AZURE_OPENAI_BASE_URL:-}
+  JINA_API_KEY: ${JINA_API_KEY:-}
   PROGENITOR_MODEL_DEFAULT: ${PROGENITOR_MODEL_DEFAULT:-gpt-5.1-codex-max}
   GH_TOKEN: ${GH_TOKEN:-}
   PROGENITOR_REASONING_ENABLED: ${PROGENITOR_REASONING_ENABLED:-false}
@@ -23,17 +24,15 @@ services:
     environment:
       <<: *progenitor-llm-env
       AGENT_NAME: progenitor
-      PROGENITOR_STATE_DIR: /app/data/state
+      PROGENITOR_DATA_DIR: /app/data
       PROGENITOR_LOG_DIR: /app/logs
       PROGENITOR_WORKTREE_DIR: /app/worktrees
-      PROGENITOR_PROMPTS_DIR: /app/prompts
       TZ: UTC
       # Bind IPC on all interfaces so other containers (backend) can connect.
       PROGENITOR_IPC_HOST: 0.0.0.0
     volumes:
       - ${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
-      - ${PROGENITOR_HOST_PROMPTS_DIR:-../prompts}:/app/prompts
     tmpfs:
       - /app/tmp:rw,noexec,nosuid,size=1g
     stdin_open: true
@@ -83,7 +82,6 @@ services:
     volumes:
       - ${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
-      - ${PROGENITOR_HOST_PROMPTS_DIR:-../prompts}:/app/prompts
     tmpfs:
       - /app/tmp:rw,noexec,nosuid,size=512m
     networks:

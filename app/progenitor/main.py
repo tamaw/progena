@@ -51,7 +51,11 @@ class Progenitor:
             self.logs_dir,
             lock_timeout=self.config.storage.state_lock_timeout_seconds,
         )
-        self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
+        self.llm_client = LLMClient(
+            config=self.config.llm,
+            mcp_config=self.config.mcp,
+            prompts_dir=self.config.storage.prompts_dir,
+        )
         self.tool_registry = ToolRegistry(self.config_dir / "agents.json")
         self.graph: Any = None
         self.loop_runner: Any = None
@@ -72,6 +76,9 @@ class Progenitor:
 
         # Load tool/agent registry
         await self.tool_registry.load()
+        from .tools.mcp import refresh_mcp_runtime
+
+        await refresh_mcp_runtime(self.llm_client, self.tool_registry, self.config.mcp)
         # Startup discovery: scan local agents and persist to registry.
         try:
             from .tools.agent_discovery import discover_agents
@@ -150,6 +157,7 @@ class Progenitor:
     async def _log_startup_config(self) -> None:
         """Log resolved configuration to decisions.jsonl on startup."""
         from .runtime.time_utils import utcnow_isoformat
+
         config_log = {
             "event": "startup_config",
             "timestamp": utcnow_isoformat(),
@@ -247,6 +255,7 @@ class Progenitor:
 
         # Persist final state
         await self.state_manager.commit_state()
+        await self.llm_client.close()
 
         # Write offline status to health file
         await self._write_health_status("offline")
@@ -277,6 +286,7 @@ class Progenitor:
 
 def setup_signal_handlers(progenitor: Progenitor) -> None:
     """Set up graceful shutdown handlers."""
+
     def handle_signal(signum, frame):
         if progenitor._shutdown_started:
             return

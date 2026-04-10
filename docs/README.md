@@ -1,21 +1,16 @@
 # Progenitor Documentation
 
-This folder contains stable, project-facing documentation only.
+This folder intentionally contains a small, maintained set of docs centered on the checked-in main system: the Progenitor runtime, backend API, and frontend UI.
 
-## Start Here
+## Core system docs
 
-- **[SPEC.md](SPEC.md)** - Product-level specification and behavior requirements
-- **[loop.spec.md](loop.spec.md)** - Minimal dual-loop algorithm contract
-- **[ARCHITECTURE_DIAGRAM.md](ARCHITECTURE_DIAGRAM.md)** - Visual architecture and loop flow
+- **[SPEC.md](SPEC.md)** - Checked-in main-system behavior, request flow, persistence, and public interfaces
+- **[ARCHITECTURE_DIAGRAM.md](ARCHITECTURE_DIAGRAM.md)** - Runtime/backend/frontend topology, request path, and deployment shape
+- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - Repository layout for the main stack
+- **[BACKEND.md](BACKEND.md)** - FastAPI backend endpoints, runtime IPC dependency, and local development commands
+- **[DOCKER.md](DOCKER.md)** - Default container stack, networks, volumes, and health checks
 
-## Implementation References
-
-- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - Current repository layout and key modules
-- **[BACKEND.md](BACKEND.md)** - FastAPI backend endpoints, runtime modes, and local run commands
-- **[DOCKER.md](DOCKER.md)** - Container stack and docker compose usage
-- **[CONTAINER_RUNNERS.md](CONTAINER_RUNNERS.md)** - Isolated runner containers for spawned A2A/MCP runtimes
-
-## Project Links
+## Project links
 
 - [Main README](../README.md)
 - [Tests](../tests/)

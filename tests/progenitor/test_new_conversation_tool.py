@@ -24,7 +24,9 @@ async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None
     fake_loop = _FakeLoop()
 
     with patch("app.progenitor.agent.tools_adapter.get_current_loop", return_value=fake_loop):
-        tools = create_deepagent_tools(tool_registry=MagicMock(), llm_client=MagicMock(), state_manager=None)
+        tools = create_deepagent_tools(
+            tool_registry=MagicMock(), llm_client=MagicMock(), state_manager=None
+        )
 
         new_conv = next(t for t in tools if t.name == "new_conversation")
         result = await new_conv.ainvoke({"request": "reset the conversation"})
@@ -102,6 +104,7 @@ async def test_loop_preserves_persisted_run_id_on_startup(tmp_path: Path) -> Non
 
     state_manager = MagicMock()
     state_manager.get_current_state = AsyncMock(return_value={"run_id": "run_persisted"})
+    state_manager.get_a2a_tasks = AsyncMock(return_value=[])
     state_manager.save_current_state = AsyncMock()
     state_manager.state_dir = tmp_path
 
@@ -116,6 +119,10 @@ async def test_loop_preserves_persisted_run_id_on_startup(tmp_path: Path) -> Non
     loop._update_health_file = AsyncMock()  # type: ignore[method-assign]
     loop._push_event = AsyncMock()  # type: ignore[method-assign]
 
-    await loop.run_forever()
+    with patch("app.progenitor.runtime.loop.A2ATaskTracker") as tracker_cls:
+        tracker = MagicMock()
+        tracker.run = AsyncMock(return_value=None)
+        tracker_cls.return_value = tracker
+        await loop.run_forever()
 
     assert loop._state["run_id"] == "run_persisted"

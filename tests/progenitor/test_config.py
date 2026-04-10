@@ -9,14 +9,20 @@ from unittest.mock import patch
 
 from app.progenitor.config import (
     LLMConfig,
+    MCPConfig,
+    MCPServerConfig,
     ProgenitorConfig,
     RuntimeConfig,
     SchedulerConfig,
     StorageConfig,
     get_config,
+    load_mcp_servers,
     reload_config,
+    resolve_mcp_config_path,
+    resolve_schedule_config_path,
     setup_logging,
 )
+from app.progenitor.llm.prompts import DEFAULT_PROMPTS_DIR
 from app.progenitor.utils import env_bool, env_float, env_int, env_list
 
 
@@ -169,26 +175,156 @@ class TestStorageConfig:
     def test_defaults_with_project_root(self):
         """Test defaults are project-relative when project_root is provided."""
         project_root = Path("/test/project")
-        config = StorageConfig.from_env(project_root)
+        env = {
+            "PROGENITOR_DATA_DIR": "",
+            "PROGENITOR_STATE_DIR": "",
+            "PROGENITOR_LOG_DIR": "",
+            "PROGENITOR_WORKTREE_DIR": "",
+            "PROGENITOR_WORKTREES_ROOT": "",
+            "PROGENITOR_PROMPTS_DIR": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            for key in env:
+                os.environ.pop(key, None)
+            config = StorageConfig.from_env(project_root)
+        assert config.data_dir == project_root / "data"
         assert config.state_dir == project_root / "data" / "state"
         assert config.log_dir == project_root / "logs"
         assert config.worktree_dir == project_root / "worktrees"
-        assert config.prompts_dir == project_root / "prompts"
+        assert config.prompts_dir == project_root / "data" / "prompts"
+
+    def test_default_prompts_dir_uses_checked_in_repo_path(self):
+        """Storage defaults should use the checked-in repo paths when env is unset."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PROGENITOR_DATA_DIR", None)
+            os.environ.pop("PROGENITOR_STATE_DIR", None)
+            os.environ.pop("PROGENITOR_LOG_DIR", None)
+            os.environ.pop("PROGENITOR_WORKTREE_DIR", None)
+            os.environ.pop("PROGENITOR_WORKTREES_ROOT", None)
+            os.environ.pop("PROGENITOR_PROMPTS_DIR", None)
+            config = StorageConfig.from_env()
+        repo_root = Path(__file__).resolve().parents[2]
+        assert config.data_dir == repo_root / "data"
+        assert config.state_dir == repo_root / "data" / "state"
+        assert config.log_dir == repo_root / "logs"
+        assert config.worktree_dir == repo_root / "worktrees"
+        assert config.prompts_dir == DEFAULT_PROMPTS_DIR
 
     def test_env_overrides(self):
         """Test environment variables override defaults."""
         env = {
-            "PROGENITOR_STATE_DIR": "/custom/state",
+            "PROGENITOR_DATA_DIR": "/custom/data",
             "PROGENITOR_LOG_DIR": "/custom/logs",
             "PROGENITOR_WORKTREE_DIR": "/custom/worktrees",
             "PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS": "30",
         }
         with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("PROGENITOR_STATE_DIR", None)
+            os.environ.pop("PROGENITOR_PROMPTS_DIR", None)
             config = StorageConfig.from_env()
-            assert config.state_dir == Path("/custom/state")
+            assert config.data_dir == Path("/custom/data")
+            assert config.state_dir == Path("/custom/data/state")
             assert config.log_dir == Path("/custom/logs")
             assert config.worktree_dir == Path("/custom/worktrees")
+            assert config.prompts_dir == Path("/custom/data/prompts")
             assert config.state_lock_timeout_seconds == 30
+
+
+class TestMCPConfig:
+    """Tests for Progenitor's live MCP config loader."""
+
+    def test_resolve_mcp_config_path_uses_checked_in_default(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        with patch.dict(os.environ, {}, clear=False):
+            path = resolve_mcp_config_path()
+        assert path == repo_root / "data" / "config" / "mcp.json"
+
+    def test_resolve_schedule_config_path_uses_checked_in_default(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        with patch.dict(os.environ, {}, clear=False):
+            path = resolve_schedule_config_path()
+        assert path == repo_root / "data" / "config" / "schedule.json"
+
+    def test_load_mcp_servers_reads_mcp_servers_map(self, tmp_path):
+        config_path = tmp_path / "mcp.json"
+        config_path.write_text(
+            """{
+  "mcpServers": {
+    "jina": {
+      "enabled": true,
+      "transport": "http",
+      "description": "Web search",
+      "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+      "headers": {
+        "Authorization": "Bearer ${JINA_API_KEY}"
+      }
+    }
+  }
+}""",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"JINA_API_KEY": "jina_test_key"}, clear=False):
+            servers = load_mcp_servers(config_path)
+
+        assert servers == [
+            MCPServerConfig(
+                name="jina",
+                enabled=True,
+                transport="http",
+                description="Web search",
+                url="https://mcp.jina.ai/v1?include_tags=search,read",
+                headers={"Authorization": "Bearer jina_test_key"},
+            )
+        ]
+
+    def test_load_mcp_servers_drops_headers_with_missing_env(self, tmp_path):
+        config_path = tmp_path / "mcp.json"
+        config_path.write_text(
+            """{
+  "mcpServers": {
+    "jina": {
+      "enabled": true,
+      "transport": "http",
+      "url": "https://mcp.jina.ai/v1",
+      "headers": {
+        "Authorization": "Bearer ${JINA_API_KEY}"
+      }
+    }
+  }
+}""",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("JINA_API_KEY", None)
+            servers = load_mcp_servers(config_path)
+
+        assert len(servers) == 1
+        assert servers[0].name == "jina"
+        assert servers[0].headers == {}
+
+    def test_load_reads_checked_in_file(self, tmp_path):
+        mcp_dir = tmp_path / "data" / "config"
+        mcp_dir.mkdir(parents=True)
+        config_path = mcp_dir / "mcp.json"
+        config_path.write_text(
+            """{
+  "mcpServers": {
+    "jina": {
+      "enabled": true,
+      "transport": "http",
+      "url": "https://mcp.jina.ai/v1"
+    }
+  }
+}""",
+            encoding="utf-8",
+        )
+
+        config = MCPConfig.load(config_path=config_path)
+
+        assert config.config_path == config_path
+        assert [server.name for server in config.servers] == ["jina"]
 
 
 class TestSchedulerConfig:
@@ -265,6 +401,7 @@ class TestGlobalConfig:
         """Test get_config returns cached instance."""
         # Reset global config
         import app.progenitor.config as config_module
+
         config_module._config = None
 
         with patch.dict(
@@ -280,6 +417,7 @@ class TestGlobalConfig:
     def test_reload_config_creates_new_instance(self):
         """Test reload_config creates new instance."""
         import app.progenitor.config as config_module
+
         config_module._config = None
 
         with patch.dict(
@@ -303,6 +441,7 @@ class TestLoggingSetup:
 
         config = ProgenitorConfig(
             storage=StorageConfig(
+                data_dir=tmp_path / "data",
                 state_dir=tmp_path / "state",
                 log_dir=tmp_path,
                 worktree_dir=tmp_path / "worktrees",
@@ -318,8 +457,12 @@ class TestLoggingSetup:
             for handler in logging.root.handlers:
                 handler.flush()
 
-            stdout_log = (tmp_path / "progenitor" / "progenitor.stdout.log").read_text(encoding="utf-8")
-            stderr_log = (tmp_path / "progenitor" / "progenitor.stderr.log").read_text(encoding="utf-8")
+            stdout_log = (tmp_path / "progenitor" / "progenitor.stdout.log").read_text(
+                encoding="utf-8"
+            )
+            stderr_log = (tmp_path / "progenitor" / "progenitor.stderr.log").read_text(
+                encoding="utf-8"
+            )
 
             assert "info line" in stdout_log
             assert "error line" not in stdout_log

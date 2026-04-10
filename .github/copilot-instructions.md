@@ -32,7 +32,7 @@ User → Frontend → Backend (/v1/chat) → IPC → ProgenitorLoop → LangGrap
                         State persistence:
                         - current_state.json (user session: messages, tool calls)
                         - build_state.json (build state: backlog, verification)
-                        - schedule.json (system feature: scheduled tasks)
+                        - data/config/schedule.json (system feature: scheduled tasks)
 ```
 
 ## Developer Workflow
@@ -95,5 +95,5 @@ See `app/progenitor/config.py` for full dataclass definitions.
 - `app/progenitor/state/models.py` - All Pydantic models
 - `app/progenitor/config.py` - Configuration dataclasses
 - `app/backend/main.py` - FastAPI endpoints
-- `docs/loop.spec.md` - The "Last Algorithm" specification
+- `docs/SPEC.md` - Checked-in main system specification
 - `docs/ARCHITECTURE_DIAGRAM.md` - Visual architecture

@@ -1,4 +1,5 @@
 """Tests for the BuilderAgentExecutor A2A implementation."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +27,7 @@ def _make_text_message(text: str) -> Message:
 @pytest.fixture
 def executor():
     from app.agents.builder_agent.agent import BuilderAgentExecutor
+
     return BuilderAgentExecutor()
 
 
@@ -109,11 +111,25 @@ async def test_run_build_request_cancels_active_background_build() -> None:
         patch("app.agents.builder_agent.agent._ensure_initialized", new_callable=AsyncMock),
         patch("app.agents.builder_agent.agent._runner", runner),
         patch("app.agents.builder_agent.agent._llm_client", MagicMock()),
-        patch("app.agents.builder_agent.agent._tool_registry", MagicMock(get_tool_context=MagicMock(return_value=""))),
+        patch(
+            "app.agents.builder_agent.agent._tool_registry",
+            MagicMock(get_tool_context=MagicMock(return_value="")),
+        ),
         patch("app.agents.builder_agent.agent._normalize_build_action", return_value="build_agent"),
-        patch("app.agents.builder_agent.runtime.decide._request_decision_data", new_callable=AsyncMock, return_value={"action": "build_agent"}),
-        patch("app.agents.builder_agent.runtime.decide._generate_build_settings", new_callable=AsyncMock, return_value=build_settings),
-        patch("app.agents.builder_agent.runtime.decide._infer_target_capabilities", return_value=["agents"]),
+        patch(
+            "app.agents.builder_agent.runtime.decide._request_decision_data",
+            new_callable=AsyncMock,
+            return_value={"action": "build_agent"},
+        ),
+        patch(
+            "app.agents.builder_agent.runtime.decide._generate_build_settings",
+            new_callable=AsyncMock,
+            return_value=build_settings,
+        ),
+        patch(
+            "app.agents.builder_agent.runtime.decide._infer_target_capabilities",
+            return_value=["agents"],
+        ),
     ):
         task = asyncio.create_task(_run_build_request("task-123", "ctx-123", "build demo", {}))
         await asyncio.sleep(0)
@@ -135,7 +151,9 @@ def test_normalize_build_action_keeps_build_actions():
 
 
 @pytest.mark.asyncio
-async def test_execute_enqueues_and_returns_submitted(executor, mock_event_queue, mock_context_build):
+async def test_execute_enqueues_and_returns_submitted(
+    executor, mock_event_queue, mock_context_build
+):
     queue = AsyncMock()
     queue.enqueue = AsyncMock()
 
@@ -149,15 +167,18 @@ async def test_execute_enqueues_and_returns_submitted(executor, mock_event_queue
     queued_task = queue.enqueue.await_args.args[0]
     assert isinstance(queued_task, _QueuedTask)
     assert queued_task.request_text == "Build a hello world Python script"
+    assert queued_task.event_queue is mock_event_queue
 
     events = [call.args[0] for call in mock_event_queue.enqueue_event.call_args_list]
     assert len(events) == 1
     assert events[0].status.state == TaskState.submitted
-    assert events[0].final is True
+    assert events[0].final is False
 
 
 @pytest.mark.asyncio
-async def test_execute_prefers_metadata_task_ids(executor, mock_event_queue, mock_context_build):
+async def test_execute_prefers_request_context_task_ids(
+    executor, mock_event_queue, mock_context_build
+):
     queue = AsyncMock()
     queue.enqueue = AsyncMock()
     mock_context_build.message.metadata = {
@@ -172,5 +193,8 @@ async def test_execute_prefers_metadata_task_ids(executor, mock_event_queue, moc
         await executor.execute(mock_context_build, mock_event_queue)
 
     queued_task = queue.enqueue.await_args.args[0]
-    assert queued_task.task_id == "remote-task-123"
-    assert queued_task.context_id == "remote-ctx-456"
+    assert queued_task.task_id == "task-test-002"
+    assert queued_task.context_id == "ctx-test-002"
+    assert queued_task.request_ctx["a2a_task_id"] == "task-test-002"
+    assert queued_task.request_ctx["a2a_context_id"] == "ctx-test-002"
+    assert queued_task.event_queue is mock_event_queue

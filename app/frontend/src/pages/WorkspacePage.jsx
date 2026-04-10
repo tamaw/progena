@@ -5,31 +5,43 @@ import {
   Controls,
   MiniMap,
   useReactFlow,
+  useOnViewportChange,
   ReactFlowProvider,
 } from '@xyflow/react';
 
+import '../styles/workspace.css';
+import '../styles/nodes.css';
 import Header from '../components/layout/Header';
 import WorkspaceSidebar from '../components/workspace/WorkspaceSidebar';
 import WorkspaceDock from '../components/workspace/WorkspaceDock';
 import NodeContextMenu from '../components/workspace/NodeContextMenu';
-import { WorkspaceProvider, useWorkspaceContext } from '../context/WorkspaceContext';
+import {
+  WorkspaceProvider,
+  useWorkspaceActions,
+  useWorkspaceGraph,
+} from '../context/WorkspaceContext';
 
 import PromptNode from '../components/workspace/nodes/PromptNode';
 import CodeNode from '../components/workspace/nodes/CodeNode';
 import WebFrameNode from '../components/workspace/nodes/WebFrameNode';
 import LabelNode from '../components/workspace/nodes/LabelNode';
 import ScheduleNode from '../components/workspace/nodes/ScheduleNode';
+import EventNode from '../components/workspace/nodes/EventNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
+import UserNode from '../components/workspace/nodes/UserNode';
+import { useNotifications } from '../context/NotificationContext';
 import { useApi } from '../hooks/useApi';
-import { useStatusSSE } from '../hooks/useSSE';
+import { useEventsSSE, useStatusSSE } from '../hooks/useSSE';
 
 const nodeTypes = {
   prompt: PromptNode,
   code: CodeNode,
+  user: UserNode,
   webframe: WebFrameNode,
   label: LabelNode,
   schedule: ScheduleNode,
+  event: EventNode,
   group: GroupNode,
   agent: AgentNode,
   mcp: AgentNode,
@@ -39,6 +51,16 @@ const minimapStyle = {
   height: 100,
   width: 150,
 };
+const defaultEdgeOptions = {
+  type: 'smoothstep',
+  animated: true,
+};
+const snapGrid = [16, 16];
+const defaultViewport = { x: 0, y: 0, zoom: 1 };
+
+function getViewportSignature(viewport = {}) {
+  return `${viewport.x ?? 0}:${viewport.y ?? 0}:${viewport.zoom ?? 1}`;
+}
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'workspace.sidebar.width';
 const SIDEBAR_MIN_WIDTH_PERCENT = 18;
@@ -72,9 +94,11 @@ const minimapNodeColor = (node) => {
   switch (node.type) {
     case 'prompt': return '#58a6ff';
     case 'code': return '#3fb950';
+    case 'user': return '#39c5cf';
     case 'webframe': return '#d29922';
     case 'label': return '#8b949e';
     case 'schedule': return '#bc8cff';
+    case 'event': return '#ffa657';
     case 'group': return '#6e7681';
     case 'agent': return '#f85149';
     default: return '#8b949e';
@@ -82,29 +106,36 @@ const minimapNodeColor = (node) => {
 };
 
 function WorkspaceInner() {
+  const { show } = useNotifications();
   const {
     nodes,
     edges,
     viewport,
+    viewportVersion,
+    loading,
+    error,
+  } = useWorkspaceGraph();
+  const {
     onNodesChange,
     onEdgesChange,
     onConnect,
     addNode,
+    captureViewport,
     removeNodes,
+    removeEdges,
     duplicateNode,
     bringToFront,
     sendToBack,
     toggleExpanded,
-    setViewport,
-    loading,
-    error,
     refreshWorkspace,
     syncWidgets,
-  } = useWorkspaceContext();
+  } = useWorkspaceActions();
   const workspaceReady = !loading && !error;
 
   const reactFlowInstance = useReactFlow();
   const reactFlowWrapper = useRef(null);
+  const viewportSignatureRef = useRef(getViewportSignature(defaultViewport));
+  const lastAppliedViewportVersionRef = useRef(-1);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(getDefaultSidebarWidth);
   const [contextMenu, setContextMenu] = useState(null);
@@ -122,9 +153,29 @@ function WorkspaceInner() {
     [nodes, selectedNodeId]
   );
 
+  useOnViewportChange({
+    onChange: workspaceReady
+      ? (nextViewport) => {
+        viewportSignatureRef.current = getViewportSignature(nextViewport);
+        captureViewport(nextViewport);
+      }
+      : undefined,
+  });
+
   useEffect(() => {
+    if (!workspaceReady || lastAppliedViewportVersionRef.current === viewportVersion) {
+      return;
+    }
+
+    lastAppliedViewportVersionRef.current = viewportVersion;
+    const nextSignature = getViewportSignature(viewport);
+    if (viewportSignatureRef.current === nextSignature) {
+      return;
+    }
+
+    viewportSignatureRef.current = nextSignature;
     reactFlowInstance.setViewport(viewport);
-  }, [reactFlowInstance, viewport]);
+  }, [reactFlowInstance, viewport, viewportVersion, workspaceReady]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -170,23 +221,33 @@ function WorkspaceInner() {
   }, [sidebarCollapsed]);
 
   const handleStatusEvent = useCallback((event) => {
+    if (event?.type !== 'widgets' || !event?.data) {
+      return;
+    }
+    syncWidgets(event.data.items || event.data.widgets || []);
+  }, [syncWidgets]);
+
+  const handleChatEvent = useCallback((event) => {
     if (!event?.data) {
       return;
     }
 
-    if (event.type === 'widgets') {
-      syncWidgets(event.data.items || event.data.widgets || []);
+    if (event.type === 'agent_message') {
+      const tool = event.data?.metadata?.tool;
+      if (tool === 'say_to_user' || tool === 'user_communication') {
+        show('info', tool === 'say_to_user' ? 'Say to User' : 'User Communication', event.data?.content || '');
+      }
       return;
     }
 
-    if (event.type === 'connected' || event.type === 'status' || event.type === 'heartbeat') {
-      if (Array.isArray(event.data.widgets)) {
-        syncWidgets(event.data.widgets);
-      }
+    if (event.type === 'agent_notification') {
+      const metadata = event.data?.metadata || {};
+      show(metadata.level || 'info', metadata.title || 'Notification', event.data?.content || '');
     }
-  }, [syncWidgets]);
+  }, [show]);
 
   useStatusSSE(handleStatusEvent);
+  useEventsSSE(handleChatEvent);
 
   // Handle drop from sidebar
   const onDrop = useCallback(
@@ -223,14 +284,6 @@ function WorkspaceInner() {
   const onDragLeave = useCallback(() => {
     setDragOver(false);
   }, []);
-
-  // Track viewport changes for persistence
-  const onMoveEnd = useCallback(
-    (_, viewport) => {
-      setViewport(viewport);
-    },
-    [setViewport]
-  );
 
   // Context menu
   const onNodeContextMenu = useCallback((event, node) => {
@@ -296,9 +349,14 @@ function WorkspaceInner() {
     setSelectedNodeId(null);
   }, []);
 
-  const onSelectionChange = useCallback(({ nodes: selectedNodes }) => {
+  const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }) => {
     if (selectedNodes?.length > 0) {
       setSelectedNodeId(selectedNodes[0].id);
+      return;
+    }
+
+    if (selectedEdges?.length > 0) {
+      setSelectedNodeId(null);
     }
   }, []);
 
@@ -316,8 +374,7 @@ function WorkspaceInner() {
     event.preventDefault();
   }, [sidebarCollapsed, sidebarWidth]);
 
-  // Keyboard shortcuts
-  const onKeyDown = useCallback(
+  const handleKeyboardShortcut = useCallback(
     (event) => {
       if (!workspaceReady) {
         return;
@@ -327,11 +384,13 @@ function WorkspaceInner() {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        const selectedNodes = nodes.filter(
-          (n) => n.selected
-        );
+        const selectedNodes = nodes.filter((node) => node.selected);
+        const selectedEdges = edges.filter((edge) => edge.selected);
+        if (selectedEdges.length > 0) {
+          removeEdges(selectedEdges.map((edge) => edge.id));
+        }
         if (selectedNodes.length > 0) {
-          removeNodes(selectedNodes.map((n) => n.id));
+          removeNodes(selectedNodes.map((node) => node.id));
         }
       }
 
@@ -343,11 +402,16 @@ function WorkspaceInner() {
         }
       }
     },
-    [workspaceReady, nodes, removeNodes, duplicateNode]
+    [workspaceReady, nodes, edges, removeNodes, removeEdges, duplicateNode]
   );
 
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyboardShortcut);
+    return () => window.removeEventListener('keydown', handleKeyboardShortcut);
+  }, [handleKeyboardShortcut]);
+
   return (
-    <div className="workspace-container" onKeyDown={onKeyDown} tabIndex={-1}>
+    <div className="workspace-container" tabIndex={-1}>
       <WorkspaceSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -384,7 +448,6 @@ function WorkspaceInner() {
           onNodesChange={workspaceReady ? onNodesChange : undefined}
           onEdgesChange={workspaceReady ? onEdgesChange : undefined}
           onConnect={workspaceReady ? onConnect : undefined}
-          onMoveEnd={workspaceReady ? onMoveEnd : undefined}
           onNodeContextMenu={workspaceReady ? onNodeContextMenu : undefined}
           onPaneContextMenu={workspaceReady ? onPaneContextMenu : undefined}
           onPaneClick={workspaceReady ? onPaneClick : undefined}
@@ -403,12 +466,12 @@ function WorkspaceInner() {
           zoomOnDoubleClick={workspaceReady}
           panOnScroll={false}
           selectionMode="partial"
-          defaultEdgeOptions={{ type: 'smoothstep', animated: true }}
+          defaultEdgeOptions={defaultEdgeOptions}
           snapToGrid
-          snapGrid={[16, 16]}
+          snapGrid={snapGrid}
           minZoom={0.1}
           maxZoom={4}
-          defaultViewport={viewport}
+          defaultViewport={defaultViewport}
         >
           <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
           <Controls showInteractive={false} />

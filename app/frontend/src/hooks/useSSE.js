@@ -14,7 +14,7 @@ function buildUrl(baseUrl, path) {
 
 /**
  * Hook for connecting to the /events SSE stream.
- * Receives IPC events: scheduled_response, agent_message, alert, task, agent.
+ * Receives IPC events: scheduled_response, agent_message, agent_notification, alert, task, agent.
  *
  * Uses shared HealthContext for health status - no duplicate health checks.
  */
@@ -67,6 +67,7 @@ export function useEventsSSE(onEvent) {
     es.addEventListener('shutdown', handleEvent('shutdown'));
     es.addEventListener('scheduled_response', handleEvent('scheduled_response'));
     es.addEventListener('agent_message', handleEvent('agent_message'));
+    es.addEventListener('agent_notification', handleEvent('agent_notification'));
 
     es.onmessage = handleEvent('message');
 
@@ -137,6 +138,7 @@ export function useStatusSSE(onEvent) {
     const url = buildUrl(baseUrl, '/api/ui/status');
     console.log('[useStatusSSE] Connecting to', url);
     const es = new EventSource(url);
+    eventSourceRef.current = es;
 
     es.onopen = () => {
       setIsConnected(true);
@@ -155,6 +157,7 @@ export function useStatusSSE(onEvent) {
     es.addEventListener('connected', handleEvent('connected'));
     es.addEventListener('status', handleEvent('status'));
     es.addEventListener('heartbeat', handleEvent('heartbeat'));
+    es.addEventListener('widgets', handleEvent('widgets'));
     es.addEventListener('shutdown', handleEvent('shutdown'));
 
     es.onmessage = handleEvent('message');

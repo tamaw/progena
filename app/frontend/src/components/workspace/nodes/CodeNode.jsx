@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
@@ -10,7 +10,8 @@ const LANGUAGES = [
 ];
 
 function CodeNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runCodeNode, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, runCodeNode } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('code');
   const defaultTab = useMemo(
@@ -64,6 +65,7 @@ function CodeNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon code">&lt;&gt;</div>
