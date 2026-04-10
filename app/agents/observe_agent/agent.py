@@ -386,6 +386,13 @@ class ObserveAgent:
     def _responses_endpoint(self) -> str:
         return _build_responses_endpoint(self.config.llm.base_url)
 
+    def _is_azure_endpoint(self) -> bool:
+        parsed = urlsplit(self.config.llm.base_url or "")
+        path = (parsed.path or "").rstrip("/")
+        return (
+            path == "/openai" or path.startswith("/openai/") or "azure.com" in parsed.netloc.lower()
+        )
+
     def _build_graph(self):
         async def prepare(state: ObserveGraphState) -> dict[str, Any]:
             request = (state.get("request") or "").strip() or (
@@ -509,16 +516,28 @@ class ObserveAgent:
 
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self._responses_endpoint()
+        send_payload = dict(payload)
+        if self._is_azure_endpoint():
+            deployment = send_payload.get("deployment") or send_payload.get("model")
+            if deployment:
+                send_payload["deployment"] = deployment
+            send_payload.pop("model", None)
         start = time.monotonic()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(60.0), headers=self._responses_headers()
         ) as client:
-            response = await client.post(endpoint, json=payload)
-            response.raise_for_status()
+            response = await client.post(endpoint, json=send_payload)
+            if response.status_code >= 400:
+                logger.error(
+                    "Observe responses call failed status=%d body=%s",
+                    response.status_code,
+                    response.text,
+                )
+                response.raise_for_status()
             data = cast(dict[str, Any], response.json())
         logger.info(
             "Observe responses call succeeded model=%s duration_ms=%.1f",
-            payload.get("model"),
+            send_payload.get("deployment") or payload.get("model"),
             (time.monotonic() - start) * 1000,
         )
         return data

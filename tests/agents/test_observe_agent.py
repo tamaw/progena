@@ -1,9 +1,62 @@
-import json
-from pathlib import Path
+from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+import httpx
 import pytest
 
 from app.agents.observe_agent.agent import ObserveAgent
+
+
+class _FakeResponse:
+    """Minimal httpx.Response stand-in."""
+
+    def __init__(self, status_code: int, body: dict[str, Any]) -> None:
+        self.status_code = status_code
+        self._body = body
+        self.text = json.dumps(body)
+
+    def json(self) -> dict[str, Any]:
+        return self._body
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            request = httpx.Request("POST", "http://test")
+            raise httpx.HTTPStatusError(
+                message=f"HTTP {self.status_code}",
+                request=request,
+                response=httpx.Response(self.status_code, request=request),
+            )
+
+
+class _FakeAsyncClient:
+    """Async context manager wrapping a configurable post callable."""
+
+    def __init__(self, post_fn, **kwargs: Any) -> None:
+        self._post_fn = post_fn
+
+    async def __aenter__(self) -> _FakeAsyncClient:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        pass
+
+    async def post(self, url: str, *, json: dict[str, Any], **kwargs: Any) -> _FakeResponse:
+        return await self._post_fn(url, json=json, **kwargs)
+
+
+@pytest.fixture()
+def azure_agent(monkeypatch, tmp_path: Path) -> ObserveAgent:
+    monkeypatch.setenv("AZURE_OPENAI_BASE_URL", "https://contoso.internal/openai/v1")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
+    state_dir = tmp_path / "state"
+    logs_dir = tmp_path / "logs"
+    state_dir.mkdir()
+    logs_dir.mkdir()
+    return ObserveAgent(state_dir=state_dir, logs_dir=logs_dir)
 
 
 @pytest.mark.asyncio
@@ -74,3 +127,45 @@ def test_observe_agent_tool_defs_match_responses_api_schema(tmp_path: Path) -> N
         assert isinstance(parameters, dict)
         assert parameters.get("type") == "object"
         assert parameters.get("additionalProperties") is False
+
+
+@pytest.mark.asyncio
+async def test_post_responses_maps_model_to_deployment_for_azure_custom_domains(
+    azure_agent: ObserveAgent, monkeypatch
+) -> None:
+    captured: list[dict[str, Any]] = []
+
+    async def fake_post(url: str, *, json: dict[str, Any], **kwargs: Any) -> _FakeResponse:
+        captured.append(dict(json))
+        return _FakeResponse(200, {"output_text": "ok"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(fake_post, **kw))
+
+    await azure_agent._post_responses({"model": "gpt-5-mini", "input": []})
+
+    assert len(captured) == 1
+    assert captured[0]["deployment"] == "gpt-5-mini"
+    assert "model" not in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_post_responses_logs_body_on_400(
+    azure_agent: ObserveAgent, monkeypatch, caplog
+) -> None:
+    error_body = {"error": {"code": "DeploymentNotFound", "message": "not found"}}
+
+    async def fake_post(url: str, *, json: dict[str, Any], **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse(400, error_body)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(fake_post, **kw))
+
+    with (
+        caplog.at_level(logging.ERROR, logger="app.agents.observe_agent.agent"),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        await azure_agent._post_responses({"model": "gpt-5-mini", "input": []})
+
+    error_messages = [
+        record.message for record in caplog.records if record.levelno >= logging.ERROR
+    ]
+    assert any("400" in message and "DeploymentNotFound" in message for message in error_messages)
