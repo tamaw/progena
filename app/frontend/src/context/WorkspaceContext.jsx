@@ -19,9 +19,13 @@ const WorkspaceMetaContext = createContext(null);
 const SAVE_DEBOUNCE_MS = 500;
 const SERVER_NODE_TYPES = new Set(['agent', 'mcp', 'schedule', 'event']);
 const DEFAULT_EVENT_TYPE = 'kanban.card.created';
-const EVENT_TRIGGER_TARGET_TYPES = new Set(['prompt', 'code', 'schedule']);
+const DATAFLOW_SOURCE_TYPES = new Set(['event', 'prompt', 'code', 'user', 'schedule']);
+const DATAFLOW_TARGET_TYPES = new Set(['prompt', 'code', 'user', 'schedule']);
 const MAX_EVENT_LOG_ENTRIES = 25;
 const DEFAULT_USER_MESSAGE_TYPE = 'say_to_user';
+const EDGE_KIND_PROMPT_AGENT = 'prompt-agent';
+const EDGE_KIND_DATAFLOW = 'dataflow';
+const LEGACY_EDGE_KIND_EVENT_TRIGGER = 'event-trigger';
 
 const defaultNodeSizes = {
   prompt: { width: 320, height: 200 },
@@ -47,6 +51,7 @@ const defaultNodeData = {
     linkedOutputIds: [],
     lastThreadId: null,
     summaryState: '',
+    lastOutput: '',
   }),
   code: () => ({
     language: 'javascript',
@@ -55,6 +60,7 @@ const defaultNodeData = {
     originPromptId: null,
     lastThreadId: null,
     outputRefs: [],
+    lastOutput: '',
   }),
   user: () => ({
     messageType: DEFAULT_USER_MESSAGE_TYPE,
@@ -63,6 +69,7 @@ const defaultNodeData = {
     level: 'info',
     lastSentAt: null,
     summaryState: '',
+    lastOutput: '',
   }),
   webframe: () => ({
     sourceType: 'html',
@@ -94,6 +101,7 @@ const defaultNodeData = {
     isUnsaved: false,
     isSaving: false,
     saveError: null,
+    lastOutput: '',
   }),
   event: () => ({
     eventType: DEFAULT_EVENT_TYPE,
@@ -107,6 +115,7 @@ const defaultNodeData = {
     saveError: null,
     summaryState: `Waiting for ${DEFAULT_EVENT_TYPE}`,
     logs: [],
+    lastOutput: '',
   }),
   group: () => ({
     childIds: [],
@@ -190,6 +199,22 @@ function normalizeLogs(logs) {
   }));
 }
 
+function buildEventOutputText(payload, fallback = '') {
+  if (!payload) {
+    return fallback;
+  }
+
+  if (typeof payload === 'string') {
+    return payload;
+  }
+
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
+}
+
 function mapWidgetToNodeData(widget, existingData = {}) {
   const timestamp = widget.updated_at || existingData.updatedAt || new Date().toISOString();
   const title = widget.title || widget.name || existingData.title || widget.id;
@@ -216,6 +241,10 @@ function mapWidgetToNodeData(widget, existingData = {}) {
       isUnsaved: false,
       isSaving: false,
       saveError: null,
+      lastOutput: buildEventOutputText(
+        widget.data?.last_payload ?? widget.last_payload ?? existingData.lastPayload ?? null,
+        existingData.lastOutput || widget.summary || existingData.summaryState || ''
+      ),
       updatedAt: timestamp,
     };
   }
@@ -241,6 +270,7 @@ function mapWidgetToNodeData(widget, existingData = {}) {
       isUnsaved: false,
       isSaving: false,
       saveError: null,
+      lastOutput: existingData.lastOutput || widget.summary || existingData.summaryState || '',
       updatedAt: timestamp,
     };
   }
@@ -304,8 +334,47 @@ function isAgentNodeType(type) {
   return type === 'agent' || type === 'mcp';
 }
 
-function isEventTriggerTargetType(type) {
-  return EVENT_TRIGGER_TARGET_TYPES.has(type);
+function isDataflowSourceType(type) {
+  return DATAFLOW_SOURCE_TYPES.has(type);
+}
+
+function isDataflowTargetType(type) {
+  return DATAFLOW_TARGET_TYPES.has(type);
+}
+
+function getEdgeKind(edge) {
+  return edge?.data?.kind || '';
+}
+
+function isPromptAgentEdge(edge) {
+  return getEdgeKind(edge) === EDGE_KIND_PROMPT_AGENT;
+}
+
+function isDataflowEdge(edge) {
+  const edgeKind = getEdgeKind(edge);
+  return edgeKind === EDGE_KIND_DATAFLOW || edgeKind === LEGACY_EDGE_KIND_EVENT_TRIGGER;
+}
+
+function createDataflowEdge(sourceId, targetId) {
+  return {
+    id: createEdgeId(sourceId, targetId),
+    source: sourceId,
+    target: targetId,
+    type: 'smoothstep',
+    animated: true,
+    data: { kind: EDGE_KIND_DATAFLOW },
+  };
+}
+
+function createPromptAgentEdge(sourceId, targetId) {
+  return {
+    id: createEdgeId(sourceId, targetId),
+    source: sourceId,
+    target: targetId,
+    type: 'smoothstep',
+    animated: true,
+    data: { kind: EDGE_KIND_PROMPT_AGENT },
+  };
 }
 
 function createEdgeId(sourceId, targetId) {
@@ -397,16 +466,16 @@ function getAgentNameFromNode(node) {
   return node?.data?.agentId || node?.data?.title || '';
 }
 
-function getLinkedEventTargets(sourceNodeId, nodes, edges) {
+function getOutgoingDataflowTargets(sourceNodeId, nodes, edges) {
   const seen = new Set();
 
   return edges.reduce((targets, edge) => {
-    if (edge.source !== sourceNodeId || seen.has(edge.target)) {
+    if (edge.source !== sourceNodeId || seen.has(edge.target) || !isDataflowEdge(edge)) {
       return targets;
     }
 
     const targetNode = nodes.find((node) => node.id === edge.target);
-    if (!targetNode || !isEventTriggerTargetType(targetNode.type)) {
+    if (!targetNode || !isDataflowTargetType(targetNode.type)) {
       return targets;
     }
 
@@ -427,7 +496,7 @@ function getPromptTargetAgent(promptData = {}, connectedTargetAgent = '') {
 }
 
 function getConnectedAgentTarget(promptNodeId, nodes, edges) {
-  const edge = edges.find((entry) => entry.source === promptNodeId);
+  const edge = edges.find((entry) => entry.source === promptNodeId && isPromptAgentEdge(entry));
   if (!edge) {
     return null;
   }
@@ -443,26 +512,101 @@ function getConnectedAgentTarget(promptNodeId, nodes, edges) {
   };
 }
 
-function buildPromptInvocation(promptData = {}, connectedTargetAgent = '', eventContext = null) {
+function getNodeOutputText(node) {
+  if (!node) {
+    return '';
+  }
+
+  const explicitOutput = typeof node.data?.lastOutput === 'string' ? node.data.lastOutput : '';
+  if (explicitOutput) {
+    return explicitOutput;
+  }
+
+  if (node.type === 'event') {
+    return buildEventOutputText(node.data?.lastPayload, node.data?.summaryState || '');
+  }
+
+  if (node.type === 'code') {
+    return Array.isArray(node.data?.outputRefs) ? node.data.outputRefs.join('\n') : '';
+  }
+
+  return node.data?.summaryState || '';
+}
+
+function getIncomingDataflowSource(targetNodeId, nodes, edges) {
+  const edge = edges.find((entry) => entry.target === targetNodeId && isDataflowEdge(entry));
+  if (!edge) {
+    return null;
+  }
+
+  const sourceNode = nodes.find((node) => node.id === edge.source);
+  if (!sourceNode || !isDataflowSourceType(sourceNode.type)) {
+    return null;
+  }
+
+  return {
+    edge,
+    node: sourceNode,
+  };
+}
+
+function buildExecutionInput(sourceNode, outputText) {
+  const normalizedOutput = String(outputText || '').trim();
+  if (!normalizedOutput) {
+    return '';
+  }
+
+  if (!sourceNode) {
+    return normalizedOutput;
+  }
+
+  return [
+    `Connected output from ${formatWidgetLabel(sourceNode)}:`,
+    normalizedOutput,
+  ].join('\n');
+}
+
+function resolveNodeExecutionInput(nodeId, nodes, edges, options = {}) {
+  if (typeof options.upstreamOutput === 'string') {
+    const sourceNode = options.upstreamSourceNodeId
+      ? nodes.find((node) => node.id === options.upstreamSourceNodeId) || null
+      : null;
+    return buildExecutionInput(sourceNode, options.upstreamOutput);
+  }
+
+  const incoming = getIncomingDataflowSource(nodeId, nodes, edges);
+  if (!incoming) {
+    return '';
+  }
+
+  return buildExecutionInput(incoming.node, getNodeOutputText(incoming.node));
+}
+
+function augmentMessageWithInput(message, inputText) {
+  const baseMessage = String(message || '').trim();
+  const normalizedInput = String(inputText || '').trim();
+
+  if (!normalizedInput) {
+    return baseMessage;
+  }
+
+  return [
+    baseMessage,
+    '',
+    'Connected input:',
+    normalizedInput,
+  ].filter(Boolean).join('\n');
+}
+
+function buildPromptInvocation(promptData = {}, connectedTargetAgent = '') {
   const prompt = (promptData.prompt || '').trim();
   if (!prompt) {
     return '';
   }
 
   const targetAgent = getPromptTargetAgent(promptData, connectedTargetAgent);
-  const promptWithContext = eventContext
-    ? [
-      'The following workspace event triggered this prompt. Use it as additional context.',
-      '```json',
-      JSON.stringify(eventContext, null, 2),
-      '```',
-      '',
-      prompt,
-    ].join('\n')
-    : prompt;
-
   if (targetAgent === 'progenitor') {
-    return promptWithContext;
+    return prompt;
   }
 
   return [
@@ -470,7 +614,7 @@ function buildPromptInvocation(promptData = {}, connectedTargetAgent = '', event
     'You are orchestrating from progenitor, so delegate the work and return the response here.',
     '',
     'Task:',
-    promptWithContext,
+    prompt,
   ].join('\n');
 }
 
@@ -495,9 +639,9 @@ function buildExecutionContext(rootWidgetId, invocationSource, existingContext =
   };
 }
 
-function buildUserMessageInstruction(userData = {}) {
+function buildUserMessageInstruction(userData = {}, inputText = '') {
   const messageType = userData.messageType || DEFAULT_USER_MESSAGE_TYPE;
-  const message = String(userData.message || '').trim();
+  const message = augmentMessageWithInput(userData.message, inputText);
 
   if (!message) {
     return { error: 'Enter a message before sending it.' };
@@ -634,6 +778,7 @@ export function WorkspaceProvider({ children }) {
   const latestViewportRef = useRef({ x: 0, y: 0, zoom: 1 });
   const lastSavedGraphSignatureRef = useRef('');
   const lastSavedViewportSignatureRef = useRef(getViewportSignature({ x: 0, y: 0, zoom: 1 }));
+  const runNodeByTypeRef = useRef(null);
   const [edges, setEdges] = useState([]);
 
   const mergeWidgetNodes = useCallback((widgetPayload, nextViewport = null) => {
@@ -928,19 +1073,20 @@ export function WorkspaceProvider({ children }) {
     ));
 
     setEdges((currentEdges) => {
-      const withoutPromptEdges = currentEdges.filter((edge) => edge.source !== promptNodeId);
+      const withoutPromptAgentEdges = currentEdges.filter(
+        (edge) => !(edge.source === promptNodeId && isPromptAgentEdge(edge))
+      );
       if (!targetNode || normalizedTarget === 'progenitor') {
-        return withoutPromptEdges;
+        latestEdgesRef.current = withoutPromptAgentEdges;
+        return withoutPromptAgentEdges;
       }
 
-      return addEdge({
-        id: createEdgeId(promptNodeId, targetNode.id),
-        source: promptNodeId,
-        target: targetNode.id,
-        type: 'smoothstep',
-        animated: true,
-        data: { kind: 'prompt-agent' },
-      }, withoutPromptEdges);
+      const nextEdges = addEdge(
+        createPromptAgentEdge(promptNodeId, targetNode.id),
+        withoutPromptAgentEdges
+      );
+      latestEdgesRef.current = nextEdges;
+      return nextEdges;
     });
 
     updateNodeData(promptNodeId, {
@@ -948,26 +1094,29 @@ export function WorkspaceProvider({ children }) {
     });
   }, [updateNodeData]);
 
-  const connectEventToWidget = useCallback((eventNodeId, targetNodeId) => {
-    const eventNode = latestNodesRef.current.find((node) => node.id === eventNodeId && node.type === 'event');
+  const connectDataflowNodes = useCallback((sourceNodeId, targetNodeId) => {
+    const sourceNode = latestNodesRef.current.find((node) => node.id === sourceNodeId);
     const targetNode = latestNodesRef.current.find((node) => node.id === targetNodeId);
-    if (!eventNode || !targetNode || !isEventTriggerTargetType(targetNode.type)) {
+    if (
+      !sourceNode
+      || !targetNode
+      || sourceNodeId === targetNodeId
+      || !isDataflowSourceType(sourceNode.type)
+      || !isDataflowTargetType(targetNode.type)
+    ) {
       return;
     }
 
     setEdges((currentEdges) => {
-      if (currentEdges.some((edge) => edge.source === eventNodeId && edge.target === targetNodeId)) {
-        return currentEdges;
-      }
-
-      return addEdge({
-        id: createEdgeId(eventNodeId, targetNodeId),
-        source: eventNodeId,
-        target: targetNodeId,
-        type: 'smoothstep',
-        animated: true,
-        data: { kind: 'event-trigger' },
-      }, currentEdges);
+      const nextEdgesBase = currentEdges.filter(
+        (edge) => !(edge.target === targetNodeId && isDataflowEdge(edge))
+      );
+      const nextEdges = addEdge(
+        createDataflowEdge(sourceNodeId, targetNodeId),
+        nextEdgesBase
+      );
+      latestEdgesRef.current = nextEdges;
+      return nextEdges;
     });
   }, []);
 
@@ -991,9 +1140,9 @@ export function WorkspaceProvider({ children }) {
     removedEdges.forEach((edge) => {
       const sourceNode = latestNodesRef.current.find((node) => node.id === edge.source);
       const targetNode = latestNodesRef.current.find((node) => node.id === edge.target);
-      if (sourceNode?.type === 'prompt' && isAgentNodeType(targetNode?.type)) {
+      if (sourceNode?.type === 'prompt' && isPromptAgentEdge(edge) && isAgentNodeType(targetNode?.type)) {
         const stillConnected = nextEdges.some((nextEdge) => {
-          if (nextEdge.source !== edge.source) {
+          if (nextEdge.source !== edge.source || !isPromptAgentEdge(nextEdge)) {
             return false;
           }
           const nextTarget = latestNodesRef.current.find((node) => node.id === nextEdge.target);
@@ -1014,7 +1163,7 @@ export function WorkspaceProvider({ children }) {
   const onConnect = useCallback((connection) => {
     const sourceNode = latestNodesRef.current.find((node) => node.id === connection.source);
     const targetNode = latestNodesRef.current.find((node) => node.id === connection.target);
-    if (!sourceNode || !targetNode) {
+    if (!sourceNode || !targetNode || sourceNode.id === targetNode.id) {
       return;
     }
 
@@ -1023,10 +1172,10 @@ export function WorkspaceProvider({ children }) {
       return;
     }
 
-    if (sourceNode.type === 'event' && isEventTriggerTargetType(targetNode.type)) {
-      connectEventToWidget(sourceNode.id, targetNode.id);
+    if (isDataflowSourceType(sourceNode.type) && isDataflowTargetType(targetNode.type)) {
+      connectDataflowNodes(sourceNode.id, targetNode.id);
     }
-  }, [connectEventToWidget, connectPromptToAgent]);
+  }, [connectDataflowNodes, connectPromptToAgent]);
 
   const saveScheduleNode = useCallback(async (nodeId) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
@@ -1259,14 +1408,71 @@ export function WorkspaceProvider({ children }) {
     );
   }, []);
 
+  const runConnectedTargets = useCallback(async (sourceNodeId, options = {}) => {
+    const sourceNode = latestNodesRef.current.find((entry) => entry.id === sourceNodeId);
+    if (!sourceNode) {
+      return [];
+    }
+
+    const outputText = typeof options.outputText === 'string'
+      ? options.outputText
+      : getNodeOutputText(sourceNode);
+
+    const targets = getOutgoingDataflowTargets(sourceNodeId, latestNodesRef.current, latestEdgesRef.current);
+    if (targets.length === 0) {
+      return [];
+    }
+
+    const visitedNodeIds = new Set(options.visitedNodeIds || []);
+    visitedNodeIds.add(sourceNodeId);
+
+    const results = [];
+    for (const targetNode of targets) {
+      if (visitedNodeIds.has(targetNode.id)) {
+        results.push({
+          ok: false,
+          error: `Cycle detected for ${formatWidgetLabel(targetNode)}.`,
+        });
+        continue;
+      }
+
+      const runNodeByType = runNodeByTypeRef.current;
+      if (!runNodeByType) {
+        break;
+      }
+
+      results.push(await runNodeByType(targetNode.id, {
+        upstreamOutput: outputText,
+        upstreamSourceNodeId: sourceNodeId,
+        visitedNodeIds: [...visitedNodeIds],
+        executionContext: options.executionContext,
+      }));
+    }
+
+    return results;
+  }, []);
+
   const runPromptNode = useCallback(async (nodeId, options = {}) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
     if (!node) {
       return { ok: false, error: 'Prompt node not found.' };
     }
 
+    const visitedNodeIds = new Set(options.visitedNodeIds || []);
+    if (visitedNodeIds.has(nodeId)) {
+      return { ok: false, error: `Cycle detected for ${formatWidgetLabel(node)}.` };
+    }
+
+    visitedNodeIds.add(nodeId);
+
     const connectedTarget = getConnectedAgentTarget(nodeId, latestNodesRef.current, latestEdgesRef.current);
-    const prompt = buildPromptInvocation(node.data, connectedTarget?.agentName, options.eventContext);
+    const prompt = buildPromptInvocation(node.data, connectedTarget?.agentName);
+    const executionInput = resolveNodeExecutionInput(
+      nodeId,
+      latestNodesRef.current,
+      latestEdgesRef.current,
+      options
+    );
     if (!prompt) {
       updateNodeData(nodeId, {
         status: 'failed',
@@ -1287,6 +1493,7 @@ export function WorkspaceProvider({ children }) {
         widget_id: nodeId,
         action_type: 'run_prompt',
         prompt,
+        input: executionInput || undefined,
         role: node.data.role,
         title: node.data.title,
         thread_id: executionContext.threadId,
@@ -1294,15 +1501,24 @@ export function WorkspaceProvider({ children }) {
         invocation_source: executionContext.invocationSource,
         root_widget_id: executionContext.rootWidgetId,
       });
+      const outputText = getActionText(result);
       updateNodeData(nodeId, {
         status: 'success',
         targetAgent: getPromptTargetAgent(node.data, connectedTarget?.agentName),
         lastThreadId: result.thread_id || executionContext.threadId || node.data.lastThreadId,
-        summaryState: getActionText(result),
+        summaryState: outputText,
+        lastOutput: outputText,
+      });
+      const downstreamResults = await runConnectedTargets(nodeId, {
+        visitedNodeIds: [...visitedNodeIds],
+        outputText,
+        executionContext,
       });
       return {
         ok: true,
-        message: getActionText(result) || 'Prompt completed.',
+        message: outputText || 'Prompt completed.',
+        output: outputText,
+        downstreamResults,
       };
     } catch (runError) {
       updateNodeData(nodeId, {
@@ -1311,7 +1527,7 @@ export function WorkspaceProvider({ children }) {
       });
       return { ok: false, error: runError.message };
     }
-  }, [runAction, updateNodeData]);
+  }, [runAction, runConnectedTargets, updateNodeData]);
 
   const generateFromPromptNode = useCallback(async (nodeId) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
@@ -1321,6 +1537,11 @@ export function WorkspaceProvider({ children }) {
 
     const connectedTarget = getConnectedAgentTarget(nodeId, latestNodesRef.current, latestEdgesRef.current);
     const prompt = buildPromptInvocation(node.data, connectedTarget?.agentName);
+    const executionInput = resolveNodeExecutionInput(
+      nodeId,
+      latestNodesRef.current,
+      latestEdgesRef.current
+    );
     if (!prompt) {
       updateNodeData(nodeId, {
         status: 'failed',
@@ -1337,6 +1558,7 @@ export function WorkspaceProvider({ children }) {
         widget_id: nodeId,
         action_type: 'generate_code',
         prompt,
+        input: executionInput || undefined,
         role: node.data.role,
         title: node.data.title,
         thread_id: executionContext.threadId,
@@ -1376,6 +1598,19 @@ export function WorkspaceProvider({ children }) {
       return { ok: false, error: 'Code node not found.' };
     }
 
+    const visitedNodeIds = new Set(options.visitedNodeIds || []);
+    if (visitedNodeIds.has(nodeId)) {
+      return { ok: false, error: `Cycle detected for ${formatWidgetLabel(node)}.` };
+    }
+
+    visitedNodeIds.add(nodeId);
+    const executionInput = resolveNodeExecutionInput(
+      nodeId,
+      latestNodesRef.current,
+      latestEdgesRef.current,
+      options
+    );
+
     updateNodeData(nodeId, { status: 'running' });
     const executionContext = buildExecutionContext(
       nodeId,
@@ -1389,20 +1624,30 @@ export function WorkspaceProvider({ children }) {
         action_type: 'run_code',
         language: node.data.language,
         code: node.data.content,
+        input: executionInput || undefined,
         title: node.data.title,
         thread_id: executionContext.threadId,
         invocation_type: executionContext.invocationType,
         invocation_source: executionContext.invocationSource,
         root_widget_id: executionContext.rootWidgetId,
       });
+      const outputText = getActionText(result);
       updateNodeData(nodeId, {
         status: 'completed',
         lastThreadId: result.thread_id || executionContext.threadId || node.data.lastThreadId,
-        outputRefs: [getActionText(result)].filter(Boolean),
+        outputRefs: [outputText].filter(Boolean),
+        lastOutput: outputText,
+      });
+      const downstreamResults = await runConnectedTargets(nodeId, {
+        visitedNodeIds: [...visitedNodeIds],
+        outputText,
+        executionContext,
       });
       return {
         ok: true,
-        message: getActionText(result) || 'Code executed.',
+        message: outputText || 'Code executed.',
+        output: outputText,
+        downstreamResults,
       };
     } catch (runError) {
       updateNodeData(nodeId, {
@@ -1411,7 +1656,7 @@ export function WorkspaceProvider({ children }) {
       });
       return { ok: false, error: runError.message };
     }
-  }, [runAction, updateNodeData]);
+  }, [runAction, runConnectedTargets, updateNodeData]);
 
   const runUserNode = useCallback(async (nodeId, options = {}) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
@@ -1419,7 +1664,19 @@ export function WorkspaceProvider({ children }) {
       return { ok: false, error: 'User node not found.' };
     }
 
-    const instruction = buildUserMessageInstruction(node.data);
+    const visitedNodeIds = new Set(options.visitedNodeIds || []);
+    if (visitedNodeIds.has(nodeId)) {
+      return { ok: false, error: `Cycle detected for ${formatWidgetLabel(node)}.` };
+    }
+
+    visitedNodeIds.add(nodeId);
+    const executionInput = resolveNodeExecutionInput(
+      nodeId,
+      latestNodesRef.current,
+      latestEdgesRef.current,
+      options
+    );
+    const instruction = buildUserMessageInstruction(node.data, executionInput);
     if (instruction.error) {
       updateNodeData(nodeId, {
         status: 'failed',
@@ -1454,6 +1711,12 @@ export function WorkspaceProvider({ children }) {
         status: 'success',
         lastSentAt: new Date().toISOString(),
         summaryState: summary,
+        lastOutput: instruction.previewMessage,
+      });
+      const downstreamResults = await runConnectedTargets(nodeId, {
+        visitedNodeIds: [...visitedNodeIds],
+        outputText: instruction.previewMessage,
+        executionContext,
       });
 
       return {
@@ -1462,6 +1725,8 @@ export function WorkspaceProvider({ children }) {
         previewTitle: instruction.previewTitle,
         previewMessage: instruction.previewMessage,
         level: instruction.level,
+        output: instruction.previewMessage,
+        downstreamResults,
       };
     } catch (runError) {
       updateNodeData(nodeId, {
@@ -1470,7 +1735,7 @@ export function WorkspaceProvider({ children }) {
       });
       return { ok: false, error: runError.message };
     }
-  }, [runAction, updateNodeData]);
+  }, [runAction, runConnectedTargets, updateNodeData]);
 
   const runScheduleNode = useCallback(async (nodeId, options = {}) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
@@ -1478,6 +1743,12 @@ export function WorkspaceProvider({ children }) {
       return { ok: false, error: 'Schedule node not found.' };
     }
 
+    const visitedNodeIds = new Set(options.visitedNodeIds || []);
+    if (visitedNodeIds.has(nodeId)) {
+      return { ok: false, error: `Cycle detected for ${formatWidgetLabel(node)}.` };
+    }
+
+    visitedNodeIds.add(nodeId);
     if (!node.data?.serverManaged) {
       updateNodeData(nodeId, {
         lastRunStatus: 'error',
@@ -1486,6 +1757,12 @@ export function WorkspaceProvider({ children }) {
       return { ok: false, error: 'Save the schedule before running it.' };
     }
 
+    const executionInput = resolveNodeExecutionInput(
+      nodeId,
+      latestNodesRef.current,
+      latestEdgesRef.current,
+      options
+    );
     updateNodeData(nodeId, { lastRunStatus: 'running' });
     const executionContext = buildExecutionContext(
       nodeId,
@@ -1500,16 +1777,26 @@ export function WorkspaceProvider({ children }) {
         invocation_type: executionContext.invocationType,
         invocation_source: executionContext.invocationSource,
         root_widget_id: executionContext.rootWidgetId,
+        input: executionInput || undefined,
       });
+      const outputText = getActionText(result);
       updateNodeData(nodeId, {
         lastRunStatus: 'completed',
         lastRunAt: new Date().toISOString(),
         lastThreadId: result.thread_id || executionContext.threadId || node.data.lastThreadId,
-        summaryState: getActionText(result),
+        summaryState: outputText,
+        lastOutput: outputText,
+      });
+      const downstreamResults = await runConnectedTargets(nodeId, {
+        visitedNodeIds: [...visitedNodeIds],
+        outputText,
+        executionContext,
       });
       return {
         ok: true,
-        message: getActionText(result) || 'Schedule completed.',
+        message: outputText || 'Schedule completed.',
+        output: outputText,
+        downstreamResults,
       };
     } catch (runError) {
       updateNodeData(nodeId, {
@@ -1518,7 +1805,7 @@ export function WorkspaceProvider({ children }) {
       });
       return { ok: false, error: runError.message };
     }
-  }, [runAction, updateNodeData]);
+  }, [runAction, runConnectedTargets, updateNodeData]);
 
   const runEventNode = useCallback(async (nodeId) => {
     const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
@@ -1527,7 +1814,8 @@ export function WorkspaceProvider({ children }) {
     }
 
     const eventPayload = buildManualEventPayload(node);
-    const linkedTargets = getLinkedEventTargets(nodeId, latestNodesRef.current, latestEdgesRef.current);
+    const eventOutput = buildEventOutputText(eventPayload);
+    const linkedTargets = getOutgoingDataflowTargets(nodeId, latestNodesRef.current, latestEdgesRef.current);
     const initialSummary = linkedTargets.length > 0
       ? `Running ${linkedTargets.length} linked widget${linkedTargets.length === 1 ? '' : 's'}.`
       : `Manual trigger fired for ${eventPayload.event_type}.`;
@@ -1540,32 +1828,19 @@ export function WorkspaceProvider({ children }) {
       lastRunStatus: linkedTargets.length > 0 ? 'running' : 'completed',
       summaryState: initialSummary,
       logs: initialLogs,
+      lastOutput: eventOutput,
     });
 
     if (linkedTargets.length === 0) {
-      return { ok: true, triggered: 0 };
+      return { ok: true, triggered: 0, output: eventOutput };
     }
 
     const executionContext = buildExecutionContext(nodeId, 'workspace.event_chain');
-    const results = [];
-    for (const targetNode of linkedTargets) {
-      if (targetNode.type === 'prompt') {
-        results.push(await runPromptNode(targetNode.id, { eventContext: eventPayload, executionContext }));
-        continue;
-      }
-      if (targetNode.type === 'code') {
-        results.push(await runCodeNode(targetNode.id, { executionContext }));
-        continue;
-      }
-      if (targetNode.type === 'schedule') {
-        results.push(await runScheduleNode(targetNode.id, { executionContext }));
-        continue;
-      }
-      results.push({
-        ok: false,
-        error: `Unsupported linked widget type: ${targetNode.type}`,
-      });
-    }
+    const results = await runConnectedTargets(nodeId, {
+      visitedNodeIds: [nodeId],
+      outputText: eventOutput,
+      executionContext,
+    });
 
     const successfulCount = results.filter((result) => result?.ok).length;
     const failedTargets = linkedTargets.filter((_, index) => !results[index]?.ok);
@@ -1584,6 +1859,7 @@ export function WorkspaceProvider({ children }) {
         new Date().toISOString(),
         failedTargets.length > 0 ? 'error' : 'info'
       ),
+      lastOutput: eventOutput,
     });
 
     return {
@@ -1591,8 +1867,40 @@ export function WorkspaceProvider({ children }) {
       triggered: linkedTargets.length,
       successfulCount,
       failedCount: failedTargets.length,
+      output: eventOutput,
     };
-  }, [runCodeNode, runPromptNode, runScheduleNode, updateNodeData]);
+  }, [runConnectedTargets, updateNodeData]);
+
+  useEffect(() => {
+    runNodeByTypeRef.current = async (nodeId, options = {}) => {
+      const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+      if (!node) {
+        return { ok: false, error: 'Widget not found.' };
+      }
+
+      if (node.type === 'prompt') {
+        return runPromptNode(nodeId, options);
+      }
+      if (node.type === 'code') {
+        return runCodeNode(nodeId, options);
+      }
+      if (node.type === 'user') {
+        return runUserNode(nodeId, options);
+      }
+      if (node.type === 'schedule') {
+        return runScheduleNode(nodeId, options);
+      }
+
+      return {
+        ok: false,
+        error: `Unsupported linked widget type: ${node.type}`,
+      };
+    };
+
+    return () => {
+      runNodeByTypeRef.current = null;
+    };
+  }, [runCodeNode, runPromptNode, runScheduleNode, runUserNode]);
 
   const graphValue = useMemo(() => ({
     nodes,
@@ -1612,7 +1920,6 @@ export function WorkspaceProvider({ children }) {
     addPromptFromLibrary,
     updateNodeData,
     connectPromptToAgent,
-    connectEventToWidget,
     removeNodes,
     removeEdges,
     duplicateNode,
@@ -1638,7 +1945,6 @@ export function WorkspaceProvider({ children }) {
     addPromptFromLibrary,
     updateNodeData,
     connectPromptToAgent,
-    connectEventToWidget,
     removeNodes,
     removeEdges,
     duplicateNode,

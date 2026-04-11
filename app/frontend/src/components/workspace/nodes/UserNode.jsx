@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { NodeResizer } from '@xyflow/react';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
@@ -84,6 +84,8 @@ function UserNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon user">U</div>
@@ -103,7 +105,10 @@ function UserNode({ id, data, selected }) {
               <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
               {resolvedActiveTab === 'output' ? (
                 <div className="node-output-stack">
-                  <div className="node-output-panel">{data.summaryState || 'No messages sent yet.'}</div>
+                  <div className="node-output-panel">{data.lastOutput || data.summaryState || 'No messages sent yet.'}</div>
+                  {data.summaryState && data.lastOutput && data.summaryState !== data.lastOutput && (
+                    <div className="event-summary-note">{data.summaryState}</div>
+                  )}
                   <div className="schedule-info">
                     <div className="schedule-row">
                       <span className="schedule-row-label">Message type</span>
