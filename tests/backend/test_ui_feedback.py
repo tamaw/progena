@@ -88,6 +88,7 @@ class TestUIStatusEndpoint:
 
         # Build status
         assert "build" in data
+        assert "alerts" in data
 
     def test_status_loops_structure(self, client):
         """Test that loops have the correct structure for UI rendering."""

@@ -122,15 +122,15 @@ function ChatPage() {
     if (!event?.data) return;
 
     // Handle scheduled/background messages from the agent.
-    // Prefer agent_message/agent_notification over scheduled_response as they have cleaner content.
+    // Prefer agent_message/agent_question over scheduled_response as they have cleaner content.
     if (
       event.type === 'agent_message'
+      || event.type === 'agent_question'
       || event.type === 'scheduled_response'
-      || event.type === 'agent_notification'
     ) {
       const content = event.data?.content || '';
       const metadata = event.data?.metadata || {};
-      const isNotification = event.type === 'agent_notification';
+      const isQuestion = event.type === 'agent_question';
 
       // Clean up the content (remove "SAY: " prefix if present)
       let cleanContent = content;
@@ -158,6 +158,7 @@ function ChatPage() {
           content: cleanContent,
           timestamp: Date.now(),
           isScheduled: true,
+          isQuestion,
           scheduleId: metadata?.schedule_id,
           originalRequest: metadata?.original_request,
         };
@@ -166,22 +167,13 @@ function ChatPage() {
 
         // Show a notification
         show(
-          isNotification ? (metadata?.level || 'info') : 'info',
-          metadata?.title || 'Scheduled Message',
+          isQuestion ? 'warning' : 'info',
+          metadata?.title || (isQuestion ? 'Question from Progenitor' : 'Scheduled Message'),
           metadata?.schedule_id
             ? `Reminder: ${cleanContent.slice(0, 50)}...`
             : cleanContent.slice(0, 100)
         );
       }
-    }
-
-    if (event.type === 'agent_notification') {
-      const metadata = event.data?.metadata || {};
-      show(
-        metadata?.level || 'info',
-        metadata?.title || 'Notification',
-        event.data?.content || ''
-      );
     }
 
     // Handle alerts

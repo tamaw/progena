@@ -505,20 +505,19 @@ function buildUserMessageInstruction(userData = {}) {
     };
   }
 
-  if (messageType === 'user_communication') {
+  if (messageType === 'ask_user') {
     return {
-      delivery: 'user_communication',
+      delivery: 'ask_user',
       level: 'info',
-      previewTitle: 'user_communication',
+      previewTitle: 'ask_user',
       previewMessage: message,
       prompt: [
-        'Use the `user_communication` tool exactly once.',
+        'Use the `ask_user` tool exactly once with these exact arguments.',
         'Do not call any other tools.',
-        'Pass this exact raw input string to the tool.',
-        '```text',
-        `user_communication: ${message}`,
-        '```',
         'After the tool call, reply with exactly: sent',
+        '```json',
+        JSON.stringify({ question: message }, null, 2),
+        '```',
       ].join('\n'),
     };
   }

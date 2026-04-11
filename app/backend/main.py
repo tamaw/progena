@@ -20,7 +20,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,7 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .alerts import AlertInfo
 from .attachments import (
     AttachmentConfig,
     AttachmentManager,
@@ -419,6 +420,85 @@ async def _send_telegram_message(telegram: TelegramClient, content: str, event_t
         logger.error("Error sending to Telegram: %s", e)
 
 
+def _build_alert_summary_prompt(alert: AlertInfo) -> str:
+    """Build the follow-up prompt that turns an alert into a normal user-facing message."""
+    return "\n".join(
+        [
+            "A backend alert was just created for the user.",
+            "Use the `say_to_user` tool exactly once.",
+            "Do not call `notify_user`, `ask_user`, or any other tools.",
+            "Write a short alert-style summary for the user on their current platform.",
+            "Keep the message faithful to the alert details, but summarize it clearly and naturally.",
+            "After the tool call, reply with exactly: sent",
+            "```json",
+            json.dumps(
+                {
+                    "id": alert.id,
+                    "type": alert.type,
+                    "title": alert.title,
+                    "message": alert.message,
+                    "urgent": alert.urgent,
+                    "requires_response": alert.requires_response,
+                },
+                indent=2,
+            ),
+            "```",
+        ]
+    )
+
+
+async def _handle_alert_request(
+    progenitor: ProgenitorClient | IPCProgenitorClient | None,
+    *,
+    title: str,
+    body: str,
+    level: str,
+    urgent: bool,
+    requires_response: bool,
+    create_alert_record: Callable[..., AlertInfo],
+    broadcast_alert_record: Callable[[AlertInfo], None],
+    broadcast_alert_state: Callable[[], None],
+) -> None:
+    """Store an alert and ask Progenitor to summarize it through the normal user-message path."""
+    if not body:
+        return
+
+    alert = create_alert_record(
+        type=level,
+        title=title,
+        message=body,
+        urgent=urgent,
+        requires_response=requires_response,
+    )
+    broadcast_alert_record(alert)
+    broadcast_alert_state()
+
+    if progenitor is None:
+        logger.warning(
+            "Dropping alert summary request for %s because backend client is unavailable", alert.id
+        )
+        return
+
+    try:
+        if not progenitor.is_running:
+            await progenitor.start()
+
+        response_text = (
+            await progenitor.send_message(
+                _build_alert_summary_prompt(alert),
+                request_id=f"alert-summary-{alert.id}",
+            )
+        ).strip()
+        if response_text and response_text.lower() != "sent":
+            logger.debug(
+                "Alert summary helper returned non-sentinel text for %s: %s",
+                alert.id,
+                response_text,
+            )
+    except Exception as e:
+        logger.warning("Failed to enqueue alert summary for %s: %s", alert.id, e)
+
+
 async def _handle_telegram_agent_message(
     telegram: TelegramClient,
     progenitor: ProgenitorClient | IPCProgenitorClient,
@@ -555,8 +635,13 @@ async def lifespan(app: FastAPI):
         config.progenitor_ipc_host,
         config.progenitor_ipc_port,
     )
-    # Import broadcast_chat_event for IPC events (chat, alerts, tasks)
-    from .ui_routes import broadcast_chat_event
+    # Import broadcast helpers for IPC events and alert state.
+    from .ui_routes import (
+        broadcast_alert,
+        broadcast_alerts_state,
+        broadcast_chat_event,
+        create_alert,
+    )
 
     # Create a combined event callback that handles both SSE and Telegram
     def combined_event_callback(event_type: str, data: dict) -> None:
@@ -564,8 +649,31 @@ async def lifespan(app: FastAPI):
 
         - Always broadcasts to SSE for any connected web clients
         - If no web clients connected, also sends to Telegram
-        - Only forwards certain event types to Telegram (agent_message, scheduled_response)
+        - Only forwards certain event types to Telegram (agent_message, agent_question, scheduled_response)
         """
+        if event_type == "alert_request":
+            metadata = data.get("metadata") or {}
+            title = str(metadata.get("title") or "Alert").strip() or "Alert"
+            body = str(data.get("content") or "").strip()
+            level = str(metadata.get("level") or "info").strip().lower() or "info"
+            urgent = bool(metadata.get("urgent")) or level in {"warning", "error"}
+            requires_response = bool(metadata.get("requires_response"))
+
+            asyncio.create_task(
+                _handle_alert_request(
+                    client,
+                    title=title,
+                    body=body,
+                    level=level,
+                    urgent=urgent,
+                    requires_response=requires_response,
+                    create_alert_record=create_alert,
+                    broadcast_alert_record=broadcast_alert,
+                    broadcast_alert_state=broadcast_alerts_state,
+                )
+            )
+            return
+
         # Always broadcast to SSE
         broadcast_chat_event(event_type, data)
 
@@ -577,6 +685,7 @@ async def lifespan(app: FastAPI):
             telegram_event_types = {
                 "scheduled_response",  # Scheduled task responses
                 "agent_message",  # Direct agent messages
+                "agent_question",  # Questions that should reach the user directly
             }
 
             if event_type in telegram_event_types:
