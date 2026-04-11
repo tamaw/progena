@@ -128,9 +128,7 @@ def encode_message(message: IPCMessage | dict[str, Any]) -> bytes:
     json_bytes = json.dumps(payload).encode(ENCODING)
 
     if len(json_bytes) > MAX_MESSAGE_SIZE:
-        raise ValueError(
-            f"Message size {len(json_bytes)} exceeds maximum {MAX_MESSAGE_SIZE}"
-        )
+        raise ValueError(f"Message size {len(json_bytes)} exceeds maximum {MAX_MESSAGE_SIZE}")
 
     # Length prefix (4 bytes, big-endian)
     header = struct.pack(">I", len(json_bytes))
@@ -171,9 +169,7 @@ async def read_message(
     try:
         # Read header
         if timeout:
-            header = await asyncio.wait_for(
-                reader.readexactly(HEADER_SIZE), timeout=timeout
-            )
+            header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=timeout)
         else:
             header = await reader.readexactly(HEADER_SIZE)
 
@@ -185,9 +181,7 @@ async def read_message(
 
         # Read payload
         if timeout:
-            payload = await asyncio.wait_for(
-                reader.readexactly(length), timeout=timeout
-            )
+            payload = await asyncio.wait_for(reader.readexactly(length), timeout=timeout)
         else:
             payload = await reader.readexactly(length)
 
@@ -227,6 +221,7 @@ def user_message(
     content: str,
     request_id: str | None = None,
     stream: bool = False,
+    metadata: dict[str, Any] | None = None,
 ) -> IPCMessage:
     """Create a user message."""
     return IPCMessage(
@@ -234,6 +229,7 @@ def user_message(
         content=content,
         request_id=request_id,
         stream=stream,
+        metadata=metadata,
     )
 
 
@@ -324,6 +320,7 @@ def agent_event(
         IPCMessage with type AGENT_EVENT.
     """
     from ..runtime.time_utils import utcnow_isoformat
+
     return IPCMessage(
         type=MessageType.AGENT_EVENT,
         event_type=event_type,

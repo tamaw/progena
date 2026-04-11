@@ -46,7 +46,7 @@ def mock_state_files(tmp_path):
     health_data = {
         "status": "running",
         "last_active": datetime.now(UTC).isoformat(),
-        "run_id": "alien-demo-001",
+        "thread_id": "alien-demo-001",
         "cycle_count": 42,
         "pid": 12345,
     }
@@ -169,7 +169,7 @@ class TestUIFeedbackIntegration:
         # Health should show running
         health = reader.get_health()
         assert health.status == "running"
-        assert health.run_id == "alien-demo-001"
+        assert health.thread_id == "alien-demo-001"
         assert health.cycle_count == 42
         assert health.is_running()  # Should be true due to recent last_active
 
@@ -242,7 +242,7 @@ class TestUIFeedbackIntegration:
         payload = reader.get_workspace_payload()
 
         assert payload["workspace"]["storage"] == "indexeddb"
-        assert payload["health"]["run_id"] == "alien-demo-001"
+        assert payload["health"]["thread_id"] == "alien-demo-001"
         widget_types = {widget["type"] for widget in payload["widgets"]}
         assert {"agent", "mcp", "schedule"} <= widget_types
 
@@ -523,7 +523,7 @@ class TestDataIntegrity:
         health = HealthInfo(
             status="running",
             last_active="2024-01-15T10:30:00+00:00",
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=100,
             pid=1234,
         )

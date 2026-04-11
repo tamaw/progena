@@ -14,6 +14,7 @@ Features:
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -205,8 +206,9 @@ class IPCServer:
                 await writer.wait_closed()
             except Exception as e:
                 logger.debug("Error closing client writer (expected during shutdown): %s", e)
-            logger.info("Client %s disconnected, %d clients remaining",
-                        client_id, self._client_count)
+            logger.info(
+                "Client %s disconnected, %d clients remaining", client_id, self._client_count
+            )
 
     async def _process_message(
         self,
@@ -236,12 +238,10 @@ class IPCServer:
 
                 if msg.stream:
                     await self._handle_streaming_request(
-                        msg.content, request_id, writer
+                        msg.content, request_id, writer, msg.metadata
                     )
                 else:
-                    await self._handle_request(
-                        msg.content, request_id, writer
-                    )
+                    await self._handle_request(msg.content, request_id, writer, msg.metadata)
 
             else:
                 logger.warning("Unknown message type: %s", msg.type)
@@ -270,6 +270,7 @@ class IPCServer:
         content: str,
         request_id: str,
         writer: asyncio.StreamWriter,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Handle a non-streaming request.
 
@@ -287,7 +288,7 @@ class IPCServer:
             await self._drain_response_queues(request_id)
 
             # Enqueue input and wait for output
-            await self.loop_runner.enqueue_input(content)
+            await self._enqueue_loop_input(content, metadata=metadata)
 
             # Wait for the response (with timeout)
             try:
@@ -311,6 +312,20 @@ class IPCServer:
                     writer,
                     error_message("Request timed out", error_code="TIMEOUT", request_id=request_id),
                 )
+
+    async def _enqueue_loop_input(
+        self,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Enqueue input on loop implementations with or without metadata support."""
+
+        enqueue_input = self.loop_runner.enqueue_input
+        parameters = inspect.signature(enqueue_input).parameters
+        if "metadata" in parameters:
+            await enqueue_input(content, metadata=metadata)
+            return
+        await enqueue_input(content)
 
     async def _wait_for_response(self, request_id: str) -> str:
         """Wait for a response from the loop runner.
@@ -336,6 +351,7 @@ class IPCServer:
         content: str,
         request_id: str,
         writer: asyncio.StreamWriter,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Handle a streaming request.
 
@@ -353,7 +369,7 @@ class IPCServer:
             await self._drain_response_queues(request_id)
 
             # Enqueue input
-            await self.loop_runner.enqueue_input(content)
+            await self._enqueue_loop_input(content, metadata=metadata)
 
             # Stream chunks from the loop runner's stream queue
             try:
@@ -391,14 +407,20 @@ class IPCServer:
 
                     # Brief yield to allow other tasks
                     if poll_count % 100 == 0:
-                        logger.debug("Still waiting for stream chunks %s (poll %d)", request_id, poll_count)
+                        logger.debug(
+                            "Still waiting for stream chunks %s (poll %d)", request_id, poll_count
+                        )
 
                 # If we exited the loop without finding output, we timed out
-                logger.error("Streaming request %s timed out after %d polls", request_id, poll_count)
+                logger.error(
+                    "Streaming request %s timed out after %d polls", request_id, poll_count
+                )
                 await self._drain_response_queues(request_id)
                 await write_message(
                     writer,
-                    error_message("Streaming timed out", error_code="TIMEOUT", request_id=request_id),
+                    error_message(
+                        "Streaming timed out", error_code="TIMEOUT", request_id=request_id
+                    ),
                 )
 
             except Exception as e:
@@ -479,7 +501,9 @@ class IPCServer:
 
                 # Broadcast to all connected clients
                 if not self._clients:
-                    logger.debug("No clients connected, dropping event: %s", event.get("event_type"))
+                    logger.debug(
+                        "No clients connected, dropping event: %s", event.get("event_type")
+                    )
                     continue
 
                 # Create the IPC message
@@ -494,11 +518,11 @@ class IPCServer:
                 for client_id, writer in list(self._clients.items()):
                     try:
                         await write_message(writer, msg)
-                        logger.debug("Sent event %s to client %s",
-                                    event.get("event_type"), client_id)
+                        logger.debug(
+                            "Sent event %s to client %s", event.get("event_type"), client_id
+                        )
                     except Exception as e:
-                        logger.warning("Failed to send event to client %s: %s",
-                                      client_id, e)
+                        logger.warning("Failed to send event to client %s: %s", client_id, e)
                         disconnected.append(client_id)
 
                 # Clean up disconnected clients

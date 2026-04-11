@@ -19,13 +19,13 @@ class TestComposableSubstates(unittest.TestCase):
         )
 
         # Verify they're TypedDicts
-        assert hasattr(ConversationState, '__annotations__')
-        assert hasattr(WorkState, '__annotations__')
-        assert hasattr(SchedulingState, '__annotations__')
-        assert hasattr(LoopControlState, '__annotations__')
-        assert hasattr(InnerLoopState, '__annotations__')
-        assert hasattr(ExecutionState, '__annotations__')
-        assert hasattr(ProgenitorState, '__annotations__')
+        assert hasattr(ConversationState, "__annotations__")
+        assert hasattr(WorkState, "__annotations__")
+        assert hasattr(SchedulingState, "__annotations__")
+        assert hasattr(LoopControlState, "__annotations__")
+        assert hasattr(InnerLoopState, "__annotations__")
+        assert hasattr(ExecutionState, "__annotations__")
+        assert hasattr(ProgenitorState, "__annotations__")
 
     def test_conversation_state_fields(self):
         """Test ConversationState has expected fields."""
@@ -33,9 +33,9 @@ class TestComposableSubstates(unittest.TestCase):
 
         annotations = ConversationState.__annotations__
 
-        assert 'messages' in annotations
-        assert 'current_input' in annotations
-        assert 'pending_response' in annotations
+        assert "messages" in annotations
+        assert "current_input" in annotations
+        assert "pending_response" in annotations
 
     def test_work_state_fields(self):
         """Test WorkState has expected fields."""
@@ -43,9 +43,9 @@ class TestComposableSubstates(unittest.TestCase):
 
         annotations = WorkState.__annotations__
 
-        assert 'backlog' in annotations
-        assert 'current_work_item' in annotations
-        assert 'current_decision' in annotations
+        assert "backlog" in annotations
+        assert "current_work_item" in annotations
+        assert "current_decision" in annotations
 
     def test_scheduling_state_fields(self):
         """Test SchedulingState has expected fields."""
@@ -53,10 +53,10 @@ class TestComposableSubstates(unittest.TestCase):
 
         annotations = SchedulingState.__annotations__
 
-        assert 'schedule' in annotations
-        assert 'current_time' in annotations
-        assert 'due_items' in annotations
-        assert 'agents' in annotations
+        assert "schedule" in annotations
+        assert "current_time" in annotations
+        assert "due_items" in annotations
+        assert "agents" in annotations
 
     def test_loop_control_state_fields(self):
         """Test LoopControlState has expected fields."""
@@ -64,10 +64,10 @@ class TestComposableSubstates(unittest.TestCase):
 
         annotations = LoopControlState.__annotations__
 
-        assert 'cycle_count' in annotations
-        assert 'actions_this_cycle' in annotations
-        assert 'shutdown_requested' in annotations
-        assert 'run_id' in annotations
+        assert "cycle_count" in annotations
+        assert "actions_this_cycle" in annotations
+        assert "shutdown_requested" in annotations
+        assert "thread_id" in annotations
 
     def test_inner_loop_state_fields(self):
         """Test InnerLoopState has expected fields."""
@@ -76,10 +76,10 @@ class TestComposableSubstates(unittest.TestCase):
         annotations = InnerLoopState.__annotations__
 
         # Key inner loop fields - now nested
-        assert 'iteration' in annotations  # Nested object with current, max, start_time
-        assert 'phases' in annotations  # Contains verify.score, verify.passed
-        assert 'history' in annotations  # Contains lessons_learned, artefacts
-        assert 'best' in annotations  # Contains iteration, score, passed
+        assert "iteration" in annotations  # Nested object with current, max, start_time
+        assert "phases" in annotations  # Contains verify.score, verify.passed
+        assert "history" in annotations  # Contains lessons_learned, artefacts
+        assert "best" in annotations  # Contains iteration, score, passed
 
     def test_execution_state_fields(self):
         """Test ExecutionState has expected fields."""
@@ -88,8 +88,8 @@ class TestComposableSubstates(unittest.TestCase):
         annotations = ExecutionState.__annotations__
 
         # Execution results now in phases.execute
-        assert 'pending_tool_calls' in annotations
-        assert 'work_item_completed' in annotations
+        assert "pending_tool_calls" in annotations
+        assert "work_item_completed" in annotations
 
     def test_progenitor_state_inherits_all_substates(self):
         """Test ProgenitorState includes all fields from substates."""
@@ -106,8 +106,14 @@ class TestComposableSubstates(unittest.TestCase):
         progenitor_annotations = ProgenitorState.__annotations__
 
         # Check it has fields from each substate
-        for substate in [ConversationState, WorkState, SchedulingState,
-                         LoopControlState, InnerLoopState, ExecutionState]:
+        for substate in [
+            ConversationState,
+            WorkState,
+            SchedulingState,
+            LoopControlState,
+            InnerLoopState,
+            ExecutionState,
+        ]:
             for field in substate.__annotations__:
                 assert field in progenitor_annotations, (
                     f"ProgenitorState missing field {field} from {substate.__name__}"
@@ -137,7 +143,7 @@ class TestComposableSubstates(unittest.TestCase):
             "backlog": [],
             # Loop control
             "cycle_count": 1,
-            "run_id": "test-123",
+            "thread_id": "thread-123",
         }
 
         assert state["current_input"] == "Build an agent"
@@ -156,14 +162,18 @@ class TestComposableSubstates(unittest.TestCase):
         )
 
         # TypedDicts with total=False have __required_keys__ and __optional_keys__
-        for state_type in [ConversationState, WorkState, SchedulingState,
-                           LoopControlState, InnerLoopState, ExecutionState,
-                           ProgenitorState]:
+        for state_type in [
+            ConversationState,
+            WorkState,
+            SchedulingState,
+            LoopControlState,
+            InnerLoopState,
+            ExecutionState,
+            ProgenitorState,
+        ]:
             # All keys should be optional (total=False)
-            required = getattr(state_type, '__required_keys__', set())
-            assert len(required) == 0, (
-                f"{state_type.__name__} has required keys: {required}"
-            )
+            required = getattr(state_type, "__required_keys__", set())
+            assert len(required) == 0, f"{state_type.__name__} has required keys: {required}"
 
 
 class TestSubstateUsagePatterns(unittest.TestCase):
@@ -194,10 +204,12 @@ class TestSubstateUsagePatterns(unittest.TestCase):
             return state.get("messages", [])
 
         # Should work with full state too (due to structural typing)
-        messages = get_messages({
-            "messages": [ConversationMessage(id="m1", role="user", content="hello")],
-            "current_input": "test",
-        })
+        messages = get_messages(
+            {
+                "messages": [ConversationMessage(id="m1", role="user", content="hello")],
+                "current_input": "test",
+            }
+        )
         assert messages[0].content == "hello"
 
 
