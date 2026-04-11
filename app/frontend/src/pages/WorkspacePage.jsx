@@ -30,9 +30,8 @@ import EventNode from '../components/workspace/nodes/EventNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
 import UserNode from '../components/workspace/nodes/UserNode';
-import { useNotifications } from '../context/NotificationContext';
 import { useApi } from '../hooks/useApi';
-import { useEventsSSE, useStatusSSE } from '../hooks/useSSE';
+import { useStatusSSE } from '../hooks/useSSE';
 
 const nodeTypes = {
   prompt: PromptNode,
@@ -106,7 +105,6 @@ const minimapNodeColor = (node) => {
 };
 
 function WorkspaceInner() {
-  const { show } = useNotifications();
   const {
     nodes,
     edges,
@@ -227,27 +225,7 @@ function WorkspaceInner() {
     syncWidgets(event.data.items || event.data.widgets || []);
   }, [syncWidgets]);
 
-  const handleChatEvent = useCallback((event) => {
-    if (!event?.data) {
-      return;
-    }
-
-    if (event.type === 'agent_message') {
-      const tool = event.data?.metadata?.tool;
-      if (tool === 'say_to_user' || tool === 'user_communication') {
-        show('info', tool === 'say_to_user' ? 'Say to User' : 'User Communication', event.data?.content || '');
-      }
-      return;
-    }
-
-    if (event.type === 'agent_notification') {
-      const metadata = event.data?.metadata || {};
-      show(metadata.level || 'info', metadata.title || 'Notification', event.data?.content || '');
-    }
-  }, [show]);
-
   useStatusSSE(handleStatusEvent);
-  useEventsSSE(handleChatEvent);
 
   // Handle drop from sidebar
   const onDrop = useCallback(

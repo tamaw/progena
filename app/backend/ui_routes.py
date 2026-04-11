@@ -3319,7 +3319,7 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
     - status: Full status updates from state files
     - heartbeat: Periodic heartbeats with status
 
-    Does NOT receive chat/IPC events (use /chat for those).
+    Does NOT receive chat/IPC events (use /events for those).
     """
     import json
 
@@ -3459,7 +3459,7 @@ async def status_stream():
 
 def broadcast_chat_event(event_type: str, data: dict):
     """
-    Broadcast an event to /chat SSE subscribers.
+    Broadcast an event to /events SSE subscribers.
 
     Use for IPC-related events like:
     - scheduled_response
@@ -3477,7 +3477,7 @@ def broadcast_chat_event(event_type: str, data: dict):
 
     event = {"type": event_type, "data": json.dumps(data)}
 
-    # Push to /chat subscribers
+    # Push to /events subscribers
     for queue in _chat_subscribers:
         try:
             queue.put_nowait(event)

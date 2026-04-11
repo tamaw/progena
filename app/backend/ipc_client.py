@@ -100,15 +100,21 @@ class IPCProgenitorClient:
                     metadata = event.get("metadata", {})
                     timestamp = event.get("timestamp")
 
-                    logger.info("Forwarding event to SSE: type=%s, content=%s",
-                               event_type, content[:100] if content else "")
+                    logger.info(
+                        "Forwarding event to SSE: type=%s, content=%s",
+                        event_type,
+                        content[:100] if content else "",
+                    )
 
                     try:
-                        callback(event_type, {
-                            "content": content,
-                            "metadata": metadata,
-                            "timestamp": timestamp,
-                        })
+                        callback(
+                            event_type,
+                            {
+                                "content": content,
+                                "metadata": metadata,
+                                "timestamp": timestamp,
+                            },
+                        )
                     except Exception as e:
                         logger.warning("Error in event callback: %s", e)
 
@@ -207,11 +213,7 @@ class IPCProgenitorClient:
     @property
     def is_running(self) -> bool:
         """Check if the client is running."""
-        return (
-            self._started
-            and self._ipc_client is not None
-            and self._ipc_client.is_connected
-        )
+        return self._started and self._ipc_client is not None and self._ipc_client.is_connected
 
     def last_heartbeat(self) -> float | None:
         """Get last heartbeat timestamp."""
@@ -247,6 +249,7 @@ class IPCProgenitorClient:
         self._event_callback = callback
         # Also update the underlying IPC client if it exists
         if self._ipc_client and callback:
+
             async def forward_event(event: dict) -> None:
                 """Forward events from IPC to SSE broadcast."""
                 event_type = event.get("event_type", "unknown")
@@ -254,22 +257,30 @@ class IPCProgenitorClient:
                 metadata = event.get("metadata", {})
                 timestamp = event.get("timestamp")
 
-                logger.info("Forwarding event to SSE: type=%s, content=%s",
-                           event_type, content[:100] if content else "")
+                logger.info(
+                    "Forwarding event to SSE: type=%s, content=%s",
+                    event_type,
+                    content[:100] if content else "",
+                )
 
                 try:
-                    callback(event_type, {
-                        "content": content,
-                        "metadata": metadata,
-                        "timestamp": timestamp,
-                    })
+                    callback(
+                        event_type,
+                        {
+                            "content": content,
+                            "metadata": metadata,
+                            "timestamp": timestamp,
+                        },
+                    )
                 except Exception as e:
                     logger.warning("Error in event callback: %s", e)
 
             self._ipc_client.set_event_callback(forward_event)
 
 
-def get_ipc_client(config: ChatServerConfig, event_callback: EventCallback | None = None) -> IPCProgenitorClient:
+def get_ipc_client(
+    config: ChatServerConfig, event_callback: EventCallback | None = None
+) -> IPCProgenitorClient:
     """Create an IPC-based Progenitor client.
 
     Args:
@@ -280,3 +291,28 @@ def get_ipc_client(config: ChatServerConfig, event_callback: EventCallback | Non
         An IPCProgenitorClient instance.
     """
     return IPCProgenitorClient(config, event_callback=event_callback)
+
+
+async def start_ipc_client_with_retry(
+    client: IPCProgenitorClient,
+    *,
+    retry_delay: float = 5.0,
+) -> None:
+    """Start an IPC client in the background and keep retrying until it connects."""
+    attempts = 0
+
+    while True:
+        try:
+            await client.start()
+            if attempts:
+                logger.info("IPC event-forwarding client connected after %d retries", attempts)
+            else:
+                logger.info("IPC event-forwarding client connected")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            attempts += 1
+            log = logger.warning if attempts == 1 or attempts % 12 == 0 else logger.debug
+            log("IPC event-forwarding client unavailable, retrying in %.1fs: %s", retry_delay, e)
+            await asyncio.sleep(retry_delay)

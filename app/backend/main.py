@@ -39,7 +39,7 @@ from .config import ChatServerConfig
 from .conversation import (
     ConversationHistory,
 )
-from .ipc_client import IPCProgenitorClient, get_ipc_client
+from .ipc_client import IPCProgenitorClient, get_ipc_client, start_ipc_client_with_retry
 from .models import (
     ErrorDetail,
     ErrorResponse,
@@ -492,6 +492,7 @@ async def lifespan(app: FastAPI):
     - Graceful shutdown with callbacks
     """
     global client
+    ipc_event_forwarding_task: asyncio.Task | None = None
 
     # Startup
     logger.info("Starting backend with enhanced features...")
@@ -562,7 +563,7 @@ async def lifespan(app: FastAPI):
         """Route IPC events to SSE and/or Telegram.
 
         - Always broadcasts to SSE for any connected web clients
-        - If no web clients connected, also sends to Telegram (if enabled)
+        - If no web clients connected, also sends to Telegram
         - Only forwards certain event types to Telegram (agent_message, scheduled_response)
         """
         # Always broadcast to SSE
@@ -588,6 +589,23 @@ async def lifespan(app: FastAPI):
 
     # Register client shutdown callback
     if client:
+        ipc_event_forwarding_task = asyncio.create_task(start_ipc_client_with_retry(client))
+
+        async def stop_ipc_event_forwarding_task() -> None:
+            """Stop the background IPC event-forwarding connector."""
+            nonlocal ipc_event_forwarding_task
+            if ipc_event_forwarding_task and not ipc_event_forwarding_task.done():
+                ipc_event_forwarding_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await ipc_event_forwarding_task
+            ipc_event_forwarding_task = None
+
+        graceful_shutdown.register_callback(
+            "stop_ipc_event_forwarding_task",
+            stop_ipc_event_forwarding_task,
+            priority=25,
+            timeout=5.0,
+        )
 
         async def shutdown_progenitor_client() -> None:
             """Wrapper to ensure callback returns None."""
