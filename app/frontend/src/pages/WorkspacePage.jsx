@@ -247,7 +247,7 @@ function WorkspaceInner() {
   }, [show]);
 
   useStatusSSE(handleStatusEvent);
-  useEventsSSE(handleChatEvent);
+  useEventsSSE(handleChatEvent, { blockTelegram: false });
 
   // Handle drop from sidebar
   const onDrop = useCallback(

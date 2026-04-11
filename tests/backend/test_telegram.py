@@ -427,40 +427,111 @@ class TestSubscriberTracking:
 
     def test_has_active_chat_subscribers_empty(self):
         """Test when no subscribers are connected."""
-        from app.backend.ui_routes import _chat_subscribers, has_active_chat_subscribers
+        from app.backend.ui_routes import (
+            _telegram_blocking_chat_subscribers,
+            has_active_chat_subscribers,
+        )
 
         # Clear subscribers for test
-        original = _chat_subscribers.copy()
-        _chat_subscribers.clear()
+        original = _telegram_blocking_chat_subscribers.copy()
+        _telegram_blocking_chat_subscribers.clear()
 
         try:
             assert has_active_chat_subscribers() is False
         finally:
-            _chat_subscribers.extend(original)
+            _telegram_blocking_chat_subscribers.extend(original)
+
+    def test_has_active_chat_subscribers_ignores_passive_event_subscriber(self):
+        """Passive /events subscribers should not suppress Telegram delivery."""
+        from app.backend.ui_routes import (
+            _chat_subscribers,
+            _telegram_blocking_chat_subscribers,
+            has_active_chat_subscribers,
+        )
+
+        original_events = _chat_subscribers.copy()
+        original_blocking = _telegram_blocking_chat_subscribers.copy()
+        _chat_subscribers.clear()
+        _telegram_blocking_chat_subscribers.clear()
+        _chat_subscribers.append(asyncio.Queue())
+
+        try:
+            assert has_active_chat_subscribers() is False
+        finally:
+            _chat_subscribers.clear()
+            _chat_subscribers.extend(original_events)
+            _telegram_blocking_chat_subscribers.clear()
+            _telegram_blocking_chat_subscribers.extend(original_blocking)
 
     def test_has_active_chat_subscribers_with_subscriber(self):
-        """Test when subscribers are connected."""
-        from app.backend.ui_routes import _chat_subscribers, has_active_chat_subscribers
+        """Blocking chat subscribers should suppress Telegram delivery."""
+        from app.backend.ui_routes import (
+            _chat_subscribers,
+            _telegram_blocking_chat_subscribers,
+            has_active_chat_subscribers,
+        )
 
         # Add a mock subscriber
-        original = _chat_subscribers.copy()
+        original_events = _chat_subscribers.copy()
+        original_blocking = _telegram_blocking_chat_subscribers.copy()
         _chat_subscribers.clear()
-        _chat_subscribers.append(asyncio.Queue())
+        _telegram_blocking_chat_subscribers.clear()
+        queue = asyncio.Queue()
+        _chat_subscribers.append(queue)
+        _telegram_blocking_chat_subscribers.append(queue)
 
         try:
             assert has_active_chat_subscribers() is True
         finally:
             _chat_subscribers.clear()
-            _chat_subscribers.extend(original)
+            _chat_subscribers.extend(original_events)
+            _telegram_blocking_chat_subscribers.clear()
+            _telegram_blocking_chat_subscribers.extend(original_blocking)
 
     def test_get_subscriber_counts(self):
         """Test getting subscriber counts."""
         from app.backend.ui_routes import get_subscriber_counts
 
         counts = get_subscriber_counts()
+        assert "events" in counts
         assert "chat" in counts
         assert "status" in counts
         assert "total" in counts
+
+    @pytest.mark.asyncio
+    async def test_generate_chat_events_only_blocks_telegram_when_requested(self):
+        """The /events stream should track passive and blocking subscribers separately."""
+        from app.backend.ui_routes import (
+            _chat_subscribers,
+            _generate_chat_events,
+            _telegram_blocking_chat_subscribers,
+        )
+
+        original_events = _chat_subscribers.copy()
+        original_blocking = _telegram_blocking_chat_subscribers.copy()
+        _chat_subscribers.clear()
+        _telegram_blocking_chat_subscribers.clear()
+
+        passive = _generate_chat_events(block_telegram=False)
+        blocking = _generate_chat_events(block_telegram=True)
+
+        try:
+            passive_connected = await anext(passive)
+            assert '"block_telegram": false' in passive_connected
+            assert len(_chat_subscribers) == 1
+            assert len(_telegram_blocking_chat_subscribers) == 0
+
+            blocking_connected = await anext(blocking)
+            assert '"block_telegram": true' in blocking_connected
+            assert len(_chat_subscribers) == 2
+            assert len(_telegram_blocking_chat_subscribers) == 1
+        finally:
+            await passive.aclose()
+            await blocking.aclose()
+            _chat_subscribers.clear()
+            _chat_subscribers.extend(original_events)
+            _telegram_blocking_chat_subscribers.clear()
+            _telegram_blocking_chat_subscribers.extend(original_blocking)
 
 
 class TestTelegramRoutes:

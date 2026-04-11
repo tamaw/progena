@@ -2927,7 +2927,10 @@ def create_alert(
 
 
 # Event subscribers for SSE - split into chat and status streams
-_chat_subscribers: list[asyncio.Queue] = []  # For IPC events (chat, tasks, alerts)
+_chat_subscribers: list[asyncio.Queue] = []  # All /events subscribers
+_telegram_blocking_chat_subscribers: list[
+    asyncio.Queue
+] = []  # /events subscribers that suppress Telegram forwarding
 _status_subscribers: list[asyncio.Queue] = []  # For state file status updates
 
 # Shutdown event for SSE connections
@@ -2945,25 +2948,27 @@ _active_status_tasks: list[asyncio.Task] = []
 
 
 def has_active_chat_subscribers() -> bool:
-    """Check if there are any active SSE chat subscribers (web UI connected).
+    """Check if any /events subscribers should suppress Telegram forwarding.
 
-    Used by Telegram integration to determine whether to send messages to Telegram.
-    If there are active chat subscribers, messages go to web UI and not Telegram.
+    Only the primary browser chat view should block Telegram to avoid duplicate
+    delivery. Passive consumers like the workspace and logs pages stay connected
+    to the same event stream but should not prevent Telegram delivery.
 
     Returns:
-        True if at least one chat subscriber is connected.
+        True if at least one Telegram-blocking chat subscriber is connected.
     """
-    return len(_chat_subscribers) > 0
+    return len(_telegram_blocking_chat_subscribers) > 0
 
 
 def get_subscriber_counts() -> dict[str, int]:
     """Get counts of all subscriber types.
 
     Returns:
-        Dictionary with chat and status subscriber counts.
+        Dictionary with event, Telegram-blocking chat, and status subscriber counts.
     """
     return {
-        "chat": len(_chat_subscribers),
+        "events": len(_chat_subscribers),
+        "chat": len(_telegram_blocking_chat_subscribers),
         "status": len(_status_subscribers),
         "total": len(_chat_subscribers) + len(_status_subscribers),
     }
@@ -3190,13 +3195,15 @@ async def close_all_sse_connections():
     global _sse_shutdown_event, _active_chat_tasks, _active_status_tasks
 
     # Count all subscriber types
-    chat_count = len(_chat_subscribers)
+    event_count = len(_chat_subscribers)
+    blocking_chat_count = len(_telegram_blocking_chat_subscribers)
     status_count = len(_status_subscribers)
-    total_count = chat_count + status_count
+    total_count = event_count + status_count
 
     logger.info(
-        "Closing SSE connections: %d chat, %d status (total: %d)",
-        chat_count,
+        "Closing SSE connections: %d events (%d Telegram-blocking), %d status (total: %d)",
+        event_count,
+        blocking_chat_count,
         status_count,
         total_count,
     )
@@ -3249,7 +3256,7 @@ async def close_all_sse_connections():
 # ============================================================================
 
 
-async def _generate_chat_events() -> AsyncGenerator[str, None]:
+async def _generate_chat_events(*, block_telegram: bool = False) -> AsyncGenerator[str, None]:
     """Generate SSE events for chat/IPC stream only.
 
     This stream receives:
@@ -3265,6 +3272,8 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
 
     queue: asyncio.Queue = asyncio.Queue()
     _chat_subscribers.append(queue)
+    if block_telegram:
+        _telegram_blocking_chat_subscribers.append(queue)
 
     # Track current task for cancellation during shutdown
     current_task = asyncio.current_task()
@@ -3276,7 +3285,10 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
 
     try:
         # Send initial connection event
-        yield f'event: connected\ndata: {{"stream": "chat", "timestamp": {time.time()}}}\n\n'
+        yield (
+            f"event: connected\ndata: "
+            f"{json.dumps({'stream': 'chat', 'block_telegram': block_telegram, 'timestamp': time.time()})}\n\n"
+        )
 
         while True:
             # Check if shutdown has been requested
@@ -3308,6 +3320,8 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
     finally:
         if queue in _chat_subscribers:
             _chat_subscribers.remove(queue)
+        if queue in _telegram_blocking_chat_subscribers:
+            _telegram_blocking_chat_subscribers.remove(queue)
         if current_task and current_task in _active_chat_tasks:
             _active_chat_tasks.remove(current_task)
 
@@ -3319,7 +3333,7 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
     - status: Full status updates from state files
     - heartbeat: Periodic heartbeats with status
 
-    Does NOT receive chat/IPC events (use /chat for those).
+    Does NOT receive chat/IPC events (use /events for those).
     """
     import json
 
@@ -3378,7 +3392,15 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
 
 
 @router.get("/events")
-async def events_stream():
+async def events_stream(
+    block_telegram: bool = Query(
+        default=False,
+        description=(
+            "When true, this browser subscriber suppresses Telegram forwarding to avoid "
+            "duplicate delivery in the primary web chat UI."
+        ),
+    ),
+):
     """
     Server-Sent Events endpoint for IPC events.
 
@@ -3393,6 +3415,10 @@ async def events_stream():
     This stream does NOT include status/health updates.
     Use /status for continuous health monitoring.
 
+    Set ``block_telegram=true`` only for the primary web chat UI. Passive
+    consumers like the workspace and logs pages should keep the default so
+    Telegram-delivered user messages are not suppressed.
+
     Events are formatted as:
         event: <type>
         data: <json>
@@ -3404,7 +3430,7 @@ async def events_stream():
     - alert: {"id": "...", "type": "...", "title": "...", "message": "...", "urgent": false}
     """
     return StreamingResponse(
-        _generate_chat_events(),
+        _generate_chat_events(block_telegram=block_telegram),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -3459,7 +3485,7 @@ async def status_stream():
 
 def broadcast_chat_event(event_type: str, data: dict):
     """
-    Broadcast an event to /chat SSE subscribers.
+    Broadcast an event to /events SSE subscribers.
 
     Use for IPC-related events like:
     - scheduled_response
@@ -3477,7 +3503,7 @@ def broadcast_chat_event(event_type: str, data: dict):
 
     event = {"type": event_type, "data": json.dumps(data)}
 
-    # Push to /chat subscribers
+    # Push to /events subscribers
     for queue in _chat_subscribers:
         try:
             queue.put_nowait(event)

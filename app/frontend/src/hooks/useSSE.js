@@ -16,14 +16,18 @@ function buildUrl(baseUrl, path) {
  * Hook for connecting to the /events SSE stream.
  * Receives IPC events: scheduled_response, agent_message, agent_notification, alert, task, agent.
  *
+ * The primary browser chat can opt into suppressing Telegram forwarding to avoid
+ * duplicate delivery. Passive views like workspace/logs should leave that disabled.
+ *
  * Uses shared HealthContext for health status - no duplicate health checks.
  */
-export function useEventsSSE(onEvent) {
+export function useEventsSSE(onEvent, options = {}) {
   const { config } = useConfig();
   const { isHealthy } = useHealth();
   const eventSourceRef = useRef(null);
   const isConnectingRef = useRef(false);
   const [isConnected, setIsConnected] = useState(false);
+  const { blockTelegram = false } = options;
 
   const baseUrl = config.api.baseUrl;
 
@@ -41,7 +45,9 @@ export function useEventsSSE(onEvent) {
     }
     isConnectingRef.current = true;
 
-    const url = buildUrl(baseUrl, '/api/ui/events');
+    const url = blockTelegram
+      ? `${buildUrl(baseUrl, '/api/ui/events')}?block_telegram=true`
+      : buildUrl(baseUrl, '/api/ui/events');
     const es = new EventSource(url);
     eventSourceRef.current = es;
 
@@ -78,7 +84,7 @@ export function useEventsSSE(onEvent) {
       es.close();
       eventSourceRef.current = null;
     };
-  }, [baseUrl, onEvent]);
+  }, [baseUrl, blockTelegram, onEvent]);
 
   // Connect when healthy, disconnect when not
   useEffect(() => {
