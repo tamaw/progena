@@ -222,7 +222,7 @@ async def test_send_completion_notification_pushes_agent_message(state_manager) 
 
     llm_client = MagicMock()
     llm_client._push_event = AsyncMock()
-    state_manager.get_current_state = AsyncMock(return_value={"run_id": "run-123"})
+    state_manager.get_current_state = AsyncMock(return_value={"thread_id": "thread-123"})
 
     sent = await send_completion_notification(state_manager, llm_client, record)
 

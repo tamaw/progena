@@ -77,10 +77,10 @@ function AgentNode({ id, data, selected }) {
                       <span className="schedule-row-label">Status</span>
                       <span className={`node-status-badge ${statusClass}`}>{statusClass}</span>
                     </div>
-                    {data.currentRunId && (
+                    {data.currentThreadId && (
                       <div className="schedule-row">
-                        <span className="schedule-row-label">Run ID</span>
-                        <span className="schedule-row-value">{data.currentRunId}</span>
+                        <span className="schedule-row-label">Thread ID</span>
+                        <span className="schedule-row-value">{data.currentThreadId}</span>
                       </div>
                     )}
                   </div>
@@ -117,7 +117,7 @@ function AgentNode({ id, data, selected }) {
         {expanded && (
           <div className="node-actions">
             <button className="node-action-btn primary" onClick={refreshWorkspace}>Refresh</button>
-            {data.currentRunId && (
+            {data.currentThreadId && (
               <button className="node-action-btn">Inspect Run</button>
             )}
           </div>

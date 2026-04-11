@@ -49,7 +49,7 @@ const defaultNodeData = {
     targetAgent: 'progenitor',
     variables: {},
     linkedOutputIds: [],
-    lastRunId: null,
+    lastThreadId: null,
     summaryState: '',
     lastOutput: '',
   }),
@@ -58,7 +58,7 @@ const defaultNodeData = {
     content: '',
     runtimeProfile: '',
     originPromptId: null,
-    lastRunId: null,
+    lastThreadId: null,
     outputRefs: [],
     lastOutput: '',
   }),
@@ -124,7 +124,7 @@ const defaultNodeData = {
   agent: () => ({
     agentId: '',
     agentStatus: 'idle',
-    currentRunId: null,
+    currentThreadId: null,
     summaryState: '',
     logs: [],
     widgetKind: 'agent',
@@ -132,7 +132,7 @@ const defaultNodeData = {
   mcp: () => ({
     agentId: '',
     agentStatus: 'idle',
-    currentRunId: null,
+    currentThreadId: null,
     summaryState: '',
     logs: [],
     widgetKind: 'mcp',
@@ -286,7 +286,11 @@ function mapWidgetToNodeData(widget, existingData = {}) {
     widgetKind: widget.type === 'mcp' ? 'mcp' : 'agent',
     agentId: widget.name || existingData.agentId || '',
     agentStatus: widget.status || existingData.agentStatus || 'idle',
-    currentRunId: widget.data?.current_run_id || widget.current_run_id || existingData.currentRunId || null,
+    currentThreadId:
+      widget.data?.current_thread_id
+      || widget.current_thread_id
+      || existingData.currentThreadId
+      || null,
     transport: widget.transport || widget.data?.transport || existingData.transport || '',
     updatedAt: timestamp,
   };
@@ -612,6 +616,27 @@ function buildPromptInvocation(promptData = {}, connectedTargetAgent = '') {
     'Task:',
     prompt,
   ].join('\n');
+}
+
+function generateWorkspaceThreadId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `thread_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  }
+
+  return `thread_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildExecutionContext(rootWidgetId, invocationSource, existingContext = null) {
+  if (existingContext?.threadId) {
+    return existingContext;
+  }
+
+  return {
+    threadId: generateWorkspaceThreadId(),
+    invocationType: 'automation',
+    invocationSource,
+    rootWidgetId,
+  };
 }
 
 function buildUserMessageInstruction(userData = {}, inputText = '') {
@@ -1420,6 +1445,7 @@ export function WorkspaceProvider({ children }) {
         upstreamOutput: outputText,
         upstreamSourceNodeId: sourceNodeId,
         visitedNodeIds: [...visitedNodeIds],
+        executionContext: options.executionContext,
       }));
     }
 
@@ -1456,6 +1482,11 @@ export function WorkspaceProvider({ children }) {
     }
 
     updateNodeData(nodeId, { status: 'running', summaryState: '' });
+    const executionContext = buildExecutionContext(
+      nodeId,
+      options.executionContext?.invocationSource || 'workspace.run_prompt',
+      options.executionContext,
+    );
 
     try {
       const result = await runAction({
@@ -1465,18 +1496,23 @@ export function WorkspaceProvider({ children }) {
         input: executionInput || undefined,
         role: node.data.role,
         title: node.data.title,
+        thread_id: executionContext.threadId,
+        invocation_type: executionContext.invocationType,
+        invocation_source: executionContext.invocationSource,
+        root_widget_id: executionContext.rootWidgetId,
       });
       const outputText = getActionText(result);
       updateNodeData(nodeId, {
         status: 'success',
         targetAgent: getPromptTargetAgent(node.data, connectedTarget?.agentName),
-        lastRunId: result.run_id || result.request_id || node.data.lastRunId,
+        lastThreadId: result.thread_id || executionContext.threadId || node.data.lastThreadId,
         summaryState: outputText,
         lastOutput: outputText,
       });
       const downstreamResults = await runConnectedTargets(nodeId, {
         visitedNodeIds: [...visitedNodeIds],
         outputText,
+        executionContext,
       });
       return {
         ok: true,
@@ -1515,6 +1551,7 @@ export function WorkspaceProvider({ children }) {
     }
 
     updateNodeData(nodeId, { status: 'running', summaryState: '' });
+    const executionContext = buildExecutionContext(nodeId, 'workspace.generate_prompt');
 
     try {
       const result = await generateAction({
@@ -1524,6 +1561,10 @@ export function WorkspaceProvider({ children }) {
         input: executionInput || undefined,
         role: node.data.role,
         title: node.data.title,
+        thread_id: executionContext.threadId,
+        invocation_type: executionContext.invocationType,
+        invocation_source: executionContext.invocationSource,
+        root_widget_id: executionContext.rootWidgetId,
       });
       const generatedContent = getActionText(result);
       const codeNode = createArtefact('code', {
@@ -1539,6 +1580,7 @@ export function WorkspaceProvider({ children }) {
       updateNodeData(nodeId, {
         status: 'success',
         targetAgent: getPromptTargetAgent(node.data, connectedTarget?.agentName),
+        lastThreadId: result.thread_id || executionContext.threadId || node.data.lastThreadId,
         summaryState: generatedContent ? 'Code generated via backend.' : 'Generation completed.',
         linkedOutputIds: [...(node.data.linkedOutputIds || []), codeNode.id],
       });
@@ -1570,6 +1612,11 @@ export function WorkspaceProvider({ children }) {
     );
 
     updateNodeData(nodeId, { status: 'running' });
+    const executionContext = buildExecutionContext(
+      nodeId,
+      options.executionContext?.invocationSource || 'workspace.run_code',
+      options.executionContext,
+    );
 
     try {
       const result = await runAction({
@@ -1579,17 +1626,22 @@ export function WorkspaceProvider({ children }) {
         code: node.data.content,
         input: executionInput || undefined,
         title: node.data.title,
+        thread_id: executionContext.threadId,
+        invocation_type: executionContext.invocationType,
+        invocation_source: executionContext.invocationSource,
+        root_widget_id: executionContext.rootWidgetId,
       });
       const outputText = getActionText(result);
       updateNodeData(nodeId, {
         status: 'completed',
-        lastRunId: result.run_id || result.request_id || node.data.lastRunId,
+        lastThreadId: result.thread_id || executionContext.threadId || node.data.lastThreadId,
         outputRefs: [outputText].filter(Boolean),
         lastOutput: outputText,
       });
       const downstreamResults = await runConnectedTargets(nodeId, {
         visitedNodeIds: [...visitedNodeIds],
         outputText,
+        executionContext,
       });
       return {
         ok: true,
@@ -1634,12 +1686,21 @@ export function WorkspaceProvider({ children }) {
     }
 
     updateNodeData(nodeId, { status: 'running', summaryState: '' });
+    const executionContext = buildExecutionContext(
+      nodeId,
+      options.executionContext?.invocationSource || 'workspace.run_user',
+      options.executionContext,
+    );
 
     try {
       const result = await runAction({
         widget_id: nodeId,
         prompt: instruction.prompt,
         broadcast_response: false,
+        thread_id: executionContext.threadId,
+        invocation_type: executionContext.invocationType,
+        invocation_source: executionContext.invocationSource,
+        root_widget_id: executionContext.rootWidgetId,
       });
       const responseText = getActionText(result);
       const summary = responseText && responseText !== 'sent'
@@ -1655,6 +1716,7 @@ export function WorkspaceProvider({ children }) {
       const downstreamResults = await runConnectedTargets(nodeId, {
         visitedNodeIds: [...visitedNodeIds],
         outputText: instruction.previewMessage,
+        executionContext,
       });
 
       return {
@@ -1702,22 +1764,33 @@ export function WorkspaceProvider({ children }) {
       options
     );
     updateNodeData(nodeId, { lastRunStatus: 'running' });
+    const executionContext = buildExecutionContext(
+      nodeId,
+      options.executionContext?.invocationSource || 'workspace.run_schedule',
+      options.executionContext,
+    );
     try {
       const result = await runAction({
         widget_id: nodeId,
         action_type: 'run_schedule',
+        thread_id: executionContext.threadId,
+        invocation_type: executionContext.invocationType,
+        invocation_source: executionContext.invocationSource,
+        root_widget_id: executionContext.rootWidgetId,
         input: executionInput || undefined,
       });
       const outputText = getActionText(result);
       updateNodeData(nodeId, {
         lastRunStatus: 'completed',
         lastRunAt: new Date().toISOString(),
+        lastThreadId: result.thread_id || executionContext.threadId || node.data.lastThreadId,
         summaryState: outputText,
         lastOutput: outputText,
       });
       const downstreamResults = await runConnectedTargets(nodeId, {
         visitedNodeIds: [...visitedNodeIds],
         outputText,
+        executionContext,
       });
       return {
         ok: true,
@@ -1762,9 +1835,11 @@ export function WorkspaceProvider({ children }) {
       return { ok: true, triggered: 0, output: eventOutput };
     }
 
+    const executionContext = buildExecutionContext(nodeId, 'workspace.event_chain');
     const results = await runConnectedTargets(nodeId, {
       visitedNodeIds: [nodeId],
       outputText: eventOutput,
+      executionContext,
     });
 
     const successfulCount = results.filter((result) => result?.ok).length;

@@ -204,7 +204,7 @@ class HealthInfo:
 
     status: str
     last_active: str | None
-    run_id: str | None
+    thread_id: str | None
     cycle_count: int
     pid: int | None
 
@@ -213,7 +213,7 @@ class HealthInfo:
         return cls(
             status=data.get("status", "unknown"),
             last_active=data.get("last_active"),
-            run_id=data.get("run_id"),
+            thread_id=data.get("thread_id"),
             cycle_count=data.get("cycle_count", 0),
             pid=data.get("pid"),
         )
@@ -379,7 +379,7 @@ class StateSnapshot:
     schedule: list[ScheduleItem]
     loops: list[LoopInfo]
     cycle_count: int
-    run_id: str | None
+    thread_id: str | None
     messages_count: int
     build: BuildInfo | None = None
     sessions: SessionSummary | None = None
@@ -473,7 +473,9 @@ class StateReader:
         data = self._read_json("health.json")
         if data:
             return HealthInfo.from_dict(data)
-        return HealthInfo(status="unknown", last_active=None, run_id=None, cycle_count=0, pid=None)
+        return HealthInfo(
+            status="unknown", last_active=None, thread_id=None, cycle_count=0, pid=None
+        )
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
         agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
@@ -650,7 +652,7 @@ class StateReader:
             schedule=schedule,
             loops=loops,
             cycle_count=progenitor.get("cycle_count", 0),
-            run_id=progenitor.get("run_id"),
+            thread_id=progenitor.get("thread_id"),
             messages_count=len(progenitor.get("messages", [])),
             build=BuildInfo.from_dict(build),
             sessions=self.get_sessions_summary(),
@@ -1085,7 +1087,7 @@ class StateReader:
                     "status": status,
                     "summary": summary,
                     "transport": agent.transport,
-                    "current_run_id": health.run_id,
+                    "current_thread_id": health.thread_id,
                     "logs": logs,
                     "updated_at": agent.updated_at or health.last_active,
                 }
@@ -1107,7 +1109,7 @@ class StateReader:
                     "transport": tool.transport,
                     "enabled": tool.enabled,
                     "url": tool.url,
-                    "current_run_id": health.run_id,
+                    "current_thread_id": health.thread_id,
                     "logs": logs,
                     "updated_at": health.last_active,
                 }
@@ -1180,7 +1182,7 @@ class StateReader:
             "health": {
                 "status": snapshot.health.status,
                 "last_active": snapshot.health.last_active,
-                "run_id": snapshot.health.run_id,
+                "thread_id": snapshot.health.thread_id,
                 "cycle_count": snapshot.health.cycle_count,
                 "pid": snapshot.health.pid,
                 "is_running": snapshot.health.is_running(),
@@ -1220,7 +1222,7 @@ class StateReader:
             "health": {
                 "status": snapshot.health.status,
                 "last_active": snapshot.health.last_active,
-                "run_id": snapshot.health.run_id,
+                "thread_id": snapshot.health.thread_id,
                 "cycle_count": snapshot.health.cycle_count,
                 "pid": snapshot.health.pid,
                 "is_running": snapshot.health.is_running(),
@@ -1269,7 +1271,7 @@ class StateReader:
                 for loop_item in snapshot.loops
             ],
             "cycle_count": snapshot.cycle_count,
-            "run_id": snapshot.run_id,
+            "thread_id": snapshot.thread_id,
             "messages_count": snapshot.messages_count,
             "sessions": {
                 "total": snapshot.sessions.total if snapshot.sessions else 0,

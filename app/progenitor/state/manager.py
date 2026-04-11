@@ -175,6 +175,8 @@ class StateManager:
                 )
                 schedule_default = legacy_schedule
 
+        conversation_thread_id = utcnow_isoformat()
+
         defaults = {
             # build_state.json - Agent builds ONLY (inner loop)
             # Clean nested structure with phase objects
@@ -251,7 +253,7 @@ class StateManager:
             },
             # current_state.json - Progenitor agent operational state (user session)
             "current_state": {
-                "run_id": utcnow_isoformat(),
+                "thread_id": conversation_thread_id,
                 "cycle_count": 0,
                 "actions_this_cycle": 0,
                 "shutdown_requested": False,

@@ -17,7 +17,7 @@ async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None
 
         def __init__(self):
             self._state = {
-                "run_id": "run_old",
+                "thread_id": "thread_old",
                 "messages": [{"role": "user", "content": "hello"}],
             }
 
@@ -33,7 +33,7 @@ async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None
 
     assert isinstance(result, dict)
     assert result.get("reset") is True
-    assert fake_loop._state["run_id"] != "run_old"
+    assert fake_loop._state["thread_id"] != "thread_old"
     assert fake_loop._state["messages"] == []
 
 
@@ -51,7 +51,7 @@ class _MockConfig:
 
 
 @pytest.mark.asyncio
-async def test_loop_clears_messages_when_run_id_changes_mid_cycle(tmp_path: Path) -> None:
+async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: Path) -> None:
     from app.progenitor.runtime.loop import ProgenitorLoop
 
     state_manager = MagicMock()
@@ -76,13 +76,13 @@ async def test_loop_clears_messages_when_run_id_changes_mid_cycle(tmp_path: Path
                 }
             }
             # Simulate new_conversation being invoked during the cycle.
-            loop._state["run_id"] = "run_new"
+            loop._state["thread_id"] = "thread_new"
             loop._state["messages"] = [{"role": "user", "content": "should_be_cleared"}]
             yield {}
 
     loop.graph = _FakeGraph()
     loop._state = {
-        "run_id": "run_old",
+        "thread_id": "thread_old",
         "cycle_count": 1,
         "actions_this_cycle": 0,
         "shutdown_requested": False,
@@ -94,16 +94,16 @@ async def test_loop_clears_messages_when_run_id_changes_mid_cycle(tmp_path: Path
 
     await loop._run_graph_cycle("ignored", source="user_input")
 
-    assert loop._state["run_id"] == "run_new"
+    assert loop._state["thread_id"] == "thread_new"
     assert loop._state["messages"] == []
 
 
 @pytest.mark.asyncio
-async def test_loop_preserves_persisted_run_id_on_startup(tmp_path: Path) -> None:
+async def test_loop_preserves_persisted_thread_id_on_startup(tmp_path: Path) -> None:
     from app.progenitor.runtime.loop import ProgenitorLoop
 
     state_manager = MagicMock()
-    state_manager.get_current_state = AsyncMock(return_value={"run_id": "run_persisted"})
+    state_manager.get_current_state = AsyncMock(return_value={"thread_id": "thread_persisted"})
     state_manager.get_a2a_tasks = AsyncMock(return_value=[])
     state_manager.save_current_state = AsyncMock()
     state_manager.state_dir = tmp_path
@@ -125,4 +125,4 @@ async def test_loop_preserves_persisted_run_id_on_startup(tmp_path: Path) -> Non
         tracker_cls.return_value = tracker
         await loop.run_forever()
 
-    assert loop._state["run_id"] == "run_persisted"
+    assert loop._state["thread_id"] == "thread_persisted"
