@@ -1138,11 +1138,15 @@ class TestWorkspaceBridgeActions:
         try:
             run_response = client.post(
                 "/api/ui/actions/run",
-                json={"widget_id": "prompt:test", "prompt": "Run this"},
+                json={"widget_id": "prompt:test", "prompt": "Run this", "input": "From upstream"},
             )
             generate_response = client.post(
                 "/api/ui/actions/generate",
-                json={"widget_id": "prompt:test", "prompt": "Generate this"},
+                json={
+                    "widget_id": "prompt:test",
+                    "prompt": "Generate this",
+                    "input": "Generated input",
+                },
             )
 
             assert run_response.status_code == 200
@@ -1150,5 +1154,10 @@ class TestWorkspaceBridgeActions:
             assert run_response.json()["response"] == "bridge-response"
             assert generate_response.json()["response"] == "bridge-response"
             assert mock_client.send_message.await_count == 2
+            sent_messages = [call.args[0] for call in mock_client.send_message.await_args_list]
+            assert sent_messages == [
+                "Widget ID: prompt:test\n\nPrompt:\nRun this\n\nInput:\nFrom upstream",
+                "Widget ID: prompt:test\n\nInput:\nGenerated input\n\nGenerate this",
+            ]
         finally:
             backend_main.client = original_client
