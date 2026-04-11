@@ -30,16 +30,16 @@ class UserCommunicationTools:
     then received by connected clients (e.g., the frontend).
     """
 
-    def __init__(self, event_pusher: EventPusher, run_id: str | None = None):
+    def __init__(self, event_pusher: EventPusher, thread_id: str | None = None):
         """Initialize user communication tools.
 
         Args:
             event_pusher: Async callback to push events to clients.
                          Signature: (event_type, content, metadata) -> None
-            run_id: Current run ID for context.
+            thread_id: Current conversation thread ID for context.
         """
         self._push_event = event_pusher
-        self._run_id = run_id
+        self._thread_id = thread_id
 
     async def say_to_user(
         self,
@@ -64,7 +64,7 @@ class UserCommunicationTools:
         logger.info("say_to_user: %s", message[:100] if len(message) > 100 else message)
 
         event_metadata = {
-            "run_id": self._run_id,
+            "thread_id": self._thread_id,
             "tool": "say_to_user",
             "context": context,
             **(metadata or {}),
@@ -110,7 +110,7 @@ class UserCommunicationTools:
         logger.info("ask_user: %s", question[:100] if len(question) > 100 else question)
 
         event_metadata = {
-            "run_id": self._run_id,
+            "thread_id": self._thread_id,
             "tool": "ask_user",
             "context": context,
             "options": options,
@@ -153,7 +153,7 @@ class UserCommunicationTools:
         logger.info("notify_user [%s]: %s", level, title)
 
         event_metadata = {
-            "run_id": self._run_id,
+            "thread_id": self._thread_id,
             "tool": "notify_user",
             "title": title,
             "level": level,

@@ -15,12 +15,22 @@ from fastapi.testclient import TestClient
 from app.backend.alerts import create_alert
 from app.backend.main import app
 from app.backend.state_reader import StateReader, get_state_reader
+from app.backend.threads import clear_threads
 
 
 @pytest.fixture
 def client():
     """Create a test client."""
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def clear_thread_registry():
+    """Keep the in-memory thread registry isolated between tests."""
+
+    clear_threads()
+    yield
+    clear_threads()
 
 
 @pytest.fixture
@@ -1159,5 +1169,92 @@ class TestWorkspaceBridgeActions:
                 "Widget ID: prompt:test\n\nPrompt:\nRun this\n\nInput:\nFrom upstream",
                 "Widget ID: prompt:test\n\nInput:\nGenerated input\n\nGenerate this",
             ]
+        finally:
+            backend_main.client = original_client
+
+    def test_workspace_actions_generate_distinct_threads_per_execution(self, client):
+        from app.backend import main as backend_main
+
+        original_client = backend_main.client
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value="bridge-response")
+        backend_main.client = mock_client
+        try:
+            first = client.post(
+                "/api/ui/actions/run",
+                json={"widget_id": "prompt:first", "prompt": "Run first"},
+            )
+            second = client.post(
+                "/api/ui/actions/run",
+                json={"widget_id": "prompt:second", "prompt": "Run second"},
+            )
+
+            assert first.status_code == 200
+            assert second.status_code == 200
+            first_thread_id = first.json()["thread_id"]
+            second_thread_id = second.json()["thread_id"]
+            assert first_thread_id
+            assert second_thread_id
+            assert first_thread_id != second_thread_id
+
+            metadata_values = [
+                call.kwargs["metadata"]["thread_id"]
+                for call in mock_client.send_message.await_args_list
+            ]
+            assert metadata_values == [first_thread_id, second_thread_id]
+        finally:
+            backend_main.client = original_client
+
+    def test_workspace_actions_reuse_explicit_thread_and_expose_registry(self, client):
+        from app.backend import main as backend_main
+
+        original_client = backend_main.client
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value="bridge-response")
+        backend_main.client = mock_client
+        try:
+            thread_id = "thread_shared_chain"
+
+            run_response = client.post(
+                "/api/ui/actions/run",
+                json={
+                    "widget_id": "prompt:root",
+                    "root_widget_id": "prompt:root",
+                    "prompt": "Run root",
+                    "thread_id": thread_id,
+                },
+            )
+            generate_response = client.post(
+                "/api/ui/actions/generate",
+                json={
+                    "widget_id": "prompt:child",
+                    "root_widget_id": "prompt:root",
+                    "prompt": "Generate child",
+                    "thread_id": thread_id,
+                },
+            )
+
+            assert run_response.status_code == 200
+            assert generate_response.status_code == 200
+            assert run_response.json()["thread_id"] == thread_id
+            assert generate_response.json()["thread_id"] == thread_id
+
+            metadata_values = [
+                call.kwargs["metadata"]["thread_id"]
+                for call in mock_client.send_message.await_args_list
+            ]
+            assert metadata_values == [thread_id, thread_id]
+
+            threads_response = client.get("/api/ui/threads?invocation_type=automation")
+            assert threads_response.status_code == 200
+            data = threads_response.json()
+            assert data["total"] == 1
+            record = data["items"][0]
+            assert record["thread_id"] == thread_id
+            assert record["invocation_type"] == "automation"
+            assert record["root_widget_id"] == "prompt:root"
+            assert sorted(record["widget_ids"]) == ["prompt:child", "prompt:root"]
+            assert record["status"] == "completed"
+            assert record["last_response"] == "bridge-response"
         finally:
             backend_main.client = original_client

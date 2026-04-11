@@ -270,7 +270,7 @@ class TestStateManager:
                 file_path.unlink()
         state_dir.rmdir()
 
-        await manager.save_current_state({"run_id": "restored", "cycle_count": 1})
+        await manager.save_current_state({"thread_id": "thread-restored", "cycle_count": 1})
 
         assert state_dir.exists()
         assert (state_dir / "current_state.json").exists()
@@ -286,7 +286,7 @@ class TestStateManager:
         await manager.save_build_state(
             {
                 "cycle_count": 5,
-                "run_id": "test-run",
+                "task_id": "test-run",
             }
         )
 
@@ -354,14 +354,14 @@ class TestStateManagerCacheReads:
         await manager.initialize()
 
         # Save state to populate cache
-        await manager.save_current_state({"run_id": "cached-run", "cycle_count": 7})
+        await manager.save_current_state({"thread_id": "thread-cached", "cycle_count": 7})
 
         # Corrupt the file on disk - cache should still return correct data
         with open(state_dir / "current_state.json", "w") as f:
-            f.write('{"run_id": "disk-run", "cycle_count": 0}')
+            f.write('{"thread_id": "thread-disk", "cycle_count": 0}')
 
         state = await manager.get_current_state()
-        assert state["run_id"] == "cached-run"
+        assert state["thread_id"] == "thread-cached"
         assert state["cycle_count"] == 7
 
     @pytest.mark.asyncio

@@ -16,6 +16,7 @@ Controls:
 
 import asyncio
 import contextlib
+import copy
 import inspect
 import json
 import logging
@@ -44,7 +45,7 @@ SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
 class QueuedInput(NamedTuple):
     """Input message bundled with its enqueue time."""
 
-    content: str
+    content: Any
     enqueue_time: float
 
 
@@ -126,11 +127,11 @@ class ProgenitorLoop:
         _current_loop = self
         self.running = True
 
-        run_id = str(uuid.uuid4())
+        boot_thread_id = str(uuid.uuid4())
 
         # Initialize shared state
         self._state = {
-            "run_id": run_id,
+            "thread_id": boot_thread_id,
             "cycle_count": 0,
             "actions_this_cycle": 0,
             "shutdown_requested": False,
@@ -147,21 +148,28 @@ class ProgenitorLoop:
         # Load persisted state (recover from previous run)
         current_state = await self.state_manager.get_current_state()
         self._state.update(current_state)
+        restored_thread_id = str(
+            current_state.get("thread_id") or self._state.get("thread_id") or ""
+        ).strip()
+        if restored_thread_id:
+            self._state["thread_id"] = restored_thread_id
 
         logger.info(
-            "Starting perpetual loop (boot_run_id: %s, conversation_run_id: %s)",
-            run_id,
-            self._state.get("run_id"),
+            "Starting perpetual loop (boot_thread_id: %s, conversation_thread_id: %s)",
+            boot_thread_id,
+            self._state.get("thread_id"),
         )
 
         # Update health immediately on startup
         await self._update_health_file(self._state)
 
         # Push startup event
-        await self._push_event("loop_started", f"Perpetual loop started (run_id: {run_id})")
+        await self._push_event(
+            "loop_started", f"Perpetual loop started (thread_id: {boot_thread_id})"
+        )
 
         # Core-only input handling plus scheduler dispatch loop.
-        input_task = asyncio.create_task(self._input_handler_loop(run_id))
+        input_task = asyncio.create_task(self._input_handler_loop(boot_thread_id))
         scheduler_task: asyncio.Task | None = None
         poller_task: asyncio.Task[None] | None = None
         if self._is_scheduler_enabled():
@@ -223,7 +231,7 @@ class ProgenitorLoop:
         await self._push_event("loop_stopped", "Perpetual loop stopped")
         logger.info("Loop terminated")
 
-    async def _input_handler_loop(self, run_id: str) -> None:
+    async def _input_handler_loop(self, boot_thread_id: str) -> None:
         """Handle user input messages.
 
         This task waits for user input and processes it through the graph.
@@ -234,15 +242,27 @@ class ProgenitorLoop:
 
         while self.running:
             try:
-                # Wait for user input (with short timeout to check running flag)
-                user_input = await self._get_input(timeout=1.0)
+                queued_input = await self._get_input(timeout=1.0)
 
-                if not user_input:
+                if not queued_input:
                     now = time.monotonic()
                     if now - last_health >= float(self.config.runtime.checkpoint_interval_seconds):
                         await self._update_health_file(self._state)
                         last_health = now
                     continue
+
+                user_input, input_metadata = self._extract_input_payload(queued_input)
+                if not user_input:
+                    continue
+
+                input_role = str((input_metadata or {}).get("role") or "").strip() or None
+                if input_role:
+                    input_metadata = {
+                        key: value for key, value in (input_metadata or {}).items() if key != "role"
+                    }
+                requested_thread_id = (
+                    str((input_metadata or {}).get("thread_id") or "").strip() or None
+                )
 
                 logger.info(
                     "Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input
@@ -252,32 +272,42 @@ class ProgenitorLoop:
                     user_input[len(SCHEDULED_INPUT_PREFIX) :].strip() if is_scheduled_input else ""
                 )
 
-                # Acquire lock to run graph cycle
                 async with self._graph_lock:
-                    # Reset backoff on input
                     self._state["current_backoff_seconds"] = runtime.idle_backoff_seconds
                     self._state["idle_cycles"] = 0
 
                     self._state["current_input"] = user_input
+                    self._state["current_input_role"] = input_role
+                    self._state["current_input_metadata"] = input_metadata or None
                     self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
                     self._state["actions_this_cycle"] = 0
                     self._state["input_wait_seconds"] = self._current_input_wait_seconds
                     self._state["pending_messages_in_queue"] = self._current_input_pending_count
 
-                    # Scheduled work is delivered via background events, not a
-                    # live IPC stream consumer. Keep capturing streamed text so
-                    # we can surface it later, but avoid filling the stream
-                    # queue with chunks that no client will ever read.
                     self._streaming_enabled = not is_scheduled_input
                     self._response_was_streamed = False
                     self._stream_final_sent = False
                     self._streamed_response_content = ""
 
+                    is_isolated_thread = bool(
+                        requested_thread_id
+                        and requested_thread_id != str(self._state.get("thread_id") or "")
+                    )
+
                     try:
-                        # Run graph cycle
-                        await self._run_graph_cycle(run_id, source="user_input")
+                        if is_isolated_thread and requested_thread_id:
+                            await self._run_isolated_graph_cycle(
+                                boot_thread_id,
+                                source="user_input",
+                                thread_id=requested_thread_id,
+                            )
+                        else:
+                            await self._run_graph_cycle(
+                                boot_thread_id,
+                                source="user_input",
+                                thread_id=requested_thread_id,
+                            )
                     except Exception as e:
-                        # Prevent clients from hanging on failures: emit a final chunk + mark cycle complete.
                         safe_error = redact_secrets(str(e))
                         logger.error(
                             "Graph cycle failed for user input: %s", safe_error, exc_info=True
@@ -298,8 +328,6 @@ class ProgenitorLoop:
                             self._state, status="error", error=safe_error
                         )
                     finally:
-                        # Background scheduled work is processed through the same input
-                        # path as user messages, so emit an explicit completion event here.
                         if is_scheduled_input:
                             response_text = str(
                                 self._state.get("last_cycle_response") or ""
@@ -324,13 +352,11 @@ class ProgenitorLoop:
                                 },
                             )
 
-                        # Disable streaming mode
                         self._streaming_enabled = False
                         self._response_was_streamed = False
                         self._stream_final_sent = False
                         self._streamed_response_content = ""
 
-                        # Signal cycle complete for IPC synchronization
                         logger.info("Graph cycle complete, signaling")
                         await self._signal_cycle_complete()
 
@@ -341,6 +367,65 @@ class ProgenitorLoop:
                 logger.error("Input handler error: %s", e, exc_info=True)
                 await self._push_event("error", f"Input handler error: {e}")
                 await asyncio.sleep(1.0)
+
+    def _extract_input_payload(self, queued_input: Any) -> tuple[str, dict[str, Any]]:
+        """Normalize queued input into plain content plus optional metadata."""
+
+        if isinstance(queued_input, dict):
+            content = str(queued_input.get("content") or "").strip()
+            metadata = dict(queued_input.get("metadata") or {})
+            return content, metadata
+        return str(queued_input).strip(), {}
+
+    def _snapshot_conversation_state(self) -> dict[str, Any]:
+        """Capture the main-thread conversation state before an isolated execution."""
+
+        keys = (
+            "thread_id",
+            "messages",
+            "attachments",
+            "tool_calls",
+            "current_input",
+            "current_input_role",
+            "current_input_metadata",
+            "pending_response",
+            "last_reasoning_trace",
+        )
+        return {key: copy.deepcopy(self._state.get(key)) for key in keys}
+
+    def _restore_conversation_state(self, snapshot: dict[str, Any]) -> None:
+        """Restore a previously captured main-thread conversation state."""
+
+        for key, value in snapshot.items():
+            self._state[key] = value
+
+    async def _run_isolated_graph_cycle(
+        self,
+        boot_thread_id: str,
+        *,
+        source: str,
+        thread_id: str,
+    ) -> None:
+        """Run a cycle against a temporary thread without overwriting the main thread state."""
+
+        snapshot = self._snapshot_conversation_state()
+        try:
+            self._state["thread_id"] = thread_id
+            self._state["messages"] = []
+            self._state["attachments"] = []
+            self._state["tool_calls"] = []
+            self._state["pending_response"] = None
+            self._state["last_reasoning_trace"] = None
+            await self._run_graph_cycle(
+                boot_thread_id,
+                source=source,
+                thread_id=thread_id,
+                checkpoint_state=False,
+            )
+        finally:
+            self._restore_conversation_state(snapshot)
+            await self._checkpoint_state(self._state)
+            await self._update_health_file(self._state)
 
     def _is_scheduler_enabled(self) -> bool:
         scheduler_cfg = getattr(self.config, "scheduler", None)
@@ -422,20 +507,28 @@ class ProgenitorLoop:
                 logger.error("Scheduler loop error: %s", e, exc_info=True)
                 await asyncio.sleep(poll_seconds)
 
-    async def _run_graph_cycle(self, _run_id: str, source: str = "unknown") -> None:
+    async def _run_graph_cycle(
+        self,
+        _boot_thread_id: str,
+        source: str = "unknown",
+        thread_id: str | None = None,
+        checkpoint_state: bool = True,
+    ) -> None:
         """Run a single graph cycle.
 
         Args:
-            run_id: The run ID for this session.
+            _boot_thread_id: The boot thread ID for this process.
             source: Source of the cycle (e.g., 'user_input', 'background_backlog').
+            thread_id: Optional request-scoped thread override.
+            checkpoint_state: Whether to persist the current in-memory state after the cycle.
         """
         cycle_num = self._state["cycle_count"]
         current_input = self._state.get("current_input") if source == "user_input" else None
 
         # DeepAgent uses the LangGraph checkpointer keyed by thread_id.
-        # Keep thread_id aligned to persisted conversation run_id so context survives restarts.
-        # The new_conversation tool rotates run_id, intentionally starting a fresh thread.
-        thread_id = str(self._state.get("run_id") or "progenitor_main")
+        # Keep the default interactive thread aligned to persisted state, while
+        # allowing workspace automation requests to supply a request-scoped thread override.
+        effective_thread_id = str(thread_id or self._state.get("thread_id") or "progenitor_main")
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
         # Reset per-cycle capture
@@ -453,7 +546,7 @@ class ProgenitorLoop:
 
         try:
             astream_kwargs: dict[str, Any] = {
-                "config": {"configurable": {"thread_id": thread_id}},
+                "config": {"configurable": {"thread_id": effective_thread_id}},
             }
             if self._graph_accepts_stream_mode():
                 astream_kwargs["stream_mode"] = ["messages", "updates"]
@@ -554,16 +647,17 @@ class ProgenitorLoop:
                     json.dumps(self._summarize_message_schema(last_ai_msg), default=str),
                 )
 
-            # If the run_id changed during this cycle (e.g. the LLM invoked the
+            # If the thread_id changed during this cycle (e.g. the LLM invoked the
             # new_conversation system tool), treat it as a hard context reset.
-            if str(self._state.get("run_id") or "") != thread_id:
+            current_thread_id = str(self._state.get("thread_id") or "")
+            if current_thread_id != effective_thread_id:
                 self._state["messages"] = []
                 self._state["attachments"] = []
                 self._state["tool_calls"] = []
 
-            # Checkpoint state after cycle
-            await self._checkpoint_state(self._state)
-            await self._update_health_file(self._state)
+            if checkpoint_state:
+                await self._checkpoint_state(self._state)
+                await self._update_health_file(self._state)
 
         except Exception as e:
             logger.error("Graph cycle %d failed: %s", cycle_num, e, exc_info=True)
@@ -622,7 +716,7 @@ class ProgenitorLoop:
         except TimeoutError:
             return None
 
-    async def _get_input(self, timeout: float) -> str | None:
+    async def _get_input(self, timeout: float) -> Any:
         """Get user input with timeout.
 
         Caps timeout at 30 seconds to ensure health updates happen frequently.
@@ -804,8 +898,9 @@ class ProgenitorLoop:
         Core-only profile: persist current_state.json only (conversation state).
         """
         # Current state checkpoint (progenitor agent state - user session)
+        current_thread_id = state.get("thread_id")
         current_checkpoint = {
-            "run_id": state.get("run_id"),
+            "thread_id": current_thread_id,
             "cycle_count": state.get("cycle_count", 0),
             "actions_this_cycle": state.get("actions_this_cycle", 0),
             "shutdown_requested": state.get("shutdown_requested", False),
@@ -1020,7 +1115,12 @@ class ProgenitorLoop:
             "content_type": type(content).__name__,
         }
 
-    async def enqueue_input(self, message: str, timeout: float | None = 30.0) -> bool:
+    async def enqueue_input(
+        self,
+        message: str,
+        timeout: float | None = 30.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
         """Add a message to the input queue.
 
         Args:
@@ -1033,7 +1133,8 @@ class ProgenitorLoop:
         Raises:
             asyncio.QueueFull: If timeout is 0 and queue is full (non-blocking mode).
         """
-        queued_input = QueuedInput(content=message, enqueue_time=time.monotonic())
+        payload: Any = {"content": message, "metadata": metadata or {}} if metadata else message
+        queued_input = QueuedInput(content=payload, enqueue_time=time.monotonic())
         try:
             if timeout == 0:
                 # Non-blocking mode
@@ -1158,10 +1259,11 @@ class ProgenitorLoop:
             error: Optional error message when status is 'error'.
         """
         health_path = self.state_manager.state_dir / HEALTH_FILE
+        current_thread_id = state.get("thread_id")
         health_data = {
             "status": status,
             "last_active": utcnow_isoformat(),
-            "run_id": state.get("run_id"),
+            "thread_id": current_thread_id,
             "cycle_count": state.get("cycle_count", 0),
             "pid": __import__("os").getpid(),
             "idle_cycles": state.get("idle_cycles", 0),

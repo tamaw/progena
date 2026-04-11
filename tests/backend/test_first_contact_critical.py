@@ -52,7 +52,7 @@ def complete_state_files(tmp_path):
     health_data = {
         "status": "running",
         "last_active": datetime.now(UTC).isoformat(),
-        "run_id": "first-contact-mission-001",
+        "thread_id": "first-contact-mission-001",
         "cycle_count": 1337,
         "pid": 42424,
     }
@@ -233,7 +233,7 @@ class TestCriticalUIDataPipeline:
 
         # Agent info
         assert "pid" in data
-        assert "run_id" in data
+        assert "thread_id" in data
         assert "cycle_count" in data
         assert "uptime_seconds" in data
         assert "version" in data
@@ -261,7 +261,7 @@ class TestCriticalUIDataPipeline:
 
         # Health
         assert snapshot.health.status == "running"
-        assert snapshot.health.run_id == "first-contact-mission-001"
+        assert snapshot.health.thread_id == "first-contact-mission-001"
         assert snapshot.health.cycle_count == 1337
         assert snapshot.health.pid == 42424
         assert snapshot.health.is_running()  # Recent last_active
@@ -457,7 +457,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         health_data = {
             "status": "running",
             "last_active": datetime.now(UTC).isoformat(),
-            "run_id": "partial-run",
+            "thread_id": "partial-run",
             "cycle_count": 10,
             "pid": 1234,
         }
@@ -486,7 +486,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         health_data = {
             "status": "running",
             "last_active": old_time,
-            "run_id": "stale-run",
+            "thread_id": "stale-run",
             "cycle_count": 100,
             "pid": 5678,
         }
@@ -578,7 +578,7 @@ class TestDataIntegrityUnderAllConditions:
         health1 = HealthInfo(
             status="running",
             last_active="2024-01-31T12:00:00+00:00",
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=1,
             pid=1,
         )
@@ -589,7 +589,7 @@ class TestDataIntegrityUnderAllConditions:
         health2 = HealthInfo(
             status="running",
             last_active="2024-01-31T12:00:00Z",
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=1,
             pid=1,
         )
@@ -599,7 +599,7 @@ class TestDataIntegrityUnderAllConditions:
         health3 = HealthInfo(
             status="running",
             last_active=datetime.now(UTC).isoformat(),
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=1,
             pid=1,
         )
