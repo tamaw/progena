@@ -52,6 +52,7 @@ function ScheduleNode({ id, data, selected }) {
         handleClassName="react-flow__resize-control handle"
       />
       <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon schedule">S</div>
@@ -80,7 +81,7 @@ function ScheduleNode({ id, data, selected }) {
               <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
               {resolvedActiveTab === 'output' ? (
                 <div className="node-output-stack">
-                  <div className="node-output-panel">{data.summaryState || 'No output yet.'}</div>
+                  <div className="node-output-panel">{data.lastOutput || data.summaryState || 'No output yet.'}</div>
                   <div className="schedule-info">
                     <div className="schedule-row">
                       <span className="schedule-row-label">Last run</span>
