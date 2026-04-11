@@ -53,23 +53,16 @@ export function HealthProvider({ children }) {
 
         if (!mounted) return;
 
-        if (response.ok) {
-          const data = await response.json();
-          const healthy = data.status === 'healthy' || data.status === 'draining';
-          console.log('[HealthContext] Result:', data.status, '→ healthy:', healthy);
+        const data = await response.json().catch(() => null);
+        const status = data?.status;
+        const healthy = status === 'ok' || status === 'healthy';
 
-          isHealthyRef.current = healthy;
-          setIsHealthy(healthy);
-          setLastCheck(Date.now());
+        console.log('[HealthContext] Result:', status ?? response.status, '→ healthy:', healthy);
 
-          currentInterval = healthy ? 30000 : 5000;
-        } else {
-          console.log('[HealthContext] Failed:', response.status);
-          isHealthyRef.current = false;
-          setIsHealthy(false);
-          setLastCheck(Date.now());
-          currentInterval = 5000;
-        }
+        isHealthyRef.current = healthy;
+        setIsHealthy(healthy);
+        setLastCheck(Date.now());
+        currentInterval = healthy ? 30000 : 5000;
       } catch (e) {
         console.error('[HealthContext] Error:', e.message);
         if (mounted) {

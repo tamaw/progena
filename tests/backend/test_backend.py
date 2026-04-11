@@ -260,7 +260,10 @@ class TestChatServerAPI:
         response = test_client.get("/health")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] in ("healthy", "draining")  # Status values from actual endpoint
+        assert data["status"] in ("ok", "draining")
+        assert "name" in data
+        assert "version" in data
+        assert "uptime_seconds" in data
 
     def test_list_models(self, test_client):
         """Test models listing endpoint."""

@@ -23,7 +23,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
 
 from langchain_core.messages import AIMessageChunk
 
@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
+
+
+class QueuedInput(NamedTuple):
+    """Input message bundled with its enqueue time."""
+
+    content: Any
+    enqueue_time: float
+
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -68,7 +76,9 @@ class ProgenitorLoop:
 
         # Bounded queues to prevent memory exhaustion
         runtime = config.runtime
-        self._input_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_input_queue_size)
+        self._input_queue: asyncio.Queue[QueuedInput] = asyncio.Queue(
+            maxsize=runtime.max_input_queue_size
+        )
         self._output_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_output_queue_size)
         self._stream_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_stream_queue_size)
         # Event queue for pushing background events to clients
@@ -99,6 +109,10 @@ class ProgenitorLoop:
         # Lock to prevent concurrent graph cycles
         self._graph_lock = asyncio.Lock()
 
+        # Timing metadata captured when an input is dequeued.
+        self._current_input_wait_seconds = 0.0
+        self._current_input_pending_count = 0
+
         # Shared state for the loop (protected by _graph_lock)
         self._state: dict[str, Any] = {}
         self._a2a_task_tracker: A2ATaskTracker | None = None
@@ -125,6 +139,8 @@ class ProgenitorLoop:
             "agents": [],
             "current_input_role": None,
             "current_input_metadata": None,
+            "input_wait_seconds": 0.0,
+            "pending_messages_in_queue": 0,
             "idle_cycles": 0,
             "current_backoff_seconds": self.config.runtime.idle_backoff_seconds,
         }
@@ -265,6 +281,8 @@ class ProgenitorLoop:
                     self._state["current_input_metadata"] = input_metadata or None
                     self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
                     self._state["actions_this_cycle"] = 0
+                    self._state["input_wait_seconds"] = self._current_input_wait_seconds
+                    self._state["pending_messages_in_queue"] = self._current_input_pending_count
 
                     self._streaming_enabled = not is_scheduled_input
                     self._response_was_streamed = False
@@ -706,7 +724,12 @@ class ProgenitorLoop:
         # Cap timeout to ensure health gets updated frequently
         effective_timeout = min(timeout, 30.0)
         try:
-            return await asyncio.wait_for(self._input_queue.get(), timeout=effective_timeout)
+            queued_input = await asyncio.wait_for(
+                self._input_queue.get(), timeout=effective_timeout
+            )
+            self._current_input_wait_seconds = time.monotonic() - queued_input.enqueue_time
+            self._current_input_pending_count = self._input_queue.qsize()
+            return queued_input.content
         except TimeoutError:
             return None
 
@@ -1110,17 +1133,18 @@ class ProgenitorLoop:
         Raises:
             asyncio.QueueFull: If timeout is 0 and queue is full (non-blocking mode).
         """
+        payload: Any = {"content": message, "metadata": metadata or {}} if metadata else message
+        queued_input = QueuedInput(content=payload, enqueue_time=time.monotonic())
         try:
-            payload: Any = {"content": message, "metadata": metadata or {}} if metadata else message
             if timeout == 0:
                 # Non-blocking mode
-                self._input_queue.put_nowait(payload)
+                self._input_queue.put_nowait(queued_input)
             elif timeout is None:
                 # Wait forever
-                await self._input_queue.put(payload)
+                await self._input_queue.put(queued_input)
             else:
                 # Wait with timeout
-                await asyncio.wait_for(self._input_queue.put(payload), timeout=timeout)
+                await asyncio.wait_for(self._input_queue.put(queued_input), timeout=timeout)
             return True
         except asyncio.QueueFull:
             logger.warning("Input queue full, message rejected (non-blocking)")
