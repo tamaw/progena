@@ -163,6 +163,7 @@ class IPCProgenitorClient:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Send a message and get the response.
 
@@ -182,7 +183,7 @@ class IPCProgenitorClient:
         # The Progenitor loop primarily emits responses via the streaming queue.
         # To keep the HTTP API usable for stream=false calls, collect the stream.
         chunks: list[str] = []
-        async for chunk in self._ipc_client.send_message_stream(message, request_id):
+        async for chunk in self._ipc_client.send_message_stream(message, request_id, metadata):
             if chunk:
                 chunks.append(chunk)
         return "".join(chunks)
@@ -191,6 +192,7 @@ class IPCProgenitorClient:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response.
 
@@ -207,7 +209,7 @@ class IPCProgenitorClient:
         if not self._ipc_client:
             raise RuntimeError("IPC client not initialized")
 
-        async for chunk in self._ipc_client.send_message_stream(message, request_id):
+        async for chunk in self._ipc_client.send_message_stream(message, request_id, metadata):
             yield chunk
 
     @property

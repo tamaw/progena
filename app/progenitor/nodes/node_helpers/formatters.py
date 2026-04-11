@@ -221,10 +221,12 @@ def _format_self_reflect(result: dict[str, Any]) -> str:
     if files:
         lines.append("\nRoot files:")
         for f in files:
-            desc = f" - {f['description']}" if f.get('description') else ""
+            desc = f" - {f['description']}" if f.get("description") else ""
             lines.append(f"  - {f['name']}{desc}")
 
-    lines.append(f"\nSummary: {result.get('module_count', 0)} modules, {result.get('file_count', 0)} root files")
+    lines.append(
+        f"\nSummary: {result.get('module_count', 0)} modules, {result.get('file_count', 0)} root files"
+    )
 
     tip = result.get("tip")
     if tip:
@@ -271,14 +273,14 @@ def _format_list_schedule(result: dict[str, Any]) -> str:
 
 def _format_new_conversation(result: dict[str, Any]) -> str:
     """Format new_conversation result."""
-    new_run_id = result.get("new_run_id", "unknown")
-    previous_run_id = result.get("previous_run_id", "unknown")
+    new_thread_id = result.get("new_thread_id", "unknown")
+    previous_thread_id = result.get("previous_thread_id", "unknown")
     messages_cleared = result.get("messages_cleared", 0)
 
     lines = ["🔄 New Conversation Started"]
-    lines.append(f"  - New Run ID: {new_run_id}")
-    if previous_run_id and previous_run_id != "unknown":
-        lines.append(f"  - Previous Run ID: {previous_run_id}")
+    lines.append(f"  - New Thread ID: {new_thread_id}")
+    if previous_thread_id and previous_thread_id != "unknown":
+        lines.append(f"  - Previous Thread ID: {previous_thread_id}")
     if messages_cleared:
         lines.append(f"  - Messages cleared: {messages_cleared}")
     lines.append("\nFresh conversation ready. How can I help?")

@@ -25,6 +25,7 @@ from collections.abc import AsyncGenerator, Mapping
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from typing import Literal
 
 from croniter import croniter
 from fastapi import APIRouter, HTTPException, Query
@@ -50,6 +51,13 @@ from .alerts import (
 )
 from .prompt_service import PromptService
 from .state_reader import StateReader, get_state_reader
+from .threads import (
+    ThreadsResponse,
+    complete_thread,
+    fail_thread,
+    list_threads,
+    upsert_thread,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +100,7 @@ class UIStatusResponse(BaseModel):
     rate_limit_hour_limit: int
     # State data
     cycle_count: int = 0
-    run_id: str | None = None
+    thread_id: str | None = None
     messages_count: int = 0
     pid: int | None = None
     last_active: str | None = None
@@ -432,6 +440,10 @@ class ActionRunRequest(BaseModel):
     input: str | None = None
     language: str | None = None
     broadcast_response: bool = True
+    thread_id: str | None = None
+    invocation_type: Literal["user", "automation", "system"] = "automation"
+    invocation_source: str | None = None
+    root_widget_id: str | None = None
 
 
 class ActionGenerateRequest(BaseModel):
@@ -440,6 +452,10 @@ class ActionGenerateRequest(BaseModel):
     widget_id: str | None = None
     prompt: str
     target: str | None = None
+    thread_id: str | None = None
+    invocation_type: Literal["user", "automation", "system"] = "automation"
+    invocation_source: str | None = None
+    root_widget_id: str | None = None
 
 
 class ActionResponse(BaseModel):
@@ -447,7 +463,41 @@ class ActionResponse(BaseModel):
 
     ok: bool
     widget_id: str | None = None
+    thread_id: str | None = None
     response: str
+
+
+def _resolve_action_thread_id(thread_id: str | None) -> str:
+    """Return a workspace execution thread identifier."""
+
+    normalized = str(thread_id or "").strip()
+    if normalized:
+        return normalized
+    return f"thread_{uuid.uuid4().hex[:12]}"
+
+
+def _build_action_metadata(
+    *,
+    thread_id: str,
+    invocation_type: Literal["user", "automation", "system"],
+    invocation_source: str | None,
+    widget_id: str | None,
+    root_widget_id: str | None,
+    action: str,
+) -> dict[str, str]:
+    """Build metadata sent through the backend→Progenitor boundary."""
+
+    metadata = {
+        "thread_id": thread_id,
+        "invocation_type": invocation_type,
+        "invocation_source": invocation_source or action,
+        "action": action,
+    }
+    if widget_id:
+        metadata["widget_id"] = widget_id
+    if root_widget_id:
+        metadata["root_widget_id"] = root_widget_id
+    return metadata
 
 
 class TaskInfo(BaseModel):
@@ -522,7 +572,7 @@ async def get_ui_status_snapshot():
             ),
             # State data
             cycle_count=snapshot.health.cycle_count,
-            run_id=snapshot.health.run_id,
+            thread_id=snapshot.health.thread_id,
             messages_count=len(state_reader.get_progenitor_state().get("messages", [])),
             pid=snapshot.health.pid,
             last_active=snapshot.health.last_active,
@@ -802,7 +852,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Execution",
                     default_expanded=False,
                     fields=[
-                        WidgetFieldSchemaResponse(key="lastRunId", label="Last Run"),
+                        WidgetFieldSchemaResponse(key="lastThreadId", label="Last Thread"),
                         WidgetFieldSchemaResponse(
                             key="outputRefs", label="Outputs", control="list"
                         ),
@@ -1104,7 +1154,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Status",
                     fields=[
                         WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
-                        WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
+                        WidgetFieldSchemaResponse(key="currentThreadId", label="Thread ID"),
                         WidgetFieldSchemaResponse(
                             key="summaryState", label="Summary", control="textarea"
                         ),
@@ -1155,7 +1205,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                             editable=True,
                         ),
                         WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
-                        WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
+                        WidgetFieldSchemaResponse(key="currentThreadId", label="Thread ID"),
                         WidgetFieldSchemaResponse(
                             key="summaryState", label="Summary", control="textarea"
                         ),
@@ -2358,18 +2408,41 @@ async def action_run(body: ActionRunRequest):
     if not segments:
         raise HTTPException(status_code=400, detail="No run payload provided")
 
-    response = await chat_main.client.send_message("\n\n".join(segments))
+    thread_id = _resolve_action_thread_id(body.thread_id)
+    metadata = _build_action_metadata(
+        thread_id=thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source,
+        widget_id=body.widget_id,
+        root_widget_id=body.root_widget_id,
+        action=body.invocation_source or body.language or "workspace.run",
+    )
+    upsert_thread(
+        thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source or "workspace.run",
+        root_widget_id=body.root_widget_id or body.widget_id,
+        widget_id=body.widget_id,
+    )
+
+    try:
+        response = await chat_main.client.send_message("\n\n".join(segments), metadata=metadata)
+    except Exception as exc:
+        fail_thread(thread_id, str(exc), widget_id=body.widget_id)
+        raise
+
+    complete_thread(thread_id, response, widget_id=body.widget_id)
     if body.broadcast_response:
         broadcast_chat_event(
             "agent_message",
             {
                 "content": response,
-                "metadata": {"widget_id": body.widget_id, "action": "run"},
+                "metadata": {"widget_id": body.widget_id, "action": "run", "thread_id": thread_id},
                 "timestamp": time.time(),
             },
         )
     _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
+    return ActionResponse(ok=True, widget_id=body.widget_id, thread_id=thread_id, response=response)
 
 
 @router.post("/actions/generate", response_model=ActionResponse)
@@ -2386,17 +2459,50 @@ async def action_generate(body: ActionGenerateRequest):
     if body.widget_id:
         prompt = f"Widget ID: {body.widget_id}\n\n{prompt}"
 
-    response = await chat_main.client.send_message(prompt)
+    thread_id = _resolve_action_thread_id(body.thread_id)
+    metadata = _build_action_metadata(
+        thread_id=thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source,
+        widget_id=body.widget_id,
+        root_widget_id=body.root_widget_id,
+        action=body.invocation_source or "workspace.generate",
+    )
+    upsert_thread(
+        thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source or "workspace.generate",
+        root_widget_id=body.root_widget_id or body.widget_id,
+        widget_id=body.widget_id,
+    )
+
+    try:
+        response = await chat_main.client.send_message(prompt, metadata=metadata)
+    except Exception as exc:
+        fail_thread(thread_id, str(exc), widget_id=body.widget_id)
+        raise
+
+    complete_thread(thread_id, response, widget_id=body.widget_id)
     broadcast_chat_event(
         "agent_message",
         {
             "content": response,
-            "metadata": {"widget_id": body.widget_id, "action": "generate"},
+            "metadata": {"widget_id": body.widget_id, "action": "generate", "thread_id": thread_id},
             "timestamp": time.time(),
         },
     )
     _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
+    return ActionResponse(ok=True, widget_id=body.widget_id, thread_id=thread_id, response=response)
+
+
+@router.get("/threads", response_model=ThreadsResponse)
+async def get_threads(
+    invocation_type: Literal["user", "automation", "system"] | None = Query(default=None),
+):
+    """List tracked conversation/execution threads, optionally filtered by invocation type."""
+
+    items = list_threads(invocation_type=invocation_type)
+    return ThreadsResponse(items=items, total=len(items))
 
 
 class TelegramStatusResponse(BaseModel):
@@ -2952,7 +3058,7 @@ async def _get_current_status() -> dict:
         "version": getattr(chat_main.config, "api_version", "0.1.0"),
         # State data
         "cycle_count": snapshot.health.cycle_count,  # Use health.cycle_count for accuracy
-        "run_id": snapshot.health.run_id or snapshot.run_id,
+        "thread_id": snapshot.health.thread_id or snapshot.thread_id,
         "messages_count": snapshot.messages_count,
         "pid": snapshot.health.pid,
         "last_active": snapshot.health.last_active,

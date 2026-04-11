@@ -13,9 +13,9 @@ from ..runtime.time_utils import utcnow
 logger = logging.getLogger(__name__)
 
 
-def generate_run_id() -> str:
-    """Generate a unique run ID for task tracking."""
-    return f"run_{uuid.uuid4().hex[:12]}"
+def generate_thread_id() -> str:
+    """Generate a unique thread ID for conversation tracking."""
+    return f"thread_{uuid.uuid4().hex[:12]}"
 
 
 class WorkItemStatus(StrEnum):
@@ -491,7 +491,7 @@ class LoopControlState(TypedDict, total=False):
     actions_this_cycle: int
     shutdown_requested: bool
     last_commit_time: datetime | None
-    run_id: str
+    thread_id: str
     last_validation_result: dict[str, Any] | None
     validation_result_v2: dict[str, Any] | None  # ValidationResultV2 as dict
     last_checkpoint: str | None

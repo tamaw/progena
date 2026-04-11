@@ -180,17 +180,13 @@ class IPCClient:
             )
 
             await asyncio.sleep(delay)
-            self._reconnect_delay = min(
-                self._reconnect_delay * 2, RECONNECT_DELAY_MAX
-            )
+            self._reconnect_delay = min(self._reconnect_delay * 2, RECONNECT_DELAY_MAX)
 
             if await self.connect():
                 logger.info("Reconnected to Progenitor IPC server (attempt %d)", attempt)
                 return
 
-        raise ConnectionError(
-            f"Failed to reconnect after {self.max_reconnect_attempts} attempts"
-        )
+        raise ConnectionError(f"Failed to reconnect after {self.max_reconnect_attempts} attempts")
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats and poll for events."""
@@ -276,8 +272,11 @@ class IPCClient:
                             break
 
                     if self._missed_heartbeats > 0:
-                        logger.debug("Heartbeat issue (miss %d/%d)",
-                                    self._missed_heartbeats, HEARTBEAT_MISS_THRESHOLD)
+                        logger.debug(
+                            "Heartbeat issue (miss %d/%d)",
+                            self._missed_heartbeats,
+                            HEARTBEAT_MISS_THRESHOLD,
+                        )
                         if self._missed_heartbeats >= HEARTBEAT_MISS_THRESHOLD:
                             logger.warning("Too many missed heartbeats, connection may be stale")
                             # Don't disconnect yet - let the next request attempt reconnect
@@ -296,6 +295,7 @@ class IPCClient:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Send a message and get the complete response.
 
@@ -328,7 +328,7 @@ class IPCClient:
                     # Send user message (non-streaming)
                     await write_message(
                         self._writer,
-                        user_message(message, request_id, stream=False),
+                        user_message(message, request_id, stream=False, metadata=metadata),
                     )
 
                     # Read response (may receive events while waiting)
@@ -379,6 +379,7 @@ class IPCClient:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response.
 
@@ -412,7 +413,7 @@ class IPCClient:
                     # Send user message (streaming)
                     await write_message(
                         self._writer,
-                        user_message(message, request_id, stream=True),
+                        user_message(message, request_id, stream=True, metadata=metadata),
                     )
 
                     # Read stream chunks (may receive events while streaming)
@@ -492,8 +493,7 @@ class IPCClient:
             "host": self.host,
             "port": self.port,
             "last_activity_ago": (
-                time.time() - self._last_activity
-                if self._last_activity > 0 else None
+                time.time() - self._last_activity if self._last_activity > 0 else None
             ),
             "reconnect_count": self._reconnect_count,
             "max_reconnect_attempts": self.max_reconnect_attempts,
@@ -524,10 +524,10 @@ class IPCClient:
         """
         try:
             if timeout:
-                return cast(dict[str, Any] | None, await asyncio.wait_for(
-                    self._event_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    dict[str, Any] | None,
+                    await asyncio.wait_for(self._event_queue.get(), timeout=timeout),
+                )
             return cast(dict[str, Any] | None, await self._event_queue.get())
         except TimeoutError:
             return None

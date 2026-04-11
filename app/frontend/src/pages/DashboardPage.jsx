@@ -165,8 +165,8 @@ function DashboardPage() {
             </div>
             <div className="panel-body timeline">
               <div className="timeline-item">
-                <strong>Run ID</strong>
-                <span>{status?.run_id || '--'}</span>
+                <strong>Thread ID</strong>
+                <span>{status?.thread_id || '--'}</span>
               </div>
               <div className="timeline-item">
                 <strong>Last Active</strong>

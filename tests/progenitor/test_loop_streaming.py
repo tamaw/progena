@@ -174,7 +174,7 @@ class TestProgenitorLoopStreaming:
         )
         loop._state = {
             **_make_loop_state(),
-            "run_id": "run-scheduled",
+            "thread_id": "thread-scheduled",
             "current_backoff_seconds": 1.0,
             "idle_cycles": 0,
             "actions_this_cycle": 0,
@@ -202,7 +202,7 @@ class TestProgenitorLoopStreaming:
 
         loop._get_input = _fake_get_input  # type: ignore[method-assign]
 
-        await loop._input_handler_loop("run-scheduled")
+        await loop._input_handler_loop("thread-scheduled")
         chunks = await _collect_stream_chunks(loop)
 
         assert chunks == []

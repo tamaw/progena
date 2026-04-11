@@ -63,6 +63,7 @@ class ServiceProgenitorClient:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict | None = None,
     ) -> str:
         """Send a message and get the response.
 
@@ -79,12 +80,13 @@ class ServiceProgenitorClient:
         if service is None:
             raise RuntimeError("Progenitor service failed to start")
 
-        return await service.handle_message(message, request_id)
+        return await service.handle_message(message, request_id, metadata=metadata)
 
     async def send_message_stream(
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and stream the response.
 
@@ -101,7 +103,7 @@ class ServiceProgenitorClient:
         if service is None:
             raise RuntimeError("Progenitor service failed to start")
 
-        async for chunk in service.handle_message_stream(message, request_id):
+        async for chunk in service.handle_message_stream(message, request_id, metadata=metadata):
             yield chunk
 
     @property
@@ -113,6 +115,7 @@ class ServiceProgenitorClient:
         """Get last heartbeat timestamp (for compatibility)."""
         # In-process service doesn't need heartbeats
         import time
+
         return time.time() if self.is_running else None
 
     def queue_depth(self) -> int:

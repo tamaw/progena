@@ -402,8 +402,8 @@ async def send_completion_notification(
         return False
 
     current_state = await state_manager.get_current_state()
-    run_id = str(current_state.get("run_id") or "").strip() or None
-    tools = UserCommunicationTools(cast(EventPusher, push), run_id=run_id)
+    thread_id = str(current_state.get("thread_id") or "").strip() or None
+    tools = UserCommunicationTools(cast(EventPusher, push), thread_id=thread_id)
     await tools.say_to_user(
         message=build_completion_message(record),
         context="a2a_task_completion",

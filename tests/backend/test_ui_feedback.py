@@ -77,7 +77,7 @@ class TestUIStatusEndpoint:
 
         # State data
         assert "cycle_count" in data
-        assert "run_id" in data
+        assert "thread_id" in data
         assert "messages_count" in data
 
         # Lists for UI
@@ -297,7 +297,7 @@ class TestStateReader:
         health = HealthInfo(
             status="stopped",
             last_active=datetime.now(UTC).isoformat(),
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=10,
             pid=1234,
         )
@@ -307,7 +307,7 @@ class TestStateReader:
         health = HealthInfo(
             status="running",
             last_active=None,
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=10,
             pid=1234,
         )
@@ -317,7 +317,7 @@ class TestStateReader:
         health = HealthInfo(
             status="running",
             last_active=datetime.now(UTC).isoformat(),
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=10,
             pid=1234,
         )
@@ -332,7 +332,7 @@ class TestStateReader:
         health = HealthInfo(
             status="running",
             last_active=old_time,
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=10,
             pid=1234,
         )
@@ -445,7 +445,7 @@ class TestStateReaderFileOperations:
         health_data = {
             "status": "running",
             "last_active": datetime.now(UTC).isoformat(),
-            "run_id": "run-123",
+            "thread_id": "thread-123",
             "cycle_count": 42,
             "pid": 9999,
         }
@@ -455,7 +455,7 @@ class TestStateReaderFileOperations:
         health = reader.get_health()
 
         assert health.status == "running"
-        assert health.run_id == "run-123"
+        assert health.thread_id == "thread-123"
         assert health.cycle_count == 42
         assert health.pid == 9999
 
@@ -534,7 +534,7 @@ class TestStateReaderFileOperations:
         health_data = {
             "status": "running",
             "last_active": datetime.now(UTC).isoformat(),
-            "run_id": "run-123",
+            "thread_id": "thread-123",
             "cycle_count": 42,
             "pid": 9999,
         }

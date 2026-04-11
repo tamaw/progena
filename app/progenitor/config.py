@@ -867,7 +867,7 @@ class JsonLogFormatter(logging.Formatter):
             log_entry["exception"] = self.formatException(record.exc_info)
 
         # Add extra fields if any
-        for key in ("run_id", "cycle_count", "node", "work_item_id"):
+        for key in ("thread_id", "cycle_count", "node", "work_item_id"):
             if hasattr(record, key):
                 log_entry[key] = getattr(record, key)
 

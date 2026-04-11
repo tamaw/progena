@@ -147,6 +147,7 @@ class ProgenitorService:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Handle a user message and return the response.
 
@@ -175,7 +176,7 @@ class ProgenitorService:
         try:
             if self.graph is None:
                 raise RuntimeError("Graph not initialized")
-            thread_id = await self._get_thread_id()
+            thread_id = await self._get_thread_id(metadata=metadata)
             graph_input = self._build_graph_input(message)
             config = {"configurable": {"thread_id": thread_id}}
             result = await self.graph.ainvoke(graph_input, config)
@@ -195,6 +196,7 @@ class ProgenitorService:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """Handle a message and stream the response.
 
@@ -219,7 +221,7 @@ class ProgenitorService:
         try:
             if self.graph is None:
                 raise RuntimeError("Graph not initialized")
-            thread_id = await self._get_thread_id()
+            thread_id = await self._get_thread_id(metadata=metadata)
             graph_input = self._build_graph_input(message)
             config = {"configurable": {"thread_id": thread_id}}
             # Use astream for streaming
@@ -295,13 +297,16 @@ class ProgenitorService:
         """Build the same graph input shape used by ProgenitorLoop."""
         return {"messages": [HumanMessage(content=message)]}
 
-    async def _get_thread_id(self) -> str:
-        """Use the persisted conversation run_id so service mode preserves context."""
+    async def _get_thread_id(self, metadata: dict[str, Any] | None = None) -> str:
+        """Use a request-scoped thread_id when provided, otherwise preserve the main thread."""
+        requested_thread_id = str((metadata or {}).get("thread_id") or "").strip()
+        if requested_thread_id:
+            return requested_thread_id
         if self.state_manager:
             current_state = await self.state_manager.get_current_state()
-            run_id = str(current_state.get("run_id") or "").strip()
-            if run_id:
-                return run_id
+            thread_id = str(current_state.get("thread_id") or "").strip()
+            if thread_id:
+                return thread_id
         return self._session_id or "progenitor_service"
 
     def _extract_response(self, result: Any) -> str:

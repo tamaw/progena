@@ -11,11 +11,11 @@ from app.progenitor.service import ProgenitorService
 class StubStateManager:
     """Minimal state manager stub for service tests."""
 
-    def __init__(self, run_id: str = "run-123"):
-        self.run_id = run_id
+    def __init__(self, thread_id: str = "thread-123"):
+        self.thread_id = thread_id
 
     async def get_current_state(self) -> dict[str, Any]:
-        return {"run_id": self.run_id}
+        return {"thread_id": self.thread_id}
 
 
 class StubGraph:
@@ -38,7 +38,7 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
     service._initialized = True
     service._message_count = 0
     service._session_id = "session-1"
-    service.state_manager = StubStateManager(run_id="persisted-run")
+    service.state_manager = StubStateManager(thread_id="persisted-thread")
     service.graph = StubGraph()
     service.llm_client = None
     service.tool_registry = None
@@ -49,7 +49,7 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
     response = await service.handle_message("Hello", request_id="req-1")
 
     assert response == "assistant reply"
-    assert service.graph.last_config == {"configurable": {"thread_id": "persisted-run"}}
+    assert service.graph.last_config == {"configurable": {"thread_id": "persisted-thread"}}
     assert isinstance(service.graph.last_input, dict)
     messages = service.graph.last_input["messages"]
     assert len(messages) == 1
