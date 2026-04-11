@@ -110,9 +110,7 @@ for line in sys.stdin:
         mock_process.stdin.write = MagicMock()
         mock_process.stdin.drain = AsyncMock()
         mock_process.stdout = MagicMock()
-        mock_process.stdout.readline = AsyncMock(
-            return_value=b'{"content": "test response"}\n'
-        )
+        mock_process.stdout.readline = AsyncMock(return_value=b'{"content": "test response"}\n')
         mock_process.stderr = MagicMock()
         mock_process.stderr.readline = AsyncMock(return_value=b"")
         mock_process.returncode = None
@@ -148,7 +146,10 @@ class TestChatServerAPI:
         response = test_client.get("/health")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] in ("healthy", "draining")  # Status values from actual endpoint
+        assert data["status"] in ("ok", "draining")
+        assert "name" in data
+        assert "version" in data
+        assert "uptime_seconds" in data
 
     def test_list_models(self, test_client):
         """Test models listing endpoint."""
