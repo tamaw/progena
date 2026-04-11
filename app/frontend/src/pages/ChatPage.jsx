@@ -191,7 +191,7 @@ function ChatPage() {
   }, [show]);
 
   // Connect to chat SSE stream
-  useEventsSSE(handleChatEvent);
+  useEventsSSE(handleChatEvent, { blockTelegram: true });
 
   const handleSend = useCallback(async (content) => {
     const userMessage = {

@@ -11,6 +11,7 @@ import pytest
 
 from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
+from app.backend.ipc_client import start_ipc_client_with_retry
 from app.backend.models import (
     ResponsePayload,
     ResponseRequest,
@@ -110,9 +111,7 @@ for line in sys.stdin:
         mock_process.stdin.write = MagicMock()
         mock_process.stdin.drain = AsyncMock()
         mock_process.stdout = MagicMock()
-        mock_process.stdout.readline = AsyncMock(
-            return_value=b'{"content": "test response"}\n'
-        )
+        mock_process.stdout.readline = AsyncMock(return_value=b'{"content": "test response"}\n')
         mock_process.stderr = MagicMock()
         mock_process.stderr.readline = AsyncMock(return_value=b"")
         mock_process.returncode = None
@@ -129,6 +128,23 @@ for line in sys.stdin:
             assert response == "test response"
 
         await client.stop()
+
+
+class TestIPCEventForwardingStartup:
+    """Tests for background IPC event-forwarding startup."""
+
+    @pytest.mark.asyncio
+    async def test_start_ipc_client_with_retry_retries_until_started(self):
+        """Background startup should retry until the IPC client connects."""
+        client = AsyncMock()
+        client.start = AsyncMock(side_effect=[RuntimeError("offline"), None])
+
+        sleep = AsyncMock()
+        with patch("app.backend.ipc_client.asyncio.sleep", sleep):
+            await start_ipc_client_with_retry(client, retry_delay=0.25)
+
+        assert client.start.await_count == 2
+        sleep.assert_awaited_once_with(0.25)
 
 
 class TestChatServerAPI:
