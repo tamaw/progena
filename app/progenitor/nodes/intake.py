@@ -14,6 +14,8 @@ from typing import Any, cast
 from ..runtime.time_utils import utcnow
 from ..state.models import ConversationMessage, ProgenitorState
 
+QUEUE_WAIT_THRESHOLD_SECONDS = 30.0
+
 
 def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the intake node function."""
@@ -50,6 +52,13 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             metadata["type"] = "clarification_response"
             metadata["clarification_context"] = state.get("clarification_context")
 
+        wait_secs = float(state.get("input_wait_seconds") or 0.0)
+        pending_count = int(state.get("pending_messages_in_queue") or 0)
+        if wait_secs >= QUEUE_WAIT_THRESHOLD_SECONDS:
+            metadata["queued_wait_seconds"] = round(wait_secs, 1)
+        if pending_count > 0:
+            metadata["pending_messages_in_queue"] = pending_count
+
         role = state.get("current_input_role") or "user"
 
         message = ConversationMessage(
@@ -70,12 +79,15 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Persist messages to current_state.json
         await state_manager.save_messages(messages)
 
-        return cast(ProgenitorState, {
-            "messages": messages,
-            "current_input": user_input,
-            "current_input_role": None,
-            "current_input_metadata": None,
-            **clarification_updates,
-        })
+        return cast(
+            ProgenitorState,
+            {
+                "messages": messages,
+                "current_input": user_input,
+                "current_input_role": None,
+                "current_input_metadata": None,
+                **clarification_updates,
+            },
+        )
 
     return intake_node
