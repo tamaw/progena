@@ -938,13 +938,19 @@ def _update_activity():
 @app.get("/health")
 async def health_check():
     """
-    Simple health check endpoint.
+    Simple health check endpoint for probes and operators.
 
-    Returns minimal status - use SSE /api/ui/events for detailed status.
+    Returns exactly status, name, version, and uptime_seconds.
+    Use /health/detailed for the full operator payload.
     """
-    return {
-        "status": "healthy" if not shutdown_manager.is_shutting_down else "draining",
+    is_draining = shutdown_manager.is_shutting_down
+    payload = {
+        "status": "draining" if is_draining else "ok",
+        "name": "progenitor",
+        "version": config.api_version,
+        "uptime_seconds": round(time.time() - _server_start_time, 1),
     }
+    return JSONResponse(content=payload, status_code=503 if is_draining else 200)
 
 
 @app.get("/health/detailed")

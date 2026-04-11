@@ -15,6 +15,7 @@ import pytest
 @dataclass
 class MockRuntimeConfig:
     """Mock runtime config for testing."""
+
     idle_backoff_seconds: int = 30
     max_backoff_seconds: int = 300
     backoff_multiplier: float = 1.5
@@ -27,6 +28,7 @@ class MockRuntimeConfig:
 @dataclass
 class MockStorageConfig:
     """Mock storage config for testing."""
+
     worktree_dir: Path | None = None
 
     def __post_init__(self):
@@ -37,6 +39,7 @@ class MockStorageConfig:
 @dataclass
 class MockConfig:
     """Mock config for testing."""
+
     runtime: MockRuntimeConfig | None = None
     storage: MockStorageConfig | None = None
 
@@ -88,6 +91,42 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         result = await self.loop.enqueue_input("test message")
         assert result is True
         assert self.loop._input_queue.qsize() == 1
+
+    async def test_enqueue_input_stores_queued_input_wrapper(self):
+        """Enqueued items should carry both content and enqueue timing."""
+        from app.progenitor.runtime.loop import QueuedInput
+
+        await self.loop.enqueue_input("wrapped message")
+        queued = self.loop._input_queue.get_nowait()
+
+        assert isinstance(queued, QueuedInput)
+        assert queued.content == "wrapped message"
+        assert queued.enqueue_time > 0
+
+    async def test_get_input_records_wait_time(self):
+        """Dequeuing input should capture how long the message waited."""
+        await self.loop.enqueue_input("timed message")
+        await asyncio.sleep(0.05)
+
+        result = await self.loop._get_input(timeout=1.0)
+
+        assert result == "timed message"
+        assert self.loop._current_input_wait_seconds >= 0.0
+        assert self.loop._current_input_wait_seconds < 10.0
+
+    async def test_get_input_records_pending_count(self):
+        """Dequeuing input should record how many messages remain queued."""
+        for index in range(3):
+            await self.loop.enqueue_input(f"message {index}")
+
+        assert await self.loop._get_input(timeout=1.0) == "message 0"
+        assert self.loop._current_input_pending_count == 2
+
+        assert await self.loop._get_input(timeout=1.0) == "message 1"
+        assert self.loop._current_input_pending_count == 1
+
+        assert await self.loop._get_input(timeout=1.0) == "message 2"
+        assert self.loop._current_input_pending_count == 0
 
     async def test_enqueue_input_with_timeout(self):
         """Test enqueue with timeout when queue is full."""
@@ -230,15 +269,17 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         now = utcnow().replace(microsecond=0)
         due_time = (now - timedelta(minutes=1)).isoformat()
-        self.state_manager.get_schedule = AsyncMock(return_value=[
-            {
-                "id": "sched_one_off",
-                "message": "say hello",
-                "cron_expression": f"{now.minute} {now.hour} {now.day} {now.month} *",
-                "created_at": due_time,
-                "last_run": None,
-            }
-        ])
+        self.state_manager.get_schedule = AsyncMock(
+            return_value=[
+                {
+                    "id": "sched_one_off",
+                    "message": "say hello",
+                    "cron_expression": f"{now.minute} {now.hour} {now.day} {now.month} *",
+                    "created_at": due_time,
+                    "last_run": None,
+                }
+            ]
+        )
         self.loop.enqueue_input = AsyncMock(return_value=True)
 
         fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
@@ -255,15 +296,17 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         from app.progenitor.runtime.time_utils import utcnow
 
         due_time = (utcnow() - timedelta(minutes=10)).replace(microsecond=0).isoformat()
-        self.state_manager.get_schedule = AsyncMock(return_value=[
-            {
-                "id": "sched_recurring",
-                "message": "check status",
-                "cron_expression": "*/5 * * * *",
-                "created_at": due_time,
-                "last_run": None,
-            }
-        ])
+        self.state_manager.get_schedule = AsyncMock(
+            return_value=[
+                {
+                    "id": "sched_recurring",
+                    "message": "check status",
+                    "cron_expression": "*/5 * * * *",
+                    "created_at": due_time,
+                    "last_run": None,
+                }
+            ]
+        )
         self.loop.enqueue_input = AsyncMock(return_value=True)
 
         fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
@@ -282,9 +325,7 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
 
         config = MockConfig(
             runtime=MockRuntimeConfig(
-                max_input_queue_size=50,
-                max_output_queue_size=25,
-                max_stream_queue_size=500
+                max_input_queue_size=50, max_output_queue_size=25, max_stream_queue_size=500
             )
         )
 
@@ -319,11 +360,14 @@ class TestConfigQueueSettings(unittest.TestCase):
         """Test loading queue sizes from environment."""
         from app.progenitor.config import RuntimeConfig
 
-        with patch.dict('os.environ', {
-            'PROGENITOR_MAX_INPUT_QUEUE_SIZE': '200',
-            'PROGENITOR_MAX_OUTPUT_QUEUE_SIZE': '150',
-            'PROGENITOR_MAX_STREAM_QUEUE_SIZE': '2000',
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "PROGENITOR_MAX_INPUT_QUEUE_SIZE": "200",
+                "PROGENITOR_MAX_OUTPUT_QUEUE_SIZE": "150",
+                "PROGENITOR_MAX_STREAM_QUEUE_SIZE": "2000",
+            },
+        ):
             config = RuntimeConfig.from_env()
 
             assert config.max_input_queue_size == 200

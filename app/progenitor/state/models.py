@@ -446,6 +446,8 @@ class ConversationState(TypedDict, total=False):
     current_input: str | None
     current_input_role: str | None
     current_input_metadata: dict[str, Any] | None
+    input_wait_seconds: float | None
+    pending_messages_in_queue: int
     pending_response: str | None
     last_reasoning_trace: str | None
     attachments: list[dict[str, Any]]
