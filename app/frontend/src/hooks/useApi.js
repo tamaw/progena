@@ -199,6 +199,19 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const getAlerts = useCallback(async () => {
+    const response = await fetchWithRetry('/api/ui/alerts');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const markAlertsViewed = useCallback(async (alertIds = null) => {
+    const response = await fetchWithRetry('/api/ui/alerts/viewed', {
+      method: 'POST',
+      body: alertIds ? JSON.stringify({ alert_ids: alertIds }) : undefined,
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
   const runAction = useCallback(async (payload) => {
     const response = await fetchWithRetry('actionRun', {
       method: 'POST',
@@ -347,6 +360,8 @@ export function useApi() {
     createEvent,
     getLogs,
     getLogSources,
+    getAlerts,
+    markAlertsViewed,
     runAction,
     generateAction,
     getSession,

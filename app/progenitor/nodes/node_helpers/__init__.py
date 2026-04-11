@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from ...tools.self_reflect_tool import SelfReflectTool
     from ...tools.semantic_registry import SemanticRegistryTool
     from ...tools.shell import ShellCheckTool, ShellExecTool
-    from ...tools.user_communication import UserCommunicationTool
 
 
 def __getattr__(name: str):
@@ -46,7 +45,6 @@ def __getattr__(name: str):
         "RegistryTool": "app.progenitor.tools.registry",
         "ScheduleTool": "app.progenitor.tools.schedule",
         "SemanticRegistryTool": "app.progenitor.tools.semantic_registry",
-        "UserCommunicationTool": "app.progenitor.tools.user_communication",
         "ScheduleTaskTool": "app.progenitor.tools.schedule_task",
         "NewConversationTool": "app.progenitor.tools.new_conversation",
         "ShellCheckTool": "app.progenitor.tools.shell",
@@ -54,6 +52,7 @@ def __getattr__(name: str):
     }
     if name in _abs_map:
         import importlib
+
         mod = importlib.import_module(_abs_map[name])
         return getattr(mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -84,7 +83,6 @@ __all__ = [
     "RegistryTool",
     "ScheduleTool",
     "SemanticRegistryTool",
-    "UserCommunicationTool",
     "ScheduleTaskTool",
     "NewConversationTool",
     "ShellCheckTool",

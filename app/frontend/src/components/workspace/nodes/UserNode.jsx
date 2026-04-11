@@ -7,7 +7,7 @@ import { resolveWidgetDefaultTab } from './widgetTabUtils';
 const MESSAGE_TYPE_OPTIONS = [
   { value: 'say_to_user', label: 'say_to_user' },
   { value: 'notify_user', label: 'notify_user' },
-  { value: 'user_communication', label: 'user_communication' },
+  { value: 'ask_user', label: 'ask_user' },
 ];
 
 const NOTIFICATION_LEVELS = [
@@ -19,8 +19,8 @@ const NOTIFICATION_LEVELS = [
 
 const MESSAGE_TYPE_HINTS = {
   say_to_user: 'Conversational agent message to the user.',
-  notify_user: 'Structured notification with a title, body, and level.',
-  user_communication: 'Generic IPC user message routed through the legacy tool.',
+  notify_user: 'Creates a backend-managed alert and lets Progenitor send the user-facing summary.',
+  ask_user: 'One-way question to the user via the ask_user tool.',
 };
 
 function formatTime(iso) {
@@ -153,7 +153,13 @@ function UserNode({ id, data, selected }) {
                   )}
 
                   <div className="schedule-form-field">
-                    <label>{data.messageType === 'notify_user' ? 'Body' : 'Message'}</label>
+                    <label>
+                      {data.messageType === 'notify_user'
+                        ? 'Body'
+                        : data.messageType === 'ask_user'
+                          ? 'Question'
+                          : 'Message'}
+                    </label>
                     <textarea
                       className="schedule-task-input nodrag nowheel"
                       value={data.message || ''}
@@ -161,7 +167,9 @@ function UserNode({ id, data, selected }) {
                       placeholder={
                         data.messageType === 'notify_user'
                           ? 'Tell the user what changed.'
-                          : 'What should the user see?'
+                          : data.messageType === 'ask_user'
+                            ? 'What should the agent ask the user?'
+                            : 'What should the user see?'
                       }
                     />
                   </div>
@@ -170,7 +178,7 @@ function UserNode({ id, data, selected }) {
                     {MESSAGE_TYPE_HINTS[data.messageType || 'say_to_user']}
                   </div>
                   <div className="event-summary-note">
-                    This widget asks Progenitor to call the selected user communication tool.
+                    This widget asks Progenitor to call the selected tool.
                   </div>
                 </div>
               )}
