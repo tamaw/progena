@@ -14,7 +14,7 @@ function buildUrl(baseUrl, path) {
 
 /**
  * Hook for connecting to the /events SSE stream.
- * Receives IPC events: scheduled_response, agent_message, agent_notification, alert, task, agent.
+ * Receives IPC events: scheduled_response, agent_message, agent_question, alert, task, agent.
  *
  * Uses shared HealthContext for health status - no duplicate health checks.
  */
@@ -67,7 +67,7 @@ export function useEventsSSE(onEvent) {
     es.addEventListener('shutdown', handleEvent('shutdown'));
     es.addEventListener('scheduled_response', handleEvent('scheduled_response'));
     es.addEventListener('agent_message', handleEvent('agent_message'));
-    es.addEventListener('agent_notification', handleEvent('agent_notification'));
+    es.addEventListener('agent_question', handleEvent('agent_question'));
 
     es.onmessage = handleEvent('message');
 
@@ -108,7 +108,7 @@ export function useEventsSSE(onEvent) {
 
 /**
  * Hook for connecting to the /status SSE stream.
- * Receives status/health events: status, heartbeat.
+ * Receives status-side events: status, heartbeat, alerts.
  *
  * Uses shared HealthContext for health status - no duplicate health checks.
  */
@@ -157,6 +157,7 @@ export function useStatusSSE(onEvent) {
     es.addEventListener('connected', handleEvent('connected'));
     es.addEventListener('status', handleEvent('status'));
     es.addEventListener('heartbeat', handleEvent('heartbeat'));
+    es.addEventListener('alerts', handleEvent('alerts'));
     es.addEventListener('widgets', handleEvent('widgets'));
     es.addEventListener('shutdown', handleEvent('shutdown'));
 

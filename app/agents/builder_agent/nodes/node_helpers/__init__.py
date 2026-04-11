@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from ...tools.mcp import MCPTool
     from ...tools.registry import RegistryTool
     from ...tools.shell import ShellCheckTool, ShellExecTool
-    from ...tools.user_communication import UserCommunicationTool
 
 
 def __getattr__(name: str):
@@ -35,10 +34,10 @@ def __getattr__(name: str):
         "GitTool": "app.agents.builder_agent.tools.git",
         "ShellCheckTool": "app.agents.builder_agent.tools.shell",
         "ShellExecTool": "app.agents.builder_agent.tools.shell",
-        "UserCommunicationTool": "app.agents.builder_agent.tools.user_communication",
     }
     if name in _abs_map:
         import importlib
+
         mod = importlib.import_module(_abs_map[name])
         return getattr(mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -65,5 +64,4 @@ __all__ = [
     "GitTool",
     "ShellCheckTool",
     "ShellExecTool",
-    "UserCommunicationTool",
 ]
