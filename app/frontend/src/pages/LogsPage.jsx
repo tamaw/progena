@@ -507,7 +507,7 @@ function LogsPage() {
     }
   }, [loadLogs, queueIncrementalRefresh]);
 
-  useEventsSSE(handleEvent, { blockTelegram: false });
+  useEventsSSE(handleEvent);
 
   const handleScroll = useCallback((event) => {
     const nextScrollTop = event.currentTarget.scrollTop;
