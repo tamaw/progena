@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.backend.alerts import create_alert
 from app.backend.main import app
 from app.backend.state_reader import StateReader, get_state_reader
 
@@ -121,6 +122,24 @@ class TestUIRoutes:
             "kanban.card.moved",
             "kanban.card.deleted",
             "kanban.card.status_changed",
+        }
+
+    def test_widget_schemas_include_user_widget_tools(self, client):
+        response = client.get("/api/ui/widget-schemas")
+
+        assert response.status_code == 200
+        schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
+        user_schema = schemas["user"]
+        identity_section = next(
+            section for section in user_schema["sections"] if section["id"] == "identity"
+        )
+        message_type_field = next(
+            field for field in identity_section["fields"] if field["key"] == "messageType"
+        )
+        assert {option["value"] for option in message_type_field["options"]} == {
+            "say_to_user",
+            "notify_user",
+            "ask_user",
         }
 
     def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
@@ -315,6 +334,52 @@ class TestUIRoutes:
         data = response.json()
         assert "alerts" in data
         assert "total" in data
+        assert "unread" in data
+
+    def test_mark_alerts_viewed_endpoint(self, client):
+        first = create_alert(type="warning", title="Build", message="Build failed")
+        create_alert(type="info", title="Reminder", message="Check logs")
+
+        response = client.post("/api/ui/alerts/viewed", json={"alert_ids": [first.id]})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["updated"] == 1
+        assert data["unread"] == 1
+
+        alerts = client.get("/api/ui/alerts").json()
+        first_alert = next(alert for alert in alerts["alerts"] if alert["id"] == first.id)
+        assert first_alert["viewed"] is True
+
+    def test_dismiss_alert_marks_viewed_without_deleting(self, client):
+        created = create_alert(type="warning", title="Build", message="Build failed")
+
+        response = client.post(f"/api/ui/alerts/{created.id}/dismiss")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data == {"status": "dismissed", "alert_id": created.id}
+
+        alerts = client.get("/api/ui/alerts").json()
+        assert alerts["total"] == 1
+        assert alerts["unread"] == 0
+        assert alerts["alerts"][0]["id"] == created.id
+        assert alerts["alerts"][0]["viewed"] is True
+
+    def test_respond_alert_marks_viewed_without_deleting(self, client):
+        created = create_alert(type="info", title="Heads up", message="Acknowledge me")
+
+        response = client.post(f"/api/ui/alerts/{created.id}/respond")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data == {"status": "responded", "alert_id": created.id, "response": "acknowledged"}
+
+        alerts = client.get("/api/ui/alerts").json()
+        assert alerts["total"] == 1
+        assert alerts["unread"] == 0
+        assert alerts["alerts"][0]["id"] == created.id
+        assert alerts["alerts"][0]["viewed"] is True
 
     def test_dismiss_nonexistent_alert(self, client):
         """Test dismissing a non-existent alert returns 404."""
