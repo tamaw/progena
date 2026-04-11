@@ -66,6 +66,7 @@ function CodeNode({ id, data, selected }) {
         handleClassName="react-flow__resize-control handle"
       />
       <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon code">&lt;&gt;</div>
@@ -86,7 +87,7 @@ function CodeNode({ id, data, selected }) {
               <div className="code-editor-container">
                 {resolvedActiveTab === 'output' ? (
                   <div className="code-output">
-                    {data.outputRefs?.length > 0 ? data.outputRefs.join('\n') : 'No output yet.'}
+                    {data.lastOutput || (data.outputRefs?.length > 0 ? data.outputRefs.join('\n') : 'No output yet.')}
                   </div>
                 ) : (
                   <>

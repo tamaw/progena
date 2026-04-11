@@ -451,6 +451,7 @@ class ActionGenerateRequest(BaseModel):
 
     widget_id: str | None = None
     prompt: str
+    input: str | None = None
     target: str | None = None
     thread_id: str | None = None
     invocation_type: Literal["user", "automation", "system"] = "automation"
@@ -2454,6 +2455,8 @@ async def action_generate(body: ActionGenerateRequest):
         raise HTTPException(status_code=503, detail="Client not initialized")
 
     prompt = body.prompt
+    if body.input:
+        prompt = f"Input:\n{body.input}\n\n{prompt}"
     if body.target:
         prompt = f"Target: {body.target}\n\n{prompt}"
     if body.widget_id:

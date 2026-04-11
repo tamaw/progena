@@ -136,7 +136,7 @@ function PromptNode({ id, data, selected }) {
                 <div className="node-tab-panel">
                   <div className="prompt-response">
                     <div className="prompt-response-label">Latest response</div>
-                    <div className="prompt-response-body">{data.summaryState || 'No output yet.'}</div>
+                    <div className="prompt-response-body">{data.lastOutput || data.summaryState || 'No output yet.'}</div>
                   </div>
                   {data.linkedOutputIds?.length > 0 && (
                     <div className="node-output-meta">
