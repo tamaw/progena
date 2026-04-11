@@ -180,6 +180,14 @@ function ChatPage() {
     if (event.type === 'alert') {
       show(event.data?.type || 'info', event.data?.title || 'Alert', event.data?.message || '');
     }
+
+    if (event.type === 'message_queued') {
+      show(
+        'info',
+        'Message queued',
+        event.data?.content || 'A previous message is still running; your message will be handled next.'
+      );
+    }
   }, [show]);
 
   // Connect to chat SSE stream

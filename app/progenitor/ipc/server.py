@@ -279,6 +279,8 @@ class IPCServer:
             request_id: Request identifier.
             writer: Client stream writer.
         """
+        await self._notify_queued_request(request_id, streaming=False)
+
         # Serialize requests to prevent output queue race conditions.
         # The loop doesn't track request IDs, so we must ensure only
         # one request is processed at a time.
@@ -360,6 +362,8 @@ class IPCServer:
             request_id: Request identifier.
             writer: Client stream writer.
         """
+        await self._notify_queued_request(request_id, streaming=True)
+
         # Serialize requests to prevent output queue race conditions.
         # The loop doesn't track request IDs, so we must ensure only
         # one request is processed at a time.
@@ -430,6 +434,22 @@ class IPCServer:
                     writer,
                     error_message(str(e), error_code="STREAM_ERROR", request_id=request_id),
                 )
+
+    async def _notify_queued_request(self, request_id: str, *, streaming: bool) -> None:
+        """Emit a message_queued event when another request already holds the lock."""
+        if not self._request_lock.locked():
+            return
+
+        logger.info(
+            "%s request %s queued behind active request",
+            "Streaming" if streaming else "Non-streaming",
+            request_id,
+        )
+        await self.loop_runner._push_event(
+            "message_queued",
+            "A previous message is still being processed; this message will run next.",
+            {"request_id": request_id, "streaming": streaming},
+        )
 
     @property
     def is_running(self) -> bool:

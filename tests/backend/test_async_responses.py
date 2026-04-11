@@ -482,9 +482,7 @@ class TestGracefulShutdown:
         if response.status_code == 200:
             data = response.json()
             assert "shutdown" in data
-            assert "is_shutting_down" in data["shutdown"] or "active_requests" in data[
-                "shutdown"
-            ]
+            assert "is_shutting_down" in data["shutdown"] or "active_requests" in data["shutdown"]
 
     def test_readiness_check(self, client):
         """Test readiness endpoint reflects server state."""
@@ -498,6 +496,57 @@ class TestGracefulShutdown:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "alive"
+
+
+class TestHealthEndpointContract:
+    """Tests for the compact root /health contract."""
+
+    def test_health_returns_required_fields(self, client):
+        """GET /health should expose the compact probe payload."""
+        response = client.get("/health")
+
+        assert response.status_code == 200
+        assert set(response.json()) == {
+            "status",
+            "name",
+            "version",
+            "uptime_seconds",
+        }
+
+    def test_health_returns_ok_when_healthy(self, client):
+        """Healthy root probes should use status='ok'."""
+        response = client.get("/health")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    def test_health_returns_draining_and_503_when_shutting_down(self, client, monkeypatch):
+        """Draining root probes should surface both status and HTTP 503."""
+        from app.backend import main as backend_main
+
+        monkeypatch.setattr(backend_main.shutdown_manager, "_shutting_down", True)
+        response = client.get("/health")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "draining"
+        assert data["name"] == "progenitor"
+
+    def test_health_returns_non_negative_uptime(self, client):
+        """Root health probes should report uptime as a number."""
+        response = client.get("/health")
+        data = response.json()
+
+        assert isinstance(data["uptime_seconds"], int | float)
+        assert data["uptime_seconds"] >= 0
+
+    def test_health_uptime_increases_between_calls(self, client):
+        """Uptime should increase on later health calls."""
+        first = client.get("/health").json()["uptime_seconds"]
+        time.sleep(0.12)
+        second = client.get("/health").json()["uptime_seconds"]
+
+        assert second > first
 
 
 class TestRateLimitingAsync:
@@ -604,8 +653,6 @@ class TestStreamChunk:
         assert chunk.metadata["tokens"] == 100
         assert chunk.metadata["model"] == "gpt-4"
         assert chunk.metadata["latency_ms"] == 50
-
-
 
 
 class TestLargeMessageHandling:
