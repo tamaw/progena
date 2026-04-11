@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import { useConfig } from '../context/ConfigContext';
 import { useApi } from '../hooks/useApi';
-import { useEventsSSE } from '../hooks/useSSE';
+import { useStatusSSE } from '../hooks/useSSE';
 
 const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
@@ -492,7 +492,7 @@ function LogsPage() {
     }, 250);
   }, [loadLogs]);
 
-  const handleEvent = useCallback((event) => {
+  const handleStatusEvent = useCallback((event) => {
     if (event?.type === 'connected') {
       if (newestCursorRef.current) {
         queueIncrementalRefresh();
@@ -502,12 +502,12 @@ function LogsPage() {
       return;
     }
 
-    if (['agent', 'agent_message', 'agent_notification', 'scheduled_response', 'task', 'alert', 'shutdown', 'message'].includes(event?.type)) {
+    if (['status', 'heartbeat', 'widgets', 'shutdown', 'message'].includes(event?.type)) {
       queueIncrementalRefresh();
     }
   }, [loadLogs, queueIncrementalRefresh]);
 
-  useEventsSSE(handleEvent);
+  useStatusSSE(handleStatusEvent);
 
   const handleScroll = useCallback((event) => {
     const nextScrollTop = event.currentTarget.scrollTop;
