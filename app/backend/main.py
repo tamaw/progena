@@ -563,7 +563,7 @@ async def lifespan(app: FastAPI):
         """Route IPC events to SSE and/or Telegram.
 
         - Always broadcasts to SSE for any connected web clients
-        - If no blocking web chat clients are connected, also sends to Telegram
+        - If no web clients connected, also sends to Telegram
         - Only forwards certain event types to Telegram (agent_message, scheduled_response)
         """
         # Always broadcast to SSE
