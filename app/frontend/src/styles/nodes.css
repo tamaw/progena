@@ -349,19 +349,22 @@
   border: 1px solid var(--color-border);
   background: transparent;
   color: var(--color-text-muted);
-  cursor: pointer;
+  cursor: help;
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
   transition: all var(--transition-fast);
 }
 
-.node-help-btn:hover,
-.node-help-btn:focus-visible {
+.node-help-control:focus-visible {
+  outline: none;
+}
+
+.node-help-control:hover .node-help-btn,
+.node-help-control:focus-within .node-help-btn {
   background: var(--color-bg-hover);
   border-color: rgba(255, 255, 255, 0.16);
   color: var(--color-text-primary);
-  outline: none;
 }
 
 .node-help-tooltip {
@@ -390,11 +393,6 @@
 .node-help-control:focus-within .node-help-tooltip {
   opacity: 1;
   transform: translateY(0);
-}
-
-.node-help-modal-textarea {
-  min-height: 160px;
-  resize: none;
 }
 
 /* ---- Prompt Node ---- */
