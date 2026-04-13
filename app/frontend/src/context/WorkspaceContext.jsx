@@ -125,16 +125,26 @@ const defaultNodeData = {
     agentId: '',
     agentStatus: 'idle',
     currentThreadId: null,
+    availabilityStatus: null,
     summaryState: '',
     logs: [],
+    inspection: null,
+    isRefreshing: false,
+    refreshError: null,
+    selectedAction: null,
     widgetKind: 'agent',
   }),
   mcp: () => ({
     agentId: '',
     agentStatus: 'idle',
     currentThreadId: null,
+    availabilityStatus: null,
     summaryState: '',
     logs: [],
+    inspection: null,
+    isRefreshing: false,
+    refreshError: null,
+    selectedAction: null,
     widgetKind: 'mcp',
   }),
 };
@@ -191,12 +201,65 @@ function normalizeLogs(logs) {
   if (!Array.isArray(logs)) {
     return [];
   }
-  return logs.map((entry) => ({
-    time: entry.time || entry.timestamp || entry.created_at || entry.last_active || null,
-    message: entry.message || entry.content || entry.summary || entry.description || String(entry),
-    level: entry.level || 'info',
-    source: entry.source || entry.path || 'system',
-  }));
+  return logs
+    .map((entry) => ({
+      time: entry.time || entry.timestamp || entry.created_at || entry.last_active || null,
+      message: entry.message || entry.content || entry.summary || entry.description || String(entry),
+      level: entry.level || 'info',
+      source: entry.source || entry.path || 'system',
+    }))
+    .sort((left, right) => {
+      const leftTime = Number.isFinite(Date.parse(left.time || '')) ? Date.parse(left.time) : -Infinity;
+      const rightTime = Number.isFinite(Date.parse(right.time || '')) ? Date.parse(right.time) : -Infinity;
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+      return String(right.time || '').localeCompare(String(left.time || ''));
+    });
+}
+
+function deriveAvailabilityStatus(status, inspection = null) {
+  const candidate = String(status || '').trim().toLowerCase();
+
+  if (inspection) {
+    return 'online';
+  }
+
+  if (['offline', 'disabled', 'stopped'].includes(candidate)) {
+    return 'offline';
+  }
+
+  if (['failed', 'error'].includes(candidate)) {
+    return 'failed';
+  }
+
+  if (['running', 'busy', 'ready', 'enabled', 'completed', 'success'].includes(candidate)) {
+    return 'online';
+  }
+
+  return 'offline';
+}
+
+function deriveAvailabilityStatusFromRefreshError(runtimeStatus, message) {
+  const candidate = String(runtimeStatus || '').trim().toLowerCase();
+  if (['offline', 'disabled', 'stopped'].includes(candidate)) {
+    return 'offline';
+  }
+
+  const detail = String(message || '').toLowerCase();
+  if (
+    detail.includes('connection refused')
+    || detail.includes('name or service not known')
+    || detail.includes('no route to host')
+    || detail.includes('timed out')
+    || detail.includes('not registered')
+    || detail.includes('not available for live inspection')
+    || detail.includes('returned 404')
+  ) {
+    return 'offline';
+  }
+
+  return 'failed';
 }
 
 function buildEventOutputText(payload, fallback = '') {
@@ -291,6 +354,11 @@ function mapWidgetToNodeData(widget, existingData = {}) {
       || widget.current_thread_id
       || existingData.currentThreadId
       || null,
+    availabilityStatus:
+      widget.data?.availability_status
+      || widget.availability_status
+      || existingData.availabilityStatus
+      || deriveAvailabilityStatus(widget.status, widget.data?.inspection || existingData.inspection),
     transport: widget.transport || widget.data?.transport || existingData.transport || '',
     updatedAt: timestamp,
   };
@@ -761,6 +829,7 @@ export function WorkspaceProvider({ children }) {
     getWorkspace,
     getWidgets,
     getWidgetSchemas,
+    refreshWidget,
     updateWidget,
     createSchedule,
     createEvent,
@@ -850,6 +919,30 @@ export function WorkspaceProvider({ children }) {
   const syncWidgets = useCallback((widgetPayload) => {
     mergeWidgetNodes(widgetPayload);
   }, [mergeWidgetNodes]);
+
+  const mergeSingleWidget = useCallback((widgetPayload, dataUpdates = {}) => {
+    if (!widgetPayload) {
+      return;
+    }
+
+    setNodes((currentNodes) => {
+      const mergedNodes = mergeNodes(currentNodes, [widgetPayload]).map((node) => {
+        if (node.id !== widgetPayload.id) {
+          return node;
+        }
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            ...dataUpdates,
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      });
+      latestNodesRef.current = mergedNodes;
+      return mergedNodes;
+    });
+  }, []);
 
   useEffect(() => {
     refreshWorkspace();
@@ -1411,6 +1504,36 @@ export function WorkspaceProvider({ children }) {
     );
   }, []);
 
+  const refreshWidgetNode = useCallback(async (nodeId) => {
+    const node = latestNodesRef.current.find((entry) => entry.id === nodeId);
+    if (!node || !isAgentNodeType(node.type)) {
+      return { ok: false, error: 'Only agent and MCP widgets support refresh.' };
+    }
+
+    updateNodeData(nodeId, {
+      isRefreshing: true,
+      refreshError: null,
+    });
+
+    try {
+      const refreshedWidget = await refreshWidget(nodeId);
+      mergeSingleWidget(refreshedWidget, {
+        isRefreshing: false,
+        refreshError: null,
+        availabilityStatus: refreshedWidget?.data?.availability_status || 'online',
+      });
+      return { ok: true };
+    } catch (refreshError) {
+      const message = refreshError?.message || String(refreshError);
+      updateNodeData(nodeId, {
+        isRefreshing: false,
+        refreshError: message,
+        availabilityStatus: deriveAvailabilityStatusFromRefreshError(node.data?.agentStatus, message),
+      });
+      return { ok: false, error: message };
+    }
+  }, [mergeSingleWidget, refreshWidget, updateNodeData]);
+
   const runConnectedTargets = useCallback(async (sourceNodeId, options = {}) => {
     const sourceNode = latestNodesRef.current.find((entry) => entry.id === sourceNodeId);
     if (!sourceNode) {
@@ -1929,6 +2052,7 @@ export function WorkspaceProvider({ children }) {
     bringToFront,
     sendToBack,
     toggleExpanded,
+    refreshWidgetNode,
     refreshWorkspace,
     syncWidgets,
     runPromptNode,
@@ -1954,6 +2078,7 @@ export function WorkspaceProvider({ children }) {
     bringToFront,
     sendToBack,
     toggleExpanded,
+    refreshWidgetNode,
     refreshWorkspace,
     syncWidgets,
     runPromptNode,
