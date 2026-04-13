@@ -6,10 +6,18 @@ from .agent_discovery import AgentDiscovery, discover_agents
 from .mcp import MCPClient
 from .registry import ToolRegistry
 from .schedule import (
+    DELETE_SCHEDULE_TOOL_SPEC,
+    PAUSE_SCHEDULE_TOOL_SPEC,
+    RESUME_SCHEDULE_TOOL_SPEC,
     SCHEDULE_TOOL_SPEC,
+    UPDATE_SCHEDULE_TOOL_SPEC,
     add_scheduled_task,
+    delete_scheduled_task,
     list_scheduled_tasks,
+    pause_scheduled_task,
     remove_scheduled_task,
+    resume_scheduled_task,
+    update_scheduled_task,
 )
 from .self_reflect import (
     SELF_REFLECT_TOOL_SPEC,
@@ -56,8 +64,16 @@ __all__ = [
     "discover_agents",
     "add_scheduled_task",
     "remove_scheduled_task",
+    "delete_scheduled_task",
+    "update_scheduled_task",
+    "pause_scheduled_task",
+    "resume_scheduled_task",
     "list_scheduled_tasks",
     "SCHEDULE_TOOL_SPEC",
+    "DELETE_SCHEDULE_TOOL_SPEC",
+    "UPDATE_SCHEDULE_TOOL_SPEC",
+    "PAUSE_SCHEDULE_TOOL_SPEC",
+    "RESUME_SCHEDULE_TOOL_SPEC",
     "SelfReflection",
     "execute_self_reflect",
     "SELF_REFLECT_TOOL_SPEC",

@@ -120,6 +120,192 @@ async def add_scheduled_task(
     ), entry
 
 
+async def delete_scheduled_task(
+    schedule_id: str,
+    state_manager: Any | None = None,
+) -> ScheduleResult:
+    """
+    Delete a scheduled task by ID, removing it permanently from the schedule.
+
+    Unlike ``remove_scheduled_task`` (which only signals intent), this function
+    calls the state manager directly to persist the removal.
+
+    Args:
+        schedule_id: The ID of the task to delete (e.g. "sched_abc123").
+        state_manager: Optional StateManager instance.  When provided the entry
+            is removed from ``schedule.json``; otherwise only the ScheduleResult
+            is returned (useful for pure-logic tests).
+
+    Returns:
+        ScheduleResult with success=True if the entry was found and deleted, or
+        success=False with an explanatory message if the ID was not found.
+    """
+    if not schedule_id or not schedule_id.strip():
+        return ScheduleResult(
+            success=False,
+            message="schedule_id is required",
+        )
+
+    if state_manager is not None:
+        removed = await state_manager.remove_schedule_entry(schedule_id)
+        if not removed:
+            return ScheduleResult(
+                success=False,
+                schedule_id=schedule_id,
+                message=f"Task {schedule_id} not found",
+            )
+        logger.info("Deleted schedule entry %s", schedule_id)
+
+    return ScheduleResult(
+        success=True,
+        schedule_id=schedule_id,
+        message=f"Task {schedule_id} deleted",
+    )
+
+
+async def update_scheduled_task(
+    schedule_id: str,
+    updates: dict[str, Any],
+    state_manager: Any | None = None,
+) -> ScheduleResult:
+    """
+    Update fields of an existing scheduled task.
+
+    Allowed update keys include ``message``, ``cron_expression``,
+    ``scheduled_at``, and ``user_request``.  The ``id``, ``created_at``, and
+    ``last_run`` fields are intentionally excluded from the updates dict to
+    preserve task identity and execution history.
+
+    Args:
+        schedule_id: The ID of the task to update.
+        updates: Dict of fields to update (e.g. ``{"message": "new text",
+            "cron_expression": "0 10 * * *"}``).
+        state_manager: Optional StateManager instance for persistence.
+
+    Returns:
+        ScheduleResult with success=True when the entry was updated, or
+        success=False with an explanatory message on failure.
+    """
+    if not schedule_id or not schedule_id.strip():
+        return ScheduleResult(
+            success=False,
+            message="schedule_id is required",
+        )
+    if not updates:
+        return ScheduleResult(
+            success=False,
+            schedule_id=schedule_id,
+            message="updates dict must not be empty",
+        )
+
+    # Reject protected fields to prevent accidental corruption.
+    protected = {"id", "created_at", "last_run"}
+    bad_keys = protected & set(updates.keys())
+    if bad_keys:
+        return ScheduleResult(
+            success=False,
+            schedule_id=schedule_id,
+            message=f"Cannot update protected field(s): {', '.join(sorted(bad_keys))}",
+        )
+
+    if state_manager is not None:
+        updated = await state_manager.update_schedule_entry(schedule_id, updates)
+        if not updated:
+            return ScheduleResult(
+                success=False,
+                schedule_id=schedule_id,
+                message=f"Task {schedule_id} not found",
+            )
+        logger.info("Updated schedule entry %s: %s", schedule_id, list(updates.keys()))
+
+    return ScheduleResult(
+        success=True,
+        schedule_id=schedule_id,
+        message=f"Task {schedule_id} updated",
+    )
+
+
+async def pause_scheduled_task(
+    schedule_id: str,
+    state_manager: Any | None = None,
+) -> ScheduleResult:
+    """
+    Pause a scheduled task so it is skipped by the scheduler without being deleted.
+
+    Sets ``paused=True`` on the ScheduleEntry.  The entry is preserved in full
+    and can be resumed at any time with ``resume_scheduled_task``.
+
+    Args:
+        schedule_id: The ID of the task to pause.
+        state_manager: Optional StateManager instance for persistence.
+
+    Returns:
+        ScheduleResult with success=True when the entry was paused.
+    """
+    if not schedule_id or not schedule_id.strip():
+        return ScheduleResult(
+            success=False,
+            message="schedule_id is required",
+        )
+
+    if state_manager is not None:
+        updated = await state_manager.update_schedule_entry(schedule_id, {"paused": True})
+        if not updated:
+            return ScheduleResult(
+                success=False,
+                schedule_id=schedule_id,
+                message=f"Task {schedule_id} not found",
+            )
+        logger.info("Paused schedule entry %s", schedule_id)
+
+    return ScheduleResult(
+        success=True,
+        schedule_id=schedule_id,
+        message=f"Task {schedule_id} paused",
+    )
+
+
+async def resume_scheduled_task(
+    schedule_id: str,
+    state_manager: Any | None = None,
+) -> ScheduleResult:
+    """
+    Resume a previously paused scheduled task.
+
+    Sets ``paused=False`` on the ScheduleEntry, re-enabling normal scheduler
+    processing.
+
+    Args:
+        schedule_id: The ID of the task to resume.
+        state_manager: Optional StateManager instance for persistence.
+
+    Returns:
+        ScheduleResult with success=True when the entry was resumed.
+    """
+    if not schedule_id or not schedule_id.strip():
+        return ScheduleResult(
+            success=False,
+            message="schedule_id is required",
+        )
+
+    if state_manager is not None:
+        updated = await state_manager.update_schedule_entry(schedule_id, {"paused": False})
+        if not updated:
+            return ScheduleResult(
+                success=False,
+                schedule_id=schedule_id,
+                message=f"Task {schedule_id} not found",
+            )
+        logger.info("Resumed schedule entry %s", schedule_id)
+
+    return ScheduleResult(
+        success=True,
+        schedule_id=schedule_id,
+        message=f"Task {schedule_id} resumed",
+    )
+
+
+
 async def remove_scheduled_task(schedule_id: str) -> ScheduleResult:
     """
     Remove a scheduled task by ID.
@@ -240,3 +426,123 @@ Example: If user says "say hello world at 9am", create:
         "required": ["user_request", "time_expression", "instruction"],
     },
 }
+
+# ------------------------------------------------------------------
+# Lifecycle tool specs – orchestrator-callable, similar to SCHEDULE_TOOL_SPEC
+# ------------------------------------------------------------------
+
+DELETE_SCHEDULE_TOOL_SPEC = {
+    "name": "delete_schedule",
+    "description": """Permanently delete a scheduled task by its ID.
+
+Use this tool when the user asks to:
+- Remove, cancel, or delete a scheduled task or reminder
+- Stop a recurring task permanently
+
+The tool takes:
+- schedule_id: The ID of the schedule entry to delete (e.g. "sched_abc123").
+  Use list_schedule to find the ID if you don't have it.
+""",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "schedule_id": {
+                "type": "string",
+                "description": "The ID of the scheduled task to delete (e.g. 'sched_abc123')",
+            },
+        },
+        "required": ["schedule_id"],
+    },
+}
+
+UPDATE_SCHEDULE_TOOL_SPEC = {
+    "name": "update_schedule",
+    "description": """Update fields of an existing scheduled task without recreating it.
+
+Use this tool when the user asks to:
+- Change the time or cron expression of an existing schedule
+- Edit the message or description of a scheduled task
+- Reschedule a task to a new time
+
+Updatable fields: ``message``, ``cron_expression``, ``scheduled_at``,
+``user_request``.  Protected fields (``id``, ``created_at``, ``last_run``)
+cannot be changed.
+
+The tool takes:
+- schedule_id: The ID of the task to update.
+- message: (optional) New task message / instruction.
+- cron_expression: (optional) New cron expression for recurring tasks.
+- scheduled_at: (optional) New ISO8601 one-off timestamp.
+""",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "schedule_id": {
+                "type": "string",
+                "description": "The ID of the scheduled task to update (e.g. 'sched_abc123')",
+            },
+            "message": {
+                "type": "string",
+                "description": "New task message or instruction text",
+            },
+            "cron_expression": {
+                "type": "string",
+                "description": "New cron expression for recurring tasks (e.g. '0 9 * * *')",
+            },
+            "scheduled_at": {
+                "type": "string",
+                "description": "New ISO8601 datetime for one-off tasks (e.g. '2026-06-01T09:00:00+00:00')",
+            },
+        },
+        "required": ["schedule_id"],
+    },
+}
+
+PAUSE_SCHEDULE_TOOL_SPEC = {
+    "name": "pause_schedule",
+    "description": """Pause a scheduled task so it is skipped by the scheduler without being deleted.
+
+Use this tool when the user asks to:
+- Temporarily stop or suspend a scheduled reminder or task
+- Pause a recurring task without losing its configuration
+
+The task can be re-enabled later with resume_schedule.
+
+The tool takes:
+- schedule_id: The ID of the task to pause (e.g. "sched_abc123").
+""",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "schedule_id": {
+                "type": "string",
+                "description": "The ID of the scheduled task to pause (e.g. 'sched_abc123')",
+            },
+        },
+        "required": ["schedule_id"],
+    },
+}
+
+RESUME_SCHEDULE_TOOL_SPEC = {
+    "name": "resume_schedule",
+    "description": """Resume a previously paused scheduled task.
+
+Use this tool when the user asks to:
+- Re-enable or resume a paused reminder or task
+- Restart a suspended scheduled task
+
+The tool takes:
+- schedule_id: The ID of the task to resume (e.g. "sched_abc123").
+""",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "schedule_id": {
+                "type": "string",
+                "description": "The ID of the scheduled task to resume (e.g. 'sched_abc123')",
+            },
+        },
+        "required": ["schedule_id"],
+    },
+}
+
