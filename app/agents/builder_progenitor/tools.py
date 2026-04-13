@@ -204,9 +204,18 @@ def create_builder_tools(
     # --- Worktree ---
 
     async def create_worktree(work_item_id: str, branch_name: str | None = None) -> dict[str, str]:
-        """Create an isolated git worktree and return its path and branch."""
+        """Create an isolated git worktree and return its path and branch.
+
+        Runs a preflight update on the new worktree to fetch and safely fast-forward
+        if possible, without overwriting uncommitted changes.
+        """
         path = await rt.worktrees.create_worktree(work_item_id, branch_name=branch_name)
         branch = await rt.current_branch(str(path))
+        # Run preflight on the newly created worktree
+        try:
+            await rt.worktrees.preflight_update(Path(path))
+        except Exception:
+            logger.exception("preflight: update for worktree %s failed", path)
         return {"worktree_path": str(path), "branch": branch}
 
     async def cleanup_worktrees(max_age_hours: int = 24) -> dict[str, Any]:

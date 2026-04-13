@@ -235,3 +235,61 @@ class GitWorktreeManager:
                 json.dump(metadata, f)
         except Exception as e:
             logger.warning("Failed to write worktree metadata: %s", e)
+
+    async def preflight_update(self, cwd: Path | None = None) -> dict[str, Any]:
+        """Perform a safe, logged preflight git update on *cwd* (or repo_path).
+
+        Behaviour:
+        - Always runs `git fetch` (with --prune).
+        - If the working tree has uncommitted changes, logs and skips fast-forward.
+        - If the current branch has an upstream, attempts a fast-forward merge.
+        - Does not overwrite local changes; non-fast-forward situations are skipped.
+
+        Returns a dict describing the action taken.
+        """
+        workdir = Path(cwd) if cwd is not None else self.repo_path
+        logger.info("preflight: fetching remote (cwd=%s)", workdir)
+        fetch = await self._run_git(["fetch", "--prune"], cwd=workdir)
+        if fetch["returncode"] != 0:
+            logger.warning("preflight: git fetch failed: %s", fetch.get("stderr") or fetch.get("stdout"))
+            return {"success": False, "error": fetch.get("stderr") or fetch.get("stdout")}
+
+        status = await self._run_git(["status", "--porcelain"], cwd=workdir)
+        if status.get("stdout", "").strip():
+            logger.info("preflight: local changes present, skipping fast-forward")
+            return {"success": True, "updated": False, "reason": "local_changes"}
+
+        branch_r = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=workdir)
+        if branch_r["returncode"] != 0:
+            logger.info("preflight: could not determine branch, skipping update")
+            return {"success": True, "updated": False, "reason": "no_branch"}
+        branch = branch_r.get("stdout", "").strip()
+
+        # Check for upstream
+        upstream_r = await self._run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=workdir)
+        if upstream_r["returncode"] != 0:
+            logger.info("preflight: no upstream for branch %s, skipping update", branch)
+            return {"success": True, "updated": False, "reason": "no_upstream"}
+
+        local_sha_r = await self._run_git(["rev-parse", "HEAD"], cwd=workdir)
+        remote_sha_r = await self._run_git(["rev-parse", "@{u}"], cwd=workdir)
+        if local_sha_r["returncode"] != 0 or remote_sha_r["returncode"] != 0:
+            logger.info("preflight: could not determine revision SHAs, skipping")
+            return {"success": True, "updated": False, "reason": "no_shas"}
+
+        local_sha = local_sha_r.get("stdout", "").strip()
+        remote_sha = remote_sha_r.get("stdout", "").strip()
+        if local_sha == remote_sha:
+            logger.info("preflight: already up-to-date (%s)", local_sha)
+            return {"success": True, "updated": False, "rev": local_sha}
+
+        # Attempt safe fast-forward
+        merge_r = await self._run_git(["merge", "--ff-only", "@{u}"], cwd=workdir)
+        if merge_r["returncode"] == 0:
+            new_sha_r = await self._run_git(["rev-parse", "HEAD"], cwd=workdir)
+            new_sha = new_sha_r.get("stdout", "").strip()
+            logger.info("preflight: updated to %s", new_sha)
+            return {"success": True, "updated": True, "rev": new_sha}
+        else:
+            logger.info("preflight: remote advanced but not fast-forwardable; skipping")
+            return {"success": True, "updated": False, "reason": "non_ff"}

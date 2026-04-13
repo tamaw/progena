@@ -42,6 +42,7 @@ from pydantic import SecretStr
 
 from .client import BuilderClient, PlannedBuild
 from .config import BuilderConfig, get_config, setup_logging
+from .git import GitWorktreeManager
 from .hooks import HookContext, HookManager, create_default_hook_manager
 from .prompts import load_prompt, load_skill_context
 from .queue_worker import BuilderTaskQueue, _QueuedTask
@@ -293,6 +294,13 @@ class BuilderService:
             p.mkdir(parents=True, exist_ok=True)
 
         log_dir = config.storage.log_dir / agent_log_name
+        # Run preflight repository update before initializing graphs/tools.
+        try:
+            wt_mgr = GitWorktreeManager(worktrees_dir=config.storage.worktree_dir, repo_path=repo_root)
+            await wt_mgr.preflight_update()
+        except Exception:
+            logger.exception("preflight: repository update failed; continuing initialization")
+
         self._graph = _create_graph(
             config,
             repo_root,
