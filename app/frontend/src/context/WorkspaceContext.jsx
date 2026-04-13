@@ -660,14 +660,17 @@ function buildUserMessageInstruction(userData = {}, inputText = '') {
       previewTitle: notificationTitle,
       previewMessage: message,
       prompt: [
-        'Use the `notify_user` tool exactly once with these exact arguments.',
+        'Use the `notify_user` tool exactly once with this exact payload.',
         'Do not call any other tools.',
         'After the tool call, reply with exactly: sent',
         '```json',
         JSON.stringify({
-          title: notificationTitle,
-          body: message,
-          level,
+          request: message,
+          tool_args: {
+            title: notificationTitle,
+            body: message,
+            level,
+          },
         }, null, 2),
         '```',
       ].join('\n'),
@@ -681,11 +684,11 @@ function buildUserMessageInstruction(userData = {}, inputText = '') {
       previewTitle: 'ask_user',
       previewMessage: message,
       prompt: [
-        'Use the `ask_user` tool exactly once with these exact arguments.',
+        'Use the `ask_user` tool exactly once with this exact payload.',
         'Do not call any other tools.',
         'After the tool call, reply with exactly: sent',
         '```json',
-        JSON.stringify({ question: message }, null, 2),
+        JSON.stringify({ request: message }, null, 2),
         '```',
       ].join('\n'),
     };
@@ -697,11 +700,11 @@ function buildUserMessageInstruction(userData = {}, inputText = '') {
     previewTitle: 'say_to_user',
     previewMessage: message,
     prompt: [
-      'Use the `say_to_user` tool exactly once with these exact arguments.',
+      'Use the `say_to_user` tool exactly once with this exact payload.',
       'Do not call any other tools.',
       'After the tool call, reply with exactly: sent',
       '```json',
-      JSON.stringify({ message }, null, 2),
+      JSON.stringify({ request: message }, null, 2),
       '```',
     ].join('\n'),
   };
