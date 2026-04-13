@@ -52,9 +52,7 @@ function CodeNode({ id, data, selected }) {
     }
   }, [id, updateNodeData]);
 
-  const codePreview = data.content
-    ? data.content.split('\n').slice(0, 4).join('\n')
-    : '// empty';
+  const codePreview = data.content || '// empty';
 
   return (
     <>

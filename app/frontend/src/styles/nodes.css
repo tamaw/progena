@@ -146,7 +146,47 @@
 
 .node-body-compact {
   padding: var(--spacing-sm) var(--spacing-md);
-  overflow: hidden;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.node-body-compact:hover,
+.node-body-compact:focus-within {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.node-body-compact::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.node-body-compact::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.node-body-compact::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.node-body-compact:hover::-webkit-scrollbar-thumb,
+.node-body-compact:focus-within::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.node-body-compact::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.node-body-compact > * {
+  min-width: 0;
 }
 
 .node-body-expanded {
@@ -273,10 +313,11 @@
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   line-height: 1.5;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  display: block;
+  overflow: visible;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .prompt-editor {
@@ -392,13 +433,15 @@
 }
 
 .prompt-response-preview {
-  margin-top: var(--spacing-sm);
+  margin-top: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   line-height: 1.5;
   white-space: pre-wrap;
-  max-height: 72px;
-  overflow: hidden;
+  max-height: none;
+  overflow: visible;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Code Node ---- */
@@ -412,13 +455,16 @@
 }
 
 .code-preview {
+  margin: 0;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
-  white-space: pre;
-  overflow: hidden;
+  white-space: pre-wrap;
+  overflow: visible;
   line-height: 1.6;
-  max-height: 60px;
+  max-height: none;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .code-editor-container {
@@ -609,6 +655,10 @@
   gap: 4px;
 }
 
+.node-body-compact .schedule-info {
+  min-height: 0;
+}
+
 .schedule-row {
   display: flex;
   align-items: center;
@@ -616,13 +666,28 @@
   font-size: var(--font-size-xs);
 }
 
+.node-body-compact .schedule-row {
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+}
+
 .schedule-row-label {
   color: var(--color-text-muted);
+}
+
+.node-body-compact .schedule-row-label {
+  flex-shrink: 0;
 }
 
 .schedule-row-value {
   color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
+}
+
+.node-body-compact .schedule-row-value {
+  text-align: right;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .schedule-enabled-badge {
@@ -841,7 +906,10 @@
 .agent-summary {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
-  margin-top: var(--spacing-xs);
+  margin-top: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .agent-logs {
