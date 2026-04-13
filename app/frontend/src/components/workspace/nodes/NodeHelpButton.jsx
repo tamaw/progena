@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react';
+import { memo } from 'react';
 
 function getNodeHelpText(nodeType, widgetKind) {
   if (nodeType === 'agent' && widgetKind === 'mcp') {
@@ -26,68 +26,21 @@ function getNodeHelpText(nodeType, widgetKind) {
 }
 
 function NodeHelpButton({ nodeType, widgetKind, title, alignRight = false }) {
-  const [isOpen, setIsOpen] = useState(false);
   const description = getNodeHelpText(nodeType, widgetKind);
 
-  const openModal = useCallback(() => {
-    setIsOpen(true);
-  }, []);
-
-  const closeModal = useCallback(() => {
-    setIsOpen(false);
-  }, []);
-
   return (
-    <>
-      <div className={`node-help-control nodrag${alignRight ? ' align-right' : ''}`}>
-        <button
-          type="button"
-          className="node-help-btn"
-          onClick={openModal}
-          aria-label={`About ${title || 'this'} card`}
-          aria-haspopup="dialog"
-        >
-          ?
-        </button>
-        <div className="node-help-tooltip" role="tooltip">
-          {description}
-        </div>
+    <div
+      className={`node-help-control nodrag${alignRight ? ' align-right' : ''}`}
+      tabIndex={0}
+      aria-label={`About ${title || 'this'} card`}
+    >
+      <span className="node-help-btn" aria-hidden="true">
+        ?
+      </span>
+      <div className="node-help-tooltip" role="tooltip">
+        {description}
       </div>
-
-      {isOpen && (
-        <div className="sidebar-modal-backdrop" onClick={closeModal} role="presentation">
-          <div
-            className="sidebar-modal"
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label={`About ${title || 'this'} card`}
-          >
-            <div className="sidebar-modal-header">
-              <div>
-                <div className="sidebar-details-title">About this card</div>
-                <div className="sidebar-modal-title">{title || 'Workspace card'}</div>
-              </div>
-              <button
-                className="sidebar-toggle"
-                type="button"
-                onClick={closeModal}
-                aria-label="Close help"
-              >
-                &times;
-              </button>
-            </div>
-            <textarea
-              className="sidebar-modal-textarea node-help-modal-textarea"
-              value={description}
-              readOnly
-              spellCheck={false}
-              autoFocus
-            />
-          </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }
 
