@@ -254,15 +254,21 @@ class Decision(BaseModel):
 
 
 class ScheduleEntry(BaseModel):
-    """A scheduled task entry."""
+    """A scheduled task entry.
+
+    Supports both recurring (cron_expression) and one-off (scheduled_at) tasks.
+    Use ``paused=True`` to suspend execution without deleting the entry.
+    """
     model_config = {"use_enum_values": True}
 
     id: str
     message: str
-    cron_expression: str
+    cron_expression: str | None = None  # Recurring tasks; None for one-off (scheduled_at)
+    scheduled_at: str | None = None  # ISO8601 timestamp for one-off tasks
     last_run: datetime | None = None  # When it last executed
     created_at: datetime = Field(default_factory=utcnow)
     user_request: str | None = None  # The original user request that created this entry
+    paused: bool = False  # When True, the scheduler skips this entry without deleting it
 
 
 class AgentStatus(StrEnum):
