@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function WebFrameNode({ id, data, selected }) {
@@ -166,6 +167,7 @@ function WebFrameNode({ id, data, selected }) {
               <option value="internal_url">Internal URL</option>
               <option value="remote_url">Remote URL</option>
             </select>
+            <NodeHelpButton nodeType="webframe" title={data.title} />
           </div>
         )}
       </div>
