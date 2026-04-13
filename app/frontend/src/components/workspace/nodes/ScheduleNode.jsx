@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function ScheduleNode({ id, data, selected }) {
@@ -202,6 +203,7 @@ function ScheduleNode({ id, data, selected }) {
             ) : (
               <button className="node-action-btn primary" onClick={() => runScheduleNode(id)}>Run Now</button>
             )}
+            <NodeHelpButton nodeType="schedule" title={data.title} alignRight />
           </div>
         )}
       </div>

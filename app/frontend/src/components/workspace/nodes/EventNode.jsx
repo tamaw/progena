@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 const eventTypeOptions = [
@@ -213,6 +214,7 @@ function EventNode({ id, data, selected }) {
                 {isSaving ? 'Saving...' : 'Save Event'}
               </button>
             )}
+            <NodeHelpButton nodeType="event" title={data.title} alignRight />
           </div>
         )}
       </div>
