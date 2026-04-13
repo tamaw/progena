@@ -56,6 +56,21 @@ def test_core_only_tools_present() -> None:
     assert len(names) == len(tools)
 
 
+def test_user_communication_tools_expose_request_contract() -> None:
+    tools = create_deepagent_tools()
+
+    for name in ("say_to_user", "ask_user", "notify_user"):
+        tool = _tool_by_name(tools, name)
+        schema = tool.args_schema.model_json_schema()
+        properties = schema.get("properties", {})
+
+        assert {"request", "tool_args"}.issubset(properties)
+        assert "message" not in properties
+        assert "question" not in properties
+        assert "title" not in properties
+        assert "body" not in properties
+
+
 @pytest.mark.asyncio
 async def test_list_agents_returns_registry_entries() -> None:
     registry = MagicMock()
