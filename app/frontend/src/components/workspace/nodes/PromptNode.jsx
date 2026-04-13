@@ -68,12 +68,8 @@ function PromptNode({ id, data, selected }) {
     toggleExpanded(id);
   }, [id, toggleExpanded]);
 
-  const promptPreview = data.prompt
-    ? data.prompt.substring(0, 120) + (data.prompt.length > 120 ? '...' : '')
-    : 'Empty prompt';
-  const responsePreview = data.summaryState
-    ? data.summaryState.substring(0, 160) + (data.summaryState.length > 160 ? '...' : '')
-    : '';
+  const promptPreview = data.prompt || 'Empty prompt';
+  const responsePreview = data.summaryState || '';
 
   return (
     <>

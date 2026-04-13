@@ -71,9 +71,7 @@ function UserNode({ id, data, selected }) {
     updateNodeData(id, { level: event.target.value });
   }, [id, updateNodeData]);
 
-  const previewText = data.message
-    ? data.message.substring(0, 120) + (data.message.length > 120 ? '...' : '')
-    : 'No message configured';
+  const previewText = data.message || 'No message configured';
 
   return (
     <>
