@@ -62,8 +62,12 @@ export function useApi() {
         const response = await fetch(url, mergedOptions);
 
         if (!response.ok) {
-          const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
-          throw new Error(error.error?.message || `HTTP ${response.status}: ${response.statusText}`);
+          const error = await response.json().catch(() => ({}));
+          const message = error.error?.message
+            || error.detail
+            || error.message
+            || `HTTP ${response.status}: ${response.statusText}`;
+          throw new Error(typeof message === 'string' ? message : JSON.stringify(message));
         }
 
         setConnectionState('connected');
@@ -103,6 +107,13 @@ export function useApi() {
 
   const getWidgetSchemas = useCallback(async () => {
     const response = await fetchWithRetry('widgetSchemas');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const refreshWidget = useCallback(async (widgetId) => {
+    const response = await fetchWithRetry(`/api/ui/widgets/${widgetId}/refresh`, {
+      method: 'POST',
+    });
     return response.json();
   }, [fetchWithRetry]);
 
@@ -347,6 +358,7 @@ export function useApi() {
     getWorkspace,
     getWidgets,
     getWidgetSchemas,
+    refreshWidget,
     getKanbanBoard,
     createKanbanCard,
     updateKanbanCard,

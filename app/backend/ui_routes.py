@@ -25,8 +25,9 @@ from collections.abc import AsyncGenerator, Mapping
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
+import httpx
 from croniter import croniter
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
@@ -1137,7 +1138,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
             default_tab="overview",
             tabs=[
                 WidgetTabSchemaResponse(id="overview", label="Overview"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="capabilities", label="Capabilities"),
+                WidgetTabSchemaResponse(id="skills", label="Skills"),
                 WidgetTabSchemaResponse(id="logs", label="Logs"),
             ],
             sections=[
@@ -1148,6 +1151,8 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                         WidgetFieldSchemaResponse(key="title", label="Title"),
                         WidgetFieldSchemaResponse(key="agentId", label="Agent"),
                         WidgetFieldSchemaResponse(key="transport", label="Transport"),
+                        WidgetFieldSchemaResponse(key="url", label="URL"),
+                        WidgetFieldSchemaResponse(key="agent_card_url", label="Agent Card URL"),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -1169,7 +1174,10 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
             default_tab="overview",
             tabs=[
                 WidgetTabSchemaResponse(id="overview", label="Overview"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="tools", label="Tools"),
+                WidgetTabSchemaResponse(id="resources", label="Resources"),
+                WidgetTabSchemaResponse(id="prompts", label="Prompts"),
                 WidgetTabSchemaResponse(id="logs", label="Logs"),
             ],
             sections=[
@@ -1665,6 +1673,270 @@ def _broadcast_widget_refresh(state_reader) -> None:
     broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
 
 
+def _find_widget_payload(state_reader: StateReader, widget_id: str) -> dict[str, Any]:
+    widget = next(
+        (item for item in state_reader.get_widgets() if str(item.get("id")) == widget_id),
+        None,
+    )
+    if widget is None:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    return dict(widget)
+
+
+def _format_httpx_error(exc: httpx.HTTPError) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = exc.response.text.strip()
+        if len(body) > 240:
+            body = f"{body[:237]}..."
+        return (
+            f"{exc.request.method} {exc.request.url} returned "
+            f"{exc.response.status_code}: {body or exc.response.reason_phrase}"
+        )
+    if isinstance(exc, httpx.RequestError):
+        return f"Request to {exc.request.url} failed: {exc}"
+    return str(exc)
+
+
+def _mcp_jsonrpc_error_detail(error_payload: Any) -> str:
+    if not isinstance(error_payload, Mapping):
+        return str(error_payload or "Unknown MCP error")
+
+    message = str(error_payload.get("message") or "Unknown MCP error").strip()
+    code = error_payload.get("code")
+    data = error_payload.get("data")
+    detail = message
+    if code is not None:
+        detail = f"{detail} (code {code})"
+    if data not in (None, ""):
+        detail = f"{detail}: {data}"
+    return detail
+
+
+def _agent_card_url(agent: Any) -> str | None:
+    direct = str(getattr(agent, "agent_card_url", "") or "").strip()
+    if direct:
+        return direct
+
+    base_url = str(getattr(agent, "url", "") or "").strip().rstrip("/")
+    if not base_url:
+        return None
+    return f"{base_url}/.well-known/agent-card.json"
+
+
+async def _inspect_agent_widget(
+    widget: dict[str, Any], state_reader: StateReader
+) -> dict[str, Any]:
+    agent_name = str(widget.get("name") or "").strip()
+    agents, _ = state_reader.get_registry()
+    agent = next((entry for entry in agents if entry.name == agent_name and entry.enabled), None)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent widget is not registered")
+
+    card_url = _agent_card_url(agent)
+    if card_url is None:
+        raise HTTPException(status_code=400, detail="Agent is missing an agent-card URL")
+
+    headers = {"Accept": "application/json"}
+    if agent.headers:
+        headers.update(agent.headers)
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0), headers=headers) as client:
+            response = await client.get(card_url)
+            response.raise_for_status()
+            payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Agent card returned invalid JSON: {exc}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=_format_httpx_error(exc)) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="Agent card response must be a JSON object")
+
+    default_input_modes = payload.get("defaultInputModes")
+    default_output_modes = payload.get("defaultOutputModes")
+    skills = payload.get("skills")
+    inspection = {
+        "source": "a2a",
+        "refreshed_at": utcnow().isoformat(),
+        "card_url": card_url,
+        "protocol_version": payload.get("protocolVersion"),
+        "preferred_transport": payload.get("preferredTransport"),
+        "default_input_modes": default_input_modes if isinstance(default_input_modes, list) else [],
+        "default_output_modes": default_output_modes
+        if isinstance(default_output_modes, list)
+        else [],
+        "capabilities": payload.get("capabilities"),
+        "skills": skills if isinstance(skills, list) else [],
+        "card": payload,
+    }
+
+    return {
+        **widget,
+        "description": str(payload.get("description") or widget.get("description") or ""),
+        "summary": str(widget.get("summary") or payload.get("description") or ""),
+        "url": str(payload.get("url") or getattr(agent, "url", "") or ""),
+        "agent_card_url": card_url,
+        "version": str(payload.get("version") or getattr(agent, "version", "") or ""),
+        "availability_status": "online",
+        "inspection": inspection,
+    }
+
+
+async def _call_mcp_jsonrpc(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    request_id: int,
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    session_id: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    from app.progenitor.mcp_tool_utils import parse_mcp_jsonrpc_response
+
+    request = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+    }
+    if params is not None:
+        request["params"] = params
+
+    headers = {"mcp-session-id": session_id} if session_id else None
+
+    response = await client.post(endpoint, json=request, headers=headers)
+    response.raise_for_status()
+
+    parsed = parse_mcp_jsonrpc_response(response.text)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{method} returned an invalid JSON-RPC response")
+
+    error_payload = parsed.get("error")
+    if error_payload is not None:
+        raise RuntimeError(_mcp_jsonrpc_error_detail(error_payload))
+
+    result = parsed.get("result", parsed)
+    if not isinstance(result, dict):
+        raise ValueError(f"{method} returned a non-object result")
+
+    next_session_id = response.headers.get("mcp-session-id") or session_id
+    return result, next_session_id
+
+
+def _extract_mcp_collection(payload: dict[str, Any], key: str, method: str) -> list[dict[str, Any]]:
+    entries = payload.get(key)
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError(f"{method} returned '{key}' in an unexpected format")
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+async def _inspect_mcp_widget(widget: dict[str, Any], state_reader: StateReader) -> dict[str, Any]:
+    from app.progenitor.config import load_mcp_servers
+
+    server_name = str(widget.get("name") or "").strip()
+    servers = {server.name: server for server in load_mcp_servers(state_reader.mcp_config_path)}
+    server_config = servers.get(server_name)
+    if server_config is None:
+        _mcp_config_path, mcp_data = _read_mcp_config(state_reader)
+        raw_servers = mcp_data.get("mcpServers")
+        if isinstance(raw_servers, dict) and server_name in raw_servers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"MCP server '{server_name}' is not available for live inspection",
+            )
+        raise HTTPException(status_code=404, detail="MCP widget is not registered")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        **server_config.headers,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), headers=headers) as client:
+            initialize_result, session_id = await _call_mcp_jsonrpc(
+                client,
+                server_config.url,
+                1,
+                "initialize",
+                params={
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "progenitor-ui", "version": "0.0.0"},
+                },
+            )
+            tools_result, session_id = await _call_mcp_jsonrpc(
+                client,
+                server_config.url,
+                2,
+                "tools/list",
+                session_id=session_id,
+            )
+
+            optional_errors: dict[str, str] = {}
+            resources_result: dict[str, Any] = {}
+            prompts_result: dict[str, Any] = {}
+            for method_name, key_name, request_id in (
+                ("resources/list", "resources", 3),
+                ("prompts/list", "prompts", 4),
+            ):
+                try:
+                    result, session_id = await _call_mcp_jsonrpc(
+                        client,
+                        server_config.url,
+                        request_id,
+                        method_name,
+                        session_id=session_id,
+                    )
+                except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                    optional_errors[method_name] = (
+                        _format_httpx_error(exc) if isinstance(exc, httpx.HTTPError) else str(exc)
+                    )
+                    continue
+                if key_name == "resources":
+                    resources_result = result
+                else:
+                    prompts_result = result
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=_format_httpx_error(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"MCP inspection failed for {server_name}: {exc}",
+        ) from exc
+
+    inspection = {
+        "source": "mcp",
+        "refreshed_at": utcnow().isoformat(),
+        "endpoint": server_config.url,
+        "protocol_version": initialize_result.get("protocolVersion"),
+        "server_info": initialize_result.get("serverInfo"),
+        "instructions": initialize_result.get("instructions"),
+        "capabilities": initialize_result.get("capabilities"),
+        "session_id_present": bool(session_id),
+        "tools": _extract_mcp_collection(tools_result, "tools", "tools/list"),
+        "resources": _extract_mcp_collection(resources_result, "resources", "resources/list"),
+        "prompts": _extract_mcp_collection(prompts_result, "prompts", "prompts/list"),
+        "errors": optional_errors,
+    }
+
+    return {
+        **widget,
+        "description": str(widget.get("description") or server_config.description or ""),
+        "summary": str(
+            widget.get("summary") or server_config.description or widget.get("title") or ""
+        ),
+        "url": server_config.url,
+        "availability_status": "online",
+        "inspection": inspection,
+    }
+
+
 def _summarize_event_trigger(event_type: str, payload: dict) -> str:
     label = KANBAN_EVENT_TYPE_LABELS.get(event_type, event_type)
     card = payload.get("card") if isinstance(payload, dict) else None
@@ -1849,6 +2121,26 @@ async def get_widgets():
 async def get_widget_schemas():
     """Get schema metadata for the workspace details pane."""
     return WidgetSchemasResponse(schemas=_widget_schemas())
+
+
+@router.post("/widgets/{widget_id}/refresh", response_model=WidgetResponse)
+async def refresh_widget(widget_id: str):
+    """Refresh agent or MCP widget metadata from its live protocol surface."""
+    state_reader = get_state_reader()
+    widget = _find_widget_payload(state_reader, widget_id)
+
+    if widget.get("type") == "agent":
+        refreshed = await _inspect_agent_widget(widget, state_reader)
+        return _widget_to_response(refreshed)
+
+    if widget.get("type") == "mcp":
+        refreshed = await _inspect_mcp_widget(widget, state_reader)
+        return _widget_to_response(refreshed)
+
+    raise HTTPException(
+        status_code=400,
+        detail="Only agent and MCP widgets support live refresh",
+    )
 
 
 @router.patch("/widgets/{widget_id}", response_model=WidgetResponse)
