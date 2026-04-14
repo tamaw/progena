@@ -152,6 +152,27 @@ class TestUIRoutes:
             "ask_user",
         }
 
+    def test_widget_schemas_include_agent_and_mcp_refresh_tabs(self, client):
+        response = client.get("/api/ui/widget-schemas")
+
+        assert response.status_code == 200
+        schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
+        assert [tab["id"] for tab in schemas["agent"]["tabs"]] == [
+            "overview",
+            "details",
+            "capabilities",
+            "skills",
+            "logs",
+        ]
+        assert [tab["id"] for tab in schemas["mcp"]["tabs"]] == [
+            "overview",
+            "details",
+            "tools",
+            "resources",
+            "prompts",
+            "logs",
+        ]
+
     def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
         prompts_dir = tmp_path / "data" / "prompts"
         (prompts_dir / "builder_agent").mkdir(parents=True)
@@ -939,6 +960,152 @@ class TestWorkspaceBridgeActions:
             state_reader.state_dir = original_state_dir
             state_reader.config_dir = original_config_dir
             state_reader.invalidate()
+
+    def test_refresh_agent_widget_returns_live_card_details(self, client, tmp_path, monkeypatch):
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
+        sessions_dir = tmp_path / "data" / "sessions"
+        logs_dir = tmp_path / "logs"
+        state_dir.mkdir(parents=True)
+        config_dir.mkdir(parents=True)
+        sessions_dir.mkdir(parents=True)
+        logs_dir.mkdir(parents=True)
+        (state_dir / "health.json").write_text(
+            json.dumps({"status": "running", "thread_id": "run_123"}),
+            encoding="utf-8",
+        )
+        (config_dir / "agents.json").write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {
+                            "name": "observe_agent",
+                            "kind": "a2a_agent",
+                            "version": "0.2.0",
+                            "description": "Observe health",
+                            "entrypoint": "python observe.py",
+                            "transport": "http",
+                            "enabled": True,
+                            "url": "http://example.test/observe",
+                            "created_at": "2026-04-01T00:00:00Z",
+                            "updated_at": "2026-04-01T00:00:00Z",
+                            "status": "running",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (config_dir / "mcp.json").write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+
+        state_reader = StateReader(
+            state_dir=state_dir,
+            config_dir=config_dir,
+            sessions_dir=sessions_dir,
+            logs_dir=logs_dir,
+        )
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        async def fake_inspect_agent_widget(widget, reader):
+            assert widget["id"] == "agent:observe_agent"
+            assert reader is state_reader
+            return {
+                **widget,
+                "inspection": {
+                    "source": "a2a",
+                    "refreshed_at": "2026-04-13T10:30:00Z",
+                    "protocol_version": "0.3.0",
+                    "skills": [
+                        {"id": "diagnose", "name": "Diagnose", "description": "Run diagnostics"}
+                    ],
+                },
+                "agent_card_url": "http://example.test/observe/.well-known/agent-card.json",
+                "url": "http://example.test/observe",
+                "version": "0.2.0",
+            }
+
+        monkeypatch.setattr(
+            "app.backend.ui_routes._inspect_agent_widget",
+            fake_inspect_agent_widget,
+        )
+
+        response = client.post("/api/ui/widgets/agent:observe_agent/refresh")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["id"] == "agent:observe_agent"
+        assert payload["data"]["inspection"]["source"] == "a2a"
+        assert payload["data"]["inspection"]["skills"][0]["id"] == "diagnose"
+        assert payload["data"]["agent_card_url"].endswith("/.well-known/agent-card.json")
+
+    def test_refresh_mcp_widget_returns_protocol_catalog(self, client, tmp_path, monkeypatch):
+        state_dir = tmp_path / "data" / "state"
+        config_dir = tmp_path / "data" / "config"
+        sessions_dir = tmp_path / "data" / "sessions"
+        logs_dir = tmp_path / "logs"
+        state_dir.mkdir(parents=True)
+        config_dir.mkdir(parents=True)
+        sessions_dir.mkdir(parents=True)
+        logs_dir.mkdir(parents=True)
+        (state_dir / "health.json").write_text(
+            json.dumps({"status": "running", "thread_id": "run_456"}),
+            encoding="utf-8",
+        )
+        (config_dir / "agents.json").write_text(json.dumps({"agents": []}), encoding="utf-8")
+        (config_dir / "mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "jina": {
+                            "description": "Web tools",
+                            "enabled": True,
+                            "transport": "http",
+                            "url": "https://mcp.example.test",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        state_reader = StateReader(
+            state_dir=state_dir,
+            config_dir=config_dir,
+            sessions_dir=sessions_dir,
+            logs_dir=logs_dir,
+        )
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        async def fake_inspect_mcp_widget(widget, reader):
+            assert widget["id"] == "mcp:jina"
+            assert reader is state_reader
+            return {
+                **widget,
+                "inspection": {
+                    "source": "mcp",
+                    "refreshed_at": "2026-04-13T10:31:00Z",
+                    "protocol_version": "2025-03-26",
+                    "tools": [{"name": "search", "description": "Search the web"}],
+                    "resources": [{"name": "docs", "uri": "resource://docs"}],
+                    "prompts": [{"name": "summarize", "description": "Summarize a page"}],
+                },
+                "url": "https://mcp.example.test",
+            }
+
+        monkeypatch.setattr(
+            "app.backend.ui_routes._inspect_mcp_widget",
+            fake_inspect_mcp_widget,
+        )
+
+        response = client.post("/api/ui/widgets/mcp:jina/refresh")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["id"] == "mcp:jina"
+        assert payload["data"]["inspection"]["source"] == "mcp"
+        assert payload["data"]["inspection"]["tools"][0]["name"] == "search"
+        assert payload["data"]["inspection"]["resources"][0]["uri"] == "resource://docs"
+        assert payload["data"]["inspection"]["prompts"][0]["name"] == "summarize"
 
     def test_create_schedule_writes_schedule_file(self, client, tmp_path):
         state_dir = tmp_path / "data" / "state"
