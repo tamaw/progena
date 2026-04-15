@@ -421,6 +421,22 @@ class TestUIRoutes:
         assert "total" in data
         assert "unread" in data
 
+    def test_status_snapshot_returns_full_alert_payload(self, client):
+        clear_alerts()
+        created = create_alert(type="warning", title="Build", message="Build failed")
+
+        try:
+            response = client.get("/api/ui/status/snapshot")
+        finally:
+            clear_alerts()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["alerts"]["unread"] == 1
+        assert data["alerts"]["total"] == 1
+        assert data["alerts"]["alerts"][0]["id"] == created.id
+        assert data["alerts"]["alerts"][0]["title"] == "Build"
+
     def test_mark_alerts_viewed_endpoint(self, client):
         first = create_alert(type="warning", title="Build", message="Build failed")
         create_alert(type="info", title="Reminder", message="Check logs")
