@@ -39,9 +39,10 @@ function formatMessageType(value) {
 
 function UserNode({ id, data, selected }) {
   const { updateNodeData, toggleExpanded, runUserNode } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('user');
+  const helpText = getWidgetHelpText('user');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('user'), 'details'),
     [getWidgetDefaultTab, tabs]
@@ -208,7 +209,7 @@ function UserNode({ id, data, selected }) {
             <button className="node-action-btn primary" onClick={() => runUserNode(id)}>
               Send
             </button>
-            <NodeHelpButton nodeType="user" title={data.title} alignRight />
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

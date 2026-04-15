@@ -111,9 +111,10 @@ function AgentNode({ id, data, selected }) {
     refreshWidgetNode,
     updateNodeData,
   } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const widgetKind = data.widgetKind || 'agent';
+  const helpText = getWidgetHelpText(widgetKind);
   const icon = widgetKind === 'mcp' ? 'M' : 'A';
   const titleLabel = widgetKind === 'mcp' ? 'MCP' : 'Agent';
   const actionTabId = widgetKind === 'agent' ? 'skills' : 'tools';
@@ -628,8 +629,7 @@ function AgentNode({ id, data, selected }) {
               {data.isRefreshing ? 'Refreshing...' : 'Refresh'}
             </button>
             <NodeHelpButton
-              nodeType="agent"
-              widgetKind={widgetKind}
+              description={helpText}
               title={data.title}
               alignRight
             />

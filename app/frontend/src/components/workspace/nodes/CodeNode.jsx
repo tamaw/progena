@@ -12,9 +12,10 @@ const LANGUAGES = [
 
 function CodeNode({ id, data, selected }) {
   const { updateNodeData, toggleExpanded, runCodeNode } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('code');
+  const helpText = getWidgetHelpText('code');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('code'), 'editor'),
     [getWidgetDefaultTab, tabs]
@@ -126,7 +127,7 @@ function CodeNode({ id, data, selected }) {
             {data.status === 'running' && (
               <button className="node-action-btn danger">Stop</button>
             )}
-            <NodeHelpButton nodeType="code" title={data.title} alignRight />
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

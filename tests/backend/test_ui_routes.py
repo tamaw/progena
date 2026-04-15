@@ -157,6 +157,13 @@ class TestUIRoutes:
 
         assert response.status_code == 200
         schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
+        assert schemas["prompt"]["help_text"] == (
+            "Stores prompt text, targets an agent, and runs or generates code from the latest prompt."
+        )
+        assert schemas["user"]["help_text"] == (
+            "Configures a user-facing tool call so the current run can send a message, "
+            "notification, or question."
+        )
         assert [tab["id"] for tab in schemas["agent"]["tabs"]] == [
             "overview",
             "details",
@@ -164,6 +171,9 @@ class TestUIRoutes:
             "skills",
             "logs",
         ]
+        assert schemas["agent"]["help_text"] == (
+            "Shows a linked agent, its recent activity, and the latest thread-linked output for this card."
+        )
         assert [tab["id"] for tab in schemas["mcp"]["tabs"]] == [
             "overview",
             "details",
@@ -172,6 +182,9 @@ class TestUIRoutes:
             "prompts",
             "logs",
         ]
+        assert schemas["mcp"]["help_text"] == (
+            "Shows an MCP integration, its recent activity, and the latest thread-linked output for this card."
+        )
 
     def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
         prompts_dir = tmp_path / "data" / "prompts"

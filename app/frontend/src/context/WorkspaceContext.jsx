@@ -915,6 +915,7 @@ export function WorkspaceProvider({ children }) {
   const getWidgetSchema = useCallback((type) => widgetSchemas[type] || null, [widgetSchemas]);
   const getWidgetTabs = useCallback((type) => widgetSchemas[type]?.tabs || [], [widgetSchemas]);
   const getWidgetDefaultTab = useCallback((type) => widgetSchemas[type]?.default_tab || null, [widgetSchemas]);
+  const getWidgetHelpText = useCallback((type) => widgetSchemas[type]?.help_text || '', [widgetSchemas]);
 
   const syncWidgets = useCallback((widgetPayload) => {
     mergeWidgetNodes(widgetPayload);
@@ -2096,7 +2097,8 @@ export function WorkspaceProvider({ children }) {
     getWidgetSchema,
     getWidgetTabs,
     getWidgetDefaultTab,
-  }), [agentOptions, getWidgetSchema, getWidgetTabs, getWidgetDefaultTab]);
+    getWidgetHelpText,
+  }), [agentOptions, getWidgetSchema, getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText]);
 
   return (
     <WorkspaceGraphContext.Provider value={graphValue}>
