@@ -831,6 +831,7 @@ export function WorkspaceProvider({ children }) {
     getWidgetSchemas,
     refreshWidget,
     updateWidget,
+    deleteWidget,
     createSchedule,
     createEvent,
     runAction,
@@ -1029,6 +1030,39 @@ export function WorkspaceProvider({ children }) {
 
     patchTimersRef.current.set(nodeId, timerId);
   }, [updateWidget]);
+
+  const clearQueuedWidgetPatch = useCallback((nodeId) => {
+    const existing = patchTimersRef.current.get(nodeId);
+    if (existing) {
+      clearTimeout(existing);
+      patchTimersRef.current.delete(nodeId);
+    }
+  }, []);
+
+  const setNodeSaveError = useCallback((nodeId, message) => {
+    setNodes((currentNodes) => currentNodes.map((entry) => (
+      entry.id === nodeId
+        ? {
+          ...entry,
+          data: {
+            ...entry.data,
+            saveError: message,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+        : entry
+    )));
+  }, []);
+
+  const deleteBackendManagedNode = useCallback(async (node) => {
+    if (node.type !== 'schedule' || !node.data?.serverManaged) {
+      return false;
+    }
+
+    clearQueuedWidgetPatch(node.id);
+    await deleteWidget(node.id);
+    return true;
+  }, [clearQueuedWidgetPatch, deleteWidget]);
 
   const onNodesChange = useCallback((changes) => {
     setNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
@@ -1420,15 +1454,51 @@ export function WorkspaceProvider({ children }) {
     }
   }, [createEvent, updateNodeData]);
 
-  const removeNodes = useCallback((nodeIds) => {
+  const removeNodeIdsLocally = useCallback((nodeIds) => {
+    if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
+      return;
+    }
+
+    nodeIds.forEach(clearQueuedWidgetPatch);
     const idSet = new Set(nodeIds);
-    setNodes((currentNodes) =>
-      currentNodes.filter((node) => !idSet.has(node.id) || node.data?.serverManaged)
-    );
-    setEdges((currentEdges) =>
-      currentEdges.filter((edge) => !idSet.has(edge.source) && !idSet.has(edge.target))
-    );
-  }, []);
+    setNodes((currentNodes) => {
+      const nextNodes = currentNodes.filter((node) => !idSet.has(node.id));
+      latestNodesRef.current = nextNodes;
+      return nextNodes;
+    });
+    setEdges((currentEdges) => {
+      const nextEdges = currentEdges.filter(
+        (edge) => !idSet.has(edge.source) && !idSet.has(edge.target)
+      );
+      latestEdgesRef.current = nextEdges;
+      return nextEdges;
+    });
+  }, [clearQueuedWidgetPatch]);
+
+  const removeNodes = useCallback(async (nodeIds) => {
+    const nodeIdSet = new Set(nodeIds);
+    const targets = latestNodesRef.current.filter((node) => nodeIdSet.has(node.id));
+    const removableIds = [];
+
+    for (const node of targets) {
+      try {
+        if (await deleteBackendManagedNode(node)) {
+          removableIds.push(node.id);
+          continue;
+        }
+      } catch (deleteError) {
+        const message = deleteError instanceof Error ? deleteError.message : String(deleteError);
+        setNodeSaveError(node.id, message);
+        continue;
+      }
+
+      if (!node.data?.serverManaged) {
+        removableIds.push(node.id);
+      }
+    }
+
+    removeNodeIdsLocally(removableIds);
+  }, [deleteBackendManagedNode, removeNodeIdsLocally, setNodeSaveError]);
 
   const duplicateNode = useCallback((nodeId) => {
     setNodes((currentNodes) => {
