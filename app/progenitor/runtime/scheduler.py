@@ -25,6 +25,8 @@ class Scheduler:
         due_with_time: list[tuple[datetime, dict[str, Any]]] = []
 
         for item in schedule:
+            if item.get("paused"):
+                continue
             next_run = self.next_run_for_entry(item)
             if not next_run:
                 continue
