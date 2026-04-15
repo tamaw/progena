@@ -42,11 +42,7 @@ def deep_merge(base: dict, updates: dict) -> dict:
         The merged dictionary (base is modified in place and returned).
     """
     for key, value in updates.items():
-        if (
-            key in base
-            and isinstance(base[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
             # Recursively merge nested dicts
             deep_merge(base[key], value)
         else:
@@ -101,9 +97,13 @@ async def _prepare_integration_branch(
         base_ref = f"origin/{base_branch}"
 
     # Create/reset integration branch and check it out.
-    result = await _run_git(["checkout", "-B", integration_branch, base_ref], cwd=repo_path, timeout_seconds=30.0)
+    result = await _run_git(
+        ["checkout", "-B", integration_branch, base_ref], cwd=repo_path, timeout_seconds=30.0
+    )
     if result["returncode"] != 0:
-        raise RuntimeError(f"Failed to checkout integration branch {integration_branch}: {result['stderr']}".strip())
+        raise RuntimeError(
+            f"Failed to checkout integration branch {integration_branch}: {result['stderr']}".strip()
+        )
 
     return base_ref
 
@@ -112,9 +112,11 @@ async def _cleanup_worktrees(*, repo_path: Path, worktrees: list[str]) -> None:
     """Best-effort removal of git worktrees recorded during the build."""
     for wt in worktrees:
         try:
-            await _run_git(["worktree", "remove", "--force", wt], cwd=repo_path, timeout_seconds=60.0)
-        except Exception:
-            continue
+            await _run_git(
+                ["worktree", "remove", "--force", wt], cwd=repo_path, timeout_seconds=60.0
+            )
+        except (OSError, TimeoutError) as exc:
+            logger.debug("Failed to remove worktree %s: %s", wt, exc)
 
 
 def _expected_output_path(repo_path: Path, build_state: dict[str, Any]) -> Path | None:
@@ -139,12 +141,16 @@ def _expected_output_path_candidates(repo_path: Path, build_state: dict[str, Any
     if expected.is_absolute() and str(expected) == str(Path(expected)):
         # For absolute paths, there is only one valid candidate.
         build_settings = build_state.get("build_settings")
-        project_directory = build_settings.get("project_directory") if isinstance(build_settings, dict) else None
+        project_directory = (
+            build_settings.get("project_directory") if isinstance(build_settings, dict) else None
+        )
         if isinstance(project_directory, str) and Path(project_directory.strip()).is_absolute():
             return [expected]
 
     build_settings = build_state.get("build_settings")
-    project_directory = build_settings.get("project_directory") if isinstance(build_settings, dict) else None
+    project_directory = (
+        build_settings.get("project_directory") if isinstance(build_settings, dict) else None
+    )
     if not isinstance(project_directory, str):
         return [expected]
     project_path = Path(project_directory.strip())
@@ -182,10 +188,7 @@ def _assert_expected_output_exists(repo_path: Path, build_state: dict[str, Any])
         if expected_path.is_dir() and not any(p.is_file() for p in expected_path.rglob("*")):
             raise RuntimeError(f"Build output directory is empty: {expected_path}")
         return
-    raise RuntimeError(
-        "Build completed without creating expected output path: "
-        f"{candidates[0]}"
-    )
+    raise RuntimeError(f"Build completed without creating expected output path: {candidates[0]}")
 
 
 def _extract_published_pr_url(build_state: dict[str, Any]) -> str | None:
@@ -237,6 +240,7 @@ def _resolve_repo_path(worktrees_dir: Path) -> Path:
         return candidate
     return worktrees_dir.parent
 
+
 if TYPE_CHECKING:
     from ..config import ProgenitorConfig
     from ..llm.client import LLMClient
@@ -247,6 +251,7 @@ logger = logging.getLogger(__name__)
 
 class BuildStatus(StrEnum):
     """Status of a background build."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -257,6 +262,7 @@ class BuildStatus(StrEnum):
 @dataclass
 class BuildResult:
     """Result of a background build operation."""
+
     build_id: str
     status: BuildStatus
     task_description: str
@@ -275,6 +281,7 @@ class BuildResult:
 @dataclass
 class BuildRequest:
     """A request to start a background build."""
+
     build_id: str
     user_input: str
     task_description: str
@@ -304,7 +311,7 @@ class BackgroundBuildRunner:
         self.state_manager = state_manager
         self.config = config
         self.llm_client = llm_client
-        self.worktrees_dir = worktrees_dir or Path("worktrees")
+        self.worktrees_dir = worktrees_dir or config.storage.worktree_dir
         self.copilot_acp_manager = copilot_acp_manager
         hook_registrations = getattr(getattr(config, "runtime", None), "hook_registrations", None)
         self.hook_manager = hook_manager or create_default_hook_manager(
@@ -327,6 +334,7 @@ class BackgroundBuildRunner:
         """Lazily create the inner loop graph."""
         if self._inner_loop_graph is None:
             from ..graph import create_inner_loop_graph
+
             self._inner_loop_graph = create_inner_loop_graph(
                 state_manager=self.state_manager,
                 llm_client=self.llm_client,
@@ -400,7 +408,9 @@ class BackgroundBuildRunner:
         """
         async with self._lock:
             if self.is_building:
-                task_desc = self._current_build.task_description if self._current_build else "unknown"
+                task_desc = (
+                    self._current_build.task_description if self._current_build else "unknown"
+                )
                 raise RuntimeError(f"Build already in progress: {task_desc}")
 
             # Use build_id from settings if provided, otherwise generate
@@ -419,7 +429,9 @@ class BackgroundBuildRunner:
             # BL-007: Store build_settings in state for later reference
             if build_settings:
                 initial_state["build_settings"] = (
-                    build_settings.model_dump() if hasattr(build_settings, "model_dump") else build_settings
+                    build_settings.model_dump()
+                    if hasattr(build_settings, "model_dump")
+                    else build_settings
                 )
 
             # Start the build task promptly; do not hold the lock while awaiting the LLM.
@@ -449,7 +461,7 @@ class BackgroundBuildRunner:
         try:
             # Include build settings info if available
             settings_info = ""
-            if build_settings and hasattr(build_settings, 'project_name'):
+            if build_settings and hasattr(build_settings, "project_name"):
                 settings_info = (
                     f"\nProject: {build_settings.project_name}"
                     f"\nType: {build_settings.build_type}"
@@ -538,14 +550,11 @@ class BackgroundBuildRunner:
                 # Build identification
                 "build_in_progress": True,
                 "build_started_at": utcnow_isoformat(),
-
                 # User input for context
                 "current_input": current_build.user_input,
-
                 # Build settings (from decide phase) with status set to in_progress
                 # Canonical source for build_id and user_request
                 "build_settings": build_settings,
-
                 # Nested structure
                 "task": {
                     "description": current_build.task_description,
@@ -563,20 +572,34 @@ class BackgroundBuildRunner:
                     "current_report": None,
                     "target_score": 0.8,
                 },
-
                 "spec": initial_state.get("spec", {}),
-                "phases": {"observe": {"ideal_state": None}, "think": {}, "plan": {}, "execute": {}, "verify": {"target_score": 0.8}},
-                "history": {"artefacts": [], "verification_reports": [], "lessons_learned": [], "messages": []},
+                "phases": {
+                    "observe": {"ideal_state": None},
+                    "think": {},
+                    "plan": {},
+                    "execute": {},
+                    "verify": {"target_score": 0.8},
+                },
+                "history": {
+                    "artefacts": [],
+                    "verification_reports": [],
+                    "lessons_learned": [],
+                    "messages": [],
+                },
                 "best": {"iteration": None, "score": 0.0, "passed": False},
-                "clarification": {"needed": False, "question": None, "context": None, "awaiting": False, "response": None},
-
-                 # Phase tracking
-                 "build_phase": "starting",
-
-                 # Git integration branch (keeps local main clean; PR targets main)
-                 "integration_branch": integration_branch,
-                 "integration_base_branch": base_branch,
-             }
+                "clarification": {
+                    "needed": False,
+                    "question": None,
+                    "context": None,
+                    "awaiting": False,
+                    "response": None,
+                },
+                # Phase tracking
+                "build_phase": "starting",
+                # Git integration branch (keeps local main clean; PR targets main)
+                "integration_branch": integration_branch,
+                "integration_base_branch": base_branch,
+            }
 
             await self.hook_manager.emit(
                 "build_started",
@@ -624,7 +647,9 @@ class BackgroundBuildRunner:
                         # Track iterations (verify node marks end of iteration)
                         if node_name == "verify":
                             result.iterations = build_state.get("iteration", {}).get("current", 0)
-                            result.verification_score = build_state.get("phases", {}).get("verify", {}).get("score", 0)
+                            result.verification_score = (
+                                build_state.get("phases", {}).get("verify", {}).get("score", 0)
+                            )
 
                         # Log progress
                         logger.info(
@@ -650,10 +675,14 @@ class BackgroundBuildRunner:
             result.status = BuildStatus.COMPLETED
             result.completed_at = utcnow()
             result.verification_score = build_state.get("verification", {}).get("current_score", 0)
-            result.agent_name = build_state.get("agent_name") or build_state.get("build_settings", {}).get("project_name")
+            result.agent_name = build_state.get("agent_name") or build_state.get(
+                "build_settings", {}
+            ).get("project_name")
 
             # Extract success criteria results
-            verification_report: Any = build_state.get("verification", {}).get("current_report") or {}
+            verification_report: Any = (
+                build_state.get("verification", {}).get("current_report") or {}
+            )
             if hasattr(verification_report, "model_dump"):
                 verification_report = verification_report.model_dump()
             if not isinstance(verification_report, dict):
@@ -726,12 +755,15 @@ class BackgroundBuildRunner:
                     existing_build_settings["error_message"] = "Cancelled by signal"
                     existing_build_settings["updated_at"] = utcnow_isoformat()
 
-                await self.state_manager.update_build_state({
-                    "build_in_progress": False,
-                    "build_phase": "suspended",
-                    "build_settings": existing_build_settings,
-                    "build_messages": build_state.get("build_messages", []) + [suspension_event],
-                })
+                await self.state_manager.update_build_state(
+                    {
+                        "build_in_progress": False,
+                        "build_phase": "suspended",
+                        "build_settings": existing_build_settings,
+                        "build_messages": build_state.get("build_messages", [])
+                        + [suspension_event],
+                    }
+                )
                 logger.info("Build %s suspended at iteration %d", build_id, current_iteration)
             except Exception as e:
                 logger.warning("Failed to record suspension event: %s", e)
@@ -759,10 +791,12 @@ class BackgroundBuildRunner:
                     existing_build_settings["status"] = "failed"
                     existing_build_settings["error_message"] = str(e)
                     existing_build_settings["updated_at"] = utcnow_isoformat()
-                await self.state_manager.update_build_state({
-                    "build_phase": "failed",
-                    "build_settings": existing_build_settings,
-                })
+                await self.state_manager.update_build_state(
+                    {
+                        "build_phase": "failed",
+                        "build_settings": existing_build_settings,
+                    }
+                )
             except Exception as update_err:
                 logger.warning("Failed to update build_settings status: %s", update_err)
 
@@ -792,47 +826,55 @@ class BackgroundBuildRunner:
                 except Exception:
                     existing_build_settings = {}
 
-                await self.state_manager.update_build_state({
-                    "build_in_progress": False,
-                    "build_phase": "completed",
-                    "build_settings": existing_build_settings,
-                    "last_build_result": {
-                        "build_id": build_id,
-                        "status": result.status.value,
-                        "completed_at": utcnow_isoformat(),
-                        "output_summary": result.output_summary,
-                        "error_message": result.error_message,
-                    },
-                })
+                await self.state_manager.update_build_state(
+                    {
+                        "build_in_progress": False,
+                        "build_phase": "completed",
+                        "build_settings": existing_build_settings,
+                        "last_build_result": {
+                            "build_id": build_id,
+                            "status": result.status.value,
+                            "completed_at": utcnow_isoformat(),
+                            "output_summary": result.output_summary,
+                            "error_message": result.error_message,
+                        },
+                    }
+                )
             elif result.status == BuildStatus.FAILED:
                 # Already updated in the except block, just set last_build_result
-                await self.state_manager.update_build_state({
-                    "build_in_progress": False,
-                    "last_build_result": {
-                        "build_id": build_id,
-                        "status": result.status.value,
-                        "completed_at": utcnow_isoformat(),
-                        "output_summary": result.output_summary,
-                        "error_message": result.error_message,
-                    },
-                })
+                await self.state_manager.update_build_state(
+                    {
+                        "build_in_progress": False,
+                        "last_build_result": {
+                            "build_id": build_id,
+                            "status": result.status.value,
+                            "completed_at": utcnow_isoformat(),
+                            "output_summary": result.output_summary,
+                            "error_message": result.error_message,
+                        },
+                    }
+                )
             else:
                 # For cancelled/suspended builds, just update the last_build_result
                 # Don't touch build_in_progress or build_phase (already set in CancelledError handler)
-                await self.state_manager.update_build_state({
-                    "last_build_result": {
-                        "build_id": build_id,
-                        "status": "cancelled",
-                        "completed_at": utcnow_isoformat(),
-                        "output_summary": result.output_summary,
-                        "error_message": "Build was cancelled",
-                    },
-                })
+                await self.state_manager.update_build_state(
+                    {
+                        "last_build_result": {
+                            "build_id": build_id,
+                            "status": "cancelled",
+                            "completed_at": utcnow_isoformat(),
+                            "output_summary": result.output_summary,
+                            "error_message": "Build was cancelled",
+                        },
+                    }
+                )
 
             # Also update current_state to clear the build reference
-            await self.state_manager.update_current_state({
-                "current_build_request": None,
-            })
+            await self.state_manager.update_current_state(
+                {
+                    "current_build_request": None,
+                }
+            )
 
             # Trigger completion callback if set
             if self._completion_callback:

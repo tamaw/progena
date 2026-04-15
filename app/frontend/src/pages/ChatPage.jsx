@@ -121,11 +121,16 @@ function ChatPage() {
   const handleChatEvent = useCallback((event) => {
     if (!event?.data) return;
 
-    // Handle scheduled/background messages from the agent
-    // Prefer agent_message over scheduled_response as it has cleaner content
-    if (event.type === 'agent_message' || event.type === 'scheduled_response') {
+    // Handle scheduled/background messages from the agent.
+    // Prefer agent_message/agent_question over scheduled_response as they have cleaner content.
+    if (
+      event.type === 'agent_message'
+      || event.type === 'agent_question'
+      || event.type === 'scheduled_response'
+    ) {
       const content = event.data?.content || '';
       const metadata = event.data?.metadata || {};
+      const isQuestion = event.type === 'agent_question';
 
       // Clean up the content (remove "SAY: " prefix if present)
       let cleanContent = content;
@@ -153,6 +158,7 @@ function ChatPage() {
           content: cleanContent,
           timestamp: Date.now(),
           isScheduled: true,
+          isQuestion,
           scheduleId: metadata?.schedule_id,
           originalRequest: metadata?.original_request,
         };
@@ -160,7 +166,9 @@ function ChatPage() {
         setMessages(prev => [...prev, scheduledMessage]);
 
         // Show a notification
-        show('info', 'Scheduled Message',
+        show(
+          isQuestion ? 'warning' : 'info',
+          metadata?.title || (isQuestion ? 'Question from Progenitor' : 'Scheduled Message'),
           metadata?.schedule_id
             ? `Reminder: ${cleanContent.slice(0, 50)}...`
             : cleanContent.slice(0, 100)
@@ -171,6 +179,14 @@ function ChatPage() {
     // Handle alerts
     if (event.type === 'alert') {
       show(event.data?.type || 'info', event.data?.title || 'Alert', event.data?.message || '');
+    }
+
+    if (event.type === 'message_queued') {
+      show(
+        'info',
+        'Message queued',
+        event.data?.content || 'A previous message is still running; your message will be handled next.'
+      );
     }
   }, [show]);
 

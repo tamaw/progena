@@ -52,25 +52,29 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                     "type": "clarification_request",
                     "clarification_context": state.get("clarification_context"),
                     "iteration": state.get("iteration", {}).get("current", 0),
-                }
+                },
             )
             await state_manager.log_conversation(message)
 
             messages = list(state.get("messages", []))
             messages.append(message)
 
-            return cast(ProgenitorState, {
-                "pending_response": response_text or "",
-                "messages": messages,
-                **clarification_updates,
-            })
+            return cast(
+                ProgenitorState,
+                {
+                    "pending_response": response_text or "",
+                    "messages": messages,
+                    **clarification_updates,
+                },
+            )
 
         # Check if response was already streamed by the decide node
         from ..runtime.loop import get_current_loop
+
         loop = get_current_loop()
         if loop and loop._response_was_streamed:
             # Response was already streamed, but we still need to save it to messages
-            streamed_content = getattr(loop, '_streamed_response_content', '')
+            streamed_content = getattr(loop, "_streamed_response_content", "")
 
             if streamed_content:
                 # Log and save the streamed assistant response
@@ -86,7 +90,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                         "iteration_count": 0,
                         "stop_reason": None,
                         "streamed": True,
-                    }
+                    },
                 )
 
                 await state_manager.log_conversation(message)
@@ -98,16 +102,22 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 # Persist messages to current_state.json
                 await state_manager.save_messages(messages)
 
-                return cast(ProgenitorState, {
-                    "pending_response": streamed_content,
-                    "messages": messages,
-                    "current_input": None,
-                })
+                return cast(
+                    ProgenitorState,
+                    {
+                        "pending_response": streamed_content,
+                        "messages": messages,
+                        "current_input": None,
+                    },
+                )
 
             # No content to save, just clear the input
-            return cast(ProgenitorState, {
-                "current_input": None,
-            })
+            return cast(
+                ProgenitorState,
+                {
+                    "current_input": None,
+                },
+            )
 
         response_text_out: str | None = _generate_response(decision, current_item, state)
 
@@ -132,7 +142,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 "verification_score": state.get("verification", {}).get("current_score", 0.0),
                 "iteration_count": state.get("iteration", {}).get("current", 0),
                 "stop_reason": state.get("iteration_stop_reason"),
-            }
+            },
         )
 
         await state_manager.log_conversation(message)
@@ -158,12 +168,15 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
             # Note: The spec file remains under build/ as it's part of the built artifact
             await state_manager.clear_spec_doc()
 
-        return cast(ProgenitorState, {
-            "pending_response": response_text_out,
-            "messages": messages,
-            "current_input": None,  # Clear input after responding
-            **build_clear_updates,
-        })
+        return cast(
+            ProgenitorState,
+            {
+                "pending_response": response_text_out,
+                "messages": messages,
+                "current_input": None,  # Clear input after responding
+                **build_clear_updates,
+            },
+        )
 
     return respond_node
 
@@ -353,7 +366,8 @@ def _get_decision_action(decision) -> str | None:
         action = decision.action
         return action.value if hasattr(action, "value") else str(action)
     if isinstance(decision, dict):
-        return decision.get("action")
+        action = decision.get("action")
+        return action if isinstance(action, str) else str(action) if action is not None else None
     return None
 
 
@@ -364,5 +378,12 @@ def _get_work_item_id(current_item) -> str | None:
     if isinstance(current_item, WorkItem):
         return current_item.id
     if isinstance(current_item, dict):
-        return current_item.get("id")
+        work_item_id = current_item.get("id")
+        return (
+            work_item_id
+            if isinstance(work_item_id, str)
+            else str(work_item_id)
+            if work_item_id is not None
+            else None
+        )
     return None

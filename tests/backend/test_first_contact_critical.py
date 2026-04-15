@@ -52,7 +52,7 @@ def complete_state_files(tmp_path):
     health_data = {
         "status": "running",
         "last_active": datetime.now(UTC).isoformat(),
-        "run_id": "first-contact-mission-001",
+        "thread_id": "first-contact-mission-001",
         "cycle_count": 1337,
         "pid": 42424,
     }
@@ -107,15 +107,31 @@ def complete_state_files(tmp_path):
             },
         ]
     }
+    mcp_config_path = config_dir / "mcp.json"
     mcp_data = {
-        "tools": [
-            {"name": "universal_translator", "description": "Translates any language", "enabled": True},
-            {"name": "spectrum_analyzer", "description": "Analyzes signal spectrums", "enabled": True},
-            {"name": "pattern_matcher", "description": "Matches complex patterns", "enabled": True},
-        ]
+        "mcpServers": {
+            "universal_translator": {
+                "description": "Translates any language",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/universal_translator",
+            },
+            "spectrum_analyzer": {
+                "description": "Analyzes signal spectrums",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/spectrum_analyzer",
+            },
+            "pattern_matcher": {
+                "description": "Matches complex patterns",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/pattern_matcher",
+            },
+        }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
+    mcp_config_path.write_text(json.dumps(mcp_data))
 
     # Build state - actively working on first contact
     build_state = {
@@ -161,10 +177,22 @@ def complete_state_files(tmp_path):
 
     # Schedule
     schedule = [
-        {"id": "sched-1", "name": "Signal scan", "schedule": "*/5 * * * *", "enabled": True, "next_run": None},
-        {"id": "sched-2", "name": "Protocol check", "schedule": "0 * * * *", "enabled": True, "next_run": None},
+        {
+            "id": "sched-1",
+            "name": "Signal scan",
+            "schedule": "*/5 * * * *",
+            "enabled": True,
+            "next_run": None,
+        },
+        {
+            "id": "sched-2",
+            "name": "Protocol check",
+            "schedule": "0 * * * *",
+            "enabled": True,
+            "next_run": None,
+        },
     ]
-    (state_dir / "schedule.json").write_text(json.dumps(schedule))
+    (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
     return state_dir
 
@@ -187,7 +215,9 @@ class TestCriticalUIDataPipeline:
 
         for endpoint in endpoints:
             response = client.get(endpoint)
-            assert response.status_code == 200, f"Endpoint {endpoint} failed with {response.status_code}"
+            assert response.status_code == 200, (
+                f"Endpoint {endpoint} failed with {response.status_code}"
+            )
 
     def test_status_endpoint_complete_data(self, client):
         """Status endpoint must provide ALL data needed by the UI."""
@@ -203,7 +233,7 @@ class TestCriticalUIDataPipeline:
 
         # Agent info
         assert "pid" in data
-        assert "run_id" in data
+        assert "thread_id" in data
         assert "cycle_count" in data
         assert "uptime_seconds" in data
         assert "version" in data
@@ -231,7 +261,7 @@ class TestCriticalUIDataPipeline:
 
         # Health
         assert snapshot.health.status == "running"
-        assert snapshot.health.run_id == "first-contact-mission-001"
+        assert snapshot.health.thread_id == "first-contact-mission-001"
         assert snapshot.health.cycle_count == 1337
         assert snapshot.health.pid == 42424
         assert snapshot.health.is_running()  # Recent last_active
@@ -289,11 +319,14 @@ class TestRealTimeFeedbackConsistency:
 
         try:
             # Broadcast an important message
-            broadcast_chat_event("first_contact", {
-                "status": "initiated",
-                "signal_strength": 0.98,
-                "decoded_message": "Greetings from Earth",
-            })
+            broadcast_chat_event(
+                "first_contact",
+                {
+                    "status": "initiated",
+                    "signal_strength": 0.98,
+                    "decoded_message": "Greetings from Earth",
+                },
+            )
 
             # All subscribers must receive the event
             for i, q in enumerate(queues):
@@ -384,16 +417,18 @@ class TestErrorRecoveryAndGracefulDegradation:
         state_dir.mkdir()
 
         # Write corrupt JSON to all files
-        corrupt_files = ["health.json", "build_state.json", "schedule.json"]
+        corrupt_files = ["health.json", "build_state.json"]
 
         for filename in corrupt_files:
             (state_dir / filename).write_text("{this is not valid json!!!")
         config_dir = state_dir.parent / "config"
         config_dir.mkdir()
         (config_dir / "agents.json").write_text("{this is not valid json!!!")
-        (config_dir / "mcp.json").write_text("{this is not valid json!!!")
+        mcp_config_path = config_dir / "mcp.json"
+        mcp_config_path.write_text("{this is not valid json!!!")
+        (config_dir / "schedule.json").write_text("{this is not valid json!!!")
 
-        reader = StateReader(state_dir=state_dir)
+        reader = StateReader(state_dir=state_dir, config_dir=config_dir)
 
         # All methods should return defaults, not crash
         health = reader.get_health()
@@ -422,7 +457,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         health_data = {
             "status": "running",
             "last_active": datetime.now(UTC).isoformat(),
-            "run_id": "partial-run",
+            "thread_id": "partial-run",
             "cycle_count": 10,
             "pid": 1234,
         }
@@ -451,7 +486,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         health_data = {
             "status": "running",
             "last_active": old_time,
-            "run_id": "stale-run",
+            "thread_id": "stale-run",
             "cycle_count": 100,
             "pid": 5678,
         }
@@ -543,7 +578,7 @@ class TestDataIntegrityUnderAllConditions:
         health1 = HealthInfo(
             status="running",
             last_active="2024-01-31T12:00:00+00:00",
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=1,
             pid=1,
         )
@@ -554,7 +589,7 @@ class TestDataIntegrityUnderAllConditions:
         health2 = HealthInfo(
             status="running",
             last_active="2024-01-31T12:00:00Z",
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=1,
             pid=1,
         )
@@ -564,7 +599,7 @@ class TestDataIntegrityUnderAllConditions:
         health3 = HealthInfo(
             status="running",
             last_active=datetime.now(UTC).isoformat(),
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=1,
             pid=1,
         )

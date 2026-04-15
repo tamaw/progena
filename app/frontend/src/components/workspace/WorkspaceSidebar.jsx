@@ -1,14 +1,16 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
-import { useWorkspaceContext } from '../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../context/WorkspaceContext';
 
 const typeLabels = {
   prompt: 'Prompt',
   code: 'Code',
+  user: 'User',
   webframe: 'Web Frame',
   label: 'Label',
   schedule: 'Schedule',
+  event: 'Event',
   group: 'Group',
   agent: 'Agent',
   mcp: 'MCP',
@@ -80,11 +82,10 @@ function WorkspaceSidebar({
   selectedNode = null,
   width = null,
 }) {
-  const { getPrompts, getWidgetSchemas } = useApi();
-  const { nodes, updateNodeData, connectPromptToAgent } = useWorkspaceContext();
+  const { getPrompts } = useApi();
+  const { updateNodeData, connectPromptToAgent } = useWorkspaceActions();
+  const { agentOptions, getWidgetSchema } = useWorkspaceMeta();
   const navigate = useNavigate();
-  const [schemas, setSchemas] = useState({});
-  const [schemaError, setSchemaError] = useState(null);
   const [prompts, setPrompts] = useState([]);
   const [loadingPrompts, setLoadingPrompts] = useState(false);
   const [promptError, setPromptError] = useState(null);
@@ -94,33 +95,7 @@ function WorkspaceSidebar({
   const selectedNodeIdRef = useRef(selectedNode?.id || null);
   const lastPromptRequestKeyRef = useRef(null);
 
-  useEffect(() => {
-    let active = true;
-
-    async function loadSchemas() {
-      try {
-        const response = await getWidgetSchemas();
-        if (!active) {
-          return;
-        }
-
-        const nextSchemas = Object.fromEntries((response.schemas || []).map((schema) => [schema.type, schema]));
-        setSchemas(nextSchemas);
-        setSchemaError(null);
-      } catch (error) {
-        if (active) {
-          setSchemaError(error);
-        }
-      }
-    }
-
-    loadSchemas();
-    return () => {
-      active = false;
-    };
-  }, [getWidgetSchemas]);
-
-  const activeSchema = selectedNode ? schemas[selectedNode.type] || null : null;
+  const activeSchema = selectedNode ? getWidgetSchema(selectedNode.type) || null : null;
 
   useEffect(() => {
     const nextSelectedId = selectedNode?.id || null;
@@ -240,20 +215,6 @@ function WorkspaceSidebar({
       active = false;
     };
   }, [getPrompts, promptLookupKey, selectedNodeId, selectedNodeType]);
-
-  const agentOptions = useMemo(() => {
-    const values = new Set(['progenitor']);
-    nodes
-      .filter((node) => node.type === 'agent' || node.type === 'mcp')
-      .forEach((node) => {
-        const value = node.data?.agentId || node.data?.title;
-        if (value) {
-          values.add(value);
-        }
-      });
-
-    return [...values];
-  }, [nodes]);
 
   const onFieldChange = (fieldKey, nextValue) => {
     if (!selectedNode) {
@@ -377,11 +338,6 @@ function WorkspaceSidebar({
               <h2 className="sidebar-selection-title" title={selectedNodeTitle}>{selectedNodeTitle}</h2>
               <span className="sidebar-selection-type">{typeLabels[selectedNode.type] || selectedNode.type}</span>
             </div>
-
-            {schemaError && (
-              <div className="prompt-library-empty">Failed to load details schema.</div>
-            )}
-
             {(activeSchema?.sections || []).map((section) => {
               const isCollapsed = collapsedSections[section.id] ?? false;
 

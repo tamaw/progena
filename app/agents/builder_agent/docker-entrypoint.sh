@@ -6,12 +6,20 @@ export GH_TOKEN="${GH_TOKEN:-}"
 export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-}"
 export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-}"
 export AGENT_NAME="${AGENT_NAME:?AGENT_NAME must be set}"
+export PROGENITOR_DATA_DIR="${PROGENITOR_DATA_DIR:-/app/data}"
+export PROGENITOR_WORKTREES_ROOT="${PROGENITOR_WORKTREES_ROOT:-/app/worktrees}"
 
 ensure_dir() {
   mkdir -p "$1"
 }
 
-for target in /app/data /app/logs /app/worktrees; do
+for target in \
+  "$PROGENITOR_DATA_DIR" \
+  "$PROGENITOR_DATA_DIR/state" \
+  "$PROGENITOR_DATA_DIR/prompts" \
+  "$PROGENITOR_DATA_DIR/skills" \
+  /app/logs \
+  "$PROGENITOR_WORKTREES_ROOT"; do
   ensure_dir "$target"
 done
 ensure_dir "${PROGENITOR_LOG_DIR:-/app/logs}"
@@ -21,8 +29,8 @@ if [ -n "${GH_TOKEN:-}" ]; then
   git config --global --replace-all credential.helper "!gh auth git-credential" 2>/dev/null || true
 fi
 
-git config --global --add safe.directory /app/worktrees 2>/dev/null || true
-git config --global --add safe.directory "/app/worktrees/*" 2>/dev/null || true
+git config --global --add safe.directory "$PROGENITOR_WORKTREES_ROOT" 2>/dev/null || true
+git config --global --add safe.directory "${PROGENITOR_WORKTREES_ROOT}/*" 2>/dev/null || true
 
 if [ -n "${GIT_AUTHOR_NAME:-}" ]; then
   git config --global user.name "$GIT_AUTHOR_NAME" 2>/dev/null || true
@@ -39,7 +47,7 @@ fi
 
 if [ "$(id -u)" -eq 0 ]; then
   # Best-effort ownership fix for mounted paths when starting as root.
-  if ! chown -R runner:agent /app/data /app/logs /app/worktrees; then
+  if ! chown -R runner:agent "$PROGENITOR_DATA_DIR" /app/logs "$PROGENITOR_WORKTREES_ROOT"; then
     echo "WARN: failed to chown runtime directories; continuing with existing ownership" >&2
   fi
   exec runuser -u runner -- "$@"

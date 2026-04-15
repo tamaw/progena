@@ -17,12 +17,34 @@ def _test_config(tmp_path: Path) -> BuilderConfig:
     return BuilderConfig(
         llm=LLMConfig(),
         storage=StorageConfig(
-            state_dir=tmp_path / "state",
+            data_dir=tmp_path / "data",
+            state_dir=tmp_path / "data" / "state",
             log_dir=tmp_path / "logs",
             worktree_dir=tmp_path / "worktrees",
         ),
         copilot=CopilotConfig(allowed_dirs=[str(tmp_path)]),
     )
+
+
+def test_builder_config_uses_project_path_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for key in (
+        "PROGENITOR_DATA_DIR",
+        "PROGENITOR_STATE_DIR",
+        "PROGENITOR_LOG_DIR",
+        "PROGENITOR_WORKTREE_DIR",
+        "PROGENITOR_WORKTREES_ROOT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    config = BuilderConfig.load(tmp_path)
+
+    assert config.storage.data_dir == tmp_path / "data"
+    assert config.storage.state_dir == tmp_path / "data" / "state"
+    assert config.storage.log_dir == tmp_path / "logs"
+    assert config.storage.worktree_dir == tmp_path / "worktrees"
+    assert config.copilot.allowed_dirs == [str(tmp_path)]
 
 
 @pytest.mark.asyncio
@@ -31,7 +53,10 @@ async def test_create_pull_request_accepts_existing_pr_update(tmp_path: Path) ->
     tool = next(tool for tool in tools if tool.name == "create_pull_request")
 
     with (
-        patch("app.agents.builder_progenitor.tools.ToolRuntime.current_branch", new=AsyncMock(return_value="feature/test")),
+        patch(
+            "app.agents.builder_progenitor.tools.ToolRuntime.current_branch",
+            new=AsyncMock(return_value="feature/test"),
+        ),
         patch(
             "app.agents.builder_progenitor.tools.ToolRuntime.run_command",
             new=AsyncMock(return_value={"success": True, "stdout": "", "stderr": ""}),
@@ -42,7 +67,7 @@ async def test_create_pull_request_accepts_existing_pr_update(tmp_path: Path) ->
                 return_value={
                     "success": False,
                     "stdout": "",
-                    "stderr": "a pull request for branch \"feature/test\" into branch \"main\" already exists:\nhttps://github.com/org/repo/pull/42",
+                    "stderr": 'a pull request for branch "feature/test" into branch "main" already exists:\nhttps://github.com/org/repo/pull/42',
                 }
             ),
         ),
@@ -92,7 +117,9 @@ async def test_gh_cli_accepts_command_string(tmp_path: Path) -> None:
 
     with patch(
         "app.agents.builder_progenitor.tools.ToolRuntime.run_gh",
-        new=AsyncMock(return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}),
+        new=AsyncMock(
+            return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}
+        ),
     ) as run_gh:
         result = await tool.ainvoke(
             {
@@ -112,7 +139,9 @@ async def test_gh_cli_runs_help_command_string(tmp_path: Path) -> None:
 
     with patch(
         "app.agents.builder_progenitor.tools.ToolRuntime.run_gh",
-        new=AsyncMock(return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}),
+        new=AsyncMock(
+            return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}
+        ),
     ) as run_gh:
         result = await tool.ainvoke(
             {
@@ -132,7 +161,9 @@ async def test_git_cli_runs_command_string(tmp_path: Path) -> None:
 
     with patch(
         "app.agents.builder_progenitor.tools.ToolRuntime.run_command_args",
-        new=AsyncMock(return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}),
+        new=AsyncMock(
+            return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}
+        ),
     ) as run_command_args:
         result = await tool.ainvoke(
             {
@@ -142,7 +173,9 @@ async def test_git_cli_runs_command_string(tmp_path: Path) -> None:
         )
 
     assert result["success"] is True
-    run_command_args.assert_awaited_once_with(str(tmp_path), ["git", "status", "--short"], timeout=120)
+    run_command_args.assert_awaited_once_with(
+        str(tmp_path), ["git", "status", "--short"], timeout=120
+    )
 
 
 @pytest.mark.asyncio
@@ -152,7 +185,9 @@ async def test_git_cli_runs_help_command_string(tmp_path: Path) -> None:
 
     with patch(
         "app.agents.builder_progenitor.tools.ToolRuntime.run_command_args",
-        new=AsyncMock(return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}),
+        new=AsyncMock(
+            return_value={"success": True, "stdout": "ok", "stderr": "", "returncode": 0}
+        ),
     ) as run_command_args:
         result = await tool.ainvoke(
             {
@@ -162,4 +197,6 @@ async def test_git_cli_runs_help_command_string(tmp_path: Path) -> None:
         )
 
     assert result["success"] is True
-    run_command_args.assert_awaited_once_with(str(tmp_path), ["git", "checkout", "--help"], timeout=120)
+    run_command_args.assert_awaited_once_with(
+        str(tmp_path), ["git", "checkout", "--help"], timeout=120
+    )

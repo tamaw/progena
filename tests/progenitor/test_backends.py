@@ -39,7 +39,7 @@ class TestBackendFactory:
             from pathlib import Path
 
             root = Path(tmpdir)
-            for rel in ("app", "data", "logs", "prompts"):
+            for rel in ("app", "data", "data/prompts", "logs"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
 
             factory = create_progenitor_backend(project_root=tmpdir)

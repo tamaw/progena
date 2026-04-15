@@ -1,55 +1,91 @@
-# Docker Deployment
+# Docker stack
 
-The project ships compose stacks under `docker/`.
+This document covers the main Progenitor container stack only: runtime, backend, and frontend.
 
-## Compose Files
+## What the repo currently ships
 
-- `docker/docker-compose.progenitor.yml` - Progenitor stack (progenitor + backend + frontend) with direct Azure Responses configuration
+`docker/docker-compose.progenitor.yml` defines a three-container stack:
+- `progenitor` - runs `python -m app.progenitor.main`
+- `backend` - runs `uvicorn app.backend.main:app`
+- `frontend` - builds the Vite app and serves it with nginx
 
-## Start Full Stack
+Supporting Dockerfiles:
+- `docker/progenitor/Dockerfile`
+- `docker/backend/Dockerfile`
+- `docker/frontend/Dockerfile`
 
-From repository root:
+## Before starting
+
+Required runtime environment:
+- `AZURE_OPENAI_BASE_URL`
+- `AZURE_OPENAI_API_KEY`
+
+Common optional overrides:
+- `PROGENITOR_MODEL_DEFAULT`
+- `GH_TOKEN`
+- `PROGENITOR_REASONING_ENABLED`
+- `PROGENITOR_REASONING_BUDGET_TOKENS`
+- `TELEGRAM_*` backend settings
+
+The compose file also expects the external Docker network `progenitor_network` to exist:
+
+```bash
+docker network create progenitor_network
+```
+
+## Start and stop
+
+From the repository root:
 
 ```bash
 docker compose -f docker/docker-compose.progenitor.yml up --build -d
-```
-
-## Stop Stack
-
-```bash
 docker compose -f docker/docker-compose.progenitor.yml down
 ```
 
-## View Logs
+Useful inspection commands:
 
 ```bash
+docker compose -f docker/docker-compose.progenitor.yml ps
 docker compose -f docker/docker-compose.progenitor.yml logs -f
 docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 docker compose -f docker/docker-compose.progenitor.yml logs -f backend
 docker compose -f docker/docker-compose.progenitor.yml logs -f frontend
 ```
 
-## Exposed Services
+## Network and ports
 
-- Frontend UI: `http://localhost`
-- Backend API: `http://localhost:8000`
+Current compose behavior:
+- Only the frontend is published to the host: `80:80`
+- The backend listens on port `8000` **inside** the compose networks only
+- The Progenitor IPC server listens on port `9500` inside the compose networks
+- The backend connects to the runtime with `CHAT_SERVER_IPC_HOST=progenitor`
+- The compose file attaches services to an internal bridge network and the external `progenitor_network`
 
-Health checks:
+Because the backend is not host-published, host access normally goes through nginx on `http://localhost`:
+- UI: `http://localhost/`
+- Proxied backend health: `http://localhost/health`, `/ready`, `/live`
+- Proxied API: `http://localhost/v1/...` and `http://localhost/api/ui/...`
 
-```bash
-curl http://localhost:8000/health
-```
+If you need direct host access to backend port `8000`, add your own port mapping to the compose file or use a one-off override file.
 
-## Required Environment
+## Volumes and ephemeral storage
 
-Set values in your shell or `.env` before startup:
+Host-mounted by default:
+- `${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data`
+- `${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs`
 
-- `AZURE_OPENAI_BASE_URL` (for example `https://<resource>.openai.azure.com/openai/v1`)
-- `AZURE_OPENAI_API_KEY`
-- `PROGENITOR_MODEL_DEFAULT` (optional override)
+Ephemeral storage:
+- `/app/tmp` is a `tmpfs` mount in `progenitor` and `backend`
 
-## Notes
+Notes:
+- Prompt assets now live inside `${PROGENITOR_HOST_DATA_DIR}/prompts` and resolve to `/app/data/prompts` in containers.
+- Skill assets now live inside `${PROGENITOR_HOST_DATA_DIR}/skills` and resolve to `/app/data/skills` in containers.
+- The compose file does **not** currently mount `/app/worktrees` from the host.
+- `PROGENITOR_WORKTREE_DIR` is still set in the `progenitor` container, so the directory exists there, but it is container-local unless you add your own volume.
 
-- The compose stack mounts runtime paths such as `data/state`, `logs`, `worktrees`, `prompts`, and `tmp`.
-- Backend runs `uvicorn app.backend.main:app` in container and depends on `progenitor`.
-- Runner container images for spawned A2A/MCP processes are documented in `CONTAINER_RUNNERS.md`.
+## Health checks
+
+Current health probes are implemented as follows:
+- `progenitor`: `python /app/scripts/healthcheck.py` checks `/app/data/state/health.json`
+- `backend`: `curl -f http://localhost:8000/health`
+- `frontend`: `wget -q -O /dev/null http://127.0.0.1/`

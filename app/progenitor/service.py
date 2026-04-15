@@ -63,10 +63,7 @@ class ProgenitorService:
             project_root: Project root path. If None, uses default.
         """
         self.project_root = project_root or Path(__file__).parent.parent.parent
-        self.config = config or get_config(
-            self.project_root,
-            self.project_root / "config"
-        )
+        self.config = config or get_config(self.project_root, self.project_root / "config")
 
         self._initialized = False
         self._lock = asyncio.Lock()
@@ -110,7 +107,11 @@ class ProgenitorService:
             await self.state_manager.initialize()
 
             # Initialize LLM client
-            self.llm_client = LLMClient(config=self.config.llm, mcp_config=self.config.mcp)
+            self.llm_client = LLMClient(
+                config=self.config.llm,
+                mcp_config=self.config.mcp,
+                prompts_dir=self.config.storage.prompts_dir,
+            )
 
             # Initialize tool registry
             self.tool_registry = ToolRegistry(
@@ -118,12 +119,10 @@ class ProgenitorService:
             )
             await self.tool_registry.load()
 
-            # Initialize MCP tools and register them so they show up
-            # in tool discovery and can be invoked via the registry.
-            from .tools.mcp import setup_mcp_for_llm_client
+            # Initialize external MCP servers and cache their discovered tools.
+            from .tools.mcp import refresh_mcp_runtime
 
-            await setup_mcp_for_llm_client(self.llm_client, self.config.mcp)
-            await self._register_mcp_tools()
+            await refresh_mcp_runtime(self.llm_client, self.tool_registry, self.config.mcp)
 
             # Run agent discovery to populate registry from agents/ folder
             await self._discover_agents()
@@ -142,26 +141,13 @@ class ProgenitorService:
             self._session_id = f"session_{uuid.uuid4().hex[:12]}"
 
             self._initialized = True
-            logger.info(
-                "Progenitor service initialized (session=%s)",
-                self._session_id
-            )
-
-    async def _register_mcp_tools(self) -> None:
-        """Register MCP tools discovered via configured MCP endpoint."""
-        if not self.llm_client or not self.tool_registry:
-            return
-
-        if not self.llm_client.mcp_tools:
-            return
-
-        for tool in self.llm_client.get_mcp_tool_registry_entries():
-            await self.tool_registry.register_tool(tool)
+            logger.info("Progenitor service initialized (session=%s)", self._session_id)
 
     async def handle_message(
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Handle a user message and return the response.
 
@@ -190,7 +176,7 @@ class ProgenitorService:
         try:
             if self.graph is None:
                 raise RuntimeError("Graph not initialized")
-            thread_id = await self._get_thread_id()
+            thread_id = await self._get_thread_id(metadata=metadata)
             graph_input = self._build_graph_input(message)
             config = {"configurable": {"thread_id": thread_id}}
             result = await self.graph.ainvoke(graph_input, config)
@@ -210,6 +196,7 @@ class ProgenitorService:
         self,
         message: str,
         request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """Handle a message and stream the response.
 
@@ -234,7 +221,7 @@ class ProgenitorService:
         try:
             if self.graph is None:
                 raise RuntimeError("Graph not initialized")
-            thread_id = await self._get_thread_id()
+            thread_id = await self._get_thread_id(metadata=metadata)
             graph_input = self._build_graph_input(message)
             config = {"configurable": {"thread_id": thread_id}}
             # Use astream for streaming
@@ -248,7 +235,7 @@ class ProgenitorService:
                     last_result.update(node_output)
                     if chunk := node_output.get("pending_response"):
                         # Yield new content
-                        new_content = chunk[len(full_response):]
+                        new_content = chunk[len(full_response) :]
                         if new_content:
                             full_response = chunk
                             yield new_content
@@ -300,6 +287,8 @@ class ProgenitorService:
         # Commit any pending state
         if self.state_manager:
             await self.state_manager.commit_state()
+        if self.llm_client:
+            await self.llm_client.close()
 
         self._initialized = False
         logger.info("Progenitor service shutdown complete")
@@ -308,13 +297,16 @@ class ProgenitorService:
         """Build the same graph input shape used by ProgenitorLoop."""
         return {"messages": [HumanMessage(content=message)]}
 
-    async def _get_thread_id(self) -> str:
-        """Use the persisted conversation run_id so service mode preserves context."""
+    async def _get_thread_id(self, metadata: dict[str, Any] | None = None) -> str:
+        """Use a request-scoped thread_id when provided, otherwise preserve the main thread."""
+        requested_thread_id = str((metadata or {}).get("thread_id") or "").strip()
+        if requested_thread_id:
+            return requested_thread_id
         if self.state_manager:
             current_state = await self.state_manager.get_current_state()
-            run_id = str(current_state.get("run_id") or "").strip()
-            if run_id:
-                return run_id
+            thread_id = str(current_state.get("thread_id") or "").strip()
+            if thread_id:
+                return thread_id
         return self._session_id or "progenitor_service"
 
     def _extract_response(self, result: Any) -> str:
@@ -461,9 +453,7 @@ def get_service(config: ProgenitorConfig | None = None) -> ProgenitorService:
     return _service
 
 
-async def get_initialized_service(
-    config: ProgenitorConfig | None = None
-) -> ProgenitorService:
+async def get_initialized_service(config: ProgenitorConfig | None = None) -> ProgenitorService:
     """Get an initialized service instance.
 
     Args:

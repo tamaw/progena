@@ -64,6 +64,6 @@ When proposing architectural changes:
 
 ## References
 - `docs/ARCHITECTURE_DIAGRAM.md` - System architecture
-- `docs/loop.spec.md` - Loop specification
+- `docs/SPEC.md` - Main system specification
 - `app/progenitor/graph.py` - Graph topology
 - `app/progenitor/state/models.py` - State models

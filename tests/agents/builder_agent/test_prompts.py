@@ -25,5 +25,5 @@ def test_planner_prompt_includes_repo_skill_context():
 def test_builder_skill_context_missing_skill_raises():
     prompts = PromptTemplates()
 
-    with pytest.raises(FileNotFoundError, match="prompts/skills/does-not-exist/SKILL.md"):
+    with pytest.raises(FileNotFoundError, match="does-not-exist/SKILL.md"):
         prompts.get_builder_skill_context(["does-not-exist"])

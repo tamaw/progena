@@ -1,18 +1,16 @@
-"""
-New Conversation - Start a new conversation by resetting run_id and clearing session state.
-"""
+"""New Conversation - Start a new conversation by resetting the main thread ID."""
 
 import logging
 from typing import Any
 
-from ..state.models import generate_run_id
+from ..state.models import generate_thread_id
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
 
 class NewConversationTool(BaseSystemTool):
-    """Start a new conversation by resetting run_id and clearing session state."""
+    """Start a new conversation by resetting thread_id and clearing session state."""
 
     @property
     def name(self) -> str:
@@ -20,7 +18,7 @@ class NewConversationTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Start a new conversation (fresh run_id, clears server-side context/history)"
+        return "Start a new conversation (fresh thread_id, clears server-side context/history)"
 
     @property
     def keywords(self) -> list[str]:
@@ -32,9 +30,8 @@ class NewConversationTool(BaseSystemTool):
             "clear conversation",
             "clear chat",
             "reset chat",
-            "fresh run",
-            "new run id",
-            "new run",
+            "fresh thread",
+            "new thread id",
             "start over",
         ]
 
@@ -44,14 +41,18 @@ class NewConversationTool(BaseSystemTool):
 
         previous_state = context.state
 
-        previous_run_id = previous_state.get("run_id") if isinstance(previous_state, dict) else None
-        previous_messages = previous_state.get("messages", []) if isinstance(previous_state, dict) else []
+        previous_thread_id = (
+            previous_state.get("thread_id") if isinstance(previous_state, dict) else None
+        )
+        previous_messages = (
+            previous_state.get("messages", []) if isinstance(previous_state, dict) else []
+        )
         messages_cleared = len(previous_messages or [])
 
-        new_run_id = generate_run_id()
+        new_thread_id = generate_thread_id()
 
         reset_state: dict[str, Any] = {
-            "run_id": new_run_id,
+            "thread_id": new_thread_id,
             "cycle_count": 0,
             "actions_this_cycle": 0,
             "shutdown_requested": False,
@@ -70,9 +71,9 @@ class NewConversationTool(BaseSystemTool):
             context.state.update(reset_state)  # type: ignore[typeddict-item]
 
         logger.info(
-            "New conversation started (previous_run_id=%s, new_run_id=%s, messages_cleared=%d)",
-            previous_run_id,
-            new_run_id,
+            "New conversation started (previous_thread_id=%s, new_thread_id=%s, messages_cleared=%d)",
+            previous_thread_id,
+            new_thread_id,
             messages_cleared,
         )
 
@@ -80,10 +81,10 @@ class NewConversationTool(BaseSystemTool):
         return ToolResult.ok(
             {
                 "reset": True,
-                "run_id": new_run_id,
-                "new_run_id": new_run_id,
-                "previous_run_id": previous_run_id,
+                "thread_id": new_thread_id,
+                "new_thread_id": new_thread_id,
+                "previous_thread_id": previous_thread_id,
                 "messages_cleared": messages_cleared,
             },
-            state_updates=reset_state
+            state_updates=reset_state,
         )

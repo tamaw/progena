@@ -116,7 +116,7 @@ pytest tests/progenitor/ --cov=app.progenitor
 #### Config Files
 - `current_state.json`: User session state
 - `build_state.json`: Build backlog and results
-- `schedule.json`: Scheduled tasks
+- `data/config/schedule.json`: Scheduled tasks
 
 ### Key Patterns
 
@@ -161,7 +161,7 @@ result = await llm_client.verify(build_output)
 - Secret redaction in logs
 
 ### References
-- Loop Spec: `docs/loop.spec.md`
+- Runtime Spec: `docs/SPEC.md`
 - Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
 - State Models: `app/progenitor/state/models.py`
 - Graph Definition: `app/progenitor/graph.py`

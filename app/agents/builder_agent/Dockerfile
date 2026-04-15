@@ -22,14 +22,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEFAULT_COPILOT_MODEL= \
     PROGENITOR_PROJECT_ROOT=/app/worktrees \
     PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
-    PROGENITOR_STATE_DIR=/app/data/state \
-    PROGENITOR_LOG_DIR=/app/logs \
-    PROGENITOR_PROMPTS_DIR=/app/prompts
+    PROGENITOR_WORKTREES_ROOT=/app/worktrees \
+    PROGENITOR_DATA_DIR=/app/data \
+    PROGENITOR_LOG_DIR=/app/logs
 
 RUN addgroup --system agent && adduser --system --ingroup agent runner
 
 # Install system dependencies: git for worktrees, curl/ca-certs for CLI installs
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
@@ -44,7 +44,7 @@ RUN set -eux; \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list; \
     apt-get update; \
-    apt-get install -y gh; \
+    apt-get install -y --no-install-recommends gh; \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -57,17 +57,18 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy the builder agent package
 COPY app/agents/builder_agent/ /app/agent/
 
-# Copy prompts used by inner-loop nodes (skills, system prompts)
-COPY prompts/ /app/prompts/
+# Copy prompts and repo-level skills used by inner-loop nodes
+COPY data/prompts/ /app/data/prompts/
+COPY data/skills/ /app/data/skills/
 
 # Runtime directories (state and logs are mounted as named volumes).
 # /app/worktrees is the git workspace used for worktrees — populated on first
 # boot if PROGENITOR_REPO_URL is set, or bind-mounted with a pre-cloned repo.
-RUN mkdir -p /app/data/state /app/logs /app/worktrees /app/tmp && \
+RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/worktrees /app/tmp && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp
 
 # Named volume mount-points — Docker Compose overrides these with named volumes.
-VOLUME ["/app/data", "/app/logs", "/app/worktrees", "/app/prompts"]
+VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
 
 COPY app/agents/builder_agent/docker-entrypoint.sh /usr/local/bin/builder-entrypoint.sh
 RUN chmod +x /usr/local/bin/builder-entrypoint.sh

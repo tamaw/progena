@@ -133,6 +133,34 @@ def _text_msg(text: str) -> Message:
     )
 
 
+def _responses_function_tool(
+    name: str,
+    description: str,
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    schema: dict[str, Any] = (
+        dict(parameters)
+        if parameters is not None
+        else {"type": "object", "properties": {}, "required": []}
+    )
+    if "type" not in schema:
+        schema["type"] = "object"
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        schema["properties"] = properties
+    schema["required"] = list(properties.keys())
+    if "additionalProperties" not in schema:
+        schema["additionalProperties"] = False
+    return {
+        "type": "function",
+        "name": name,
+        "description": description,
+        "parameters": schema,
+        "strict": True,
+    }
+
+
 def _extract_request_text(message: Message | None) -> str:
     if not message:
         return ""
@@ -155,7 +183,9 @@ class ObserveAgent:
 
     AGENT_ID = AGENT_ID
     AGENT_NAME = AGENT_NAME
-    DESCRIPTION = "Monitors Progenitor by reading mounted state/logs and producing diagnostic insights."
+    DESCRIPTION = (
+        "Monitors Progenitor by reading mounted state/logs and producing diagnostic insights."
+    )
     CAPABILITIES = CAPABILITIES
 
     def __init__(
@@ -171,7 +201,10 @@ class ObserveAgent:
         self.state_dir = state_dir or self.config.storage.state_dir
         self.source_logs_dir = source_logs_dir or logs_dir or self.config.storage.log_dir
         self.agent_log_dir = self.config.storage.log_dir / self.runtime_agent_name
-        self._system_prompt = load_prompt("system.md").strip()
+        self._system_prompt = load_prompt(
+            "system.md",
+            prompts_dir=self.config.storage.prompts_dir,
+        ).strip()
         self._graph = self._build_graph()
 
     async def initialize(self) -> None:
@@ -207,7 +240,9 @@ class ObserveAgent:
     def _list_files(base_dir: Path, limit: int = 200) -> list[str]:
         if not base_dir.exists():
             return []
-        results = [str(path.relative_to(base_dir)) for path in base_dir.rglob("*") if path.is_file()]
+        results = [
+            str(path.relative_to(base_dir)) for path in base_dir.rglob("*") if path.is_file()
+        ]
         return sorted(results)[:limit]
 
     def tool_list_state_files(self) -> dict[str, Any]:
@@ -218,7 +253,10 @@ class ObserveAgent:
 
     def tool_list_log_files(self) -> dict[str, Any]:
         try:
-            return {"logs_dir": str(self.source_logs_dir), "files": self._list_files(self.source_logs_dir)}
+            return {
+                "logs_dir": str(self.source_logs_dir),
+                "files": self._list_files(self.source_logs_dir),
+            }
         except Exception as exc:
             return {"error": str(exc)}
 
@@ -261,79 +299,59 @@ class ObserveAgent:
 
     def _tool_defs(self) -> list[dict[str, Any]]:
         return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_state_files",
-                    "description": "List files under the mounted state directory.",
-                    "parameters": {"type": "object", "properties": {}, "required": []},
+            _responses_function_tool(
+                "list_state_files",
+                "List files under the mounted state directory.",
+            ),
+            _responses_function_tool(
+                "list_log_files",
+                "List files under the mounted logs directory. Paths may include nested directories.",
+            ),
+            _responses_function_tool(
+                "read_state_json",
+                "Read a JSON file from the mounted state directory.",
+                {
+                    "type": "object",
+                    "properties": {"filename": {"type": "string"}},
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_log_files",
-                    "description": "List files under the mounted logs directory. Paths may include nested directories.",
-                    "parameters": {"type": "object", "properties": {}, "required": []},
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_state_json",
-                    "description": "Read a JSON file from the mounted state directory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"filename": {"type": "string"}},
-                        "required": ["filename"],
+            ),
+            _responses_function_tool(
+                "read_state_text_tail",
+                "Read the tail of a state file as text.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "max_bytes": {"type": "integer", "default": 131072},
                     },
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_state_text_tail",
-                    "description": "Read the tail of a state file as text.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "max_bytes": {"type": "integer", "default": 131072},
-                        },
-                        "required": ["filename"],
+            ),
+            _responses_function_tool(
+                "read_log_jsonl_tail",
+                "Read the tail of a JSONL log file from the mounted logs directory.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "limit": {"type": "integer", "default": 50},
                     },
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_log_jsonl_tail",
-                    "description": "Read the tail of a JSONL log file from the mounted logs directory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "limit": {"type": "integer", "default": 50},
-                        },
-                        "required": ["filename"],
+            ),
+            _responses_function_tool(
+                "read_log_text_tail",
+                "Read the tail of a log file from the mounted logs directory.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "max_bytes": {"type": "integer", "default": 262144},
                     },
+                    "required": ["filename"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_log_text_tail",
-                    "description": "Read the tail of a log file from the mounted logs directory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "max_bytes": {"type": "integer", "default": 262144},
-                        },
-                        "required": ["filename"],
-                    },
-                },
-            },
+            ),
         ]
 
     def _execute_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -380,7 +398,9 @@ class ObserveAgent:
                 {"role": "user", "content": request},
             ]
             if context:
-                input_messages.append({"role": "user", "content": f"Context keys: {sorted(context.keys())}"})
+                input_messages.append(
+                    {"role": "user", "content": f"Context keys: {sorted(context.keys())}"}
+                )
 
             payload: dict[str, Any] = {
                 "model": self.config.llm.get_model(),
@@ -415,7 +435,12 @@ class ObserveAgent:
                 if not isinstance(call, dict):
                     continue
                 call_id = call.get("call_id") or call.get("id") or call.get("tool_call_id") or ""
-                name = call.get("name") or call.get("tool_name") or call.get("function", {}).get("name") or ""
+                name = (
+                    call.get("name")
+                    or call.get("tool_name")
+                    or call.get("function", {}).get("name")
+                    or ""
+                )
                 raw_args = (
                     call.get("arguments")
                     or call.get("input")
@@ -461,7 +486,9 @@ class ObserveAgent:
 
         def route_after_llm(state: ObserveGraphState) -> str:
             tool_calls = state.get("tool_calls") or []
-            if tool_calls and int(state.get("tool_round", 0)) < int(state.get("max_tool_rounds", 0)):
+            if tool_calls and int(state.get("tool_round", 0)) < int(
+                state.get("max_tool_rounds", 0)
+            ):
                 return "run_tools"
             return "finalize"
 
@@ -483,10 +510,19 @@ class ObserveAgent:
 
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self._responses_endpoint()
+        send_payload = dict(payload)
         start = time.monotonic()
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), headers=self._responses_headers()) as client:
-            response = await client.post(endpoint, json=payload)
-            response.raise_for_status()
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0), headers=self._responses_headers()
+        ) as client:
+            response = await client.post(endpoint, json=send_payload)
+            if response.status_code >= 400:
+                logger.error(
+                    "Observe responses call failed status=%d body=%s",
+                    response.status_code,
+                    response.text,
+                )
+                response.raise_for_status()
             data = cast(dict[str, Any], response.json())
         logger.info(
             "Observe responses call succeeded model=%s duration_ms=%.1f",
@@ -531,7 +567,9 @@ class ObserveAgent:
         return ""
 
     async def process(self, request: str, context: dict[str, Any]) -> str:
-        req = (request or "").strip() or "Summarize current Progenitor health and explain any recent errors."
+        req = (
+            request or ""
+        ).strip() or "Summarize current Progenitor health and explain any recent errors."
         initial_state: ObserveGraphState = {
             "request": req,
             "context": context if isinstance(context, dict) else {},
@@ -545,7 +583,7 @@ class ObserveAgent:
 
 
 class ObserveExecutor(AgentExecutor):
-    """A2A executor that immediately accepts tasks and runs them in the background."""
+    """A2A executor that emits a submitted state, then continues task execution."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or str(uuid.uuid4())
@@ -585,24 +623,25 @@ class ObserveExecutor(AgentExecutor):
             )
             return
 
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=ctx_id,
+                final=False,
+                status=TaskStatus(
+                    state=TaskState.submitted,
+                    message=_text_msg(f"Task accepted (id={task_id}): {request_text[:120]}"),
+                    timestamp=_utc_now_iso(),
+                ),
+            )
+        )
         await _task_queue.enqueue(
             _QueuedTask(
                 task_id=task_id,
                 context_id=ctx_id,
                 request_text=request_text,
                 request_ctx=request_ctx,
-            )
-        )
-        await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
-                task_id=task_id,
-                context_id=ctx_id,
-                final=True,
-                status=TaskStatus(
-                    state=TaskState.submitted,
-                    message=_text_msg(f"Task accepted (id={task_id}): {request_text[:120]}"),
-                    timestamp=_utc_now_iso(),
-                ),
+                event_queue=event_queue,
             )
         )
 

@@ -5,6 +5,7 @@ Tests end-to-end communication between the IPC client and server.
 """
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -19,6 +20,7 @@ class MockLoopRunner:
         self._input_queue = asyncio.Queue()
         self._output_queue = asyncio.Queue()
         self._stream_queue = asyncio.Queue()
+        self._event_queue = asyncio.Queue()
         self._response = "Mock response"
         self._cycle_complete_event = asyncio.Event()
         # Auto-set event for mocking
@@ -34,24 +36,23 @@ class MockLoopRunner:
         # Also put streaming chunks (for streaming handler)
         if self._auto_stream:
             # Split response into words like the real loop does
-            words = self._response.split(' ')
+            words = self._response.split(" ")
             for i, word in enumerate(words):
-                is_last = (i == len(words) - 1)
-                chunk = word if is_last else word + ' '
-                await self._stream_queue.put({
-                    "type": "stream_chunk",
-                    "content": chunk,
-                    "is_final": is_last,
-                })
+                is_last = i == len(words) - 1
+                chunk = word if is_last else word + " "
+                await self._stream_queue.put(
+                    {
+                        "type": "stream_chunk",
+                        "content": chunk,
+                        "is_final": is_last,
+                    }
+                )
 
     async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from queue."""
         try:
             if timeout:
-                return await asyncio.wait_for(
-                    self._output_queue.get(),
-                    timeout=timeout
-                )
+                return await asyncio.wait_for(self._output_queue.get(), timeout=timeout)
             return self._output_queue.get_nowait()
         except (TimeoutError, asyncio.QueueEmpty):
             return None
@@ -60,10 +61,7 @@ class MockLoopRunner:
         """Get stream chunk from queue."""
         try:
             if timeout:
-                return await asyncio.wait_for(
-                    self._stream_queue.get(),
-                    timeout=timeout
-                )
+                return await asyncio.wait_for(self._stream_queue.get(), timeout=timeout)
             return self._stream_queue.get_nowait()
         except (TimeoutError, asyncio.QueueEmpty):
             return None
@@ -86,6 +84,18 @@ class MockLoopRunner:
         if timeout:
             await asyncio.sleep(timeout)
         return None
+
+    async def _push_event(
+        self, event_type: str, content: str = "", metadata: dict | None = None
+    ) -> None:
+        """Record an event pushed by the IPC server."""
+        self._event_queue.put_nowait(
+            {
+                "event_type": event_type,
+                "content": content,
+                "metadata": metadata or {},
+            }
+        )
 
 
 @pytest.fixture
@@ -157,9 +167,7 @@ class TestIPCServerBasic:
         assert ipc_server.client_count == 0
 
         # Connect a client
-        reader, writer = await asyncio.open_connection(
-            "127.0.0.1", ipc_server.port
-        )
+        reader, writer = await asyncio.open_connection("127.0.0.1", ipc_server.port)
 
         # Wait for connection to be processed
         await asyncio.sleep(0.2)
@@ -237,16 +245,11 @@ class TestIPCCommunication:
         assert response == "Hello back!"
 
     @pytest.mark.asyncio
-    async def test_send_message_with_request_id(
-        self, ipc_client, ipc_server, mock_loop_runner
-    ):
+    async def test_send_message_with_request_id(self, ipc_client, ipc_server, mock_loop_runner):
         """Test that request ID is preserved."""
         mock_loop_runner.set_response("Response")
 
-        response = await ipc_client.send_message(
-            "Test message",
-            request_id="custom_req_id"
-        )
+        response = await ipc_client.send_message("Test message", request_id="custom_req_id")
 
         assert response == "Response"
 
@@ -258,9 +261,7 @@ class TestIPCCommunication:
         assert initial is not None
 
     @pytest.mark.asyncio
-    async def test_multiple_messages(
-        self, ipc_client, ipc_server, mock_loop_runner
-    ):
+    async def test_multiple_messages(self, ipc_client, ipc_server, mock_loop_runner):
         """Test sending multiple messages sequentially."""
         responses = []
 
@@ -276,11 +277,13 @@ class TestIPCCommunication:
         self, ipc_client, ipc_server, mock_loop_runner
     ):
         """A timed-out prior request must not leak stream chunks into the next response."""
-        await mock_loop_runner._stream_queue.put({
-            "type": "stream_chunk",
-            "content": "stale response",
-            "is_final": True,
-        })
+        await mock_loop_runner._stream_queue.put(
+            {
+                "type": "stream_chunk",
+                "content": "stale response",
+                "is_final": True,
+            }
+        )
         mock_loop_runner.set_response("fresh response")
 
         response = await ipc_client.send_message("Hello after timeout", request_id="fresh_req")
@@ -292,9 +295,7 @@ class TestIPCStreaming:
     """Tests for streaming responses."""
 
     @pytest.mark.asyncio
-    async def test_stream_response(
-        self, ipc_client, ipc_server, mock_loop_runner
-    ):
+    async def test_stream_response(self, ipc_client, ipc_server, mock_loop_runner):
         """Test streaming response."""
         # Disable auto streaming so we can manually control chunks
         mock_loop_runner._auto_stream = False
@@ -455,3 +456,38 @@ class TestIPCConcurrency:
             for client in clients:
                 await client.disconnect()
             await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_message_queued_event_emitted_when_lock_contended(
+        self, ipc_server, mock_loop_runner
+    ):
+        """Queued requests should surface a message_queued event immediately."""
+        client = IPCClient(
+            host="127.0.0.1",
+            port=ipc_server.port,
+            timeout=5.0,
+            auto_reconnect=False,
+        )
+        send_task = None
+
+        await ipc_server._request_lock.acquire()
+        try:
+            await client.connect()
+            send_task = asyncio.create_task(
+                client.send_message("second message while busy", request_id="req_queued")
+            )
+
+            await asyncio.sleep(0.3)
+
+            event = mock_loop_runner._event_queue.get_nowait()
+            assert event["event_type"] == "message_queued"
+            assert event["metadata"]["request_id"] == "req_queued"
+            assert event["metadata"]["streaming"] is False
+        finally:
+            ipc_server._request_lock.release()
+            await asyncio.sleep(0.3)
+            if send_task is not None:
+                send_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await send_task
+            await client.disconnect()

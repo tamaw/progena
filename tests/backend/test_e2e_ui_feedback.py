@@ -46,7 +46,7 @@ def mock_state_files(tmp_path):
     health_data = {
         "status": "running",
         "last_active": datetime.now(UTC).isoformat(),
-        "run_id": "alien-demo-001",
+        "thread_id": "alien-demo-001",
         "cycle_count": 42,
         "pid": 12345,
     }
@@ -83,13 +83,19 @@ def mock_state_files(tmp_path):
             },
         ]
     }
+    mcp_config_path = config_dir / "mcp.json"
     mcp_data = {
-        "tools": [
-            {"name": "universal_decoder", "description": "Decodes alien signals", "enabled": True},
-        ]
+        "mcpServers": {
+            "universal_decoder": {
+                "description": "Decodes alien signals",
+                "enabled": True,
+                "transport": "http",
+                "url": "https://example.com/universal_decoder",
+            }
+        }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    (config_dir / "mcp.json").write_text(json.dumps(mcp_data))
+    mcp_config_path.write_text(json.dumps(mcp_data))
 
     # Build state - in progress
     build_state = {
@@ -126,7 +132,7 @@ def mock_state_files(tmp_path):
     schedule = [
         {"id": "sched-1", "name": "Hourly galactic scan", "schedule": "0 * * * *", "enabled": True},
     ]
-    (state_dir / "schedule.json").write_text(json.dumps(schedule))
+    (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
     return state_dir
 
@@ -163,7 +169,7 @@ class TestUIFeedbackIntegration:
         # Health should show running
         health = reader.get_health()
         assert health.status == "running"
-        assert health.run_id == "alien-demo-001"
+        assert health.thread_id == "alien-demo-001"
         assert health.cycle_count == 42
         assert health.is_running()  # Should be true due to recent last_active
 
@@ -221,7 +227,9 @@ class TestUIFeedbackIntegration:
         assert parsed["health"]["is_running"] is True
         assert len(parsed["agents"]) == 2
 
-    def test_workspace_payload_and_widgets_include_mcp_and_schedule(self, mock_state_files, tmp_path):
+    def test_workspace_payload_and_widgets_include_mcp_and_schedule(
+        self, mock_state_files, tmp_path
+    ):
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
         (logs_dir / "galactic-translator.log").write_text("translator online\n", encoding="utf-8")
@@ -234,7 +242,7 @@ class TestUIFeedbackIntegration:
         payload = reader.get_workspace_payload()
 
         assert payload["workspace"]["storage"] == "indexeddb"
-        assert payload["health"]["run_id"] == "alien-demo-001"
+        assert payload["health"]["thread_id"] == "alien-demo-001"
         widget_types = {widget["type"] for widget in payload["widgets"]}
         assert {"agent", "mcp", "schedule"} <= widget_types
 
@@ -242,7 +250,14 @@ class TestUIFeedbackIntegration:
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
         (logs_dir / "tech-analyzer.jsonl").write_text(
-            json.dumps({"timestamp": "2026-03-12T10:00:00Z", "level": "warn", "message": "analysis delayed"}) + "\n",
+            json.dumps(
+                {
+                    "timestamp": "2026-03-12T10:00:00Z",
+                    "level": "warn",
+                    "message": "analysis delayed",
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -418,10 +433,13 @@ class TestRealTimeSSEFeedback:
 
         try:
             # Broadcast test event
-            broadcast_chat_event("alien_contact", {
-                "message": "First contact initiated",
-                "species": "Unknown",
-            })
+            broadcast_chat_event(
+                "alien_contact",
+                {
+                    "message": "First contact initiated",
+                    "species": "Unknown",
+                },
+            )
 
             # Verify event was queued
             assert not queue.empty()
@@ -505,7 +523,7 @@ class TestDataIntegrity:
         health = HealthInfo(
             status="running",
             last_active="2024-01-15T10:30:00+00:00",
-            run_id="test",
+            thread_id="thread-test",
             cycle_count=100,
             pid=1234,
         )
@@ -516,27 +534,29 @@ class TestDataIntegrity:
 
     def test_agent_info_handles_all_fields(self):
         """Test AgentInfo handles all possible fields."""
-        full_agent = AgentInfo.from_dict({
-            "name": "complete-agent",
-            "kind": "a2a_agent",
-            "version": "3.0.0",
-            "description": "Complete agent with all fields",
-            "capabilities": ["cap1", "cap2", "cap3"],
-            "entrypoint": "python complete.py",
-            "endpoint": "http://localhost:9001",
-            "transport": "http",
-            "enabled": True,
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-15T12:00:00Z",
-            "status": "ready",
-            "status_message": "Waiting for requests",
-            "port": 9001,
-            "agent_card_url": "http://localhost:9001/.well-known/agent-card.json",
-            "pid": 54321,
-            "startup_time": "2024-01-15T11:00:00Z",
-            "last_heartbeat": "2024-01-15T12:00:00Z",
-            "last_error": None,
-        })
+        full_agent = AgentInfo.from_dict(
+            {
+                "name": "complete-agent",
+                "kind": "a2a_agent",
+                "version": "3.0.0",
+                "description": "Complete agent with all fields",
+                "capabilities": ["cap1", "cap2", "cap3"],
+                "entrypoint": "python complete.py",
+                "endpoint": "http://localhost:9001",
+                "transport": "http",
+                "enabled": True,
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-15T12:00:00Z",
+                "status": "ready",
+                "status_message": "Waiting for requests",
+                "port": 9001,
+                "agent_card_url": "http://localhost:9001/.well-known/agent-card.json",
+                "pid": 54321,
+                "startup_time": "2024-01-15T11:00:00Z",
+                "last_heartbeat": "2024-01-15T12:00:00Z",
+                "last_error": None,
+            }
+        )
 
         assert full_agent.name == "complete-agent"
         assert full_agent.port == 9001
