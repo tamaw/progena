@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function buildTargetOptions(data, agentOptions) {
@@ -36,12 +37,14 @@ function PromptNode({ id, data, selected }) {
     agentOptions,
     getWidgetTabs,
     getWidgetDefaultTab,
+    getWidgetHelpText,
   } = useWorkspaceMeta();
   const { expanded } = data;
   const associatedAgents = data.associatedAgents || [];
   const targetAgentOptions = buildTargetOptions(data, agentOptions);
   const activeTargetAgent = data.targetAgent || targetAgentOptions[0] || 'progenitor';
   const tabs = getWidgetTabs('prompt');
+  const helpText = getWidgetHelpText('prompt');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('prompt'), 'editor'),
     [getWidgetDefaultTab, tabs]
@@ -189,6 +192,7 @@ function PromptNode({ id, data, selected }) {
           <div className="node-actions">
             <button className="node-action-btn primary" onClick={() => runPromptNode(id)}>Run</button>
             <button className="node-action-btn" onClick={() => generateFromPromptNode(id)}>Generate Code</button>
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

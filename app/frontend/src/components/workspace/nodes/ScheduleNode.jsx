@@ -2,15 +2,17 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function ScheduleNode({ id, data, selected }) {
   const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
   const isSaving = Boolean(data.isSaving && !data.serverManaged);
   const tabs = getWidgetTabs('schedule');
+  const helpText = getWidgetHelpText('schedule');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('schedule'), 'details'),
     [getWidgetDefaultTab, tabs]
@@ -202,6 +204,7 @@ function ScheduleNode({ id, data, selected }) {
             ) : (
               <button className="node-action-btn primary" onClick={() => runScheduleNode(id)}>Run Now</button>
             )}
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

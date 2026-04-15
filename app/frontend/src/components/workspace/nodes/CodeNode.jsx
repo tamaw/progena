@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 const LANGUAGES = [
@@ -11,9 +12,10 @@ const LANGUAGES = [
 
 function CodeNode({ id, data, selected }) {
   const { updateNodeData, toggleExpanded, runCodeNode } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('code');
+  const helpText = getWidgetHelpText('code');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('code'), 'editor'),
     [getWidgetDefaultTab, tabs]
@@ -125,6 +127,7 @@ function CodeNode({ id, data, selected }) {
             {data.status === 'running' && (
               <button className="node-action-btn danger">Stop</button>
             )}
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

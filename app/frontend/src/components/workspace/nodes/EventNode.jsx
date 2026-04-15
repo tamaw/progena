@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 const eventTypeOptions = [
@@ -38,11 +39,12 @@ function formatEventLabel(eventType) {
 
 function EventNode({ id, data, selected }) {
   const { updateNodeData, toggleExpanded, saveEventNode, runEventNode } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
   const isSaving = Boolean(data.isSaving && !data.serverManaged);
   const tabs = getWidgetTabs('event');
+  const helpText = getWidgetHelpText('event');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('event'), 'details'),
     [getWidgetDefaultTab, tabs]
@@ -213,6 +215,7 @@ function EventNode({ id, data, selected }) {
                 {isSaving ? 'Saving...' : 'Save Event'}
               </button>
             )}
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>
