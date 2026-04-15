@@ -23,9 +23,8 @@ export function AlertCenterProvider({ children }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [selectedAlertId, setSelectedAlertId] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const refreshTimerRef = useRef(null);
   const mountedRef = useRef(false);
 
   const applyAlertPayload = useCallback((payload) => {
@@ -62,33 +61,19 @@ export function AlertCenterProvider({ children }) {
     }
   }, [applyAlertPayload, getAlerts]);
 
-  const queueRefresh = useCallback(() => {
-    if (refreshTimerRef.current) {
-      return;
-    }
-
-    refreshTimerRef.current = window.setTimeout(() => {
-      refreshTimerRef.current = null;
-      void loadAlerts({ background: true });
-    }, 200);
-  }, [loadAlerts]);
-
   useEffect(() => {
     mountedRef.current = true;
-    void loadAlerts();
 
     return () => {
       mountedRef.current = false;
-      if (refreshTimerRef.current) {
-        clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = null;
-      }
     };
-  }, [loadAlerts]);
+  }, []);
 
   const handleStatusEvent = useCallback((event) => {
-    if (['connected', 'status', 'heartbeat', 'alerts'].includes(event?.type)) {
-      queueRefresh();
+    if (event?.type === 'alerts' && event.data) {
+      applyAlertPayload(event.data);
+      setIsLoading(false);
+      setError('');
       return;
     }
 
@@ -96,9 +81,15 @@ export function AlertCenterProvider({ children }) {
       setIsPanelOpen(false);
       setSelectedAlertId(null);
     }
-  }, [queueRefresh]);
+  }, [applyAlertPayload]);
 
-  useStatusSSE(handleStatusEvent);
+  const { isHealthy } = useStatusSSE(handleStatusEvent);
+
+  useEffect(() => {
+    if (!isHealthy) {
+      setIsLoading(false);
+    }
+  }, [isHealthy]);
 
   const openPanel = useCallback(async () => {
     setIsPanelOpen(true);
@@ -110,13 +101,13 @@ export function AlertCenterProvider({ children }) {
 
     try {
       await markAlertsViewed();
-      await loadAlerts({ background: true });
+      setError('');
     } catch (markError) {
       if (mountedRef.current) {
         setError(markError.message);
       }
     }
-  }, [alerts, loadAlerts, markAlertsViewed, unreadCount]);
+  }, [alerts, markAlertsViewed, unreadCount]);
 
   const closePanel = useCallback(() => {
     setIsPanelOpen(false);

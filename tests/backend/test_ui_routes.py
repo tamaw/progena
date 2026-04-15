@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.alerts import create_alert
+from app.backend.alerts import clear_alerts, create_alert
 from app.backend.main import app
 from app.backend.state_reader import StateReader, get_state_reader
 from app.backend.threads import clear_threads
@@ -915,6 +915,52 @@ class TestSplitSSEEndpoints:
         # Just verify they're callable
         assert callable(broadcast_chat_event)
         assert callable(broadcast_status_event)
+
+    def test_broadcast_alerts_state_pushes_full_alert_payload(self):
+        from app.backend import ui_routes
+
+        clear_alerts()
+        alert = create_alert(type="warning", title="Build", message="Build failed")
+        queue = ui_routes.asyncio.Queue()
+        ui_routes._status_subscribers.append(queue)
+        try:
+            ui_routes.broadcast_alerts_state()
+            event = queue.get_nowait()
+        finally:
+            ui_routes._status_subscribers.remove(queue)
+            clear_alerts()
+
+        assert event["type"] == "alerts"
+        payload = json.loads(event["data"])
+        assert payload["unread"] == 1
+        assert payload["total"] == 1
+        assert payload["alerts"][0]["id"] == alert.id
+        assert payload["alerts"][0]["title"] == "Build"
+
+    @pytest.mark.asyncio
+    async def test_status_stream_connected_emits_alerts_payload(self, monkeypatch):
+        from app.backend import ui_routes
+
+        clear_alerts()
+        alert = create_alert(type="info", title="Heads up", message="Alert from SSE")
+        monkeypatch.setattr(ui_routes, "start_status_monitor", lambda: None)
+        monkeypatch.setattr(
+            ui_routes, "_get_current_status", AsyncMock(return_value={"connected": True})
+        )
+
+        generator = ui_routes._generate_status_events()
+        try:
+            connected_event = await generator.__anext__()
+            alerts_event = await generator.__anext__()
+        finally:
+            await generator.aclose()
+            clear_alerts()
+
+        assert "event: connected" in connected_event
+        assert "event: alerts" in alerts_event
+        payload = json.loads(alerts_event.split("data: ", 1)[1].strip())
+        assert payload["unread"] == 1
+        assert payload["alerts"][0]["id"] == alert.id
 
 
 class TestWorkspaceBridgeActions:
