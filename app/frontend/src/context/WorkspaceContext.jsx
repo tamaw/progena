@@ -1060,7 +1060,10 @@ export function WorkspaceProvider({ children }) {
     }
 
     clearQueuedWidgetPatch(node.id);
-    await deleteWidget(node.id);
+    const deleteResult = await deleteWidget(node.id);
+    if (deleteResult?.warning) {
+      console.warn(`[WorkspaceContext] ${deleteResult.warning}`);
+    }
     return true;
   }, [clearQueuedWidgetPatch, deleteWidget]);
 
