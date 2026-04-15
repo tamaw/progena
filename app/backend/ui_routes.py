@@ -1659,6 +1659,24 @@ def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
     return schedule_path, raw
 
 
+def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> None:
+    """Delete a persisted schedule entry and refresh the cached schedule file."""
+    schedule_path, schedule_data = _read_schedule_config(state_reader)
+    remaining_entries: list = []
+    deleted = False
+    for entry in schedule_data:
+        if isinstance(entry, dict) and entry.get("id") == schedule_id:
+            deleted = True
+            continue
+        remaining_entries.append(entry)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Widget not found")
+
+    _atomic_write_json(schedule_path, remaining_entries)
+    state_reader.invalidate(schedule_path)
+
+
 async def _refresh_live_mcp_runtime(mcp_config_path: Path) -> None:
     """Best-effort refresh for the in-process Progenitor service after config edits."""
     with contextlib.suppress(Exception):
@@ -2330,6 +2348,22 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
 
     _broadcast_widget_refresh(state_reader)
     return _widget_to_response(refreshed)
+
+
+@router.delete("/widgets/{widget_id}", status_code=204)
+async def delete_widget(widget_id: str):
+    """Delete a backend-owned widget where a matching state file exists."""
+    state_reader = get_state_reader()
+    if not widget_id.startswith("schedule:"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only schedule widgets can be deleted from the backend",
+        )
+
+    schedule_id = widget_id.split(":", 1)[1]
+    _delete_schedule_entry(state_reader, schedule_id)
+    _broadcast_widget_refresh(state_reader)
+    return None
 
 
 @router.get("/schedules", response_model=ScheduleResponse)

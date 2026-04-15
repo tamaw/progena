@@ -172,6 +172,12 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const deleteWidget = useCallback(async (widgetId) => {
+    await fetchWithRetry(`/api/ui/widgets/${widgetId}`, {
+      method: 'DELETE',
+    });
+  }, [fetchWithRetry]);
+
   const getSchedules = useCallback(async () => {
     const response = await fetchWithRetry('schedules');
     return response.json();
@@ -367,6 +373,7 @@ export function useApi() {
     getPromptContent,
     updatePromptContent,
     updateWidget,
+    deleteWidget,
     getSchedules,
     createSchedule,
     createEvent,
