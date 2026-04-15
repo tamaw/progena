@@ -39,7 +39,6 @@ from app.progenitor.runtime.time_utils import utcnow
 from .alerts import (
     AlertInfo,
     AlertsResponse,
-    AlertSummary,
     MarkAlertsViewedRequest,
     MarkAlertsViewedResponse,
     alert_summary,
@@ -115,7 +114,7 @@ class UIStatusResponse(BaseModel):
     schedule: list["ScheduleItemInfo"] = []
     widgets: list[dict] = []
     sessions: dict = {}
-    alerts: AlertSummary = Field(default_factory=lambda: alert_summary())
+    alerts: AlertsResponse = Field(default_factory=get_alerts_response)
 
 
 class LoopInfo(BaseModel):
@@ -643,7 +642,7 @@ async def get_ui_status_snapshot():
                 else None,
                 "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
             },
-            alerts=alert_summary(),
+            alerts=get_alerts_response(),
         )
     except Exception as e:
         logger.error("Failed to get UI status: %s", e)
@@ -3480,7 +3479,7 @@ async def _get_current_status() -> dict:
             "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
             "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
         },
-        "alerts": alert_summary(),
+        "alerts": _alerts_payload(),
     }
 
     if shutdown_mgr and shutdown_mgr.is_shutting_down:
