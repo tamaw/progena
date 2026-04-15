@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 const MESSAGE_TYPE_OPTIONS = [
@@ -38,9 +39,10 @@ function formatMessageType(value) {
 
 function UserNode({ id, data, selected }) {
   const { updateNodeData, toggleExpanded, runUserNode } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('user');
+  const helpText = getWidgetHelpText('user');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('user'), 'details'),
     [getWidgetDefaultTab, tabs]
@@ -207,6 +209,7 @@ function UserNode({ id, data, selected }) {
             <button className="node-action-btn primary" onClick={() => runUserNode(id)}>
               Send
             </button>
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

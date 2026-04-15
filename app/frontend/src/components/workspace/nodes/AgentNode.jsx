@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function formatDateTime(value) {
@@ -110,9 +111,10 @@ function AgentNode({ id, data, selected }) {
     refreshWidgetNode,
     updateNodeData,
   } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const widgetKind = data.widgetKind || 'agent';
+  const helpText = getWidgetHelpText(widgetKind);
   const icon = widgetKind === 'mcp' ? 'M' : 'A';
   const titleLabel = widgetKind === 'mcp' ? 'MCP' : 'Agent';
   const actionTabId = widgetKind === 'agent' ? 'skills' : 'tools';
@@ -626,6 +628,11 @@ function AgentNode({ id, data, selected }) {
             >
               {data.isRefreshing ? 'Refreshing...' : 'Refresh'}
             </button>
+            <NodeHelpButton
+              description={helpText}
+              title={data.title}
+              alignRight
+            />
           </div>
         )}
       </div>
