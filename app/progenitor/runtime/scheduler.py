@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, cast
 
-from croniter import croniter  # type: ignore[import-untyped]
+from croniter import croniter
 
 from .time_utils import utcnow
 
@@ -65,7 +65,9 @@ class Scheduler:
         if parsed_dt:
             # Normalize to UTC-aware ISO string
             result["scheduled_at"] = parsed_dt.isoformat()
-            result["description"] = f"One-off at {parsed_dt.strftime('%Y-%m-%d %H:%M:%S %Z') or parsed_dt.isoformat()}"
+            result["description"] = (
+                f"One-off at {parsed_dt.strftime('%Y-%m-%d %H:%M:%S %Z') or parsed_dt.isoformat()}"
+            )
             return result
 
         # "every day at 9am"

@@ -39,6 +39,47 @@ def _env_list(key: str) -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
+DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
+DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+DEFAULT_PROJECT_WORKTREES_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_PROJECT_WORKTREE_DIR = DEFAULT_PROJECT_WORKTREES_ROOT / "worktrees"
+
+
+def _default_data_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in data directory unless an explicit project root is provided."""
+    return DEFAULT_PROJECT_DATA_DIR if project_root is None else project_root / "data"
+
+
+def _default_state_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in state directory unless an explicit project root is provided."""
+    return _default_data_dir(project_root) / "state"
+
+
+def _default_log_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in logs directory unless an explicit project root is provided."""
+    return DEFAULT_PROJECT_LOG_DIR if project_root is None else project_root / "logs"
+
+
+def _default_worktrees_root(project_root: Path | None = None) -> Path:
+    """Return the workspace root that owns the managed worktrees/ directory."""
+    return DEFAULT_PROJECT_WORKTREES_ROOT if project_root is None else project_root
+
+
+def _default_worktree_dir(
+    project_root: Path | None = None,
+    *,
+    worktrees_root: Path | str | None = None,
+) -> Path:
+    """Return the managed worktree directory for the current workspace root."""
+    root = (
+        Path(worktrees_root)
+        if worktrees_root is not None
+        else _default_worktrees_root(project_root)
+    )
+    return root / "worktrees"
+
+
 # ---------------------------------------------------------------------------
 # Config dataclasses
 # ---------------------------------------------------------------------------
@@ -60,7 +101,8 @@ class LLMConfig:
             model_default=_first_env(
                 "AGENT_MODEL_DEFAULT",
                 default="gpt-5-mini",
-            ) or "gpt-5-mini",
+            )
+            or "gpt-5-mini",
         )
 
     def get_model(self) -> str:
@@ -71,25 +113,25 @@ class LLMConfig:
 class StorageConfig:
     """Filesystem paths."""
 
-    state_dir: Path = field(default_factory=lambda: Path("/data/state"))
-    log_dir: Path = field(default_factory=lambda: Path("/logs"))
-    worktree_dir: Path = field(default_factory=lambda: Path("/worktrees"))
+    data_dir: Path = field(default_factory=_default_data_dir)
+    state_dir: Path = field(default_factory=_default_state_dir)
+    log_dir: Path = field(default_factory=_default_log_dir)
+    worktree_dir: Path = field(default_factory=_default_worktree_dir)
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> StorageConfig:
         wt_root = (os.getenv("PROGENITOR_WORKTREES_ROOT") or "").strip()
-        if project_root:
-            d_state = project_root / "data" / "state"
-            d_logs = project_root / "logs"
-            d_wt = Path(wt_root) / "worktrees" if wt_root else project_root / "worktrees"
-        else:
-            d_state = Path("/data/state")
-            d_logs = Path("/logs")
-            d_wt = Path(wt_root) / "worktrees" if wt_root else Path("/worktrees")
+        data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(_default_data_dir(project_root))))
         return cls(
-            state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", str(d_state))),
-            log_dir=Path(os.getenv("PROGENITOR_LOG_DIR", str(d_logs))),
-            worktree_dir=Path(os.getenv("PROGENITOR_WORKTREE_DIR", str(d_wt))),
+            data_dir=data_dir,
+            state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", str(data_dir / "state"))),
+            log_dir=Path(os.getenv("PROGENITOR_LOG_DIR", str(_default_log_dir(project_root)))),
+            worktree_dir=Path(
+                os.getenv(
+                    "PROGENITOR_WORKTREE_DIR",
+                    str(_default_worktree_dir(project_root, worktrees_root=wt_root or None)),
+                )
+            ),
         )
 
 
@@ -104,14 +146,15 @@ class CopilotConfig:
     allowed_dirs: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_env(cls) -> CopilotConfig:
-        wt_root = (os.getenv("PROGENITOR_WORKTREES_ROOT") or "").strip() or "/worktrees"
+    def from_env(cls, project_root: Path | None = None) -> CopilotConfig:
+        wt_root = (os.getenv("PROGENITOR_WORKTREES_ROOT") or "").strip()
+        workspace_root = Path(wt_root) if wt_root else _default_worktrees_root(project_root)
         return cls(
             bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
             timeout_seconds=_env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
             additional_flags=_env_list("PROGENITOR_COPILOT_ADDITIONAL_FLAGS"),
             model=os.getenv("DEFAULT_COPILOT_MODEL", "gpt-5-mini"),
-            allowed_dirs=[wt_root],
+            allowed_dirs=[str(workspace_root)],
         )
 
 
@@ -130,7 +173,7 @@ class BuilderConfig:
         return cls(
             llm=LLMConfig.from_env(),
             storage=StorageConfig.from_env(project_root),
-            copilot=CopilotConfig.from_env(),
+            copilot=CopilotConfig.from_env(project_root),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
         )

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Deploy mode: changed (diff HEAD^..HEAD) or all agents/mcps"
+        description: "Deploy mode: changed (diff HEAD^..HEAD) or all agents"
         required: false
         default: "changed"
         type: choice
@@ -16,8 +16,6 @@ on:
   push:
     paths:
       - "app/agents/**"
-      - "app/mcp/**"
-      - "docker/runner/**"
       - ".github/workflows/agents.yml"
 
 concurrency:
@@ -72,8 +70,6 @@ jobs:
     env:
       AGENT_NAME: ${{ matrix.agent }}
       PIP_CACHE_DIR: /tmp/pip-cache
-      PROGENITOR_LOG_DIR: /app/logs
-      PROGENITOR_STATE_DIR: /app/data/state
     strategy:
       fail-fast: false
       matrix:
@@ -87,12 +83,10 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install -r requirements.lock.txt
+          pip install -e ".[dev]"
           if [ -f "app/agents/${{ matrix.agent }}/requirements.txt" ]; then
             pip install -r "app/agents/${{ matrix.agent }}/requirements.txt"
           fi
-          pip install ruff pyright
-          pip install -e . --no-deps
 
       - uses: actions/setup-node@v4
         with:
@@ -128,13 +122,12 @@ jobs:
     runs-on: [self-hosted, Linux]
     outputs:
       agents: ${{ steps.diff.outputs.agents }}
-      mcps: ${{ steps.diff.outputs.mcps }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Detect changed agents and MCP servers
+      - name: Detect changed agents
         id: diff
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -161,20 +154,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect agent Dockerfile
-        id: dockerfile
-        run: |
-          if [ -f "app/agents/${{ matrix.agent }}/Dockerfile" ]; then
-            echo "file=app/agents/${{ matrix.agent }}/Dockerfile" >> "$GITHUB_OUTPUT"
-          else
-            echo "file=docker/runner/Dockerfile.agent" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build and push agent image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ steps.dockerfile.outputs.file }}
+          file: app/agents/${{ matrix.agent }}/Dockerfile
           build-args: |
             AGENT_NAME=${{ matrix.agent }}
           push: true
@@ -226,7 +210,7 @@ jobs:
           GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          PROGENITOR_PROMPTS_DIR: /app/prompts
+          PROGENITOR_DATA_DIR: /app/data
         run: python .github/scripts/get_agent_runtime_config.py
 
       - name: Docker login (GHCR)
@@ -254,7 +238,7 @@ jobs:
           GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          PROGENITOR_PROMPTS_DIR: /app/prompts
+          PROGENITOR_DATA_DIR: /app/data
         run: |
           CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
           PORT=${{ steps.runtime.outputs.port }}
@@ -281,19 +265,33 @@ jobs:
             fi
           done
 
-          PROMPTS_HOST_DIR="/var/lib/progenitor/prompts"
+          PROMPTS_HOST_DIR="${{ steps.runtime.outputs.prompts_host_dir }}"
+          if [ -z "${PROMPTS_HOST_DIR}" ]; then
+            PROMPTS_HOST_DIR="/var/lib/progenitor/data/prompts"
+          fi
+          SKILLS_HOST_DIR="$(dirname "${PROMPTS_HOST_DIR}")/skills"
           if command -v sudo >/dev/null 2>&1; then
             sudo mkdir -p "${PROMPTS_HOST_DIR}" || mkdir -p "${PROMPTS_HOST_DIR}"
+            sudo mkdir -p "${SKILLS_HOST_DIR}" || mkdir -p "${SKILLS_HOST_DIR}"
             sudo rm -rf "${PROMPTS_HOST_DIR:?}/"*
-            sudo cp -a prompts/. "${PROMPTS_HOST_DIR}/"
+            sudo rm -rf "${SKILLS_HOST_DIR:?}/"*
+            sudo cp -a data/prompts/. "${PROMPTS_HOST_DIR}/"
+            sudo cp -a data/skills/. "${SKILLS_HOST_DIR}/"
             sudo chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}" || chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}"
+            sudo chown -R "${HOST_UID}:${HOST_GID}" "${SKILLS_HOST_DIR}" || chown -R "${HOST_UID}:${HOST_GID}" "${SKILLS_HOST_DIR}"
             sudo chmod -R u+rwX "${PROMPTS_HOST_DIR}" || chmod -R u+rwX "${PROMPTS_HOST_DIR}"
+            sudo chmod -R u+rwX "${SKILLS_HOST_DIR}" || chmod -R u+rwX "${SKILLS_HOST_DIR}"
           else
             mkdir -p "${PROMPTS_HOST_DIR}"
+            mkdir -p "${SKILLS_HOST_DIR}"
             rm -rf "${PROMPTS_HOST_DIR:?}/"*
-            cp -a prompts/. "${PROMPTS_HOST_DIR}/"
+            rm -rf "${SKILLS_HOST_DIR:?}/"*
+            cp -a data/prompts/. "${PROMPTS_HOST_DIR}/"
+            cp -a data/skills/. "${SKILLS_HOST_DIR}/"
             chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}"
+            chown -R "${HOST_UID}:${HOST_GID}" "${SKILLS_HOST_DIR}"
             chmod -R u+rwX "${PROMPTS_HOST_DIR}"
+            chmod -R u+rwX "${SKILLS_HOST_DIR}"
           fi
 
           if [ -n "${CHOWN_PATHS}" ]; then
@@ -328,12 +326,11 @@ jobs:
             --network progenitor_network \
             -e AGENT_NAME="${AGENT_NAME}" \
             -e A2A_PUBLIC_HOST="${CONTAINER_NAME}" \
-            -e PROGENITOR_STATE_DIR=/app/data/state \
+            -e PROGENITOR_DATA_DIR=/app/data \
             -e PROGENITOR_LOG_DIR=/app/logs \
             -e PROGENITOR_PROJECT_ROOT=/app/worktrees \
             -e PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
             -e PROGENITOR_WORKTREES_ROOT=/app/worktrees \
-            -e PROGENITOR_PROMPTS_DIR=/app/prompts \
             -e GH_TOKEN="${GH_TOKEN}" \
             -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
             ${VOLUME_ARGS} \
@@ -378,101 +375,6 @@ jobs:
           DOCKER_HOSTNAME: ${{ steps.health.outputs.registry_host }}
           PROGENITOR_CONTAINER: progenitor
         run: python .github/scripts/register_agent.py
-
-      - name: Cleanup unused managed images
-        if: success()
-        run: |
-          docker image prune -af \
-            --filter "label=com.progenitor.managed=true" \
-            --filter "until=168h" || true
-
-  # ------------------------------------------------------------------ build + push mcps
-  build-mcp:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
-    runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push MCP image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/runner/Dockerfile.mcp
-          build-args: |
-            MCP_NAME=${{ matrix.mcp }}
-          push: true
-          labels: |
-            com.progenitor.managed=true
-            com.progenitor.component=mcp
-          tags: |
-            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
-            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ------------------------------------------------------------------ deploy mcps
-  deploy-mcp:
-    needs: [detect-changes, build-mcp]
-    if: needs.detect-changes.outputs.mcps != '[]' && needs.detect-changes.outputs.mcps != ''
-    runs-on: self-hosted
-    environment: cronix
-    strategy:
-      fail-fast: false
-      matrix:
-        mcp: ${{ fromJson(needs.detect-changes.outputs.mcps) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Validate MCP directory exists
-        run: |
-          test -d "app/mcp/${{ matrix.mcp }}" \
-            || { echo "MCP directory app/mcp/${{ matrix.mcp }} not found"; exit 1; }
-
-      - name: Docker login (GHCR)
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      - name: Pull MCP image
-        run: docker pull ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
-
-      - name: Stop existing container (if any)
-        run: docker rm -f progenitor-mcp-${{ matrix.mcp }} 2>/dev/null || true
-
-      - name: Run MCP container
-        run: |
-          docker run -d \
-            --name progenitor-mcp-${{ matrix.mcp }} \
-            --restart unless-stopped \
-            --network progenitor_network \
-            -e TEST_MODE=false \
-            ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
-
-      - name: Wait for MCP server to become healthy
-        run: |
-          echo "Waiting for MCP container to start..."
-          for i in $(seq 1 30); do
-            if docker exec progenitor-mcp-${{ matrix.mcp }} \
-              python -c "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()" 2>/dev/null; then
-              echo "MCP ${{ matrix.mcp }} is healthy"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "MCP ${{ matrix.mcp }} failed health check"
-          docker logs progenitor-mcp-${{ matrix.mcp }} --tail 50
-          exit 1
 
       - name: Cleanup unused managed images
         if: success()

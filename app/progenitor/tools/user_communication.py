@@ -16,10 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 # Type alias for event pusher callback
-EventPusher = Callable[
-    [str, str, dict[str, Any] | None],
-    Coroutine[Any, Any, None]
-]
+EventPusher = Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]]
 
 
 class UserCommunicationTools:
@@ -33,16 +30,16 @@ class UserCommunicationTools:
     then received by connected clients (e.g., the frontend).
     """
 
-    def __init__(self, event_pusher: EventPusher, run_id: str | None = None):
+    def __init__(self, event_pusher: EventPusher, thread_id: str | None = None):
         """Initialize user communication tools.
 
         Args:
             event_pusher: Async callback to push events to clients.
                          Signature: (event_type, content, metadata) -> None
-            run_id: Current run ID for context.
+            thread_id: Current conversation thread ID for context.
         """
         self._push_event = event_pusher
-        self._run_id = run_id
+        self._thread_id = thread_id
 
     async def say_to_user(
         self,
@@ -67,7 +64,7 @@ class UserCommunicationTools:
         logger.info("say_to_user: %s", message[:100] if len(message) > 100 else message)
 
         event_metadata = {
-            "run_id": self._run_id,
+            "thread_id": self._thread_id,
             "tool": "say_to_user",
             "context": context,
             **(metadata or {}),
@@ -113,7 +110,7 @@ class UserCommunicationTools:
         logger.info("ask_user: %s", question[:100] if len(question) > 100 else question)
 
         event_metadata = {
-            "run_id": self._run_id,
+            "thread_id": self._thread_id,
             "tool": "ask_user",
             "context": context,
             "options": options,
@@ -142,10 +139,7 @@ class UserCommunicationTools:
         level: str = "info",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Send a notification to the user.
-
-        This is similar to say_to_user but with additional structure for
-        notifications that may be displayed differently (e.g., toast, alert).
+        """Request a backend-managed alert for the user.
 
         Args:
             title: Short notification title.
@@ -159,18 +153,14 @@ class UserCommunicationTools:
         logger.info("notify_user [%s]: %s", level, title)
 
         event_metadata = {
-            "run_id": self._run_id,
+            "thread_id": self._thread_id,
             "tool": "notify_user",
             "title": title,
             "level": level,
             **(metadata or {}),
         }
 
-        await self._push_event(
-            "agent_notification",
-            body,
-            event_metadata,
-        )
+        await self._push_event("alert_request", body, event_metadata)
 
         return {
             "status": "sent",
@@ -186,7 +176,7 @@ USER_COMMUNICATION_TOOLS = [
         "name": "say_to_user",
         "description": "Send a message to the user. Use this to communicate information, updates, or results. Aliases: 'say', 'tell', 'to user', 'message user'.",
         "type": "system_tool",
-        "capabilities": ["user_communication", "messaging", "say", "tell"],
+        "capabilities": ["messaging", "say", "tell"],
         "parameters": {
             "message": {
                 "type": "string",
@@ -204,7 +194,7 @@ USER_COMMUNICATION_TOOLS = [
         "name": "ask_user",
         "description": "Ask the user a question. Use this when you need clarification or input from the user. Aliases: 'ask', 'question', 'inquire'.",
         "type": "system_tool",
-        "capabilities": ["user_communication", "questioning", "ask", "inquire"],
+        "capabilities": ["questioning", "ask", "inquire"],
         "parameters": {
             "question": {
                 "type": "string",
@@ -227,7 +217,7 @@ USER_COMMUNICATION_TOOLS = [
         "name": "notify_user",
         "description": "Send a notification to the user with a title and body. Use for important alerts or status updates.",
         "type": "system_tool",
-        "capabilities": ["user_communication", "notifications", "alerts"],
+        "capabilities": ["notifications", "alerts"],
         "parameters": {
             "title": {
                 "type": "string",
@@ -248,41 +238,6 @@ USER_COMMUNICATION_TOOLS = [
         },
     },
 ]
-
-
-class UserCommunicationTool(BaseSystemTool):
-    """Send a one-way message event to connected clients (via IPC events)."""
-
-    @property
-    def name(self) -> str:
-        return "user_communication"
-
-    @property
-    def description(self) -> str:
-        return "Send a message event to the user via IPC (one-way notification)"
-
-    @property
-    def keywords(self) -> list[str]:
-        return []
-
-    async def execute(self, context: ToolContext) -> ToolResult:
-        raw = (context.user_input or "").strip()
-        message = raw.split(":", 1)[1].strip() if ":" in raw else raw
-
-        if not message:
-            return ToolResult.fail("Provide a message, e.g. 'user_communication: hello'")
-
-        push = getattr(context.llm_client, "_push_event", None)
-        if not callable(push):
-            return ToolResult.fail("LLM client has no IPC event pusher configured")
-
-        await cast(EventPusher, push)(
-            "agent_message",
-            message,
-            {"tool": "user_communication"},
-        )
-
-        return ToolResult.ok({"status": "sent", "message": message})
 
 
 class SayToUserTool(BaseSystemTool):
@@ -351,7 +306,7 @@ class AskUserTool(BaseSystemTool):
 
 
 class NotifyUserTool(BaseSystemTool):
-    """Send a one-way agent_notification event via IPC."""
+    """Request a backend-managed alert via IPC."""
 
     @property
     def name(self) -> str:
@@ -359,7 +314,7 @@ class NotifyUserTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Send a notification to the user via IPC (agent_notification event)"
+        return "Create a backend-managed alert and let the backend drive user-facing delivery"
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
@@ -377,7 +332,7 @@ class NotifyUserTool(BaseSystemTool):
             return ToolResult.fail("LLM client has no IPC event pusher configured")
 
         await cast(EventPusher, push)(
-            "agent_notification",
+            "alert_request",
             body,
             {"tool": "notify_user", "title": title, "level": level},
         )

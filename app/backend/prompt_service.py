@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.progenitor.llm.prompts import resolve_prompts_dir
+from app.progenitor.llm.prompts import resolve_project_root, resolve_prompts_dir
 
 from .state_reader import StateReader, get_state_reader
 
@@ -74,7 +74,7 @@ class PromptService:
 
     def _build_usage_index(self) -> dict[str, set[str]]:
         usage_index: dict[str, set[str]] = {}
-        search_root = self.prompts_dir.parent / "app"
+        search_root = resolve_project_root(self.prompts_dir) / "app"
         if not search_root.exists():
             return usage_index
 
@@ -118,7 +118,10 @@ class PromptService:
         parts = relative_path.parts
         category = parts[0] if parts else None
         if category:
-            if category == "skills" or category == "progenitor":
+            if category == "skills":
+                skill_agent = parts[1] if len(parts) > 1 else "progenitor"
+                agents.add(self._known_agents.get(_normalize_name(skill_agent), skill_agent))
+            elif category == "progenitor":
                 agents.add("progenitor")
             else:
                 agents.add(self._known_agents.get(_normalize_name(category), category))
@@ -126,11 +129,13 @@ class PromptService:
         ordered_agents = sorted(agent for agent in agents if agent)
         primary_agent = ordered_agents[0] if ordered_agents else None
         if category:
-            category_agent = self._known_agents.get(_normalize_name(category), category)
+            if category == "skills":
+                skill_agent = parts[1] if len(parts) > 1 else "progenitor"
+                category_agent = self._known_agents.get(_normalize_name(skill_agent), skill_agent)
+            else:
+                category_agent = self._known_agents.get(_normalize_name(category), category)
             if category_agent in ordered_agents:
                 primary_agent = category_agent
-            elif category == "skills":
-                primary_agent = "progenitor"
 
         return primary_agent, ordered_agents
 

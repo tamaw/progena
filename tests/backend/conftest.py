@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.backend.alerts import clear_alerts
+
 
 @pytest.fixture(autouse=True)
 def cleanup_event_loop():
@@ -39,9 +41,19 @@ def mock_progenitor_client():
     mock_client.start = AsyncMock()
     mock_client.stop = AsyncMock()
 
-    with patch('app.backend.main.get_ipc_client', return_value=mock_client), \
-         patch('app.backend.main.config.telegram_enabled', False):
+    with (
+        patch("app.backend.main.get_ipc_client", return_value=mock_client),
+        patch("app.backend.main.config.telegram_enabled", False),
+    ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def reset_alert_store():
+    """Ensure backend alert state does not leak between tests."""
+    clear_alerts()
+    yield
+    clear_alerts()
 
 
 @pytest.fixture
@@ -59,4 +71,5 @@ def client():
 def app():
     """Get the FastAPI app instance."""
     from app.backend.main import app
+
     return app

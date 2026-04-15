@@ -1,9 +1,10 @@
 """
 Centralized Configuration for Progenitor.
 
-Configuration is read from environment variables. Per SPEC.md.
+Configuration is read from environment variables and live config files.
 """
 
+import json
 import logging
 import logging.handlers
 import os
@@ -33,6 +34,130 @@ DEFAULT_MAX_OUTER_ITERATIONS = 10
 DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
 DEFAULT_VERIFICATION_TARGET_SCORE = 0.8
 DEFAULT_MAX_CONVERSATION_HISTORY = 10
+DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
+DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[2] / "worktrees"
+DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
+
+
+def _default_data_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in data directory unless an explicit project root is provided."""
+    return DEFAULT_PROJECT_DATA_DIR if project_root is None else project_root / "data"
+
+
+def _default_state_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in state directory unless an explicit project root is provided."""
+    return _default_data_dir(project_root) / "state"
+
+
+def _default_log_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in logs directory unless an explicit project root is provided."""
+    return DEFAULT_PROJECT_LOG_DIR if project_root is None else project_root / "logs"
+
+
+def _default_worktree_dir(
+    project_root: Path | None = None,
+    *,
+    worktrees_root: Path | str | None = None,
+) -> Path:
+    """Return the managed worktree directory for the current project root."""
+    if worktrees_root is not None:
+        return Path(worktrees_root) / "worktrees"
+    return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "worktrees"
+
+
+def _default_prompts_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in prompt root unless an explicit project root is provided."""
+    return _default_data_dir(project_root) / "prompts"
+
+
+def _default_config_dir(project_root: Path | None = None) -> Path:
+    """Return the live config directory derived from the active data/state roots."""
+    data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(_default_data_dir(project_root))))
+    default_state_dir = data_dir / "state"
+    state_dir = Path(os.getenv("PROGENITOR_STATE_DIR", str(default_state_dir)))
+    return state_dir.parent / "config"
+
+
+def resolve_mcp_config_path(config_dir: Path | str | None = None) -> Path:
+    """Resolve the live MCP config path from the active config directory."""
+    base_dir = Path(config_dir) if config_dir is not None else _default_config_dir()
+    return base_dir / "mcp.json"
+
+
+def resolve_schedule_config_path(config_dir: Path | str | None = None) -> Path:
+    """Resolve the live schedule config path from the active config directory."""
+    base_dir = Path(config_dir) if config_dir is not None else _default_config_dir()
+    return base_dir / "schedule.json"
+
+
+def _is_valid_env_name(value: str) -> bool:
+    """Return whether a placeholder name is a valid environment variable key."""
+    if not value:
+        return False
+    if not (value[0].isalpha() or value[0] == "_"):
+        return False
+    return all(char.isalnum() or char == "_" for char in value[1:])
+
+
+def _resolve_required_env_template(value: str) -> tuple[str | None, list[str]]:
+    """Resolve ${VAR} placeholders, returning missing variable names when unresolved."""
+    missing: list[str] = []
+    rendered_parts: list[str] = []
+    cursor = 0
+
+    while True:
+        start = value.find("${", cursor)
+        if start == -1:
+            rendered_parts.append(value[cursor:])
+            break
+
+        rendered_parts.append(value[cursor:start])
+        end = value.find("}", start + 2)
+        if end == -1:
+            rendered_parts.append(value[start:])
+            break
+
+        var_name = value[start + 2 : end]
+        if not _is_valid_env_name(var_name):
+            rendered_parts.append(value[start : end + 1])
+            cursor = end + 1
+            continue
+
+        resolved = os.getenv(var_name)
+        if resolved is None:
+            missing.append(var_name)
+        else:
+            rendered_parts.append(resolved)
+        cursor = end + 1
+
+    rendered = "".join(rendered_parts)
+    if missing:
+        return None, missing
+    return rendered, []
+
+
+def default_mcp_config_payload() -> dict[str, Any]:
+    """Return the default MCP server configuration written to data/config/mcp.json."""
+    return {
+        "mcpServers": {
+            "jina": {
+                "enabled": False,
+                "transport": "http",
+                "description": "Jina AI web search and page read tools",
+                "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+                "headers": {
+                    "Authorization": "Bearer ${JINA_API_KEY}",
+                },
+            }
+        }
+    }
+
+
+def default_schedule_config_payload() -> list[Any]:
+    """Return the default schedule configuration written to data/config/schedule.json."""
+    return []
 
 
 @dataclass
@@ -164,18 +289,10 @@ class RuntimeConfig:
                 "PROGENITOR_HEALTH_STALE_SECONDS", fc.get("health_stale_seconds", 120)
             ),
             # IPC settings
-            ipc_enabled=env_bool(
-                "PROGENITOR_IPC_ENABLED", fc.get("ipc_enabled", True)
-            ),
-            ipc_host=os.getenv(
-                "PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")
-            ),
-            ipc_port=env_int(
-                "PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)
-            ),
-            ipc_max_clients=env_int(
-                "PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)
-            ),
+            ipc_enabled=env_bool("PROGENITOR_IPC_ENABLED", fc.get("ipc_enabled", True)),
+            ipc_host=os.getenv("PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")),
+            ipc_port=env_int("PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)),
+            ipc_max_clients=env_int("PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)),
             # Inner loop settings
             max_inner_iterations=env_int(
                 "PROGENITOR_MAX_INNER_ITERATIONS", fc.get("max_inner_iterations", 5)
@@ -184,7 +301,8 @@ class RuntimeConfig:
                 "PROGENITOR_MIN_VERIFICATION_SCORE", fc.get("min_verification_score", 0.8)
             ),
             iteration_time_limit_seconds=env_int(
-                "PROGENITOR_ITERATION_TIME_LIMIT_SECONDS", fc.get("iteration_time_limit_seconds", 600)
+                "PROGENITOR_ITERATION_TIME_LIMIT_SECONDS",
+                fc.get("iteration_time_limit_seconds", 600),
             ),
             # Decision routing settings
             build_confidence_threshold=env_float(
@@ -201,26 +319,34 @@ class RuntimeConfig:
 class StorageConfig:
     """Storage paths configuration."""
 
-    state_dir: Path = field(default_factory=lambda: Path("/data/state"))
-    log_dir: Path = field(default_factory=lambda: Path("/logs"))
-    worktree_dir: Path = field(default_factory=lambda: Path("/worktrees"))
-    prompts_dir: Path = field(default_factory=lambda: Path("/prompts"))
+    data_dir: Path = field(default_factory=_default_data_dir)
+    state_dir: Path = field(default_factory=_default_state_dir)
+    log_dir: Path = field(default_factory=_default_log_dir)
+    worktree_dir: Path = field(default_factory=_default_worktree_dir)
+    prompts_dir: Path = field(default_factory=_default_prompts_dir)
     state_lock_timeout_seconds: int = 10
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
         """Load storage config from environment."""
-        # Default to project-relative paths if not in container
-        default_state = "/data/state" if project_root is None else str(project_root / "data" / "state")
-        default_logs = "/logs" if project_root is None else str(project_root / "logs")
-        default_worktrees = "/worktrees" if project_root is None else str(project_root / "worktrees")
-        default_prompts = "/prompts" if project_root is None else str(project_root / "prompts")
+        worktrees_root = (os.getenv("PROGENITOR_WORKTREES_ROOT") or "").strip()
+        default_data = Path(os.getenv("PROGENITOR_DATA_DIR", str(_default_data_dir(project_root))))
+        default_state = default_data / "state"
+        default_logs = Path(os.getenv("PROGENITOR_LOG_DIR", str(_default_log_dir(project_root))))
+        default_worktrees = Path(
+            os.getenv(
+                "PROGENITOR_WORKTREE_DIR",
+                str(_default_worktree_dir(project_root, worktrees_root=worktrees_root or None)),
+            )
+        )
+        default_prompts = default_data / "prompts"
 
         return cls(
-            state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", default_state)),
-            log_dir=Path(os.getenv("PROGENITOR_LOG_DIR", default_logs)),
-            worktree_dir=Path(os.getenv("PROGENITOR_WORKTREE_DIR", default_worktrees)),
-            prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", default_prompts)),
+            data_dir=default_data,
+            state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", str(default_state))),
+            log_dir=default_logs,
+            worktree_dir=default_worktrees,
+            prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(default_prompts))),
             state_lock_timeout_seconds=env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
         )
 
@@ -287,7 +413,9 @@ class ValidationConfig:
             max_failed_prompts_to_show=env_int("PROGENITOR_VALIDATION_MAX_FAILED_PROMPTS", 5),
             enable_pattern_detection=env_bool("PROGENITOR_VALIDATION_PATTERN_DETECTION", True),
             enable_deduplication=env_bool("PROGENITOR_VALIDATION_DEDUPLICATION", True),
-            enable_historical_comparison=env_bool("PROGENITOR_VALIDATION_HISTORICAL_COMPARISON", True),
+            enable_historical_comparison=env_bool(
+                "PROGENITOR_VALIDATION_HISTORICAL_COMPARISON", True
+            ),
             enable_llm_severity=env_bool("PROGENITOR_VALIDATION_LLM_SEVERITY", True),
             enable_python_tool_actions=env_bool("PROGENITOR_VALIDATION_PYTHON_TOOLS", True),
             pytest_timeout_seconds=env_int("PROGENITOR_VALIDATION_PYTEST_TIMEOUT", 120),
@@ -314,24 +442,123 @@ class SchedulerConfig:
 
 
 @dataclass
+class MCPServerConfig:
+    """Remote HTTP MCP server definition loaded from the live MCP config file."""
+
+    name: str
+    url: str
+    enabled: bool = True
+    transport: str = "http"
+    headers: dict[str, str] = field(default_factory=dict)
+    description: str = ""
+
+
+def load_mcp_servers(
+    config_path: Path | str | None = None,
+) -> list[MCPServerConfig]:
+    """Load external MCP server definitions from Progenitor's live config file."""
+    path = Path(config_path) if config_path is not None else resolve_mcp_config_path()
+    if not path.exists():
+        return []
+
+    try:
+        raw_data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load MCP config from %s: %s", path, exc)
+        return []
+
+    raw_servers = raw_data.get("mcpServers") if isinstance(raw_data, dict) else None
+    if not isinstance(raw_servers, dict):
+        logger.warning("MCP config at %s is missing an 'mcpServers' object", path)
+        return []
+
+    servers: list[MCPServerConfig] = []
+    for server_name, raw_server in raw_servers.items():
+        if not isinstance(server_name, str) or not isinstance(raw_server, dict):
+            continue
+
+        transport = str(raw_server.get("transport") or "http").strip().lower()
+        if transport != "http":
+            logger.warning(
+                "Skipping MCP server '%s': unsupported transport '%s' (remote HTTP only)",
+                server_name,
+                transport,
+            )
+            continue
+
+        raw_url = str(raw_server.get("url") or raw_server.get("endpoint") or "").strip()
+        if not raw_url:
+            logger.warning("Skipping MCP server '%s': missing url", server_name)
+            continue
+
+        resolved_url, missing_url_vars = _resolve_required_env_template(raw_url)
+        if resolved_url is None:
+            logger.warning(
+                "Skipping MCP server '%s': unresolved env vars in url: %s",
+                server_name,
+                ", ".join(sorted(set(missing_url_vars))),
+            )
+            continue
+
+        headers: dict[str, str] = {}
+        raw_headers = raw_server.get("headers")
+        if isinstance(raw_headers, dict):
+            for header_name, header_value in raw_headers.items():
+                if not isinstance(header_name, str):
+                    continue
+                resolved_header, missing_header_vars = _resolve_required_env_template(
+                    str(header_value)
+                )
+                if resolved_header is None:
+                    logger.info(
+                        "Skipping header '%s' for MCP server '%s': missing env vars %s",
+                        header_name,
+                        server_name,
+                        ", ".join(sorted(set(missing_header_vars))),
+                    )
+                    continue
+                headers[header_name] = resolved_header
+
+        servers.append(
+            MCPServerConfig(
+                name=server_name,
+                url=resolved_url,
+                enabled=bool(raw_server.get("enabled", True)),
+                transport=transport,
+                headers=headers,
+                description=str(raw_server.get("description") or "").strip(),
+            )
+        )
+
+    return servers
+
+
+@dataclass
 class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
-    enabled: bool = True
-    base_url: str = "http://localhost:8080/mcp/"
-    api_key: str | None = None
+    config_path: Path = field(default_factory=resolve_mcp_config_path)
+    servers: list[MCPServerConfig] = field(default_factory=list)
 
     @classmethod
-    def from_env(cls) -> "MCPConfig":
-        """Load MCP config from environment."""
-        base_url = os.getenv("PROGENITOR_MCP_BASE_URL", "http://localhost:8080/mcp/").strip()
-        api_key = os.getenv("PROGENITOR_MCP_API_KEY")
-
-        return cls(
-            enabled=env_bool("PROGENITOR_MCP_ENABLED", True),
-            base_url=base_url,
-            api_key=api_key,
+    def load(
+        cls,
+        *,
+        config_path: Path | str | None = None,
+    ) -> "MCPConfig":
+        """Load MCP config from the live data/config/mcp.json file."""
+        resolved_config_path = (
+            Path(config_path) if config_path is not None else resolve_mcp_config_path()
         )
+        return cls(
+            config_path=resolved_config_path,
+            servers=load_mcp_servers(resolved_config_path),
+        )
+
+    @property
+    def enabled_servers(self) -> list[MCPServerConfig]:
+        """Return the remote HTTP MCP servers that should be active."""
+        return [server for server in self.servers if server.enabled]
 
 
 @dataclass
@@ -347,7 +574,9 @@ class ProgenitorConfig:
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
     @classmethod
-    def load(cls, project_root: Path | None = None, _config_dir: Path | None = None) -> "ProgenitorConfig":
+    def load(
+        cls, project_root: Path | None = None, _config_dir: Path | None = None
+    ) -> "ProgenitorConfig":
         """Load complete configuration from environment and files.
 
         Configuration is sourced from environment variables.
@@ -361,7 +590,7 @@ class ProgenitorConfig:
             copilot=CopilotConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             validation=ValidationConfig.from_env(),
-            mcp=MCPConfig.from_env(),
+            mcp=MCPConfig.load(),
         )
 
         # Validate configuration
@@ -392,10 +621,15 @@ class ProgenitorConfig:
 
         # Log warnings but don't fail
         if self.runtime.max_inner_iterations < 1:
-            logger.warning("max_inner_iterations should be >= 1, got %d", self.runtime.max_inner_iterations)
+            logger.warning(
+                "max_inner_iterations should be >= 1, got %d", self.runtime.max_inner_iterations
+            )
 
         if self.runtime.min_verification_score < 0 or self.runtime.min_verification_score > 1:
-            logger.warning("min_verification_score should be between 0 and 1, got %f", self.runtime.min_verification_score)
+            logger.warning(
+                "min_verification_score should be between 0 and 1, got %f",
+                self.runtime.min_verification_score,
+            )
 
         if errors:
             raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))
@@ -443,17 +677,25 @@ class ProgenitorConfig:
                 "poll_seconds": self.scheduler.poll_seconds,
             },
             "mcp": {
-                "enabled": self.mcp.enabled,
-                "base_url": self.mcp.base_url,
+                "config_path": str(self.mcp.config_path),
+                "servers": [
+                    {
+                        "name": server.name,
+                        "url": server.url,
+                        "enabled": server.enabled,
+                        "transport": server.transport,
+                        "description": server.description,
+                        "header_keys": sorted(server.headers.keys()),
+                    }
+                    for server in self.mcp.servers
+                ],
             },
         }
 
         if redact_secrets:
             result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
-            result["mcp"]["api_key"] = "***REDACTED***" if self.mcp.api_key else None
         else:
             result["llm"]["api_key"] = self.llm.api_key
-            result["mcp"]["api_key"] = self.mcp.api_key
 
         return result
 
@@ -463,9 +705,7 @@ _config: ProgenitorConfig | None = None
 
 
 def get_config(
-    project_root: Path | None = None,
-    config_dir: Path | None = None,
-    validate: bool = True
+    project_root: Path | None = None, config_dir: Path | None = None, validate: bool = True
 ) -> ProgenitorConfig:
     """Get or create the global configuration instance.
 
@@ -480,20 +720,17 @@ def get_config(
         _config = ProgenitorConfig.load(project_root, config_dir)
         if validate:
             from .config_validation import validate_config
+
             is_valid, issues = validate_config(_config)
             if not is_valid:
                 logger.warning(
-                    "Configuration has %d validation issue(s): %s",
-                    len(issues),
-                    "; ".join(issues)
+                    "Configuration has %d validation issue(s): %s", len(issues), "; ".join(issues)
                 )
     return _config
 
 
 def reload_config(
-    project_root: Path | None = None,
-    config_dir: Path | None = None,
-    validate: bool = True
+    project_root: Path | None = None, config_dir: Path | None = None, validate: bool = True
 ) -> ProgenitorConfig:
     """Reload configuration (useful for testing or dynamic updates).
 
@@ -506,12 +743,11 @@ def reload_config(
     _config = ProgenitorConfig.load(project_root, config_dir)
     if validate:
         from .config_validation import validate_config
+
         is_valid, issues = validate_config(_config)
         if not is_valid:
             logger.warning(
-                "Configuration has %d validation issue(s): %s",
-                len(issues),
-                "; ".join(issues)
+                "Configuration has %d validation issue(s): %s", len(issues), "; ".join(issues)
             )
     return _config
 
@@ -631,7 +867,7 @@ class JsonLogFormatter(logging.Formatter):
             log_entry["exception"] = self.formatException(record.exc_info)
 
         # Add extra fields if any
-        for key in ("run_id", "cycle_count", "node", "work_item_id"):
+        for key in ("thread_id", "cycle_count", "node", "work_item_id"):
             if hasattr(record, key):
                 log_entry[key] = getattr(record, key)
 

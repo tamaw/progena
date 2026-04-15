@@ -1,9 +1,9 @@
 import { memo, useCallback } from 'react';
 import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions } from '../../../context/WorkspaceContext';
 
 function GroupNode({ id, data, selected }) {
-  const { updateNodeData } = useWorkspaceContext();
+  const { updateNodeData } = useWorkspaceActions();
 
   const onDescriptionChange = useCallback((e) => {
     updateNodeData(id, { description: e.target.value });

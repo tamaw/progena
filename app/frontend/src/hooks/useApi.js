@@ -62,8 +62,12 @@ export function useApi() {
         const response = await fetch(url, mergedOptions);
 
         if (!response.ok) {
-          const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
-          throw new Error(error.error?.message || `HTTP ${response.status}: ${response.statusText}`);
+          const error = await response.json().catch(() => ({}));
+          const message = error.error?.message
+            || error.detail
+            || error.message
+            || `HTTP ${response.status}: ${response.statusText}`;
+          throw new Error(typeof message === 'string' ? message : JSON.stringify(message));
         }
 
         setConnectionState('connected');
@@ -103,6 +107,13 @@ export function useApi() {
 
   const getWidgetSchemas = useCallback(async () => {
     const response = await fetchWithRetry('widgetSchemas');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const refreshWidget = useCallback(async (widgetId) => {
+    const response = await fetchWithRetry(`/api/ui/widgets/${widgetId}/refresh`, {
+      method: 'POST',
+    });
     return response.json();
   }, [fetchWithRetry]);
 
@@ -161,6 +172,13 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const deleteWidget = useCallback(async (widgetId) => {
+    const response = await fetchWithRetry(`/api/ui/widgets/${widgetId}`, {
+      method: 'DELETE',
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
   const getSchedules = useCallback(async () => {
     const response = await fetchWithRetry('schedules');
     return response.json();
@@ -168,6 +186,14 @@ export function useApi() {
 
   const createSchedule = useCallback(async (payload) => {
     const response = await fetchWithRetry('schedules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const createEvent = useCallback(async (payload) => {
+    const response = await fetchWithRetry('events', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
@@ -188,6 +214,19 @@ export function useApi() {
 
   const getLogSources = useCallback(async () => {
     const response = await fetchWithRetry('/api/ui/logs/sources');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getAlerts = useCallback(async () => {
+    const response = await fetchWithRetry('/api/ui/alerts');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const markAlertsViewed = useCallback(async (alertIds = null) => {
+    const response = await fetchWithRetry('/api/ui/alerts/viewed', {
+      method: 'POST',
+      body: alertIds ? JSON.stringify({ alert_ids: alertIds }) : undefined,
+    });
     return response.json();
   }, [fetchWithRetry]);
 
@@ -326,6 +365,7 @@ export function useApi() {
     getWorkspace,
     getWidgets,
     getWidgetSchemas,
+    refreshWidget,
     getKanbanBoard,
     createKanbanCard,
     updateKanbanCard,
@@ -334,10 +374,14 @@ export function useApi() {
     getPromptContent,
     updatePromptContent,
     updateWidget,
+    deleteWidget,
     getSchedules,
     createSchedule,
+    createEvent,
     getLogs,
     getLogSources,
+    getAlerts,
+    markAlertsViewed,
     runAction,
     generateAction,
     getSession,

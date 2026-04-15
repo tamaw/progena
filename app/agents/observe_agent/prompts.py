@@ -9,14 +9,19 @@ from app.progenitor.llm.prompts import resolve_prompts_dir
 
 
 @lru_cache(maxsize=1)
-def get_prompts_dir() -> Path:
+def get_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
     """Return the observe_agent prompt directory."""
-    return resolve_prompts_dir() / "observe_agent"
+    return resolve_prompts_dir(prompts_dir) / "observe_agent"
 
 
-def load_prompt(filename: str, **replacements: str) -> str:
+def load_prompt(
+    filename: str,
+    *,
+    prompts_dir: Path | str | None = None,
+    **replacements: str,
+) -> str:
     """Load an observe_agent prompt file and apply simple replacements."""
-    prompt_path = get_prompts_dir() / filename
+    prompt_path = get_prompts_dir(prompts_dir) / filename
     if not prompt_path.exists():
         raise FileNotFoundError(f"observe_agent prompt file not found: {prompt_path}")
 

@@ -1,14 +1,17 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function WebFrameNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const iframeRef = useRef(null);
   const tabs = getWidgetTabs('webframe');
+  const helpText = getWidgetHelpText('webframe');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('webframe'), 'preview'),
     [getWidgetDefaultTab, tabs]
@@ -165,6 +168,7 @@ function WebFrameNode({ id, data, selected }) {
               <option value="internal_url">Internal URL</option>
               <option value="remote_url">Remote URL</option>
             </select>
+            <NodeHelpButton description={helpText} title={data.title} />
           </div>
         )}
       </div>

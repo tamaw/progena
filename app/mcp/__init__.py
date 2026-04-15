@@ -7,6 +7,7 @@ This directory contains self-hosted FastMCP tools that can be used by:
 - External MCP clients
 
 Each tool lives in its own subdirectory with:
+- Dockerfile: container image used by the MCP deployment workflow
 - server.py: FastMCP server implementation
 - __init__.py: Package exports
 - spec.md: Tool specification
@@ -16,6 +17,7 @@ Tools use the Model Context Protocol (MCP) with FastMCP decorators.
 
 Example tool structure:
     app/mcp/my_tool/
+    ├── Dockerfile
     ├── __init__.py
     ├── server.py  # mcp = FastMCP("my_tool"); @mcp.tool()
     ├── spec.md

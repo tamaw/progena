@@ -5,9 +5,6 @@ These tests use a real StateManager backed by temporary directories and the
 real Scheduler class.  No LLM or network access is required.
 """
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from app.progenitor.runtime.scheduler import Scheduler
@@ -21,7 +18,6 @@ from app.progenitor.tools.schedule import (
     resume_scheduled_task,
     update_scheduled_task,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -161,7 +157,9 @@ class TestSchedulerLifecycle:
         assert result.success is False
 
     @pytest.mark.asyncio
-    async def test_paused_entry_skipped_by_scheduler(self, state_manager: StateManager, scheduler: Scheduler):
+    async def test_paused_entry_skipped_by_scheduler(
+        self, state_manager: StateManager, scheduler: Scheduler
+    ):
         """A paused entry must not appear in get_due_items even when past its run time."""
         schedule_id = await _add_and_persist(state_manager)
         await pause_scheduled_task(schedule_id, state_manager=state_manager)
@@ -178,7 +176,9 @@ class TestSchedulerLifecycle:
         assert schedule_id not in [d["id"] for d in due]
 
     @pytest.mark.asyncio
-    async def test_resumed_entry_eligible_for_scheduling(self, state_manager: StateManager, scheduler: Scheduler):
+    async def test_resumed_entry_eligible_for_scheduling(
+        self, state_manager: StateManager, scheduler: Scheduler
+    ):
         """A resumed entry with a past cron should appear in get_due_items."""
         schedule_id = await _add_and_persist(state_manager)
         await pause_scheduled_task(schedule_id, state_manager=state_manager)

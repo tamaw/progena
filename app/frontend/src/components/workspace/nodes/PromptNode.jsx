@@ -1,18 +1,17 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Handle, NodeResizer, Position } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
-function buildTargetOptions(data, nodes) {
+function buildTargetOptions(data, agentOptions) {
   return [...new Set(
     [
       data.targetAgent,
       data.primaryAgent,
       ...(data.associatedAgents || []),
-      ...nodes
-        .filter((node) => node.type === 'agent' || node.type === 'mcp')
-        .map((node) => node.data?.agentId || node.data?.title || ''),
+      ...agentOptions,
       'progenitor',
     ]
       .map((value) => (typeof value === 'string' ? value.trim() : ''))
@@ -28,20 +27,24 @@ function formatAgentLabel(value) {
 
 function PromptNode({ id, data, selected }) {
   const {
-    nodes,
     connectPromptToAgent,
     updateNodeData,
     toggleExpanded,
     runPromptNode,
     generateFromPromptNode,
+  } = useWorkspaceActions();
+  const {
+    agentOptions,
     getWidgetTabs,
     getWidgetDefaultTab,
-  } = useWorkspaceContext();
+    getWidgetHelpText,
+  } = useWorkspaceMeta();
   const { expanded } = data;
   const associatedAgents = data.associatedAgents || [];
-  const targetAgentOptions = buildTargetOptions(data, nodes);
+  const targetAgentOptions = buildTargetOptions(data, agentOptions);
   const activeTargetAgent = data.targetAgent || targetAgentOptions[0] || 'progenitor';
   const tabs = getWidgetTabs('prompt');
+  const helpText = getWidgetHelpText('prompt');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('prompt'), 'editor'),
     [getWidgetDefaultTab, tabs]
@@ -68,12 +71,8 @@ function PromptNode({ id, data, selected }) {
     toggleExpanded(id);
   }, [id, toggleExpanded]);
 
-  const promptPreview = data.prompt
-    ? data.prompt.substring(0, 120) + (data.prompt.length > 120 ? '...' : '')
-    : 'Empty prompt';
-  const responsePreview = data.summaryState
-    ? data.summaryState.substring(0, 160) + (data.summaryState.length > 160 ? '...' : '')
-    : '';
+  const promptPreview = data.prompt || 'Empty prompt';
+  const responsePreview = data.summaryState || '';
 
   return (
     <>
@@ -136,7 +135,7 @@ function PromptNode({ id, data, selected }) {
                 <div className="node-tab-panel">
                   <div className="prompt-response">
                     <div className="prompt-response-label">Latest response</div>
-                    <div className="prompt-response-body">{data.summaryState || 'No output yet.'}</div>
+                    <div className="prompt-response-body">{data.lastOutput || data.summaryState || 'No output yet.'}</div>
                   </div>
                   {data.linkedOutputIds?.length > 0 && (
                     <div className="node-output-meta">
@@ -193,6 +192,7 @@ function PromptNode({ id, data, selected }) {
           <div className="node-actions">
             <button className="node-action-btn primary" onClick={() => runPromptNode(id)}>Run</button>
             <button className="node-action-btn" onClick={() => generateFromPromptNode(id)}>Generate Code</button>
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

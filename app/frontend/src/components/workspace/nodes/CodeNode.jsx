@@ -1,7 +1,8 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 const LANGUAGES = [
@@ -10,9 +11,11 @@ const LANGUAGES = [
 ];
 
 function CodeNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runCodeNode, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, runCodeNode } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('code');
+  const helpText = getWidgetHelpText('code');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('code'), 'editor'),
     [getWidgetDefaultTab, tabs]
@@ -51,9 +54,7 @@ function CodeNode({ id, data, selected }) {
     }
   }, [id, updateNodeData]);
 
-  const codePreview = data.content
-    ? data.content.split('\n').slice(0, 4).join('\n')
-    : '// empty';
+  const codePreview = data.content || '// empty';
 
   return (
     <>
@@ -64,6 +65,8 @@ function CodeNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon code">&lt;&gt;</div>
@@ -84,7 +87,7 @@ function CodeNode({ id, data, selected }) {
               <div className="code-editor-container">
                 {resolvedActiveTab === 'output' ? (
                   <div className="code-output">
-                    {data.outputRefs?.length > 0 ? data.outputRefs.join('\n') : 'No output yet.'}
+                    {data.lastOutput || (data.outputRefs?.length > 0 ? data.outputRefs.join('\n') : 'No output yet.')}
                   </div>
                 ) : (
                   <>
@@ -124,6 +127,7 @@ function CodeNode({ id, data, selected }) {
             {data.status === 'running' && (
               <button className="node-action-btn danger">Stop</button>
             )}
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

@@ -16,17 +16,19 @@ Controls:
 
 import asyncio
 import contextlib
+import copy
 import inspect
 import json
 import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
 
 from langchain_core.messages import AIMessageChunk
 
-from ..state.models import redact_secrets
+from ..state.models import A2ATaskRecord, ConversationMessage, redact_secrets
+from .a2a_tasks import A2ATaskTracker, build_completion_message
 from .scheduler import Scheduler
 from .time_utils import utcnow, utcnow_isoformat
 
@@ -38,6 +40,14 @@ logger = logging.getLogger(__name__)
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
+
+
+class QueuedInput(NamedTuple):
+    """Input message bundled with its enqueue time."""
+
+    content: Any
+    enqueue_time: float
+
 
 # Module-level reference to the current loop instance for streaming access
 _current_loop: Optional["ProgenitorLoop"] = None
@@ -66,15 +76,11 @@ class ProgenitorLoop:
 
         # Bounded queues to prevent memory exhaustion
         runtime = config.runtime
-        self._input_queue: asyncio.Queue = asyncio.Queue(
+        self._input_queue: asyncio.Queue[QueuedInput] = asyncio.Queue(
             maxsize=runtime.max_input_queue_size
         )
-        self._output_queue: asyncio.Queue = asyncio.Queue(
-            maxsize=runtime.max_output_queue_size
-        )
-        self._stream_queue: asyncio.Queue = asyncio.Queue(
-            maxsize=runtime.max_stream_queue_size
-        )
+        self._output_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_output_queue_size)
+        self._stream_queue: asyncio.Queue = asyncio.Queue(maxsize=runtime.max_stream_queue_size)
         # Event queue for pushing background events to clients
         # Events include: backlog updates, scheduled task triggers, work progress
         self._event_queue: asyncio.Queue = asyncio.Queue(
@@ -91,7 +97,9 @@ class ProgenitorLoop:
         self._streaming_enabled = False
         self._response_was_streamed = False
         self._stream_final_sent = False
-        self._streamed_response_content: str = ""  # Accumulated streamed text for saving to messages
+        self._streamed_response_content: str = (
+            ""  # Accumulated streamed text for saving to messages
+        )
 
         # Captures the most recent pending_response emitted by the graph during a cycle.
         # Used for background job cycles where we don't stream to the client.
@@ -101,8 +109,14 @@ class ProgenitorLoop:
         # Lock to prevent concurrent graph cycles
         self._graph_lock = asyncio.Lock()
 
+        # Timing metadata captured when an input is dequeued.
+        self._current_input_wait_seconds = 0.0
+        self._current_input_pending_count = 0
+
         # Shared state for the loop (protected by _graph_lock)
         self._state: dict[str, Any] = {}
+        self._a2a_task_tracker: A2ATaskTracker | None = None
+        self._a2a_task_poller: asyncio.Task[None] | None = None
 
     async def run_forever(self) -> None:
         """Run the perpetual loop.
@@ -113,11 +127,11 @@ class ProgenitorLoop:
         _current_loop = self
         self.running = True
 
-        run_id = str(uuid.uuid4())
+        boot_thread_id = str(uuid.uuid4())
 
         # Initialize shared state
         self._state = {
-            "run_id": run_id,
+            "thread_id": boot_thread_id,
             "cycle_count": 0,
             "actions_this_cycle": 0,
             "shutdown_requested": False,
@@ -125,6 +139,8 @@ class ProgenitorLoop:
             "agents": [],
             "current_input_role": None,
             "current_input_metadata": None,
+            "input_wait_seconds": 0.0,
+            "pending_messages_in_queue": 0,
             "idle_cycles": 0,
             "current_backoff_seconds": self.config.runtime.idle_backoff_seconds,
         }
@@ -132,30 +148,49 @@ class ProgenitorLoop:
         # Load persisted state (recover from previous run)
         current_state = await self.state_manager.get_current_state()
         self._state.update(current_state)
+        restored_thread_id = str(
+            current_state.get("thread_id") or self._state.get("thread_id") or ""
+        ).strip()
+        if restored_thread_id:
+            self._state["thread_id"] = restored_thread_id
 
         logger.info(
-            "Starting perpetual loop (boot_run_id: %s, conversation_run_id: %s)",
-            run_id,
-            self._state.get("run_id"),
+            "Starting perpetual loop (boot_thread_id: %s, conversation_thread_id: %s)",
+            boot_thread_id,
+            self._state.get("thread_id"),
         )
 
         # Update health immediately on startup
         await self._update_health_file(self._state)
 
         # Push startup event
-        await self._push_event("loop_started", f"Perpetual loop started (run_id: {run_id})")
+        await self._push_event(
+            "loop_started", f"Perpetual loop started (thread_id: {boot_thread_id})"
+        )
 
         # Core-only input handling plus scheduler dispatch loop.
-        input_task = asyncio.create_task(self._input_handler_loop(run_id))
+        input_task = asyncio.create_task(self._input_handler_loop(boot_thread_id))
         scheduler_task: asyncio.Task | None = None
+        poller_task: asyncio.Task[None] | None = None
         if self._is_scheduler_enabled():
             scheduler_task = asyncio.create_task(self._scheduler_loop())
             logger.info("Scheduler loop started")
+        self._a2a_task_tracker = A2ATaskTracker(
+            self.state_manager,
+            self.llm_client,
+            completion_callback=self._record_completed_a2a_task,
+        )
+        self._a2a_task_poller = asyncio.create_task(self._a2a_task_tracker.run())
+        poller_task = self._a2a_task_poller
 
         try:
             if scheduler_task:
                 done, pending = await asyncio.wait(
-                    [input_task, scheduler_task],
+                    [
+                        task
+                        for task in [input_task, scheduler_task, poller_task]
+                        if task is not None
+                    ],
                     return_when=asyncio.FIRST_EXCEPTION,
                 )
                 for task in pending:
@@ -167,7 +202,10 @@ class ProgenitorLoop:
                     if exc:
                         raise exc
             else:
-                await input_task
+                await asyncio.gather(
+                    input_task,
+                    poller_task,
+                )
         except asyncio.CancelledError:
             logger.info("Loop cancelled by signal")
             input_task.cancel()
@@ -177,6 +215,15 @@ class ProgenitorLoop:
                 scheduler_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await scheduler_task
+            if poller_task:
+                poller_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poller_task
+        finally:
+            if poller_task and not poller_task.done():
+                poller_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poller_task
 
         # Final checkpoint
         await self._checkpoint_state(self._state)
@@ -184,7 +231,7 @@ class ProgenitorLoop:
         await self._push_event("loop_stopped", "Perpetual loop stopped")
         logger.info("Loop terminated")
 
-    async def _input_handler_loop(self, run_id: str) -> None:
+    async def _input_handler_loop(self, boot_thread_id: str) -> None:
         """Handle user input messages.
 
         This task waits for user input and processes it through the graph.
@@ -195,47 +242,76 @@ class ProgenitorLoop:
 
         while self.running:
             try:
-                # Wait for user input (with short timeout to check running flag)
-                user_input = await self._get_input(timeout=1.0)
+                queued_input = await self._get_input(timeout=1.0)
 
-                if not user_input:
+                if not queued_input:
                     now = time.monotonic()
                     if now - last_health >= float(self.config.runtime.checkpoint_interval_seconds):
                         await self._update_health_file(self._state)
                         last_health = now
                     continue
 
-                logger.info("Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input)
-                is_scheduled_input = user_input.startswith(SCHEDULED_INPUT_PREFIX)
-                scheduled_message = (
-                    user_input[len(SCHEDULED_INPUT_PREFIX):].strip()
-                    if is_scheduled_input
-                    else ""
+                user_input, input_metadata = self._extract_input_payload(queued_input)
+                if not user_input:
+                    continue
+
+                input_role = str((input_metadata or {}).get("role") or "").strip() or None
+                if input_role:
+                    input_metadata = {
+                        key: value for key, value in (input_metadata or {}).items() if key != "role"
+                    }
+                requested_thread_id = (
+                    str((input_metadata or {}).get("thread_id") or "").strip() or None
                 )
 
-                # Acquire lock to run graph cycle
+                logger.info(
+                    "Got user input: %s", user_input[:50] if len(user_input) > 50 else user_input
+                )
+                is_scheduled_input = user_input.startswith(SCHEDULED_INPUT_PREFIX)
+                scheduled_message = (
+                    user_input[len(SCHEDULED_INPUT_PREFIX) :].strip() if is_scheduled_input else ""
+                )
+
                 async with self._graph_lock:
-                    # Reset backoff on input
                     self._state["current_backoff_seconds"] = runtime.idle_backoff_seconds
                     self._state["idle_cycles"] = 0
 
                     self._state["current_input"] = user_input
+                    self._state["current_input_role"] = input_role
+                    self._state["current_input_metadata"] = input_metadata or None
                     self._state["cycle_count"] = self._state.get("cycle_count", 0) + 1
                     self._state["actions_this_cycle"] = 0
+                    self._state["input_wait_seconds"] = self._current_input_wait_seconds
+                    self._state["pending_messages_in_queue"] = self._current_input_pending_count
 
-                    # Enable streaming mode
-                    self._streaming_enabled = True
+                    self._streaming_enabled = not is_scheduled_input
                     self._response_was_streamed = False
                     self._stream_final_sent = False
                     self._streamed_response_content = ""
 
+                    is_isolated_thread = bool(
+                        requested_thread_id
+                        and requested_thread_id != str(self._state.get("thread_id") or "")
+                    )
+
                     try:
-                        # Run graph cycle
-                        await self._run_graph_cycle(run_id, source="user_input")
+                        if is_isolated_thread and requested_thread_id:
+                            await self._run_isolated_graph_cycle(
+                                boot_thread_id,
+                                source="user_input",
+                                thread_id=requested_thread_id,
+                            )
+                        else:
+                            await self._run_graph_cycle(
+                                boot_thread_id,
+                                source="user_input",
+                                thread_id=requested_thread_id,
+                            )
                     except Exception as e:
-                        # Prevent clients from hanging on failures: emit a final chunk + mark cycle complete.
                         safe_error = redact_secrets(str(e))
-                        logger.error("Graph cycle failed for user input: %s", safe_error, exc_info=True)
+                        logger.error(
+                            "Graph cycle failed for user input: %s", safe_error, exc_info=True
+                        )
                         await self._push_event("error", safe_error)
 
                         if self._streaming_enabled and not self._stream_final_sent:
@@ -248,13 +324,17 @@ class ProgenitorLoop:
                         self._last_cycle_response = f"Error: {safe_error}"
                         self._state["last_cycle_response"] = self._last_cycle_response
                         await self._checkpoint_state(self._state)
-                        await self._update_health_file(self._state, status="error", error=safe_error)
+                        await self._update_health_file(
+                            self._state, status="error", error=safe_error
+                        )
                     finally:
-                        # Background scheduled work is processed through the same input
-                        # path as user messages, so emit an explicit completion event here.
                         if is_scheduled_input:
-                            response_text = str(self._state.get("last_cycle_response") or "").strip()
-                            result_status = "completed" if response_text else "completed_no_response"
+                            response_text = str(
+                                self._state.get("last_cycle_response") or ""
+                            ).strip()
+                            result_status = (
+                                "completed" if response_text else "completed_no_response"
+                            )
                             await self._push_event(
                                 "scheduled_response",
                                 response_text or "(no response)",
@@ -272,13 +352,11 @@ class ProgenitorLoop:
                                 },
                             )
 
-                        # Disable streaming mode
                         self._streaming_enabled = False
                         self._response_was_streamed = False
                         self._stream_final_sent = False
                         self._streamed_response_content = ""
 
-                        # Signal cycle complete for IPC synchronization
                         logger.info("Graph cycle complete, signaling")
                         await self._signal_cycle_complete()
 
@@ -289,6 +367,65 @@ class ProgenitorLoop:
                 logger.error("Input handler error: %s", e, exc_info=True)
                 await self._push_event("error", f"Input handler error: {e}")
                 await asyncio.sleep(1.0)
+
+    def _extract_input_payload(self, queued_input: Any) -> tuple[str, dict[str, Any]]:
+        """Normalize queued input into plain content plus optional metadata."""
+
+        if isinstance(queued_input, dict):
+            content = str(queued_input.get("content") or "").strip()
+            metadata = dict(queued_input.get("metadata") or {})
+            return content, metadata
+        return str(queued_input).strip(), {}
+
+    def _snapshot_conversation_state(self) -> dict[str, Any]:
+        """Capture the main-thread conversation state before an isolated execution."""
+
+        keys = (
+            "thread_id",
+            "messages",
+            "attachments",
+            "tool_calls",
+            "current_input",
+            "current_input_role",
+            "current_input_metadata",
+            "pending_response",
+            "last_reasoning_trace",
+        )
+        return {key: copy.deepcopy(self._state.get(key)) for key in keys}
+
+    def _restore_conversation_state(self, snapshot: dict[str, Any]) -> None:
+        """Restore a previously captured main-thread conversation state."""
+
+        for key, value in snapshot.items():
+            self._state[key] = value
+
+    async def _run_isolated_graph_cycle(
+        self,
+        boot_thread_id: str,
+        *,
+        source: str,
+        thread_id: str,
+    ) -> None:
+        """Run a cycle against a temporary thread without overwriting the main thread state."""
+
+        snapshot = self._snapshot_conversation_state()
+        try:
+            self._state["thread_id"] = thread_id
+            self._state["messages"] = []
+            self._state["attachments"] = []
+            self._state["tool_calls"] = []
+            self._state["pending_response"] = None
+            self._state["last_reasoning_trace"] = None
+            await self._run_graph_cycle(
+                boot_thread_id,
+                source=source,
+                thread_id=thread_id,
+                checkpoint_state=False,
+            )
+        finally:
+            self._restore_conversation_state(snapshot)
+            await self._checkpoint_state(self._state)
+            await self._update_health_file(self._state)
 
     def _is_scheduler_enabled(self) -> bool:
         scheduler_cfg = getattr(self.config, "scheduler", None)
@@ -370,20 +507,28 @@ class ProgenitorLoop:
                 logger.error("Scheduler loop error: %s", e, exc_info=True)
                 await asyncio.sleep(poll_seconds)
 
-    async def _run_graph_cycle(self, _run_id: str, source: str = "unknown") -> None:
+    async def _run_graph_cycle(
+        self,
+        _boot_thread_id: str,
+        source: str = "unknown",
+        thread_id: str | None = None,
+        checkpoint_state: bool = True,
+    ) -> None:
         """Run a single graph cycle.
 
         Args:
-            run_id: The run ID for this session.
+            _boot_thread_id: The boot thread ID for this process.
             source: Source of the cycle (e.g., 'user_input', 'background_backlog').
+            thread_id: Optional request-scoped thread override.
+            checkpoint_state: Whether to persist the current in-memory state after the cycle.
         """
         cycle_num = self._state["cycle_count"]
         current_input = self._state.get("current_input") if source == "user_input" else None
 
         # DeepAgent uses the LangGraph checkpointer keyed by thread_id.
-        # Keep thread_id aligned to persisted conversation run_id so context survives restarts.
-        # The new_conversation tool rotates run_id, intentionally starting a fresh thread.
-        thread_id = str(self._state.get("run_id") or "progenitor_main")
+        # Keep the default interactive thread aligned to persisted state, while
+        # allowing workspace automation requests to supply a request-scoped thread override.
+        effective_thread_id = str(thread_id or self._state.get("thread_id") or "progenitor_main")
         logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 
         # Reset per-cycle capture
@@ -394,13 +539,14 @@ class ProgenitorLoop:
         # Passing the full self._state would flood the model with all accumulated messages.
         if current_input:
             from langchain_core.messages import HumanMessage
+
             graph_input: dict = {"messages": [HumanMessage(content=current_input)]}
         else:
             graph_input = {}
 
         try:
             astream_kwargs: dict[str, Any] = {
-                "config": {"configurable": {"thread_id": thread_id}},
+                "config": {"configurable": {"thread_id": effective_thread_id}},
             }
             if self._graph_accepts_stream_mode():
                 astream_kwargs["stream_mode"] = ["messages", "updates"]
@@ -424,7 +570,11 @@ class ProgenitorLoop:
 
                 # Process graph events
                 for node_name, node_output in event.items():
-                    output_info = list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
+                    output_info = (
+                        list(node_output.keys())
+                        if isinstance(node_output, dict)
+                        else type(node_output)
+                    )
                     logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
                     if isinstance(node_output, dict):
                         if "messages" in node_output:
@@ -442,7 +592,10 @@ class ProgenitorLoop:
                     self._last_cycle_response = pending_text
                     self._state["last_cycle_response"] = pending_text
                     if self._streaming_enabled:
-                        if self._response_was_streamed and pending_text == self._streamed_response_content:
+                        if (
+                            self._response_was_streamed
+                            and pending_text == self._streamed_response_content
+                        ):
                             if not self._stream_final_sent:
                                 await self.stream_final()
                                 self._stream_final_sent = True
@@ -452,28 +605,38 @@ class ProgenitorLoop:
                             self._stream_final_sent = True
                     self._state["pending_response"] = None
                 elif self._response_was_streamed and not self._stream_final_sent:
+                    streamed_text = self._streamed_response_content
+                    if streamed_text:
+                        self._last_cycle_response = streamed_text
+                        self._state["last_cycle_response"] = streamed_text
                     # Response was already streamed by a node, just send final marker ONCE
                     if self._streaming_enabled:
                         await self.stream_final()
                     self._stream_final_sent = True
                     self._state["pending_response"] = None
 
-            # Ensure streaming clients never hang waiting for an is_final marker.
-            # Extract the last AI message from messages if nothing was streamed yet.
+            # Ensure streaming clients never hang waiting for an is_final marker
+            # and capture a final text response even when this cycle has no live
+            # stream consumer (for example scheduled tasks).
             last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
-            if self._streaming_enabled and not self._stream_final_sent:
+            if not self._stream_final_sent:
                 response_text = self._extract_message_text(last_ai_msg)
                 if response_text:
-                    logger.info("Extracting AI response from messages (%d chars)", len(response_text))
-                    await self._stream_response(response_text)
+                    logger.info(
+                        "Extracting AI response from messages (%d chars)", len(response_text)
+                    )
+                    if self._streaming_enabled:
+                        await self._stream_response(response_text)
                     self._last_cycle_response = response_text
                     self._state["last_cycle_response"] = response_text
                     self._stream_final_sent = True
-                if not self._stream_final_sent:
+                if self._streaming_enabled and not self._stream_final_sent:
                     await self.stream_final()
                     self._stream_final_sent = True
 
-            reasoning_trace = self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+            reasoning_trace = (
+                self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+            )
             self._last_reasoning_trace = reasoning_trace
             self._state["last_reasoning_trace"] = reasoning_trace
             if reasoning_trace:
@@ -484,26 +647,24 @@ class ProgenitorLoop:
                     json.dumps(self._summarize_message_schema(last_ai_msg), default=str),
                 )
 
-            # If the run_id changed during this cycle (e.g. the LLM invoked the
+            # If the thread_id changed during this cycle (e.g. the LLM invoked the
             # new_conversation system tool), treat it as a hard context reset.
-            if str(self._state.get("run_id") or "") != thread_id:
+            current_thread_id = str(self._state.get("thread_id") or "")
+            if current_thread_id != effective_thread_id:
                 self._state["messages"] = []
                 self._state["attachments"] = []
                 self._state["tool_calls"] = []
 
-            # Checkpoint state after cycle
-            await self._checkpoint_state(self._state)
-            await self._update_health_file(self._state)
+            if checkpoint_state:
+                await self._checkpoint_state(self._state)
+                await self._update_health_file(self._state)
 
         except Exception as e:
             logger.error("Graph cycle %d failed: %s", cycle_num, e, exc_info=True)
             raise
 
     async def _push_event(
-        self,
-        event_type: str,
-        content: str = "",
-        metadata: dict[str, Any] | None = None
+        self, event_type: str, content: str = "", metadata: dict[str, Any] | None = None
     ) -> None:
         """Push an event to clients via the event queue.
 
@@ -533,7 +694,7 @@ class ProgenitorLoop:
                 "Event queue full (%d/%d), dropping event: %s",
                 self._event_queue.qsize(),
                 self._event_queue.maxsize,
-                event_type
+                event_type,
             )
 
     async def get_event(self, timeout: float | None = None) -> dict[str, Any] | None:
@@ -547,15 +708,15 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                return cast(dict[str, Any] | None, await asyncio.wait_for(
-                    self._event_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    dict[str, Any] | None,
+                    await asyncio.wait_for(self._event_queue.get(), timeout=timeout),
+                )
             return cast(dict[str, Any] | None, await self._event_queue.get())
         except TimeoutError:
             return None
 
-    async def _get_input(self, timeout: float) -> str | None:
+    async def _get_input(self, timeout: float) -> Any:
         """Get user input with timeout.
 
         Caps timeout at 30 seconds to ensure health updates happen frequently.
@@ -563,10 +724,12 @@ class ProgenitorLoop:
         # Cap timeout to ensure health gets updated frequently
         effective_timeout = min(timeout, 30.0)
         try:
-            return await asyncio.wait_for(
-                self._input_queue.get(),
-                timeout=effective_timeout
+            queued_input = await asyncio.wait_for(
+                self._input_queue.get(), timeout=effective_timeout
             )
+            self._current_input_wait_seconds = time.monotonic() - queued_input.enqueue_time
+            self._current_input_pending_count = self._input_queue.qsize()
+            return queued_input.content
         except TimeoutError:
             return None
 
@@ -583,7 +746,7 @@ class ProgenitorLoop:
             logger.warning(
                 "Output queue full (%d/%d), dropping message",
                 self._output_queue.qsize(),
-                self._output_queue.maxsize
+                self._output_queue.maxsize,
             )
 
     async def _signal_cycle_complete(self) -> None:
@@ -606,10 +769,7 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                await asyncio.wait_for(
-                    self._cycle_complete_event.wait(),
-                    timeout=timeout
-                )
+                await asyncio.wait_for(self._cycle_complete_event.wait(), timeout=timeout)
             else:
                 await self._cycle_complete_event.wait()
             # Clear the event for the next cycle
@@ -646,7 +806,8 @@ class ProgenitorLoop:
         if token:
             self._response_was_streamed = True
             self._streamed_response_content += token
-            await self._send_stream_chunk(token, is_final=False)
+            if self._streaming_enabled:
+                await self._send_stream_chunk(token, is_final=False)
 
     async def _handle_message_stream_event(self, event: Any) -> None:
         """Handle LangGraph `messages` stream events for token-level output."""
@@ -670,8 +831,7 @@ class ProgenitorLoop:
         try:
             parameters = inspect.signature(astream).parameters.values()
             return any(
-                parameter.name == "stream_mode"
-                or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                parameter.name == "stream_mode" or parameter.kind == inspect.Parameter.VAR_KEYWORD
                 for parameter in parameters
             )
         except (TypeError, ValueError):
@@ -689,26 +849,30 @@ class ProgenitorLoop:
             is_final: Whether this is the final chunk (signals stream end).
         """
         try:
-            self._stream_queue.put_nowait({
-                "type": "stream_chunk",
-                "content": chunk,
-                "is_final": is_final,
-            })
+            self._stream_queue.put_nowait(
+                {
+                    "type": "stream_chunk",
+                    "content": chunk,
+                    "is_final": is_final,
+                }
+            )
         except asyncio.QueueFull:
             logger.warning(
                 "Stream queue full (%d/%d), dropping chunk",
                 self._stream_queue.qsize(),
-                self._stream_queue.maxsize
+                self._stream_queue.maxsize,
             )
 
     async def _send_stream_end(self) -> None:
         """Signal the end of a streaming response."""
         try:
-            self._stream_queue.put_nowait({
-                "type": "stream_end",
-                "content": "",
-                "is_final": True,
-            })
+            self._stream_queue.put_nowait(
+                {
+                    "type": "stream_end",
+                    "content": "",
+                    "is_final": True,
+                }
+            )
         except asyncio.QueueFull:
             logger.warning("Stream queue full, could not send stream end marker")
 
@@ -720,10 +884,10 @@ class ProgenitorLoop:
         """
         try:
             if timeout:
-                return cast(dict[str, Any] | None, await asyncio.wait_for(
-                    self._stream_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    dict[str, Any] | None,
+                    await asyncio.wait_for(self._stream_queue.get(), timeout=timeout),
+                )
             return cast(dict[str, Any] | None, await self._stream_queue.get())
         except TimeoutError:
             return None
@@ -734,8 +898,9 @@ class ProgenitorLoop:
         Core-only profile: persist current_state.json only (conversation state).
         """
         # Current state checkpoint (progenitor agent state - user session)
+        current_thread_id = state.get("thread_id")
         current_checkpoint = {
-            "run_id": state.get("run_id"),
+            "thread_id": current_thread_id,
             "cycle_count": state.get("cycle_count", 0),
             "actions_this_cycle": state.get("actions_this_cycle", 0),
             "shutdown_requested": state.get("shutdown_requested", False),
@@ -928,8 +1093,12 @@ class ProgenitorLoop:
                 "type": msg.get("type"),
                 "role": msg.get("role"),
                 "keys": sorted(msg.keys()),
-                "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
-                "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
+                "additional_kwargs_keys": sorted(additional.keys())
+                if isinstance(additional, dict)
+                else [],
+                "response_metadata_keys": sorted(metadata.keys())
+                if isinstance(metadata, dict)
+                else [],
                 "content_type": type(content).__name__,
             }
 
@@ -939,12 +1108,19 @@ class ProgenitorLoop:
         return {
             "type": getattr(msg, "type", None),
             "role": getattr(msg, "role", None),
-            "additional_kwargs_keys": sorted(additional.keys()) if isinstance(additional, dict) else [],
+            "additional_kwargs_keys": sorted(additional.keys())
+            if isinstance(additional, dict)
+            else [],
             "response_metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
             "content_type": type(content).__name__,
         }
 
-    async def enqueue_input(self, message: str, timeout: float | None = 30.0) -> bool:
+    async def enqueue_input(
+        self,
+        message: str,
+        timeout: float | None = 30.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
         """Add a message to the input queue.
 
         Args:
@@ -957,41 +1133,78 @@ class ProgenitorLoop:
         Raises:
             asyncio.QueueFull: If timeout is 0 and queue is full (non-blocking mode).
         """
+        payload: Any = {"content": message, "metadata": metadata or {}} if metadata else message
+        queued_input = QueuedInput(content=payload, enqueue_time=time.monotonic())
         try:
             if timeout == 0:
                 # Non-blocking mode
-                self._input_queue.put_nowait(message)
+                self._input_queue.put_nowait(queued_input)
             elif timeout is None:
                 # Wait forever
-                await self._input_queue.put(message)
+                await self._input_queue.put(queued_input)
             else:
                 # Wait with timeout
-                await asyncio.wait_for(
-                    self._input_queue.put(message),
-                    timeout=timeout
-                )
+                await asyncio.wait_for(self._input_queue.put(queued_input), timeout=timeout)
             return True
         except asyncio.QueueFull:
             logger.warning("Input queue full, message rejected (non-blocking)")
             raise
         except TimeoutError:
             logger.warning(
-                "Input queue full, message rejected after %.1fs timeout. "
-                "Queue size: %d/%d",
+                "Input queue full, message rejected after %.1fs timeout. Queue size: %d/%d",
                 timeout,
                 self._input_queue.qsize(),
-                self._input_queue.maxsize
+                self._input_queue.maxsize,
             )
             return False
+
+    async def _record_completed_a2a_task(self, record: A2ATaskRecord) -> None:
+        """Persist a terminal A2A task update into the active conversation state."""
+        metadata = {
+            "type": "a2a_task_completion",
+            "task_id": record.task_id,
+            "agent": record.agent_name,
+            "a2a_status": record.status,
+            "source": record.source,
+        }
+        content = build_completion_message(record)
+
+        async with self._graph_lock:
+            messages = list(self._state.get("messages", []))
+            for existing in messages:
+                existing_metadata = (
+                    existing.get("metadata")
+                    if isinstance(existing, dict)
+                    else getattr(existing, "metadata", None)
+                )
+                if not isinstance(existing_metadata, dict):
+                    continue
+                if (
+                    existing_metadata.get("type") == metadata["type"]
+                    and existing_metadata.get("task_id") == record.task_id
+                    and existing_metadata.get("a2a_status") == record.status
+                ):
+                    return
+
+            message = ConversationMessage(
+                id=str(uuid.uuid4()),
+                role="tool",
+                content=content,
+                timestamp=utcnow(),
+                metadata=metadata,
+            )
+            await self.state_manager.log_conversation(message)
+            messages.append(message)
+            await self.state_manager.save_messages(messages)
+            self._state["messages"] = messages
 
     async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from the agent."""
         try:
             if timeout:
-                return cast(str | None, await asyncio.wait_for(
-                    self._output_queue.get(),
-                    timeout=timeout
-                ))
+                return cast(
+                    str | None, await asyncio.wait_for(self._output_queue.get(), timeout=timeout)
+                )
             return cast(str | None, await self._output_queue.get())
         except TimeoutError:
             return None
@@ -1046,16 +1259,21 @@ class ProgenitorLoop:
             error: Optional error message when status is 'error'.
         """
         health_path = self.state_manager.state_dir / HEALTH_FILE
+        current_thread_id = state.get("thread_id")
         health_data = {
             "status": status,
             "last_active": utcnow_isoformat(),
-            "run_id": state.get("run_id"),
+            "thread_id": current_thread_id,
             "cycle_count": state.get("cycle_count", 0),
             "pid": __import__("os").getpid(),
             "idle_cycles": state.get("idle_cycles", 0),
             "current_backoff_seconds": state.get("current_backoff_seconds"),
-            "message_count": len(state.get("messages") or []) if isinstance(state.get("messages"), list) else 0,
-            "agent_count": len(state.get("agents") or []) if isinstance(state.get("agents"), list) else 0,
+            "message_count": len(state.get("messages") or [])
+            if isinstance(state.get("messages"), list)
+            else 0,
+            "agent_count": len(state.get("agents") or [])
+            if isinstance(state.get("agents"), list)
+            else 0,
             "queues": self.get_queue_stats(),
         }
 

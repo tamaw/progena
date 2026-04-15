@@ -14,7 +14,8 @@ function buildUrl(baseUrl, path) {
 
 /**
  * Hook for connecting to the /events SSE stream.
- * Receives IPC events: scheduled_response, agent_message, alert, task, agent.
+ * Receives IPC events: scheduled_response, agent_message, agent_question,
+ * message_queued, alert, task, agent.
  *
  * Uses shared HealthContext for health status - no duplicate health checks.
  */
@@ -67,6 +68,8 @@ export function useEventsSSE(onEvent) {
     es.addEventListener('shutdown', handleEvent('shutdown'));
     es.addEventListener('scheduled_response', handleEvent('scheduled_response'));
     es.addEventListener('agent_message', handleEvent('agent_message'));
+    es.addEventListener('agent_question', handleEvent('agent_question'));
+    es.addEventListener('message_queued', handleEvent('message_queued'));
 
     es.onmessage = handleEvent('message');
 
@@ -107,7 +110,8 @@ export function useEventsSSE(onEvent) {
 
 /**
  * Hook for connecting to the /status SSE stream.
- * Receives status/health events: status, heartbeat.
+ * Receives status-side events: status, heartbeat, alerts.
+ * The alerts event carries the full alert-center payload.
  *
  * Uses shared HealthContext for health status - no duplicate health checks.
  */
@@ -137,6 +141,7 @@ export function useStatusSSE(onEvent) {
     const url = buildUrl(baseUrl, '/api/ui/status');
     console.log('[useStatusSSE] Connecting to', url);
     const es = new EventSource(url);
+    eventSourceRef.current = es;
 
     es.onopen = () => {
       setIsConnected(true);
@@ -155,6 +160,8 @@ export function useStatusSSE(onEvent) {
     es.addEventListener('connected', handleEvent('connected'));
     es.addEventListener('status', handleEvent('status'));
     es.addEventListener('heartbeat', handleEvent('heartbeat'));
+    es.addEventListener('alerts', handleEvent('alerts'));
+    es.addEventListener('widgets', handleEvent('widgets'));
     es.addEventListener('shutdown', handleEvent('shutdown'));
 
     es.onmessage = handleEvent('message');

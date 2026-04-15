@@ -20,7 +20,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,7 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .alerts import AlertInfo
 from .attachments import (
     AttachmentConfig,
     AttachmentManager,
@@ -39,7 +40,7 @@ from .config import ChatServerConfig
 from .conversation import (
     ConversationHistory,
 )
-from .ipc_client import IPCProgenitorClient, get_ipc_client
+from .ipc_client import IPCProgenitorClient, get_ipc_client, start_ipc_client_with_retry
 from .models import (
     ErrorDetail,
     ErrorResponse,
@@ -89,12 +90,16 @@ config = ChatServerConfig.from_env()
 client: ProgenitorClient | IPCProgenitorClient | None = None
 
 # Enhanced feature managers
-session_manager: SessionManager = SessionManager(SessionConfig(
-    persist_dir=Path("data/sessions") if config.host else None,
-))
-attachment_manager: AttachmentManager = AttachmentManager(AttachmentConfig(
-    cache_dir=Path("data/attachments"),
-))
+session_manager: SessionManager = SessionManager(
+    SessionConfig(
+        persist_dir=Path("data/sessions") if config.host else None,
+    )
+)
+attachment_manager: AttachmentManager = AttachmentManager(
+    AttachmentConfig(
+        cache_dir=Path("data/attachments"),
+    )
+)
 conversation_history: ConversationHistory = ConversationHistory()
 graceful_shutdown: GracefulShutdownManager = GracefulShutdownManager(
     drain_timeout=30.0,
@@ -215,9 +220,7 @@ class RateLimiter:
         self._minute_requests[client_id] = [
             t for t in self._minute_requests[client_id] if t > minute_ago
         ]
-        self._hour_requests[client_id] = [
-            t for t in self._hour_requests[client_id] if t > hour_ago
-        ]
+        self._hour_requests[client_id] = [t for t in self._hour_requests[client_id] if t > hour_ago]
 
         # Check limits
         if len(self._minute_requests[client_id]) >= self.requests_per_minute:
@@ -237,7 +240,13 @@ class RateLimiter:
         """Get remaining requests for headers."""
         now = time.time()
         minute_count = len([t for t in self._minute_requests[client_id] if t > now - 60])
-        hour_count = len([t for t in self._hour_requests[client_id] if t > now - self.stale_client_timeout_seconds])
+        hour_count = len(
+            [
+                t
+                for t in self._hour_requests[client_id]
+                if t > now - self.stale_client_timeout_seconds
+            ]
+        )
         return {
             "minute": max(0, self.requests_per_minute - minute_count),
             "hour": max(0, self.requests_per_hour - hour_count),
@@ -267,14 +276,15 @@ def get_client_id(request: Request) -> str:
     """Extract client identifier for rate limiting."""
     # Use X-Forwarded-For if behind proxy, otherwise use client host
     forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
+    if isinstance(forwarded, str) and forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return str(request.client.host) if request.client else "unknown"
 
 
 # ============================================================================
 # Graceful Shutdown Management (OPS-002)
 # ============================================================================
+
 
 class ShutdownManager:
     """Manages graceful shutdown with request draining."""
@@ -392,11 +402,7 @@ async def _send_telegram_connected_message(
             logger.warning("Failed to send fallback Telegram failure message: %s", e2)
 
 
-async def _send_telegram_message(
-    telegram: TelegramClient,
-    content: str,
-    event_type: str
-) -> None:
+async def _send_telegram_message(telegram: TelegramClient, content: str, event_type: str) -> None:
     """Send a message to Telegram (fire-and-forget helper).
 
     Args:
@@ -412,6 +418,85 @@ async def _send_telegram_message(
             logger.warning("Failed to send %s to Telegram", event_type)
     except Exception as e:
         logger.error("Error sending to Telegram: %s", e)
+
+
+def _build_alert_summary_prompt(alert: AlertInfo) -> str:
+    """Build the follow-up prompt that turns an alert into a normal user-facing message."""
+    return "\n".join(
+        [
+            "A backend alert was just created for the user.",
+            "Use the `say_to_user` tool exactly once.",
+            "Do not call `notify_user`, `ask_user`, or any other tools.",
+            "Write a short alert-style summary for the user on their current platform.",
+            "Keep the message faithful to the alert details, but summarize it clearly and naturally.",
+            "After the tool call, reply with exactly: sent",
+            "```json",
+            json.dumps(
+                {
+                    "id": alert.id,
+                    "type": alert.type,
+                    "title": alert.title,
+                    "message": alert.message,
+                    "urgent": alert.urgent,
+                    "requires_response": alert.requires_response,
+                },
+                indent=2,
+            ),
+            "```",
+        ]
+    )
+
+
+async def _handle_alert_request(
+    progenitor: ProgenitorClient | IPCProgenitorClient | None,
+    *,
+    title: str,
+    body: str,
+    level: str,
+    urgent: bool,
+    requires_response: bool,
+    create_alert_record: Callable[..., AlertInfo],
+    broadcast_alert_record: Callable[[AlertInfo], None],
+    broadcast_alert_state: Callable[[], None],
+) -> None:
+    """Store an alert and ask Progenitor to summarize it through the normal user-message path."""
+    if not body:
+        return
+
+    alert = create_alert_record(
+        type=level,
+        title=title,
+        message=body,
+        urgent=urgent,
+        requires_response=requires_response,
+    )
+    broadcast_alert_record(alert)
+    broadcast_alert_state()
+
+    if progenitor is None:
+        logger.warning(
+            "Dropping alert summary request for %s because backend client is unavailable", alert.id
+        )
+        return
+
+    try:
+        if not progenitor.is_running:
+            await progenitor.start()
+
+        response_text = (
+            await progenitor.send_message(
+                _build_alert_summary_prompt(alert),
+                request_id=f"alert-summary-{alert.id}",
+            )
+        ).strip()
+        if response_text and response_text.lower() != "sent":
+            logger.debug(
+                "Alert summary helper returned non-sentinel text for %s: %s",
+                alert.id,
+                response_text,
+            )
+    except Exception as e:
+        logger.warning("Failed to enqueue alert summary for %s: %s", alert.id, e)
 
 
 async def _handle_telegram_agent_message(
@@ -487,6 +572,7 @@ async def lifespan(app: FastAPI):
     - Graceful shutdown with callbacks
     """
     global client
+    ipc_event_forwarding_task: asyncio.Task | None = None
 
     # Startup
     logger.info("Starting backend with enhanced features...")
@@ -531,7 +617,9 @@ async def lifespan(app: FastAPI):
     if telegram_client:
         logger.info(
             "Telegram integration enabled (chat_id=%s)",
-            config.telegram_chat_id[:8] + "..." if len(config.telegram_chat_id) > 8 else config.telegram_chat_id
+            config.telegram_chat_id[:8] + "..."
+            if len(config.telegram_chat_id) > 8
+            else config.telegram_chat_id,
         )
         # Register Telegram shutdown callback
         graceful_shutdown.register_callback(
@@ -547,17 +635,45 @@ async def lifespan(app: FastAPI):
         config.progenitor_ipc_host,
         config.progenitor_ipc_port,
     )
-    # Import broadcast_chat_event for IPC events (chat, alerts, tasks)
-    from .ui_routes import broadcast_chat_event
+    # Import broadcast helpers for IPC events and alert state.
+    from .ui_routes import (
+        broadcast_alert,
+        broadcast_alerts_state,
+        broadcast_chat_event,
+        create_alert,
+    )
 
     # Create a combined event callback that handles both SSE and Telegram
     def combined_event_callback(event_type: str, data: dict) -> None:
         """Route IPC events to SSE and/or Telegram.
 
         - Always broadcasts to SSE for any connected web clients
-        - If no web clients connected, also sends to Telegram (if enabled)
-        - Only forwards certain event types to Telegram (agent_message, scheduled_response)
+        - If no web clients connected, also sends to Telegram
+        - Only forwards certain event types to Telegram (agent_message, agent_question, scheduled_response)
         """
+        if event_type == "alert_request":
+            metadata = data.get("metadata") or {}
+            title = str(metadata.get("title") or "Alert").strip() or "Alert"
+            body = str(data.get("content") or "").strip()
+            level = str(metadata.get("level") or "info").strip().lower() or "info"
+            urgent = bool(metadata.get("urgent")) or level in {"warning", "error"}
+            requires_response = bool(metadata.get("requires_response"))
+
+            asyncio.create_task(
+                _handle_alert_request(
+                    client,
+                    title=title,
+                    body=body,
+                    level=level,
+                    urgent=urgent,
+                    requires_response=requires_response,
+                    create_alert_record=create_alert,
+                    broadcast_alert_record=broadcast_alert,
+                    broadcast_alert_state=broadcast_alerts_state,
+                )
+            )
+            return
+
         # Always broadcast to SSE
         broadcast_chat_event(event_type, data)
 
@@ -568,21 +684,38 @@ async def lifespan(app: FastAPI):
             # Skip status updates, heartbeats, etc.
             telegram_event_types = {
                 "scheduled_response",  # Scheduled task responses
-                "agent_message",       # Direct agent messages
+                "agent_message",  # Direct agent messages
+                "agent_question",  # Questions that should reach the user directly
             }
 
             if event_type in telegram_event_types:
                 content = data.get("content", "")
                 if content:
                     # Fire and forget - don't block SSE broadcast
-                    asyncio.create_task(
-                        _send_telegram_message(telegram, content, event_type)
-                    )
+                    asyncio.create_task(_send_telegram_message(telegram, content, event_type))
 
     client = get_ipc_client(config, event_callback=combined_event_callback)
 
     # Register client shutdown callback
     if client:
+        ipc_event_forwarding_task = asyncio.create_task(start_ipc_client_with_retry(client))
+
+        async def stop_ipc_event_forwarding_task() -> None:
+            """Stop the background IPC event-forwarding connector."""
+            nonlocal ipc_event_forwarding_task
+            if ipc_event_forwarding_task and not ipc_event_forwarding_task.done():
+                ipc_event_forwarding_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await ipc_event_forwarding_task
+            ipc_event_forwarding_task = None
+
+        graceful_shutdown.register_callback(
+            "stop_ipc_event_forwarding_task",
+            stop_ipc_event_forwarding_task,
+            priority=25,
+            timeout=5.0,
+        )
+
         async def shutdown_progenitor_client() -> None:
             """Wrapper to ensure callback returns None."""
             await stop_client_safely(client, timeout=10.0, name="Progenitor")
@@ -596,11 +729,8 @@ async def lifespan(app: FastAPI):
 
     # Set up Telegram message handler and start polling if enabled
     if telegram_client and client:
-        async def handle_telegram_message(
-            chat_id: str,
-            message: str,
-            metadata: dict
-        ) -> str | None:
+
+        async def handle_telegram_message(chat_id: str, message: str, metadata: dict) -> str | None:
             """Handle incoming Telegram messages by forwarding to Progenitor.
 
             Args:
@@ -808,13 +938,19 @@ def _update_activity():
 @app.get("/health")
 async def health_check():
     """
-    Simple health check endpoint.
+    Simple health check endpoint for probes and operators.
 
-    Returns minimal status - use SSE /api/ui/events for detailed status.
+    Returns exactly status, name, version, and uptime_seconds.
+    Use /health/detailed for the full operator payload.
     """
-    return {
-        "status": "healthy" if not shutdown_manager.is_shutting_down else "draining",
+    is_draining = shutdown_manager.is_shutting_down
+    payload = {
+        "status": "draining" if is_draining else "ok",
+        "name": "progenitor",
+        "version": config.api_version,
+        "uptime_seconds": round(time.time() - _server_start_time, 1),
     }
+    return JSONResponse(content=payload, status_code=503 if is_draining else 200)
 
 
 @app.get("/health/detailed")
@@ -835,6 +971,7 @@ async def health_check_detailed():
     - Memory usage (if available)
     """
     import sys
+
     now = time.time()
 
     # Basic health info
@@ -875,6 +1012,7 @@ async def health_check_detailed():
     # Memory usage (if psutil available)
     try:
         import psutil
+
         process = psutil.Process()
         memory_info = process.memory_info()
         health_info["memory"] = {
@@ -934,8 +1072,6 @@ async def liveness_check():
     return {"status": "alive"}
 
 
-
-
 @app.get("/v1/models", response_model=ModelsResponse)
 async def list_models():
     """List available models (OpenAI-compatible)."""
@@ -986,11 +1122,7 @@ async def responses(request: Request, body: ResponseRequest):
         return ResponsePayload(
             id=response_id,
             model=body.model,
-            output=[
-                ResponseOutputMessage(
-                    content=[ResponseOutputText(text=response_text)]
-                )
-            ],
+            output=[ResponseOutputMessage(content=[ResponseOutputText(text=response_text)])],
             usage=Usage(
                 prompt_tokens=len(" ".join(all_inputs).split()),
                 completion_tokens=len(response_text.split()),
@@ -1083,6 +1215,7 @@ async def simple_chat(body: SimpleChatRequest):
 # Attachment Endpoints
 # ============================================================================
 
+
 @app.post("/v1/attachments")
 async def upload_attachment(
     request: Request,
@@ -1119,7 +1252,9 @@ async def upload_attachment(
         "mime_type": result.mime_type,
         "size_bytes": result.size_bytes,
         "content_truncated": result.content_truncated,
-        "content_preview": result.content[:500] + "..." if len(result.content) > 500 else result.content,
+        "content_preview": result.content[:500] + "..."
+        if len(result.content) > 500
+        else result.content,
     }
 
 
@@ -1146,6 +1281,7 @@ async def get_attachment(attachment_id: str):
 # ============================================================================
 # Session Endpoints
 # ============================================================================
+
 
 @app.get("/v1/session")
 async def get_session(request: Request):
@@ -1225,6 +1361,7 @@ async def import_settings(request: Request, response: Response):
 # Conversation History Endpoints
 # ============================================================================
 
+
 @app.get("/v1/conversation")
 async def get_conversation():
     """Get current conversation history."""
@@ -1271,6 +1408,7 @@ async def clear_conversation():
 # ============================================================================
 # Enhanced Health Endpoints
 # ============================================================================
+
 
 @app.get("/health/features")
 async def health_features():

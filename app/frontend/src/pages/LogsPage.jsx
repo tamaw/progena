@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import { useConfig } from '../context/ConfigContext';
 import { useApi } from '../hooks/useApi';
-import { useEventsSSE } from '../hooks/useSSE';
+import { useStatusSSE } from '../hooks/useSSE';
 
 const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
@@ -155,20 +155,6 @@ function mergeEntries(currentEntries, incomingEntries) {
   const seen = new Set(currentEntries.map((entry) => getEntryId(entry)));
   const freshEntries = incomingEntries.filter((entry) => !seen.has(getEntryId(entry)));
   return freshEntries.length > 0 ? [...freshEntries, ...currentEntries] : currentEntries;
-}
-
-function hasActiveFilters({ group, filePath, search, level }) {
-  return Boolean(group || filePath || search || level);
-}
-
-function getDefaultSelection(groups) {
-  for (const group of groups || []) {
-    const firstFile = (group.options || [])[0];
-    if (firstFile) {
-      return { group: group.id || '', file: firstFile.id || '' };
-    }
-  }
-  return { group: '', file: '' };
 }
 
 function findVisibleRange(items, scrollTop, viewportHeight) {
@@ -506,7 +492,7 @@ function LogsPage() {
     }, 250);
   }, [loadLogs]);
 
-  const handleEvent = useCallback((event) => {
+  const handleStatusEvent = useCallback((event) => {
     if (event?.type === 'connected') {
       if (newestCursorRef.current) {
         queueIncrementalRefresh();
@@ -516,12 +502,12 @@ function LogsPage() {
       return;
     }
 
-    if (['agent', 'agent_message', 'scheduled_response', 'task', 'alert', 'shutdown', 'message'].includes(event?.type)) {
+    if (['status', 'heartbeat', 'widgets', 'shutdown', 'message'].includes(event?.type)) {
       queueIncrementalRefresh();
     }
   }, [loadLogs, queueIncrementalRefresh]);
 
-  useEventsSSE(handleEvent);
+  useStatusSSE(handleStatusEvent);
 
   const handleScroll = useCallback((event) => {
     const nextScrollTop = event.currentTarget.scrollTop;

@@ -5,9 +5,8 @@ Creates a configured DeepAgent instance that serves as the conversational
 layer, using Progenitor's Azure endpoint for model calls and wrapping
 Progenitor's custom tools.
 
-Phase 1: Basic agent with LangChain model adapter.
-Phase 2: Custom tools wrapped via tools_adapter.
-Later phases will add middleware, skills, memory, and subagents.
+Uses the LangChain model adapter plus Progenitor's wrapped tools, middleware,
+skills, memory files, and native DeepAgent subagents.
 """
 
 import logging
@@ -19,10 +18,16 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from ..config import ProgenitorConfig, get_config
-from ..llm.prompts import PromptTemplates
+from ..llm.prompts import PromptTemplates, resolve_skills_dir
 from .backends import create_progenitor_backend
 from .langchain_adapter import create_langchain_model
-from .middleware import AuditLoggingMiddleware, MetricsMiddleware, SecretRedactionMiddleware
+from .middleware import (
+    AuditLoggingMiddleware,
+    DynamicMCPToolMiddleware,
+    MetricsMiddleware,
+    SecretRedactionMiddleware,
+)
+from .subagents import create_progenitor_subagents
 from .tools_adapter import create_deepagent_tools
 
 logger = logging.getLogger(__name__)
@@ -81,7 +86,7 @@ def create_progenitor_agent(
         project_root: Root directory for filesystem backend. Defaults to cwd.
         log_dir: Directory for JSONL audit logs. If None, logs to Python logger only.
         skills_dirs: Paths to skill directories for progressive disclosure.
-                     If None, auto-discovers from prompts/skills/.
+                     If None, auto-discovers from data/skills/progenitor/.
         memory_paths: Paths to memory files (e.g., AGENTS.md).
                       If None, auto-discovers from project root.
         inner_loop_graph: Compiled LangGraph for the inner build loop.
@@ -91,7 +96,8 @@ def create_progenitor_agent(
         Compiled DeepAgent graph ready for invoke/stream.
     """
     if config is None:
-        config = get_config(validate=False)
+        resolved_project_root = Path(project_root) if project_root else None
+        config = get_config(project_root=resolved_project_root, validate=False)
 
     # Create LangChain model routed through Azure endpoint
     model = create_langchain_model(config.llm)
@@ -104,6 +110,7 @@ def create_progenitor_agent(
     # Default to in-memory store for development
     if store is None:
         from langgraph.store.memory import InMemoryStore
+
         store = InMemoryStore()
 
     # Core-only backend: no project filesystem, no shell.
@@ -118,15 +125,22 @@ def create_progenitor_agent(
 
     # Custom middleware stack (appended after DeepAgent's built-in middleware)
     custom_middleware = [
+        DynamicMCPToolMiddleware(llm_client=llm_client),
         SecretRedactionMiddleware(),
         AuditLoggingMiddleware(log_dir=log_dir),
         MetricsMiddleware(),
     ]
 
-    # Auto-discover skills from prompts/skills/ if not provided
+    prompts_dir = Path(config.storage.prompts_dir).expanduser().resolve()
+    if not prompts_dir.is_dir():
+        raise FileNotFoundError(
+            f"Configured prompts_dir does not exist: {prompts_dir}. "
+            "Set PROGENITOR_DATA_DIR (or legacy PROGENITOR_PROMPTS_DIR) or update config.storage.prompts_dir."
+        )
+
+    # Auto-discover skills from data/skills/progenitor/ if not provided
     if skills_dirs is None:
-        root = Path(project_root) if project_root else Path.cwd()
-        skills_path = root / "prompts" / "skills"
+        skills_path = resolve_skills_dir("progenitor", prompts_dir=prompts_dir)
         if skills_path.is_dir():
             skills_dirs = [str(skills_path)]
 
@@ -139,7 +153,8 @@ def create_progenitor_agent(
             memory_paths.append(str(agents_md))
 
     # Use the canonical genesis prompt so every conversation starts with it.
-    system_prompt = PromptTemplates().get_genesis_prompt().strip()
+    system_prompt = PromptTemplates(prompts_dir=prompts_dir).get_genesis_prompt().strip()
+    subagents = create_progenitor_subagents(inner_loop_graph=inner_loop_graph)
 
     agent = create_deep_agent(
         name="progenitor",
@@ -150,13 +165,14 @@ def create_progenitor_agent(
         store=store,
         skills=skills_dirs,
         memory=memory_paths or None,
-        subagents=None,
+        subagents=subagents,
         middleware=custom_middleware,
         checkpointer=checkpointer,
     )
 
     logger.info(
-        "Created Progenitor DeepAgent: model=%s",
+        "Created Progenitor DeepAgent: model=%s subagents=%s",
         config.llm.model_default,
+        [subagent["name"] for subagent in subagents],
     )
     return agent

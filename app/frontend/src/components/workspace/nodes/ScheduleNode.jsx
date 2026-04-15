@@ -1,15 +1,18 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { NodeResizer } from '@xyflow/react';
-import { useWorkspaceContext } from '../../../context/WorkspaceContext';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
+import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/WorkspaceContext';
 import WidgetTabs from './WidgetTabs';
+import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
 
 function ScheduleNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode, getWidgetTabs, getWidgetDefaultTab } = useWorkspaceContext();
+  const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode } = useWorkspaceActions();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
   const isSaving = Boolean(data.isSaving && !data.serverManaged);
   const tabs = getWidgetTabs('schedule');
+  const helpText = getWidgetHelpText('schedule');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('schedule'), 'details'),
     [getWidgetDefaultTab, tabs]
@@ -50,6 +53,8 @@ function ScheduleNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
       <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon schedule">S</div>
@@ -78,7 +83,7 @@ function ScheduleNode({ id, data, selected }) {
               <WidgetTabs tabs={tabs} activeTab={resolvedActiveTab} onChange={setActiveTab} />
               {resolvedActiveTab === 'output' ? (
                 <div className="node-output-stack">
-                  <div className="node-output-panel">{data.summaryState || 'No output yet.'}</div>
+                  <div className="node-output-panel">{data.lastOutput || data.summaryState || 'No output yet.'}</div>
                   <div className="schedule-info">
                     <div className="schedule-row">
                       <span className="schedule-row-label">Last run</span>
@@ -199,6 +204,7 @@ function ScheduleNode({ id, data, selected }) {
             ) : (
               <button className="node-action-btn primary" onClick={() => runScheduleNode(id)}>Run Now</button>
             )}
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>

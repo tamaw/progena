@@ -2,6 +2,7 @@
 
 import importlib
 import os
+from pathlib import Path
 
 import pytest
 
@@ -83,21 +84,35 @@ async def test_cancel_delegates_to_service_for_running_task():
 
 
 def test_task_log_path_defaults_to_progenitor_log_dir(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PROGENITOR_LOG_DIR", raising=False)
     monkeypatch.setenv("AGENT_NAME", "builder_progenitor")
 
     reloaded = importlib.reload(queue_worker)
     try:
-        assert reloaded.get_task_log_path().as_posix() == "/app/logs/builder_progenitor/builder_progenitor_tasks.jsonl"
+        expected = (
+            Path(__file__).resolve().parents[3]
+            / "logs"
+            / "builder_progenitor"
+            / "builder_progenitor_tasks.jsonl"
+        )
+        assert reloaded.get_task_log_path() == expected
     finally:
         importlib.reload(queue_worker)
 
 
 def test_task_log_path_uses_agent_name_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PROGENITOR_LOG_DIR", raising=False)
     monkeypatch.setenv("AGENT_NAME", "custom_builder")
 
     reloaded = importlib.reload(queue_worker)
     try:
-        assert reloaded.get_task_log_path().as_posix() == "/app/logs/custom_builder/custom_builder_tasks.jsonl"
+        expected = (
+            Path(__file__).resolve().parents[3]
+            / "logs"
+            / "custom_builder"
+            / "custom_builder_tasks.jsonl"
+        )
+        assert reloaded.get_task_log_path() == expected
     finally:
         importlib.reload(queue_worker)
 

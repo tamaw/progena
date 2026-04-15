@@ -88,14 +88,10 @@ class GitWorktreeManager:
         if result["returncode"] == 0:
             return True
         if result["returncode"] not in (1, 128):
-            raise RuntimeError(
-                f"Failed to check branch '{branch_name}': {result['stderr']}"
-            )
+            raise RuntimeError(f"Failed to check branch '{branch_name}': {result['stderr']}")
         return False
 
-    async def _add_worktree(
-        self, worktree_path: Path, branch_name: str
-    ) -> dict[str, Any]:
+    async def _add_worktree(self, worktree_path: Path, branch_name: str) -> dict[str, Any]:
         """Add a worktree for the given branch.
 
         Returns git command result dict.
@@ -146,9 +142,7 @@ class GitWorktreeManager:
                     work_item_id,
                     branch_to_use,
                 )
-                await self._write_worktree_metadata(
-                    worktree_path, work_item_id, branch_to_use
-                )
+                await self._write_worktree_metadata(worktree_path, work_item_id, branch_to_use)
                 return worktree_path
 
             error_msg = result["stderr"].lower()
@@ -180,6 +174,7 @@ class GitWorktreeManager:
         }
         try:
             import json
+
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f)
         except Exception as e:
@@ -188,6 +183,7 @@ class GitWorktreeManager:
     async def _read_worktree_metadata(self, worktree_path: Path) -> dict | None:
         """Read metadata from a worktree."""
         import json
+
         metadata_path = worktree_path / self.METADATA_FILE
         if not metadata_path.exists():
             return None
@@ -208,8 +204,7 @@ class GitWorktreeManager:
         try:
             # Remove the worktree
             await self._run_git(
-                ["worktree", "remove", "--force", str(worktree_path)],
-                cwd=self.repo_path
+                ["worktree", "remove", "--force", str(worktree_path)], cwd=self.repo_path
             )
             return True
         except (OSError, RuntimeError) as e:
@@ -231,13 +226,11 @@ class GitWorktreeManager:
         await self._run_git(["reset", "--", self.METADATA_FILE], cwd=worktree_path)
 
         # Check if there are changes to commit
-        result = await self._run_git(
-            ["status", "--porcelain"],
-            cwd=worktree_path
-        )
+        result = await self._run_git(["status", "--porcelain"], cwd=worktree_path)
 
         changed_lines = [
-            line for line in result["stdout"].splitlines()
+            line
+            for line in result["stdout"].splitlines()
             if line.strip() and not line.rstrip().endswith(self.METADATA_FILE)
         ]
         if not changed_lines:
@@ -245,19 +238,13 @@ class GitWorktreeManager:
 
         # Commit
         before = await self._run_git(["rev-parse", "HEAD"], cwd=worktree_path)
-        commit_result = await self._run_git(
-            ["commit", "-m", message],
-            cwd=worktree_path
-        )
+        commit_result = await self._run_git(["commit", "-m", message], cwd=worktree_path)
         if commit_result["returncode"] != 0:
             detail = (commit_result["stderr"] or commit_result["stdout"]).strip()
             raise RuntimeError(f"Failed to commit changes: {detail or 'git commit failed'}")
 
         # Get commit hash
-        result = await self._run_git(
-            ["rev-parse", "HEAD"],
-            cwd=worktree_path
-        )
+        result = await self._run_git(["rev-parse", "HEAD"], cwd=worktree_path)
         if result["returncode"] != 0:
             return None
 
@@ -317,10 +304,7 @@ class GitWorktreeManager:
         return value.strip() if value and value.strip() else self.DEFAULT_GIT_USER_EMAIL
 
     def _should_configure_credential_helper(self) -> bool:
-        return any(
-            bool((os.getenv(var) or "").strip())
-            for var in ("GH_TOKEN", "GITHUB_TOKEN")
-        )
+        return any(bool((os.getenv(var) or "").strip()) for var in ("GH_TOKEN", "GITHUB_TOKEN"))
 
     async def merge_to_main(
         self,
@@ -331,10 +315,7 @@ class GitWorktreeManager:
         worktree_path = Path(worktree_path)
 
         # Get current branch
-        result = await self._run_git(
-            ["rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=worktree_path
-        )
+        result = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path)
         source_branch = result["stdout"].strip()
 
         # Switch to main in main repo
@@ -342,8 +323,7 @@ class GitWorktreeManager:
 
         # Merge
         result = await self._run_git(
-            ["merge", source_branch, "--no-ff", "-m", f"Merge {source_branch}"],
-            cwd=self.repo_path
+            ["merge", source_branch, "--no-ff", "-m", f"Merge {source_branch}"], cwd=self.repo_path
         )
 
         return cast(bool, result["returncode"] == 0)
@@ -357,10 +337,7 @@ class GitWorktreeManager:
 
     async def list_worktrees(self) -> list[dict[str, str]]:
         """List all active worktrees."""
-        result = await self._run_git(
-            ["worktree", "list", "--porcelain"],
-            cwd=self.repo_path
-        )
+        result = await self._run_git(["worktree", "list", "--porcelain"], cwd=self.repo_path)
 
         worktrees: list[dict[str, str]] = []
         current: dict[str, str] = {}
@@ -495,10 +472,11 @@ class GitWorktreeManager:
         timeout: float = 30.0,
     ) -> dict[str, Any]:
         """Run a git command with timeout."""
-        logger.info("GIT: Running git %s in %s", ' '.join(args), cwd)
+        logger.info("GIT: Running git %s in %s", " ".join(args), cwd)
         try:
             process = await asyncio.create_subprocess_exec(
-                "git", *args,
+                "git",
+                *args,
                 cwd=cwd,
                 env=os.environ.copy(),
                 stdout=asyncio.subprocess.PIPE,
@@ -506,10 +484,7 @@ class GitWorktreeManager:
             )
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=timeout
-                )
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
                 logger.info("GIT: Command completed with code %s", process.returncode)
                 if stderr:
                     logger.warning("GIT stderr: %s", stderr.decode()[:200])
@@ -558,6 +533,7 @@ class GitTool(BaseSystemTool):
 
     async def execute(self, context: ToolContext) -> ToolResult:
         import os as _os  # local import
+
         _env = _os.getenv("PROGENITOR_PROJECT_ROOT")
         if _env:
             project_root = Path(_env)
@@ -565,16 +541,25 @@ class GitTool(BaseSystemTool):
             # git.py lives at app/agents/builder_agent/tools/git.py → parents[4] = repo root
             candidate = Path(__file__).resolve().parents[4]
             project_root = candidate if (candidate / ".git").exists() else Path.cwd()
-        worktrees_dir = project_root / "worktrees"
+        worktree_dir_env = (_os.getenv("PROGENITOR_WORKTREE_DIR") or "").strip()
+        worktrees_root_env = (_os.getenv("PROGENITOR_WORKTREES_ROOT") or "").strip()
+        if worktree_dir_env:
+            worktrees_dir = Path(worktree_dir_env)
+        elif worktrees_root_env:
+            worktrees_dir = Path(worktrees_root_env) / "worktrees"
+        else:
+            worktrees_dir = project_root / "worktrees"
         manager = GitWorktreeManager(
             worktrees_dir=worktrees_dir,
             repo_path=project_root,
             cleanup_on_init=False,
         )
         worktrees = await manager.list_worktrees()
-        return ToolResult.ok({
-            "repo_path": str(project_root),
-            "worktrees_dir": str(worktrees_dir),
-            "worktrees": worktrees,
-            "count": len(worktrees),
-        })
+        return ToolResult.ok(
+            {
+                "repo_path": str(project_root),
+                "worktrees_dir": str(worktrees_dir),
+                "worktrees": worktrees,
+                "count": len(worktrees),
+            }
+        )

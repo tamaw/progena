@@ -15,7 +15,7 @@ class _FakeLLMClient:
         ctx = kwargs.get("system_tool_context") or {}
         updates = ctx.get("state_updates")
         if isinstance(updates, dict):
-            updates.update({"current_decision": None, "run_id": "run_test"})
+            updates.update({"current_decision": None, "thread_id": "thread_test"})
         return "ok"
 
 
@@ -35,5 +35,4 @@ class TestChatNode:
 
         assert isinstance(result.get("current_decision"), Decision)
         assert result["current_decision"].direct_response == "ok"
-        assert result["run_id"] == "run_test"
-
+        assert result["thread_id"] == "thread_test"

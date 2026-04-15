@@ -4,11 +4,17 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel
+
+from app.progenitor.mcp_tool_utils import (
+    normalize_mcp_tool_definition,
+    parse_mcp_jsonrpc_response,
+)
 
 from ..config import LLMConfig, MCPConfig
 from ..tools.user_communication import EventPusher
@@ -105,7 +111,7 @@ def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str
             "name": schema_name,
             "schema": schema,
             "strict": True,
-        }
+        },
     }
 
 
@@ -116,6 +122,7 @@ class LLMClient:
         self,
         config: LLMConfig | None = None,
         mcp_config: MCPConfig | None = None,
+        prompts_dir: Path | str | None = None,
         role: str | None = None,
     ):
         """Initialize the LLM client.
@@ -123,11 +130,12 @@ class LLMClient:
         Args:
             config: LLM configuration. If None, loads from environment.
             mcp_config: MCP configuration. If None, loads from environment.
+            prompts_dir: Prompt root to use for template loading.
             role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
         self.mcp_config = mcp_config or MCPConfig.from_env()
-        self.prompts = PromptTemplates()
+        self.prompts = PromptTemplates(prompts_dir=prompts_dir)
         self.role = role
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 
@@ -194,10 +202,12 @@ class LLMClient:
         allowed_roles = {"system", "user", "assistant", "tool"}
 
         if system_prompt:
-            input_messages.append({
-                "role": "system",
-                "content": system_prompt,
-            })
+            input_messages.append(
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                }
+            )
 
         for msg in messages:
             role = str(msg.get("role", "user") or "user")
@@ -209,18 +219,23 @@ class LLMClient:
             content = msg.get("content", "")
 
             if isinstance(content, list):
-                if content and isinstance(content[0], dict) and content[0].get("type") in {
-                    "input_text",
-                    "output_text",
-                    "input_image",
-                    "input_file",
-                    "refusal",
-                    "summary_text",
-                    "tether_browsing_display",
-                    "computer_screenshot",
-                    "tool_call",
-                    "tool_result",
-                }:
+                if (
+                    content
+                    and isinstance(content[0], dict)
+                    and content[0].get("type")
+                    in {
+                        "input_text",
+                        "output_text",
+                        "input_image",
+                        "input_file",
+                        "refusal",
+                        "summary_text",
+                        "tether_browsing_display",
+                        "computer_screenshot",
+                        "tool_call",
+                        "tool_result",
+                    }
+                ):
                     wrapped_content: Any = content
                 else:
                     text_parts = []
@@ -233,10 +248,12 @@ class LLMClient:
             else:
                 wrapped_content = str(content)
 
-            input_messages.append({
-                "role": role,
-                "content": wrapped_content,
-            })
+            input_messages.append(
+                {
+                    "role": role,
+                    "content": wrapped_content,
+                }
+            )
 
         return input_messages
 
@@ -277,27 +294,7 @@ class LLMClient:
         if tool.get("type") == "function" and "function" in tool:
             return tool
 
-        # Extract from MCP format
-        name = tool.get("name")
-        if not name:
-            return None
-
-        description = tool.get("description") or tool.get("summary") or "MCP tool"
-        parameters = (
-            tool.get("input_schema")
-            or tool.get("inputSchema")
-            or tool.get("parameters")
-            or {"type": "object", "properties": {}}
-        )
-
-        return {
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": parameters,
-            },
-        }
+        return normalize_mcp_tool_definition(tool)
 
     def _merge_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         """Merge caller-supplied tools with MCP tools, de-duplicated by name."""
@@ -308,7 +305,11 @@ class LLMClient:
         seen_names: set[str] = set()
 
         for tool in tools or []:
-            name = tool.get("function", {}).get("name") if tool.get("type") == "function" else tool.get("name")
+            name = (
+                tool.get("function", {}).get("name")
+                if tool.get("type") == "function"
+                else tool.get("name")
+            )
             if name:
                 seen_names.add(name)
             merged.append(tool)
@@ -412,7 +413,10 @@ class LLMClient:
 
         request = {
             "jsonrpc": "2.0",
-            "id": tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id") or 1,
+            "id": tool_call.get("call_id")
+            or tool_call.get("id")
+            or tool_call.get("tool_call_id")
+            or 1,
             "method": "tools/call",
             "params": {
                 "name": name,
@@ -423,15 +427,15 @@ class LLMClient:
         try:
             response = await self.mcp_client.post(self.mcp_config.base_url, json=request)
             response.raise_for_status()
-            payload = response.json()
+            payload = parse_mcp_jsonrpc_response(response.text)
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid MCP JSON-RPC response")
 
-            if isinstance(payload, dict):
-                if error := payload.get("error"):
-                    return {"error": error}
-                return cast(dict[str, Any], payload.get("result", payload))
-            return cast(dict[str, Any], payload)
+            if error := payload.get("error"):
+                return {"error": error}
+            return cast(dict[str, Any], payload.get("result", payload))
 
-        except Exception as exc:
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             logger.warning("MCP tool call failed: %s", exc)
             return {"error": f"MCP call failed: {exc}"}
 
@@ -452,7 +456,11 @@ class LLMClient:
                 get_system_tool = None
                 execute_system_tool = None
 
-            if callable(get_system_tool) and callable(execute_system_tool) and get_system_tool(tool_name):
+            if (
+                callable(get_system_tool)
+                and callable(execute_system_tool)
+                and get_system_tool(tool_name)
+            ):
                 tool_registry = system_tool_context.get("tool_registry")
                 state_manager = system_tool_context.get("state_manager")
                 state = system_tool_context.get("state")
@@ -490,7 +498,11 @@ class LLMClient:
                     from ..tools.mcp import A2AClient
 
                     req = str(tool_args.get("request") or "")
-                    ctx = tool_args.get("context") if isinstance(tool_args.get("context"), dict) else {}
+                    ctx = (
+                        tool_args.get("context")
+                        if isinstance(tool_args.get("context"), dict)
+                        else {}
+                    )
                     result = await A2AClient().call_agent(
                         agent_config=agent_cfg,
                         request=req,
@@ -541,7 +553,15 @@ class LLMClient:
                     _append_text_candidate(item)
                 return
             if isinstance(candidate, dict):
-                for key in ("text", "value", "content", "output_text", "refusal", "message", "parts"):
+                for key in (
+                    "text",
+                    "value",
+                    "content",
+                    "output_text",
+                    "refusal",
+                    "message",
+                    "parts",
+                ):
                     if key in candidate:
                         _append_text_candidate(candidate.get(key))
 
@@ -598,7 +618,8 @@ class LLMClient:
             incomplete_details = data.get("incomplete_details")
             truncation = data.get("truncation")
             top_text = data.get("text")
-            output_items: list[Any] = data.get("output") if isinstance(data.get("output"), list) else []  # type: ignore[assignment]
+            output_value = data.get("output")
+            output_items: list[Any] = output_value if isinstance(output_value, list) else []
 
             output_summaries: list[dict[str, Any]] = []
             for item in output_items[:5]:
@@ -712,7 +733,7 @@ class LLMClient:
                     usage_percent,
                     token_count,
                     context_window,
-                    model or self.model
+                    model or self.model,
                 )
         except Exception as e:
             logger.debug("Failed to check token usage: %s", e)
@@ -792,7 +813,9 @@ class LLMClient:
             tool_result_messages: list[dict[str, Any]] = []
 
             for tool_call in tool_calls:
-                tool_call_id = tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
+                tool_call_id = (
+                    tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
+                )
                 tool_name = (
                     tool_call.get("name")
                     or tool_call.get("tool_name")
@@ -1007,7 +1030,9 @@ class LLMClient:
         """Make a routing decision for user input."""
         system_prompt = self.prompts.get_decide_prompt(tool_context)
         messages = conversation_history[-10:] + [{"role": "user", "content": user_input}]
-        schema_hint = json.dumps(DecisionResponse.model_json_schema(), separators=(",", ":"), ensure_ascii=True)
+        schema_hint = json.dumps(
+            DecisionResponse.model_json_schema(), separators=(",", ":"), ensure_ascii=True
+        )
         instruction = (
             "Return ONLY valid JSON (no markdown, no extra text) that matches this JSON Schema: "
             f"{schema_hint}"
@@ -1028,7 +1053,7 @@ class LLMClient:
             end = response.rfind("}")
             if start != -1 and end != -1 and end > start:
                 try:
-                    raw_data = json.loads(response[start:end + 1])
+                    raw_data = json.loads(response[start : end + 1])
                     validated = validate_decision_response(raw_data)
                     return validated.model_dump()
                 except json.JSONDecodeError:
@@ -1053,7 +1078,9 @@ class LLMClient:
         messages = [{"role": "user", "content": context}]
         response_format = _build_json_schema_format(PlannerResponse, "planner_response")
 
-        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
+        response = await self.chat(
+            messages, system_prompt, temperature=0.5, response_format=response_format
+        )
         raw_data = json.loads(response)
         validated = validate_planner_response(raw_data)
         return [item.model_dump() for item in validated.work_items]
@@ -1069,14 +1096,18 @@ class LLMClient:
         messages = conversation_history[-20:]
 
         if action_results:
-            results_summary = "\n".join([
-                f"- {r.get('action', 'unknown')}: {r.get('result', 'completed')}"
-                for r in action_results
-            ])
-            messages.append({
-                "role": "system",
-                "content": f"Actions completed:\n{results_summary}\n\nRespond to the user about these results."
-            })
+            results_summary = "\n".join(
+                [
+                    f"- {r.get('action', 'unknown')}: {r.get('result', 'completed')}"
+                    for r in action_results
+                ]
+            )
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"Actions completed:\n{results_summary}\n\nRespond to the user about these results.",
+                }
+            )
 
         messages.append({"role": "user", "content": user_input})
         return await self.chat(messages, system_prompt, temperature=0.7)
@@ -1120,7 +1151,9 @@ class LLMClient:
         messages = [{"role": "user", "content": context}]
         response_format = _build_json_schema_format(BuildSpec, "build_spec")
 
-        response = await self.chat(messages, system_prompt, temperature=0.5, response_format=response_format)
+        response = await self.chat(
+            messages, system_prompt, temperature=0.5, response_format=response_format
+        )
         raw_data = json.loads(response)
         validated = validate_build_spec(raw_data)
         return validated.model_dump()

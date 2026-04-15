@@ -3,12 +3,12 @@ Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
 
-Reads real state data from data/state/ and data/config/:
+Reads real state data from data/state/, data/config/, and live backend-managed config:
 - health.json: Agent health status
-- agents.json + mcp.json: Registered agents and tools
+- agents.json + data/config/mcp.json: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
-- schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
+- data/config/schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
 """
 
 import asyncio
@@ -21,12 +21,14 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from typing import Any, Literal
 
-from croniter import croniter  # type: ignore[import-untyped]
+import httpx
+from croniter import croniter
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -34,16 +36,46 @@ from pydantic import BaseModel, Field
 from app.progenitor.runtime.scheduler import Scheduler
 from app.progenitor.runtime.time_utils import utcnow
 
+from .alerts import (
+    AlertInfo,
+    AlertsResponse,
+    MarkAlertsViewedRequest,
+    MarkAlertsViewedResponse,
+    alert_summary,
+    get_alert,
+    get_alerts_response,
+    mark_alerts_viewed,
+)
+from .alerts import (
+    create_alert as store_alert,
+)
 from .prompt_service import PromptService
 from .state_reader import StateReader, get_state_reader
+from .threads import (
+    ThreadsResponse,
+    complete_thread,
+    fail_thread,
+    list_threads,
+    upsert_thread,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
+KANBAN_EVENT_TYPE_LABELS = {
+    "kanban.card.created": "Card created",
+    "kanban.card.updated": "Card updated",
+    "kanban.card.moved": "Card moved",
+    "kanban.card.deleted": "Card deleted",
+    "kanban.card.status_changed": "Status changed",
+}
+MAX_EVENT_WIDGET_LOGS = 20
+
 
 class BuildInfoResponse(BaseModel):
     """Build status information."""
+
     in_progress: bool = False
     phase: str | None = None  # observe, think, plan, build, execute, verify, learn
     task_description: str | None = None
@@ -55,6 +87,7 @@ class BuildInfoResponse(BaseModel):
 
 class UIStatusResponse(BaseModel):
     """Combined status response for the UI."""
+
     connected: bool
     server_status: str
     progenitor_running: bool
@@ -67,7 +100,7 @@ class UIStatusResponse(BaseModel):
     rate_limit_hour_limit: int
     # State data
     cycle_count: int = 0
-    run_id: str | None = None
+    thread_id: str | None = None
     messages_count: int = 0
     pid: int | None = None
     last_active: str | None = None
@@ -81,10 +114,12 @@ class UIStatusResponse(BaseModel):
     schedule: list["ScheduleItemInfo"] = []
     widgets: list[dict] = []
     sessions: dict = {}
+    alerts: AlertsResponse = Field(default_factory=get_alerts_response)
 
 
 class LoopInfo(BaseModel):
     """Processing loop information (Planner/Executor)."""
+
     name: str
     status: str
     current_task: str | None = None
@@ -92,11 +127,13 @@ class LoopInfo(BaseModel):
 
 class LoopsResponse(BaseModel):
     """Response containing loop status."""
+
     loops: list[LoopInfo]
 
 
 class SubAgentInfo(BaseModel):
     """Sub-agent (registered agent) information."""
+
     name: str
     status: str
     kind: str = "a2a_agent"
@@ -109,12 +146,14 @@ class SubAgentInfo(BaseModel):
 
 class SubAgentsResponse(BaseModel):
     """Response containing registered agents."""
+
     agents: list[SubAgentInfo]
     total: int
 
 
 class BacklogItemInfo(BaseModel):
     """Backlog item information."""
+
     id: str
     type: str
     status: str
@@ -123,12 +162,14 @@ class BacklogItemInfo(BaseModel):
 
 class BacklogResponse(BaseModel):
     """Response containing backlog items."""
+
     items: list[BacklogItemInfo]
     total: int
 
 
 class ScheduleItemInfo(BaseModel):
     """Schedule item information."""
+
     id: str
     name: str
     schedule: str
@@ -138,12 +179,14 @@ class ScheduleItemInfo(BaseModel):
 
 class ScheduleResponse(BaseModel):
     """Response containing schedule items."""
+
     items: list[ScheduleItemInfo]
     total: int
 
 
 class WidgetResponse(BaseModel):
     """Unified widget payload."""
+
     id: str
     type: str
     title: str
@@ -158,18 +201,35 @@ class WidgetResponse(BaseModel):
 
 class WidgetsResponse(BaseModel):
     """Response containing widget entries."""
+
     items: list[WidgetResponse]
     total: int
 
 
+class WidgetDeleteResponse(BaseModel):
+    """Result of deleting a backend-managed widget."""
+
+    widget_id: str
+    removed: bool = True
+    already_removed: bool = False
+    warning: str | None = None
+
+
+def _alerts_payload() -> dict[str, object]:
+    """Return the full alert payload for REST and SSE consumers."""
+    return get_alerts_response().model_dump(mode="json")
+
+
 class WidgetFieldOptionResponse(BaseModel):
     """Selectable option for a widget field."""
+
     value: str
     label: str
 
 
 class WidgetFieldSchemaResponse(BaseModel):
     """Schema for a single editable or readonly widget field."""
+
     key: str
     label: str
     control: str = "text"
@@ -181,6 +241,7 @@ class WidgetFieldSchemaResponse(BaseModel):
 
 class WidgetSectionSchemaResponse(BaseModel):
     """Schema for a collapsible widget details section."""
+
     id: str
     label: str
     default_expanded: bool = True
@@ -189,13 +250,16 @@ class WidgetSectionSchemaResponse(BaseModel):
 
 class WidgetTabSchemaResponse(BaseModel):
     """Schema for a widget canvas tab."""
+
     id: str
     label: str
 
 
 class WidgetSchemaResponse(BaseModel):
     """Details-pane schema for a widget type."""
+
     type: str
+    help_text: str | None = None
     default_tab: str | None = None
     tabs: list[WidgetTabSchemaResponse] = Field(default_factory=list)
     sections: list[WidgetSectionSchemaResponse] = Field(default_factory=list)
@@ -203,11 +267,13 @@ class WidgetSchemaResponse(BaseModel):
 
 class WidgetSchemasResponse(BaseModel):
     """Response containing details-pane schemas by widget type."""
+
     schemas: list[WidgetSchemaResponse]
 
 
 class WorkspaceResponse(BaseModel):
     """Workspace bootstrap payload."""
+
     timestamp: float
     workspace: dict
     health: dict
@@ -246,16 +312,21 @@ class PromptUpdateRequest(BaseModel):
 
 class WidgetPatchRequest(BaseModel):
     """Patch request for mutable backend-backed widgets."""
+
     enabled: bool | None = None
     name: str | None = None
+    description: str | None = None
+    url: str | None = None
     instruction: str | None = None
     schedule_type: str | None = None
     expression: str | None = None
     timezone: str | None = None
+    event_type: str | None = None
 
 
 class ScheduleCreateRequest(BaseModel):
     """Create request for a new schedule entry."""
+
     name: str
     instruction: str
     schedule_type: str = "cron"
@@ -264,8 +335,17 @@ class ScheduleCreateRequest(BaseModel):
     enabled: bool = True
 
 
+class EventWidgetCreateRequest(BaseModel):
+    """Create request for a new persisted event widget."""
+
+    name: str
+    event_type: str
+    enabled: bool = True
+
+
 class KanbanColumnResponse(BaseModel):
     """Kanban column metadata."""
+
     id: str
     label: str
     description: str
@@ -276,6 +356,7 @@ class KanbanColumnResponse(BaseModel):
 
 class KanbanStatusOptionResponse(BaseModel):
     """Allowed kanban card status."""
+
     id: str
     label: str
     tone: str = "neutral"
@@ -283,6 +364,7 @@ class KanbanStatusOptionResponse(BaseModel):
 
 class KanbanFieldSchemaResponse(BaseModel):
     """Schema for an editable kanban card field."""
+
     key: str
     label: str
     control: str = "text"
@@ -292,12 +374,14 @@ class KanbanFieldSchemaResponse(BaseModel):
 
 class KanbanCardSchemaResponse(BaseModel):
     """Schema describing editable kanban card state."""
+
     statuses: list[KanbanStatusOptionResponse] = Field(default_factory=list)
     fields: list[KanbanFieldSchemaResponse] = Field(default_factory=list)
 
 
 class KanbanCardResponse(BaseModel):
     """Single kanban card entry."""
+
     id: str
     title: str
     summary: str = ""
@@ -321,6 +405,7 @@ class KanbanCardResponse(BaseModel):
 
 class KanbanBoardResponse(BaseModel):
     """Kanban board payload for the frontend."""
+
     id: str
     title: str
     updated_at: str
@@ -331,6 +416,7 @@ class KanbanBoardResponse(BaseModel):
 
 class KanbanCardCreateRequest(BaseModel):
     """Create a new kanban card."""
+
     title: str
     summary: str = ""
     description: str = ""
@@ -340,6 +426,7 @@ class KanbanCardCreateRequest(BaseModel):
 
 class KanbanCardPatchRequest(BaseModel):
     """Update mutable kanban card fields."""
+
     title: str | None = None
     summary: str | None = None
     description: str | None = None
@@ -360,30 +447,78 @@ class KanbanCardPatchRequest(BaseModel):
 
 class ActionRunRequest(BaseModel):
     """Run an action using the existing IPC message flow."""
+
     widget_id: str | None = None
     prompt: str | None = None
     code: str | None = None
     content: str | None = None
     input: str | None = None
     language: str | None = None
+    broadcast_response: bool = True
+    thread_id: str | None = None
+    invocation_type: Literal["user", "automation", "system"] = "automation"
+    invocation_source: str | None = None
+    root_widget_id: str | None = None
 
 
 class ActionGenerateRequest(BaseModel):
     """Generate content using the existing IPC message flow."""
+
     widget_id: str | None = None
     prompt: str
+    input: str | None = None
     target: str | None = None
+    thread_id: str | None = None
+    invocation_type: Literal["user", "automation", "system"] = "automation"
+    invocation_source: str | None = None
+    root_widget_id: str | None = None
 
 
 class ActionResponse(BaseModel):
     """Action response payload."""
+
     ok: bool
     widget_id: str | None = None
+    thread_id: str | None = None
     response: str
+
+
+def _resolve_action_thread_id(thread_id: str | None) -> str:
+    """Return a workspace execution thread identifier."""
+
+    normalized = str(thread_id or "").strip()
+    if normalized:
+        return normalized
+    return f"thread_{uuid.uuid4().hex[:12]}"
+
+
+def _build_action_metadata(
+    *,
+    thread_id: str,
+    invocation_type: Literal["user", "automation", "system"],
+    invocation_source: str | None,
+    widget_id: str | None,
+    root_widget_id: str | None,
+    action: str,
+) -> dict[str, str]:
+    """Build metadata sent through the backend→Progenitor boundary."""
+
+    metadata = {
+        "thread_id": thread_id,
+        "invocation_type": invocation_type,
+        "invocation_source": invocation_source or action,
+        "action": action,
+    }
+    if widget_id:
+        metadata["widget_id"] = widget_id
+    if root_widget_id:
+        metadata["root_widget_id"] = root_widget_id
+    return metadata
 
 
 class TaskInfo(BaseModel):
     """Active task information."""
+
     id: str
     title: str
     status: str
@@ -393,37 +528,9 @@ class TaskInfo(BaseModel):
 
 class TasksResponse(BaseModel):
     """Response containing active tasks."""
+
     tasks: list[TaskInfo]
     total: int
-
-
-class AlertInfo(BaseModel):
-    """Alert information."""
-    id: str
-    type: str
-    title: str
-    message: str
-    timestamp: float
-    urgent: bool = False
-    requires_response: bool = False
-
-
-class AlertsResponse(BaseModel):
-    """Response containing pending alerts."""
-    alerts: list[AlertInfo]
-    total: int
-
-
-# In-memory alert storage (would be replaced with proper storage in production)
-_pending_alerts: list[AlertInfo] = []
-_alert_id_counter = 0
-
-
-def generate_alert_id() -> str:
-    """Generate a unique alert ID."""
-    global _alert_id_counter
-    _alert_id_counter += 1
-    return f"alert-{int(time.time())}-{_alert_id_counter}"
 
 
 @router.get("/status/snapshot", response_model=UIStatusResponse)
@@ -473,11 +580,15 @@ async def get_ui_status_snapshot():
             version=health.get("version", "unknown"),
             memory_mb=health.get("memory", {}).get("rss_mb"),
             active_requests=health.get("shutdown", {}).get("active_requests", 0),
-            rate_limit_minute_limit=health.get("rate_limiter", {}).get("requests_per_minute_limit", 60),
-            rate_limit_hour_limit=health.get("rate_limiter", {}).get("requests_per_hour_limit", 500),
+            rate_limit_minute_limit=health.get("rate_limiter", {}).get(
+                "requests_per_minute_limit", 60
+            ),
+            rate_limit_hour_limit=health.get("rate_limiter", {}).get(
+                "requests_per_hour_limit", 500
+            ),
             # State data
             cycle_count=snapshot.health.cycle_count,
-            run_id=snapshot.health.run_id,
+            thread_id=snapshot.health.thread_id,
             messages_count=len(state_reader.get_progenitor_state().get("messages", [])),
             pid=snapshot.health.pid,
             last_active=snapshot.health.last_active,
@@ -485,7 +596,11 @@ async def get_ui_status_snapshot():
             build=build_info,
             # Lists
             loops=[
-                LoopInfo(name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task)
+                LoopInfo(
+                    name=loop_item.name,
+                    status=loop_item.status,
+                    current_task=loop_item.current_task,
+                )
                 for loop_item in snapshot.loops
             ],
             agents=[
@@ -504,19 +619,30 @@ async def get_ui_status_snapshot():
                 for tool in snapshot.tools
             ],
             backlog=[
-                BacklogItemInfo(id=b.id, type=b.item_type, status=b.status, description=b.description)
+                BacklogItemInfo(
+                    id=b.id, type=b.item_type, status=b.status, description=b.description
+                )
                 for b in snapshot.backlog
             ],
             schedule=[
-                ScheduleItemInfo(id=s.id, name=s.name, schedule=s.schedule, next_run=s.next_run, enabled=s.enabled)
+                ScheduleItemInfo(
+                    id=s.id,
+                    name=s.name,
+                    schedule=s.schedule,
+                    next_run=s.next_run,
+                    enabled=s.enabled,
+                )
                 for s in snapshot.schedule
             ],
             widgets=state_reader.get_widgets(),
             sessions={
                 "total": snapshot.sessions.total if snapshot.sessions else 0,
-                "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
+                "latest_session_id": snapshot.sessions.latest_session_id
+                if snapshot.sessions
+                else None,
                 "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
             },
+            alerts=get_alerts_response(),
         )
     except Exception as e:
         logger.error("Failed to get UI status: %s", e)
@@ -534,7 +660,9 @@ async def get_loops():
 
     return LoopsResponse(
         loops=[
-            LoopInfo(name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task)
+            LoopInfo(
+                name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task
+            )
             for loop_item in loops
         ]
     )
@@ -556,16 +684,18 @@ async def get_sub_agents():
     agent_infos = []
     for agent in agents:
         if agent.enabled:
-            agent_infos.append(SubAgentInfo(
-                name=agent.name,
-                status="ready" if progenitor_running else "offline",
-                kind=agent.kind,
-                version=agent.version,
-                description=agent.description,
-                transport=agent.transport,
-                task=None,
-                progress=None,
-            ))
+            agent_infos.append(
+                SubAgentInfo(
+                    name=agent.name,
+                    status="ready" if progenitor_running else "offline",
+                    kind=agent.kind,
+                    version=agent.version,
+                    description=agent.description,
+                    transport=agent.transport,
+                    task=None,
+                    progress=None,
+                )
+            )
 
     return SubAgentsResponse(agents=agent_infos, total=len(agent_infos))
 
@@ -632,11 +762,19 @@ def _widget_to_response(widget: dict) -> WidgetResponse:
     )
 
 
+def _kanban_event_type_options() -> list[WidgetFieldOptionResponse]:
+    return [
+        WidgetFieldOptionResponse(value=value, label=label)
+        for value, label in KANBAN_EVENT_TYPE_LABELS.items()
+    ]
+
+
 def _widget_schemas() -> list[WidgetSchemaResponse]:
     """Return schema definitions for workspace details editing."""
     return [
         WidgetSchemaResponse(
             type="prompt",
+            help_text="Stores prompt text, targets an agent, and runs or generates code from the latest prompt.",
             default_tab="editor",
             tabs=[
                 WidgetTabSchemaResponse(id="editor", label="Editor"),
@@ -687,8 +825,12 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     fields=[
                         WidgetFieldSchemaResponse(key="sourcePath", label="Source Path"),
                         WidgetFieldSchemaResponse(key="primaryAgent", label="Primary Agent"),
-                        WidgetFieldSchemaResponse(key="associatedAgents", label="Associated Agents", control="list"),
-                        WidgetFieldSchemaResponse(key="linkedOutputIds", label="Linked Outputs", control="list"),
+                        WidgetFieldSchemaResponse(
+                            key="associatedAgents", label="Associated Agents", control="list"
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="linkedOutputIds", label="Linked Outputs", control="list"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -696,6 +838,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="code",
+            help_text="Keeps editable code in the workspace and runs it so linked cards can use the latest output.",
             default_tab="editor",
             tabs=[
                 WidgetTabSchemaResponse(id="editor", label="Editor"),
@@ -708,14 +851,18 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
                         WidgetFieldSchemaResponse(key="language", label="Language", editable=True),
-                        WidgetFieldSchemaResponse(key="runtimeProfile", label="Runtime Profile", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="runtimeProfile", label="Runtime Profile", editable=True
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
                     id="content",
                     label="Content",
                     fields=[
-                        WidgetFieldSchemaResponse(key="content", label="Code", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="content", label="Code", control="textarea", editable=True
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -723,8 +870,10 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Execution",
                     default_expanded=False,
                     fields=[
-                        WidgetFieldSchemaResponse(key="lastRunId", label="Last Run"),
-                        WidgetFieldSchemaResponse(key="outputRefs", label="Outputs", control="list"),
+                        WidgetFieldSchemaResponse(key="lastThreadId", label="Last Thread"),
+                        WidgetFieldSchemaResponse(
+                            key="outputRefs", label="Outputs", control="list"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -732,6 +881,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="webframe",
+            help_text="Renders HTML or a URL inside the canvas so you can preview generated UI without leaving the workspace.",
             default_tab="preview",
             tabs=[
                 WidgetTabSchemaResponse(id="preview", label="Preview"),
@@ -760,9 +910,15 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     id="markup",
                     label="Markup",
                     fields=[
-                        WidgetFieldSchemaResponse(key="html", label="HTML", control="textarea", editable=True),
-                        WidgetFieldSchemaResponse(key="css", label="CSS", control="textarea", editable=True),
-                        WidgetFieldSchemaResponse(key="js", label="JavaScript", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="html", label="HTML", control="textarea", editable=True
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="css", label="CSS", control="textarea", editable=True
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="js", label="JavaScript", control="textarea", editable=True
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -777,6 +933,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="label",
+            help_text="Adds workspace notes and labels so you can annotate the canvas without affecting execution.",
             default_tab="content",
             tabs=[
                 WidgetTabSchemaResponse(id="content", label="Content"),
@@ -787,7 +944,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Content",
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(key="text", label="Text", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="text", label="Text", control="textarea", editable=True
+                        ),
                         WidgetFieldSchemaResponse(
                             key="variant",
                             label="Variant",
@@ -805,6 +964,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="group",
+            help_text="Organizes related cards into a visual group so larger workflows stay easier to scan.",
             default_tab="content",
             tabs=[
                 WidgetTabSchemaResponse(id="content", label="Content"),
@@ -815,7 +975,12 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Content",
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(key="description", label="Description", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="description",
+                            label="Description",
+                            control="textarea",
+                            editable=True,
+                        ),
                         WidgetFieldSchemaResponse(key="childIds", label="Children", control="list"),
                     ],
                 ),
@@ -823,6 +988,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="schedule",
+            help_text="Creates a timed automation that runs Progenitor once, on an interval, or on a cron schedule.",
             default_tab="details",
             tabs=[
                 WidgetTabSchemaResponse(id="details", label="Details"),
@@ -834,7 +1000,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Identity",
                     fields=[
                         WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
-                        WidgetFieldSchemaResponse(key="enabled", label="Enabled", control="boolean", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="enabled", label="Enabled", control="boolean", editable=True
+                        ),
                         WidgetFieldSchemaResponse(
                             key="scheduleType",
                             label="Schedule Type",
@@ -846,7 +1014,9 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                                 WidgetFieldOptionResponse(value="once", label="Once"),
                             ],
                         ),
-                        WidgetFieldSchemaResponse(key="expression", label="Expression", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="expression", label="Expression", editable=True
+                        ),
                         WidgetFieldSchemaResponse(key="timezone", label="Timezone", editable=True),
                     ],
                 ),
@@ -854,7 +1024,12 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     id="content",
                     label="Task",
                     fields=[
-                        WidgetFieldSchemaResponse(key="instruction", label="Instruction", control="textarea", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="instruction",
+                            label="Instruction",
+                            control="textarea",
+                            editable=True,
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -871,11 +1046,124 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
             ],
         ),
         WidgetSchemaResponse(
+            type="event",
+            help_text="Listens for a workspace event and triggers linked cards when that event fires.",
+            default_tab="details",
+            tabs=[
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="enabled", label="Enabled", control="boolean", editable=True
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="eventType",
+                            label="Event Type",
+                            control="select",
+                            editable=True,
+                            options=_kanban_event_type_options(),
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="status",
+                    label="Status",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="triggerCount", label="Trigger Count"),
+                        WidgetFieldSchemaResponse(key="lastTriggeredAt", label="Last Triggered"),
+                        WidgetFieldSchemaResponse(key="lastRunStatus", label="Last Run Status"),
+                        WidgetFieldSchemaResponse(key="saveError", label="Save Error"),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
+            type="user",
+            help_text="Configures a user-facing tool call so the current run can send a message, notification, or question.",
+            default_tab="details",
+            tabs=[
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="output", label="Output"),
+            ],
+            sections=[
+                WidgetSectionSchemaResponse(
+                    id="identity",
+                    label="Identity",
+                    fields=[
+                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
+                        WidgetFieldSchemaResponse(
+                            key="messageType",
+                            label="Message Type",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="say_to_user", label="say_to_user"),
+                                WidgetFieldOptionResponse(value="notify_user", label="notify_user"),
+                                WidgetFieldOptionResponse(value="ask_user", label="ask_user"),
+                            ],
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="notificationTitle",
+                            label="Notification Title",
+                            editable=True,
+                        ),
+                        WidgetFieldSchemaResponse(
+                            key="level",
+                            label="Notification Level",
+                            control="select",
+                            editable=True,
+                            options=[
+                                WidgetFieldOptionResponse(value="info", label="Info"),
+                                WidgetFieldOptionResponse(value="warning", label="Warning"),
+                                WidgetFieldOptionResponse(value="error", label="Error"),
+                                WidgetFieldOptionResponse(value="success", label="Success"),
+                            ],
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="content",
+                    label="Content",
+                    fields=[
+                        WidgetFieldSchemaResponse(
+                            key="message",
+                            label="Message / Body",
+                            control="textarea",
+                            editable=True,
+                        ),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="status",
+                    label="Status",
+                    default_expanded=False,
+                    fields=[
+                        WidgetFieldSchemaResponse(key="lastSentAt", label="Last Sent"),
+                        WidgetFieldSchemaResponse(
+                            key="summaryState", label="Summary", control="textarea"
+                        ),
+                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
+                    ],
+                ),
+            ],
+        ),
+        WidgetSchemaResponse(
             type="agent",
+            help_text="Shows a linked agent, its recent activity, and the latest thread-linked output for this card.",
             default_tab="overview",
             tabs=[
                 WidgetTabSchemaResponse(id="overview", label="Overview"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="capabilities", label="Capabilities"),
+                WidgetTabSchemaResponse(id="skills", label="Skills"),
                 WidgetTabSchemaResponse(id="logs", label="Logs"),
             ],
             sections=[
@@ -886,6 +1174,8 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                         WidgetFieldSchemaResponse(key="title", label="Title"),
                         WidgetFieldSchemaResponse(key="agentId", label="Agent"),
                         WidgetFieldSchemaResponse(key="transport", label="Transport"),
+                        WidgetFieldSchemaResponse(key="url", label="URL"),
+                        WidgetFieldSchemaResponse(key="agent_card_url", label="Agent Card URL"),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
@@ -893,8 +1183,10 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                     label="Status",
                     fields=[
                         WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
-                        WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
-                        WidgetFieldSchemaResponse(key="summaryState", label="Summary", control="textarea"),
+                        WidgetFieldSchemaResponse(key="currentThreadId", label="Thread ID"),
+                        WidgetFieldSchemaResponse(
+                            key="summaryState", label="Summary", control="textarea"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -902,10 +1194,14 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="mcp",
+            help_text="Shows an MCP integration, its recent activity, and the latest thread-linked output for this card.",
             default_tab="overview",
             tabs=[
                 WidgetTabSchemaResponse(id="overview", label="Overview"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
+                WidgetTabSchemaResponse(id="details", label="Details"),
+                WidgetTabSchemaResponse(id="tools", label="Tools"),
+                WidgetTabSchemaResponse(id="resources", label="Resources"),
+                WidgetTabSchemaResponse(id="prompts", label="Prompts"),
                 WidgetTabSchemaResponse(id="logs", label="Logs"),
             ],
             sections=[
@@ -916,15 +1212,36 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
                         WidgetFieldSchemaResponse(key="title", label="Title"),
                         WidgetFieldSchemaResponse(key="agentId", label="Tool"),
                         WidgetFieldSchemaResponse(key="transport", label="Transport"),
+                        WidgetFieldSchemaResponse(key="url", label="URL", editable=True),
+                    ],
+                ),
+                WidgetSectionSchemaResponse(
+                    id="config",
+                    label="Configuration",
+                    fields=[
+                        WidgetFieldSchemaResponse(
+                            key="description",
+                            label="Description",
+                            control="textarea",
+                            editable=True,
+                        ),
                     ],
                 ),
                 WidgetSectionSchemaResponse(
                     id="status",
                     label="Status",
                     fields=[
+                        WidgetFieldSchemaResponse(
+                            key="enabled",
+                            label="Enabled",
+                            control="boolean",
+                            editable=True,
+                        ),
                         WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
-                        WidgetFieldSchemaResponse(key="currentRunId", label="Run ID"),
-                        WidgetFieldSchemaResponse(key="summaryState", label="Summary", control="textarea"),
+                        WidgetFieldSchemaResponse(key="currentThreadId", label="Thread ID"),
+                        WidgetFieldSchemaResponse(
+                            key="summaryState", label="Summary", control="textarea"
+                        ),
                         WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
                     ],
                 ),
@@ -1134,7 +1451,13 @@ def _resequence_kanban_cards(cards: list[dict], columns: list[dict]) -> list[dic
     return normalized_cards
 
 
-def _reorder_kanban_cards(cards: list[dict], columns: list[dict], card_id: str, target_column_id: str, target_position: int) -> list[dict]:
+def _reorder_kanban_cards(
+    cards: list[dict],
+    columns: list[dict],
+    card_id: str,
+    target_column_id: str,
+    target_position: int,
+) -> list[dict]:
     """Move a card to a specific position within a target column."""
     grouped_cards: dict[str, list[dict]] = {column["id"]: [] for column in columns}
     moving_card: dict | None = None
@@ -1187,11 +1510,116 @@ def _kanban_board_path(state_reader: StateReader) -> Path:
     return state_reader.config_dir / "kanban.json"
 
 
+def _event_widget_path(state_reader: StateReader) -> Path:
+    """Return the persisted event widget state path."""
+    return state_reader.config_dir / "event_widgets.json"
+
+
 def _read_kanban_board(state_reader: StateReader) -> dict:
     """Read the kanban board from persisted config state."""
     board_path = _kanban_board_path(state_reader)
     raw = state_reader._read_json_from_path(board_path)  # noqa: SLF001 - shared helper
     return _normalize_kanban_board(raw)
+
+
+def _normalize_event_widget_logs(data: object) -> list[dict]:
+    if not isinstance(data, list):
+        return []
+
+    normalized: list[dict] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        normalized.append(
+            {
+                "time": entry.get("time") or entry.get("timestamp"),
+                "timestamp": entry.get("timestamp") or entry.get("time"),
+                "level": entry.get("level", "info"),
+                "source": entry.get("source", "kanban"),
+                "message": entry.get("message") or "",
+            }
+        )
+    return normalized[:MAX_EVENT_WIDGET_LOGS]
+
+
+def _normalize_event_widget_record(entry: dict) -> dict:
+    event_type = str(entry.get("event_type") or "kanban.card.created").strip().lower()
+    name = str(entry.get("name") or event_type or "Event").strip()
+    last_payload = entry.get("last_payload")
+    logs = _normalize_event_widget_logs(entry.get("logs"))
+    summary = str(entry.get("summary") or f"Waiting for {event_type}").strip()
+    try:
+        trigger_count = int(entry.get("trigger_count", 0) or 0)
+    except (TypeError, ValueError):
+        trigger_count = 0
+    return {
+        "id": str(entry.get("id") or ""),
+        "name": name,
+        "event_type": event_type,
+        "enabled": bool(entry.get("enabled", True)),
+        "trigger_count": trigger_count,
+        "last_triggered_at": entry.get("last_triggered_at"),
+        "last_run_status": str(entry.get("last_run_status") or "idle"),
+        "last_payload": last_payload if isinstance(last_payload, dict) else None,
+        "summary": summary,
+        "logs": logs,
+        "created_at": entry.get("created_at"),
+        "updated_at": entry.get("updated_at") or entry.get("created_at"),
+    }
+
+
+def _read_event_widget_records(state_reader: StateReader) -> list[dict]:
+    event_path = _event_widget_path(state_reader)
+    raw = state_reader._read_json_from_path(event_path)  # noqa: SLF001 - shared helper
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=500, detail="Event widget state is invalid")
+    return [_normalize_event_widget_record(entry) for entry in raw if isinstance(entry, dict)]
+
+
+def _write_event_widget_records(state_reader: StateReader, records: list[dict]) -> list[dict]:
+    event_path = _event_widget_path(state_reader)
+    normalized = [
+        _normalize_event_widget_record(entry) for entry in records if isinstance(entry, dict)
+    ]
+    _atomic_write_json(event_path, normalized)
+    state_reader.invalidate(event_path)
+    return normalized
+
+
+def _validate_event_type(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Event type is required")
+    if normalized not in KANBAN_EVENT_TYPE_LABELS:
+        raise HTTPException(status_code=400, detail=f"Unsupported event type: {value}")
+    return normalized
+
+
+def _build_event_widget_entry(
+    *,
+    event_widget_id: str,
+    name: str,
+    event_type: str,
+    enabled: bool,
+    created_at: str,
+) -> dict:
+    normalized_type = _validate_event_type(event_type)
+    return {
+        "id": event_widget_id,
+        "name": name,
+        "event_type": normalized_type,
+        "enabled": enabled,
+        "trigger_count": 0,
+        "last_triggered_at": None,
+        "last_run_status": "idle",
+        "last_payload": None,
+        "summary": f"Waiting for {normalized_type}",
+        "logs": [],
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
 
 
 def _write_kanban_board(state_reader: StateReader, board: dict) -> dict:
@@ -1220,9 +1648,393 @@ def _atomic_write_json(filepath: Path, data: object) -> None:
         raise
 
 
+def _read_mcp_config(state_reader: StateReader) -> tuple[Path, dict]:
+    """Read the live MCP config, normalizing the top-level mcpServers map."""
+    mcp_config_path = state_reader.mcp_config_path
+    raw = state_reader._read_json_from_path(mcp_config_path)  # noqa: SLF001 - shared helper
+    data = raw if isinstance(raw, dict) else {}
+    raw_servers = data.get("mcpServers")
+    if not isinstance(raw_servers, dict):
+        data["mcpServers"] = {}
+    return mcp_config_path, data
+
+
+def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
+    """Read the live schedule config, falling back to the legacy state path while migrating."""
+    schedule_path = state_reader.schedule_config_path
+    raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
+    if raw is None and not schedule_path.exists():
+        raw = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
+    if raw is None:
+        return schedule_path, []
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=500, detail="Schedule state is invalid")
+    return schedule_path, raw
+
+
+def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
+    """Delete a persisted schedule entry and refresh the cached schedule file."""
+    schedule_path, schedule_data = _read_schedule_config(state_reader)
+    remaining_entries: list = []
+    deleted = False
+    for entry in schedule_data:
+        if isinstance(entry, dict) and entry.get("id") == schedule_id:
+            deleted = True
+            continue
+        remaining_entries.append(entry)
+
+    if not deleted:
+        return False
+
+    _atomic_write_json(schedule_path, remaining_entries)
+    state_reader.invalidate(schedule_path)
+    return True
+
+
+async def _refresh_live_mcp_runtime(mcp_config_path: Path) -> None:
+    """Best-effort refresh for the in-process Progenitor service after config edits."""
+    with contextlib.suppress(Exception):
+        from app.progenitor import service as progenitor_service
+        from app.progenitor.config import MCPConfig
+        from app.progenitor.tools.mcp import refresh_mcp_runtime
+
+        service = progenitor_service._service
+        if service is None or not service.is_initialized or service.llm_client is None:
+            return
+
+        refreshed_config = MCPConfig.load(config_path=mcp_config_path)
+        service.config.mcp = refreshed_config
+        await refresh_mcp_runtime(
+            service.llm_client,
+            service.tool_registry,
+            refreshed_config,
+        )
+
+
 def _broadcast_widget_refresh(state_reader) -> None:
     """Notify status listeners that backend-derived widgets changed."""
     broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
+
+
+def _find_widget_payload(state_reader: StateReader, widget_id: str) -> dict[str, Any]:
+    widget = next(
+        (item for item in state_reader.get_widgets() if str(item.get("id")) == widget_id),
+        None,
+    )
+    if widget is None:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    return dict(widget)
+
+
+def _format_httpx_error(exc: httpx.HTTPError) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = exc.response.text.strip()
+        if len(body) > 240:
+            body = f"{body[:237]}..."
+        return (
+            f"{exc.request.method} {exc.request.url} returned "
+            f"{exc.response.status_code}: {body or exc.response.reason_phrase}"
+        )
+    if isinstance(exc, httpx.RequestError):
+        return f"Request to {exc.request.url} failed: {exc}"
+    return str(exc)
+
+
+def _mcp_jsonrpc_error_detail(error_payload: Any) -> str:
+    if not isinstance(error_payload, Mapping):
+        return str(error_payload or "Unknown MCP error")
+
+    message = str(error_payload.get("message") or "Unknown MCP error").strip()
+    code = error_payload.get("code")
+    data = error_payload.get("data")
+    detail = message
+    if code is not None:
+        detail = f"{detail} (code {code})"
+    if data not in (None, ""):
+        detail = f"{detail}: {data}"
+    return detail
+
+
+def _agent_card_url(agent: Any) -> str | None:
+    direct = str(getattr(agent, "agent_card_url", "") or "").strip()
+    if direct:
+        return direct
+
+    base_url = str(getattr(agent, "url", "") or "").strip().rstrip("/")
+    if not base_url:
+        return None
+    return f"{base_url}/.well-known/agent-card.json"
+
+
+async def _inspect_agent_widget(
+    widget: dict[str, Any], state_reader: StateReader
+) -> dict[str, Any]:
+    agent_name = str(widget.get("name") or "").strip()
+    agents, _ = state_reader.get_registry()
+    agent = next((entry for entry in agents if entry.name == agent_name and entry.enabled), None)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent widget is not registered")
+
+    card_url = _agent_card_url(agent)
+    if card_url is None:
+        raise HTTPException(status_code=400, detail="Agent is missing an agent-card URL")
+
+    headers = {"Accept": "application/json"}
+    if agent.headers:
+        headers.update(agent.headers)
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0), headers=headers) as client:
+            response = await client.get(card_url)
+            response.raise_for_status()
+            payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Agent card returned invalid JSON: {exc}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=_format_httpx_error(exc)) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="Agent card response must be a JSON object")
+
+    default_input_modes = payload.get("defaultInputModes")
+    default_output_modes = payload.get("defaultOutputModes")
+    skills = payload.get("skills")
+    inspection = {
+        "source": "a2a",
+        "refreshed_at": utcnow().isoformat(),
+        "card_url": card_url,
+        "protocol_version": payload.get("protocolVersion"),
+        "preferred_transport": payload.get("preferredTransport"),
+        "default_input_modes": default_input_modes if isinstance(default_input_modes, list) else [],
+        "default_output_modes": default_output_modes
+        if isinstance(default_output_modes, list)
+        else [],
+        "capabilities": payload.get("capabilities"),
+        "skills": skills if isinstance(skills, list) else [],
+        "card": payload,
+    }
+
+    return {
+        **widget,
+        "description": str(payload.get("description") or widget.get("description") or ""),
+        "summary": str(widget.get("summary") or payload.get("description") or ""),
+        "url": str(payload.get("url") or getattr(agent, "url", "") or ""),
+        "agent_card_url": card_url,
+        "version": str(payload.get("version") or getattr(agent, "version", "") or ""),
+        "availability_status": "online",
+        "inspection": inspection,
+    }
+
+
+async def _call_mcp_jsonrpc(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    request_id: int,
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    session_id: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    from app.progenitor.mcp_tool_utils import parse_mcp_jsonrpc_response
+
+    request = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+    }
+    if params is not None:
+        request["params"] = params
+
+    headers = {"mcp-session-id": session_id} if session_id else None
+
+    response = await client.post(endpoint, json=request, headers=headers)
+    response.raise_for_status()
+
+    parsed = parse_mcp_jsonrpc_response(response.text)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{method} returned an invalid JSON-RPC response")
+
+    error_payload = parsed.get("error")
+    if error_payload is not None:
+        raise RuntimeError(_mcp_jsonrpc_error_detail(error_payload))
+
+    result = parsed.get("result", parsed)
+    if not isinstance(result, dict):
+        raise ValueError(f"{method} returned a non-object result")
+
+    next_session_id = response.headers.get("mcp-session-id") or session_id
+    return result, next_session_id
+
+
+def _extract_mcp_collection(payload: dict[str, Any], key: str, method: str) -> list[dict[str, Any]]:
+    entries = payload.get(key)
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError(f"{method} returned '{key}' in an unexpected format")
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+async def _inspect_mcp_widget(widget: dict[str, Any], state_reader: StateReader) -> dict[str, Any]:
+    from app.progenitor.config import load_mcp_servers
+
+    server_name = str(widget.get("name") or "").strip()
+    servers = {server.name: server for server in load_mcp_servers(state_reader.mcp_config_path)}
+    server_config = servers.get(server_name)
+    if server_config is None:
+        _mcp_config_path, mcp_data = _read_mcp_config(state_reader)
+        raw_servers = mcp_data.get("mcpServers")
+        if isinstance(raw_servers, dict) and server_name in raw_servers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"MCP server '{server_name}' is not available for live inspection",
+            )
+        raise HTTPException(status_code=404, detail="MCP widget is not registered")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        **server_config.headers,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), headers=headers) as client:
+            initialize_result, session_id = await _call_mcp_jsonrpc(
+                client,
+                server_config.url,
+                1,
+                "initialize",
+                params={
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "progenitor-ui", "version": "0.0.0"},
+                },
+            )
+            tools_result, session_id = await _call_mcp_jsonrpc(
+                client,
+                server_config.url,
+                2,
+                "tools/list",
+                session_id=session_id,
+            )
+
+            optional_errors: dict[str, str] = {}
+            resources_result: dict[str, Any] = {}
+            prompts_result: dict[str, Any] = {}
+            for method_name, key_name, request_id in (
+                ("resources/list", "resources", 3),
+                ("prompts/list", "prompts", 4),
+            ):
+                try:
+                    result, session_id = await _call_mcp_jsonrpc(
+                        client,
+                        server_config.url,
+                        request_id,
+                        method_name,
+                        session_id=session_id,
+                    )
+                except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                    optional_errors[method_name] = (
+                        _format_httpx_error(exc) if isinstance(exc, httpx.HTTPError) else str(exc)
+                    )
+                    continue
+                if key_name == "resources":
+                    resources_result = result
+                else:
+                    prompts_result = result
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=_format_httpx_error(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"MCP inspection failed for {server_name}: {exc}",
+        ) from exc
+
+    inspection = {
+        "source": "mcp",
+        "refreshed_at": utcnow().isoformat(),
+        "endpoint": server_config.url,
+        "protocol_version": initialize_result.get("protocolVersion"),
+        "server_info": initialize_result.get("serverInfo"),
+        "instructions": initialize_result.get("instructions"),
+        "capabilities": initialize_result.get("capabilities"),
+        "session_id_present": bool(session_id),
+        "tools": _extract_mcp_collection(tools_result, "tools", "tools/list"),
+        "resources": _extract_mcp_collection(resources_result, "resources", "resources/list"),
+        "prompts": _extract_mcp_collection(prompts_result, "prompts", "prompts/list"),
+        "errors": optional_errors,
+    }
+
+    return {
+        **widget,
+        "description": str(widget.get("description") or server_config.description or ""),
+        "summary": str(
+            widget.get("summary") or server_config.description or widget.get("title") or ""
+        ),
+        "url": server_config.url,
+        "availability_status": "online",
+        "inspection": inspection,
+    }
+
+
+def _summarize_event_trigger(event_type: str, payload: dict) -> str:
+    label = KANBAN_EVENT_TYPE_LABELS.get(event_type, event_type)
+    card = payload.get("card") if isinstance(payload, dict) else None
+    if isinstance(card, dict):
+        title = str(card.get("title") or "").strip()
+        if title:
+            return f"{label} fired for {title}"
+    return f"{label} fired"
+
+
+def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]) -> None:
+    if not triggers:
+        return
+
+    event_widgets = _read_event_widget_records(state_reader)
+    if not event_widgets:
+        return
+
+    changed = False
+    for widget in event_widgets:
+        if not widget.get("enabled", True):
+            continue
+
+        for trigger in triggers:
+            event_type = trigger.get("event_type")
+            if not isinstance(event_type, str) or widget.get("event_type") != event_type:
+                continue
+
+            timestamp = str(trigger.get("timestamp") or utcnow().isoformat())
+            payload = trigger.get("payload")
+            normalized_payload = payload if isinstance(payload, dict) else {}
+            summary = str(
+                trigger.get("summary") or _summarize_event_trigger(event_type, normalized_payload)
+            )
+            widget["trigger_count"] = int(widget.get("trigger_count", 0) or 0) + 1
+            widget["last_triggered_at"] = timestamp
+            widget["last_run_status"] = "success"
+            widget["last_payload"] = normalized_payload
+            widget["summary"] = summary
+            widget["updated_at"] = timestamp
+            widget["logs"] = [
+                {
+                    "time": timestamp,
+                    "timestamp": timestamp,
+                    "level": "info",
+                    "source": "kanban",
+                    "message": summary,
+                },
+                *_normalize_event_widget_logs(widget.get("logs")),
+            ][:MAX_EVENT_WIDGET_LOGS]
+            changed = True
+
+    if changed:
+        _write_event_widget_records(state_reader, event_widgets)
+        _broadcast_widget_refresh(state_reader)
 
 
 def _parse_once_datetime(expression: str) -> datetime:
@@ -1354,71 +2166,228 @@ async def get_widget_schemas():
     return WidgetSchemasResponse(schemas=_widget_schemas())
 
 
+@router.post("/widgets/{widget_id}/refresh", response_model=WidgetResponse)
+async def refresh_widget(widget_id: str):
+    """Refresh agent or MCP widget metadata from its live protocol surface."""
+    state_reader = get_state_reader()
+    widget = _find_widget_payload(state_reader, widget_id)
+
+    if widget.get("type") == "agent":
+        refreshed = await _inspect_agent_widget(widget, state_reader)
+        return _widget_to_response(refreshed)
+
+    if widget.get("type") == "mcp":
+        refreshed = await _inspect_mcp_widget(widget, state_reader)
+        return _widget_to_response(refreshed)
+
+    raise HTTPException(
+        status_code=400,
+        detail="Only agent and MCP widgets support live refresh",
+    )
+
+
 @router.patch("/widgets/{widget_id}", response_model=WidgetResponse)
 async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     """Patch a backend-owned widget where a matching state file exists."""
     state_reader = get_state_reader()
-    if not widget_id.startswith("schedule:"):
-        raise HTTPException(status_code=400, detail="Only schedule widgets are mutable from the backend")
+    if widget_id.startswith("schedule:"):
+        schedule_id = widget_id.split(":", 1)[1]
+        schedule_path, schedule_data = _read_schedule_config(state_reader)
 
-    schedule_id = widget_id.split(":", 1)[1]
-    schedule_path = state_reader.state_dir / "schedule.json"
-    schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
-    if not isinstance(schedule_data, list):
-        raise HTTPException(status_code=404, detail="Schedule state not found")
+        updated = None
+        for entry in schedule_data:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("id") != schedule_id:
+                continue
+            current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
+            current_expression = (
+                body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
+            )
+            if body.enabled is not None:
+                entry["enabled"] = body.enabled
+            if body.name is not None:
+                entry["name"] = body.name
+                entry["user_request"] = body.name
+            if body.instruction is not None:
+                entry["message"] = body.instruction
+                entry["instruction"] = body.instruction
+            if body.expression is not None or body.schedule_type is not None:
+                normalized_type, cron_expression = _resolve_schedule_expression(
+                    current_schedule_type, current_expression
+                )
+                entry["schedule_type"] = normalized_type
+                entry["schedule"] = current_expression
+                entry["cron_expression"] = cron_expression
+            if body.timezone is not None:
+                entry["timezone"] = body.timezone
+            entry["updated_at"] = utcnow().isoformat()
+            next_run = Scheduler().next_run_for_entry(entry)
+            entry["next_run"] = next_run.isoformat() if next_run else None
+            entry["next_run_at"] = next_run.isoformat() if next_run else None
+            updated = entry
+            break
 
-    updated = None
-    for entry in schedule_data:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("id") != schedule_id:
-            continue
-        current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
-        current_expression = body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
-        if body.enabled is not None:
-            entry["enabled"] = body.enabled
-        if body.name is not None:
-            entry["name"] = body.name
-            entry["user_request"] = body.name
-        if body.instruction is not None:
-            entry["message"] = body.instruction
-            entry["instruction"] = body.instruction
-        if body.expression is not None or body.schedule_type is not None:
-            normalized_type, cron_expression = _resolve_schedule_expression(current_schedule_type, current_expression)
-            entry["schedule_type"] = normalized_type
-            entry["schedule"] = current_expression
-            entry["cron_expression"] = cron_expression
-        if body.timezone is not None:
-            entry["timezone"] = body.timezone
-        entry["updated_at"] = utcnow().isoformat()
-        next_run = Scheduler().next_run_for_entry(entry)
-        entry["next_run"] = next_run.isoformat() if next_run else None
-        entry["next_run_at"] = next_run.isoformat() if next_run else None
-        updated = entry
-        break
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Widget not found")
 
-    if updated is None:
+        _atomic_write_json(schedule_path, schedule_data)
+        state_reader.invalidate(schedule_path)
+
+        refreshed = next(
+            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        )
+        if refreshed is None:
+            refreshed = {
+                "id": widget_id,
+                "type": "schedule",
+                "name": updated.get("name", schedule_id),
+                "title": updated.get("name", schedule_id),
+                "status": "enabled" if updated.get("enabled", True) else "disabled",
+                "description": updated.get("message"),
+                "summary": updated.get("message"),
+                "logs": [],
+                "updated_at": updated.get("created_at"),
+            }
+
+        _broadcast_widget_refresh(state_reader)
+        return _widget_to_response(refreshed)
+
+    if widget_id.startswith("event:"):
+        event_id = widget_id.split(":", 1)[1]
+        event_widgets = _read_event_widget_records(state_reader)
+        updated = None
+        for entry in event_widgets:
+            if entry.get("id") != event_id:
+                continue
+            if body.enabled is not None:
+                entry["enabled"] = body.enabled
+            if body.name is not None:
+                name = body.name.strip()
+                if not name:
+                    raise HTTPException(status_code=400, detail="Event widget name is required")
+                entry["name"] = name
+            if body.event_type is not None:
+                entry["event_type"] = _validate_event_type(body.event_type)
+                if not entry.get("summary") or str(entry.get("summary")).startswith("Waiting for "):
+                    entry["summary"] = f"Waiting for {entry['event_type']}"
+            entry["updated_at"] = utcnow().isoformat()
+            updated = entry
+            break
+
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Widget not found")
+
+        _write_event_widget_records(state_reader, event_widgets)
+        refreshed = next(
+            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        )
+        if refreshed is None:
+            refreshed = {
+                "id": widget_id,
+                "type": "event",
+                "name": updated.get("name", event_id),
+                "title": updated.get("name", event_id),
+                "status": "enabled" if updated.get("enabled", True) else "disabled",
+                "description": updated.get("event_type"),
+                "summary": updated.get("summary"),
+                "logs": updated.get("logs", []),
+                "updated_at": updated.get("updated_at"),
+                "event_type": updated.get("event_type"),
+                "enabled": updated.get("enabled", True),
+                "trigger_count": updated.get("trigger_count", 0),
+                "last_triggered_at": updated.get("last_triggered_at"),
+                "last_run_status": updated.get("last_run_status", "idle"),
+                "last_payload": updated.get("last_payload"),
+            }
+
+        _broadcast_widget_refresh(state_reader)
+        return _widget_to_response(refreshed)
+
+    if not widget_id.startswith("mcp:"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only schedule, event, and MCP widgets are mutable from the backend",
+        )
+
+    server_name = widget_id.split(":", 1)[1]
+    mcp_config_path, mcp_data = _read_mcp_config(state_reader)
+    raw_servers = mcp_data.get("mcpServers")
+    if not isinstance(raw_servers, dict):
+        raw_servers = {}
+        mcp_data["mcpServers"] = raw_servers
+
+    server = raw_servers.get(server_name)
+    if not isinstance(server, dict):
         raise HTTPException(status_code=404, detail="Widget not found")
 
-    _atomic_write_json(schedule_path, schedule_data)
-    state_reader.invalidate(schedule_path)
+    requested_name = (body.name or "").strip()
+    if requested_name and requested_name != server_name:
+        raise HTTPException(status_code=400, detail="Renaming MCP servers is not supported")
 
-    refreshed = next((widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None)
+    if body.enabled is not None:
+        server["enabled"] = body.enabled
+    if body.description is not None:
+        server["description"] = body.description
+    if body.url is not None:
+        url = body.url.strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="MCP server URL is required")
+        server["url"] = url
+
+    _atomic_write_json(mcp_config_path, mcp_data)
+    state_reader.invalidate(mcp_config_path)
+    await _refresh_live_mcp_runtime(mcp_config_path)
+
+    refreshed = next(
+        (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+    )
     if refreshed is None:
+        enabled = bool(server.get("enabled", True))
+        description = str(server.get("description") or "")
         refreshed = {
             "id": widget_id,
-            "type": "schedule",
-            "name": updated.get("name", schedule_id),
-            "title": updated.get("name", schedule_id),
-            "status": "enabled" if updated.get("enabled", True) else "disabled",
-            "description": updated.get("message"),
-            "summary": updated.get("message"),
+            "type": "mcp",
+            "name": server_name,
+            "title": server_name,
+            "description": description,
+            "status": "enabled" if enabled else "disabled",
+            "summary": description or f"MCP {server_name}",
+            "enabled": enabled,
+            "url": server.get("url"),
+            "transport": server.get("transport", "http"),
             "logs": [],
-            "updated_at": updated.get("created_at"),
+            "updated_at": None,
         }
 
     _broadcast_widget_refresh(state_reader)
     return _widget_to_response(refreshed)
+
+
+@router.delete("/widgets/{widget_id}", response_model=WidgetDeleteResponse)
+async def delete_widget(widget_id: str):
+    """Delete a backend-owned widget where a matching state file exists."""
+    state_reader = get_state_reader()
+    if not widget_id.startswith("schedule:"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only schedule widgets can be deleted from the backend",
+        )
+
+    schedule_id = widget_id.split(":", 1)[1]
+    deleted = _delete_schedule_entry(state_reader, schedule_id)
+    if not deleted:
+        warning = f"Widget {widget_id} was already removed."
+        logger.warning("Schedule widget %s was already removed before delete request", widget_id)
+        return WidgetDeleteResponse(
+            widget_id=widget_id,
+            removed=True,
+            already_removed=True,
+            warning=warning,
+        )
+
+    _broadcast_widget_refresh(state_reader)
+    return WidgetDeleteResponse(widget_id=widget_id, removed=True)
 
 
 @router.get("/schedules", response_model=ScheduleResponse)
@@ -1429,7 +2398,7 @@ async def get_schedules():
 
 @router.post("/schedules", response_model=WidgetResponse)
 async def create_schedule(body: ScheduleCreateRequest):
-    """Create a new schedule entry by writing directly to schedule.json."""
+    """Create a new schedule entry by writing directly to data/config/schedule.json."""
     name = body.name.strip()
     instruction = body.instruction.strip()
     if not name:
@@ -1438,12 +2407,7 @@ async def create_schedule(body: ScheduleCreateRequest):
         raise HTTPException(status_code=400, detail="Schedule task is required")
 
     state_reader = get_state_reader()
-    schedule_path = state_reader.state_dir / "schedule.json"
-    schedule_data = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
-    if schedule_data is None:
-        schedule_data = []
-    if not isinstance(schedule_data, list):
-        raise HTTPException(status_code=500, detail="Schedule state is invalid")
+    schedule_path, schedule_data = _read_schedule_config(state_reader)
 
     created_at = utcnow().isoformat()
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
@@ -1462,7 +2426,14 @@ async def create_schedule(body: ScheduleCreateRequest):
     _atomic_write_json(schedule_path, schedule_data)
     state_reader.invalidate(schedule_path)
 
-    refreshed = next((widget for widget in state_reader.get_widgets() if widget["id"] == f"schedule:{schedule_id}"), None)
+    refreshed = next(
+        (
+            widget
+            for widget in state_reader.get_widgets()
+            if widget["id"] == f"schedule:{schedule_id}"
+        ),
+        None,
+    )
     if refreshed is None:
         refreshed = {
             "id": f"schedule:{schedule_id}",
@@ -1472,6 +2443,52 @@ async def create_schedule(body: ScheduleCreateRequest):
             "status": "enabled" if body.enabled else "disabled",
             "description": name,
             "summary": instruction,
+            "updated_at": created_at,
+            "data": entry,
+        }
+
+    _broadcast_widget_refresh(state_reader)
+    return _widget_to_response(refreshed)
+
+
+@router.post("/events", response_model=WidgetResponse)
+async def create_event_widget(body: EventWidgetCreateRequest):
+    """Create a new persisted event widget trigger."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Event widget name is required")
+
+    state_reader = get_state_reader()
+    event_widgets = _read_event_widget_records(state_reader)
+    created_at = utcnow().isoformat()
+    event_widget_id = f"evt_{uuid.uuid4().hex[:12]}"
+    entry = _build_event_widget_entry(
+        event_widget_id=event_widget_id,
+        name=name,
+        event_type=body.event_type,
+        enabled=body.enabled,
+        created_at=created_at,
+    )
+    event_widgets.append(entry)
+    _write_event_widget_records(state_reader, event_widgets)
+
+    refreshed = next(
+        (
+            widget
+            for widget in state_reader.get_widgets()
+            if widget["id"] == f"event:{event_widget_id}"
+        ),
+        None,
+    )
+    if refreshed is None:
+        refreshed = {
+            "id": f"event:{event_widget_id}",
+            "type": "event",
+            "name": name,
+            "title": name,
+            "status": "enabled" if body.enabled else "disabled",
+            "description": entry["event_type"],
+            "summary": entry["summary"],
             "updated_at": created_at,
             "data": entry,
         }
@@ -1526,6 +2543,19 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
     board["cards"].append(card)
     board = _write_kanban_board(state_reader, board)
     created = next((item for item in board["cards"] if item["id"] == card["id"]), card)
+    _apply_event_widget_triggers(
+        state_reader,
+        [
+            {
+                "event_type": "kanban.card.created",
+                "timestamp": now,
+                "payload": {
+                    "event_type": "kanban.card.created",
+                    "card": created,
+                },
+            }
+        ],
+    )
     return KanbanCardResponse(**created)
 
 
@@ -1539,10 +2569,12 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
     now = utcnow().isoformat()
 
     updated_card = None
+    previous_card = None
     for card in board["cards"]:
         if card["id"] != card_id:
             continue
 
+        previous_card = json.loads(json.dumps(card))
         if body.title is not None:
             title = body.title.strip()
             if not title:
@@ -1554,7 +2586,9 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
             card["description"] = body.description
         if body.column_id is not None:
             if body.column_id not in column_map:
-                raise HTTPException(status_code=400, detail=f"Unknown kanban column: {body.column_id}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown kanban column: {body.column_id}"
+                )
             card["column_id"] = body.column_id
             if body.agent_name is None:
                 card["agent_name"] = column_map[body.column_id]["agent_name"]
@@ -1606,6 +2640,79 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
     )
     board = _write_kanban_board(state_reader, board)
     refreshed = next((item for item in board["cards"] if item["id"] == card_id), updated_card)
+    triggers = []
+    if previous_card is not None:
+        content_field_map = {
+            "title": "title",
+            "summary": "summary",
+            "description": "description",
+            "agent_name": "agent_name",
+            "owner": "owner",
+            "labels": "labels",
+            "spec_path": "spec_path",
+            "branch_name": "branch_name",
+            "pr_url": "pr_url",
+            "started_at": "started_at",
+            "completed_at": "completed_at",
+            "last_error": "last_error",
+            "metadata": "metadata",
+        }
+        changed_fields = [
+            response_key
+            for request_key, response_key in content_field_map.items()
+            if getattr(body, request_key) is not None
+            and previous_card.get(response_key) != refreshed.get(response_key)
+        ]
+        if changed_fields:
+            triggers.append(
+                {
+                    "event_type": "kanban.card.updated",
+                    "timestamp": now,
+                    "payload": {
+                        "event_type": "kanban.card.updated",
+                        "card": refreshed,
+                        "previous_card": previous_card,
+                        "changed_fields": changed_fields,
+                    },
+                }
+            )
+        if previous_card.get("column_id") != refreshed.get("column_id") or previous_card.get(
+            "position"
+        ) != refreshed.get("position"):
+            triggers.append(
+                {
+                    "event_type": "kanban.card.moved",
+                    "timestamp": now,
+                    "payload": {
+                        "event_type": "kanban.card.moved",
+                        "card": refreshed,
+                        "previous_card": previous_card,
+                        "from": {
+                            "column_id": previous_card.get("column_id"),
+                            "position": previous_card.get("position"),
+                        },
+                        "to": {
+                            "column_id": refreshed.get("column_id"),
+                            "position": refreshed.get("position"),
+                        },
+                    },
+                }
+            )
+        if previous_card.get("status") != refreshed.get("status"):
+            triggers.append(
+                {
+                    "event_type": "kanban.card.status_changed",
+                    "timestamp": now,
+                    "payload": {
+                        "event_type": "kanban.card.status_changed",
+                        "card": refreshed,
+                        "previous_card": previous_card,
+                        "from_status": previous_card.get("status"),
+                        "to_status": refreshed.get("status"),
+                    },
+                }
+            )
+    _apply_event_widget_triggers(state_reader, triggers)
     return KanbanCardResponse(**refreshed)
 
 
@@ -1615,11 +2722,27 @@ async def delete_kanban_card(card_id: str):
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
     original_count = len(board["cards"])
+    deleted_card = next((card for card in board["cards"] if card["id"] == card_id), None)
     board["cards"] = [card for card in board["cards"] if card["id"] != card_id]
     if len(board["cards"]) == original_count:
         raise HTTPException(status_code=404, detail="Kanban card not found")
 
     board = _write_kanban_board(state_reader, board)
+    if deleted_card is not None:
+        timestamp = utcnow().isoformat()
+        _apply_event_widget_triggers(
+            state_reader,
+            [
+                {
+                    "event_type": "kanban.card.deleted",
+                    "timestamp": timestamp,
+                    "payload": {
+                        "event_type": "kanban.card.deleted",
+                        "card": deleted_card,
+                    },
+                }
+            ],
+        )
     return None
 
 
@@ -1647,14 +2770,41 @@ async def action_run(body: ActionRunRequest):
     if not segments:
         raise HTTPException(status_code=400, detail="No run payload provided")
 
-    response = await chat_main.client.send_message("\n\n".join(segments))
-    broadcast_chat_event("agent_message", {
-        "content": response,
-        "metadata": {"widget_id": body.widget_id, "action": "run"},
-        "timestamp": time.time(),
-    })
+    thread_id = _resolve_action_thread_id(body.thread_id)
+    metadata = _build_action_metadata(
+        thread_id=thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source,
+        widget_id=body.widget_id,
+        root_widget_id=body.root_widget_id,
+        action=body.invocation_source or body.language or "workspace.run",
+    )
+    upsert_thread(
+        thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source or "workspace.run",
+        root_widget_id=body.root_widget_id or body.widget_id,
+        widget_id=body.widget_id,
+    )
+
+    try:
+        response = await chat_main.client.send_message("\n\n".join(segments), metadata=metadata)
+    except Exception as exc:
+        fail_thread(thread_id, str(exc), widget_id=body.widget_id)
+        raise
+
+    complete_thread(thread_id, response, widget_id=body.widget_id)
+    if body.broadcast_response:
+        broadcast_chat_event(
+            "agent_message",
+            {
+                "content": response,
+                "metadata": {"widget_id": body.widget_id, "action": "run", "thread_id": thread_id},
+                "timestamp": time.time(),
+            },
+        )
     _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
+    return ActionResponse(ok=True, widget_id=body.widget_id, thread_id=thread_id, response=response)
 
 
 @router.post("/actions/generate", response_model=ActionResponse)
@@ -1666,23 +2816,62 @@ async def action_generate(body: ActionGenerateRequest):
         raise HTTPException(status_code=503, detail="Client not initialized")
 
     prompt = body.prompt
+    if body.input:
+        prompt = f"Input:\n{body.input}\n\n{prompt}"
     if body.target:
         prompt = f"Target: {body.target}\n\n{prompt}"
     if body.widget_id:
         prompt = f"Widget ID: {body.widget_id}\n\n{prompt}"
 
-    response = await chat_main.client.send_message(prompt)
-    broadcast_chat_event("agent_message", {
-        "content": response,
-        "metadata": {"widget_id": body.widget_id, "action": "generate"},
-        "timestamp": time.time(),
-    })
+    thread_id = _resolve_action_thread_id(body.thread_id)
+    metadata = _build_action_metadata(
+        thread_id=thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source,
+        widget_id=body.widget_id,
+        root_widget_id=body.root_widget_id,
+        action=body.invocation_source or "workspace.generate",
+    )
+    upsert_thread(
+        thread_id,
+        invocation_type=body.invocation_type,
+        invocation_source=body.invocation_source or "workspace.generate",
+        root_widget_id=body.root_widget_id or body.widget_id,
+        widget_id=body.widget_id,
+    )
+
+    try:
+        response = await chat_main.client.send_message(prompt, metadata=metadata)
+    except Exception as exc:
+        fail_thread(thread_id, str(exc), widget_id=body.widget_id)
+        raise
+
+    complete_thread(thread_id, response, widget_id=body.widget_id)
+    broadcast_chat_event(
+        "agent_message",
+        {
+            "content": response,
+            "metadata": {"widget_id": body.widget_id, "action": "generate", "thread_id": thread_id},
+            "timestamp": time.time(),
+        },
+    )
     _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(ok=True, widget_id=body.widget_id, response=response)
+    return ActionResponse(ok=True, widget_id=body.widget_id, thread_id=thread_id, response=response)
+
+
+@router.get("/threads", response_model=ThreadsResponse)
+async def get_threads(
+    invocation_type: Literal["user", "automation", "system"] | None = Query(default=None),
+):
+    """List tracked conversation/execution threads, optionally filtered by invocation type."""
+
+    items = list_threads(invocation_type=invocation_type)
+    return ThreadsResponse(items=items, total=len(items))
 
 
 class TelegramStatusResponse(BaseModel):
     """Telegram integration status."""
+
     enabled: bool
     connected: bool
     chat_id: str = ""  # Masked for security
@@ -1716,9 +2905,7 @@ async def get_telegram_status():
         chat_id=masked_chat_id if config.telegram_enabled else "",
         web_clients_active=subscriber_counts["chat"],
         will_forward_to_telegram=(
-            telegram is not None
-            and telegram._started
-            and subscriber_counts["chat"] == 0
+            telegram is not None and telegram._started and subscriber_counts["chat"] == 0
         ),
         rate_limit_per_minute=config.telegram_rate_limit_per_minute,
     )
@@ -1726,11 +2913,13 @@ async def get_telegram_status():
 
 class TelegramTestRequest(BaseModel):
     """Request to test Telegram integration."""
+
     message: str = "Test message from Progenitor"
 
 
 class TelegramTestResponse(BaseModel):
     """Response from Telegram test."""
+
     success: bool
     message: str
 
@@ -1747,8 +2936,7 @@ async def test_telegram():
     telegram = get_telegram_client()
     if not telegram:
         return TelegramTestResponse(
-            success=False,
-            message="Telegram integration not enabled or not configured"
+            success=False, message="Telegram integration not enabled or not configured"
         )
 
     try:
@@ -1757,21 +2945,14 @@ async def test_telegram():
             "If you see this, Telegram integration is working!"
         )
         if success:
-            return TelegramTestResponse(
-                success=True,
-                message="Test message sent successfully"
-            )
+            return TelegramTestResponse(success=True, message="Test message sent successfully")
         else:
             return TelegramTestResponse(
-                success=False,
-                message="Failed to send test message - check logs for details"
+                success=False, message="Failed to send test message - check logs for details"
             )
     except Exception as e:
         logger.error("Telegram test failed: %s", e)
-        return TelegramTestResponse(
-            success=False,
-            message=f"Error: {str(e)}"
-        )
+        return TelegramTestResponse(success=False, message=f"Error: {str(e)}")
 
 
 @router.get("/tasks", response_model=TasksResponse)
@@ -1793,13 +2974,15 @@ async def get_active_tasks():
     tasks = []
 
     if active_requests > 0:
-        tasks.append(TaskInfo(
-            id="task-active-1",
-            title="Processing Chat Request",
-            status="running",
-            description=f"Handling {active_requests} active request(s)",
-            progress=None
-        ))
+        tasks.append(
+            TaskInfo(
+                id="task-active-1",
+                title="Processing Chat Request",
+                status="running",
+                description=f"Handling {active_requests} active request(s)",
+                progress=None,
+            )
+        )
 
     return TasksResponse(tasks=tasks, total=len(tasks))
 
@@ -1807,11 +2990,19 @@ async def get_active_tasks():
 @router.get("/alerts", response_model=AlertsResponse)
 async def get_alerts():
     """
-    Get pending alerts that require user attention.
+    Get backend-managed alert history.
 
     Returns alerts generated by the progenitor agent.
     """
-    return AlertsResponse(alerts=_pending_alerts, total=len(_pending_alerts))
+    return AlertsResponse(**_alerts_payload())
+
+
+@router.post("/alerts/viewed", response_model=MarkAlertsViewedResponse)
+async def mark_viewed_alerts(body: MarkAlertsViewedRequest | None = None):
+    """Mark alerts viewed without removing them from history."""
+    updated = mark_alerts_viewed(body.alert_ids if body else None)
+    broadcast_alerts_state()
+    return MarkAlertsViewedResponse(updated=updated, unread=alert_summary()["unread"])
 
 
 @router.post("/alerts/{alert_id}/dismiss")
@@ -1819,16 +3010,14 @@ async def dismiss_alert(alert_id: str):
     """
     Dismiss an alert.
 
-    Removes the alert from the pending list.
+    Alerts remain in history; dismissing only clears unread state.
     """
-    global _pending_alerts
-
-    original_count = len(_pending_alerts)
-    _pending_alerts = [a for a in _pending_alerts if a.id != alert_id]
-
-    if len(_pending_alerts) == original_count:
+    alert = get_alert(alert_id)
+    if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
+    mark_alerts_viewed([alert_id])
+    broadcast_alerts_state()
     return {"status": "dismissed", "alert_id": alert_id}
 
 
@@ -1839,16 +3028,12 @@ async def respond_to_alert(alert_id: str, response: str = "acknowledged"):
 
     Acknowledges the alert and optionally sends a response back to the agent.
     """
-    global _pending_alerts
-
-    alert = next((a for a in _pending_alerts if a.id == alert_id), None)
+    alert = get_alert(alert_id)
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    # Remove from pending
-    _pending_alerts = [a for a in _pending_alerts if a.id != alert_id]
-
-    # In a full implementation, this would send the response to the progenitor
+    mark_alerts_viewed([alert_id])
+    broadcast_alerts_state()
     logger.info("Alert %s responded with: %s", alert_id, response)
 
     return {"status": "responded", "alert_id": alert_id, "response": response}
@@ -1856,6 +3041,7 @@ async def respond_to_alert(alert_id: str, response: str = "acknowledged"):
 
 class AgentDetailResponse(BaseModel):
     """Detailed information about a single agent."""
+
     name: str
     status: str
     kind: str = "a2a_agent"
@@ -1917,7 +3103,10 @@ async def get_prompts(agent: str | None = None):
     associations for the workspace prompt library.
     """
     service = PromptService()
-    prompts = [PromptFileResponse.model_validate(prompt, from_attributes=True) for prompt in service.list_prompts(agent=agent)]
+    prompts = [
+        PromptFileResponse.model_validate(prompt, from_attributes=True)
+        for prompt in service.list_prompts(agent=agent)
+    ]
     return PromptsResponse(prompts=prompts, total=len(prompts))
 
 
@@ -1925,7 +3114,9 @@ async def get_prompts(agent: str | None = None):
 async def get_prompt_content(path: str = Query(..., min_length=1)):
     """Get a single prompt file from the mounted prompts directory."""
     try:
-        return PromptFileResponse.model_validate(PromptService().get_prompt(path), from_attributes=True)
+        return PromptFileResponse.model_validate(
+            PromptService().get_prompt(path), from_attributes=True
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Prompt '{path}' not found") from exc
     except ValueError as exc:
@@ -2032,7 +3223,10 @@ async def get_logs(
             "entries": entries,
             "total": result["total"],
             "returned": result["returned"],
-            "filtered": any(value is not None for value in (level, search, source, folder, file_path, start_date, end_date)),
+            "filtered": any(
+                value is not None
+                for value in (level, search, source, folder, file_path, start_date, end_date)
+            ),
             "source_groups": source_groups,
             "folders": folders,
             "newest_cursor": result["newest_cursor"],
@@ -2154,41 +3348,16 @@ async def export_logs(
 
 
 def create_alert(
-    type: str,
-    title: str,
-    message: str,
-    urgent: bool = False,
-    requires_response: bool = False
+    type: str, title: str, message: str, urgent: bool = False, requires_response: bool = False
 ) -> AlertInfo:
-    """
-    Create a new alert (called by the progenitor agent).
-
-    Args:
-        type: Alert type (info, warning, error)
-        title: Alert title
-        message: Alert message
-        urgent: Whether the alert is urgent
-        requires_response: Whether the alert requires a user response
-
-    Returns:
-        Created AlertInfo
-    """
-    alert = AlertInfo(
-        id=generate_alert_id(),
+    """Create and store a backend-managed alert record."""
+    return store_alert(
         type=type,
         title=title,
         message=message,
-        timestamp=time.time(),
         urgent=urgent,
-        requires_response=requires_response
+        requires_response=requires_response,
     )
-    _pending_alerts.append(alert)
-
-    # Keep only last 100 alerts
-    while len(_pending_alerts) > 100:
-        _pending_alerts.pop(0)
-
-    return alert
 
 
 # Event subscribers for SSE - split into chat and status streams
@@ -2242,24 +3411,28 @@ async def _get_current_status() -> dict:
     snapshot = state_reader.get_snapshot()
 
     now = time.time()
-    start_time = getattr(chat_main, '_server_start_time', now)
-    shutdown_mgr = getattr(chat_main, 'shutdown_manager', None)
+    start_time = getattr(chat_main, "_server_start_time", now)
+    shutdown_mgr = getattr(chat_main, "shutdown_manager", None)
 
     status = {
         "status": "healthy",
         "uptime_seconds": round(now - start_time, 1),
         "progenitor_running": snapshot.health.is_running(),
         "progenitor_status": snapshot.health.status,  # Raw status from health.json
-        "version": getattr(chat_main.config, 'api_version', '0.1.0'),
+        "version": getattr(chat_main.config, "api_version", "0.1.0"),
         # State data
         "cycle_count": snapshot.health.cycle_count,  # Use health.cycle_count for accuracy
-        "run_id": snapshot.health.run_id or snapshot.run_id,
+        "thread_id": snapshot.health.thread_id or snapshot.thread_id,
         "messages_count": snapshot.messages_count,
         "pid": snapshot.health.pid,
         "last_active": snapshot.health.last_active,
         # Loops
         "loops": [
-            {"name": loop_item.name, "status": loop_item.status, "current_task": loop_item.current_task}
+            {
+                "name": loop_item.name,
+                "status": loop_item.status,
+                "current_task": loop_item.current_task,
+            }
             for loop_item in snapshot.loops
         ],
         # Agents
@@ -2297,13 +3470,16 @@ async def _get_current_status() -> dict:
             "iteration": snapshot.build.iteration if snapshot.build else 0,
             "score": snapshot.build.score if snapshot.build else 0.0,
             "message_count": snapshot.build.message_count if snapshot.build else 0,
-        } if snapshot.build else None,
+        }
+        if snapshot.build
+        else None,
         "widgets": state_reader.get_widgets(),
         "sessions": {
             "total": snapshot.sessions.total if snapshot.sessions else 0,
             "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
             "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
         },
+        "alerts": _alerts_payload(),
     }
 
     if shutdown_mgr and shutdown_mgr.is_shutting_down:
@@ -2453,8 +3629,12 @@ async def close_all_sse_connections():
     status_count = len(_status_subscribers)
     total_count = chat_count + status_count
 
-    logger.info("Closing SSE connections: %d chat, %d status (total: %d)",
-                chat_count, status_count, total_count)
+    logger.info(
+        "Closing SSE connections: %d chat, %d status (total: %d)",
+        chat_count,
+        status_count,
+        total_count,
+    )
 
     # Set the shutdown event to signal all SSE generators to exit
     shutdown_event = get_sse_shutdown_event()
@@ -2463,7 +3643,7 @@ async def close_all_sse_connections():
     # Send shutdown event to all subscriber types
     shutdown_data = {
         "type": "shutdown",
-        "data": '{"reason": "server_shutdown", "message": "Server is shutting down"}'
+        "data": '{"reason": "server_shutdown", "message": "Server is shutting down"}',
     }
 
     for queue in _chat_subscribers:
@@ -2503,12 +3683,14 @@ async def close_all_sse_connections():
 # NEW SPLIT SSE ENDPOINTS
 # ============================================================================
 
+
 async def _generate_chat_events() -> AsyncGenerator[str, None]:
     """Generate SSE events for chat/IPC stream only.
 
     This stream receives:
     - scheduled_response: Scheduled task responses
     - agent_message: Agent-initiated messages
+    - agent_question: Agent questions for the user
     - alert: System alerts
     - task: Task status updates
     - agent: Agent activity updates
@@ -2543,7 +3725,7 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
 
                 # Check if this is a shutdown event
-                if event.get('type') == 'shutdown':
+                if event.get("type") == "shutdown":
                     yield f"event: shutdown\ndata: {event['data']}\n\n"
                     break
 
@@ -2572,7 +3754,7 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
     - status: Full status updates from state files
     - heartbeat: Periodic heartbeats with status
 
-    Does NOT receive chat/IPC events (use /chat for those).
+    Does NOT receive chat/IPC events (use /events for those).
     """
     import json
 
@@ -2594,6 +3776,7 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
         # Send initial connection event with current status
         initial_status = await _get_current_status()
         yield f"event: connected\ndata: {json.dumps(initial_status)}\n\n"
+        yield f"event: alerts\ndata: {json.dumps(_alerts_payload())}\n\n"
 
         while True:
             # Check if shutdown has been requested
@@ -2607,7 +3790,7 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
                 event = await asyncio.wait_for(queue.get(), timeout=5.0)
 
                 # Check if this is a shutdown event
-                if event.get('type') == 'shutdown':
+                if event.get("type") == "shutdown":
                     yield f"event: shutdown\ndata: {event['data']}\n\n"
                     break
 
@@ -2638,6 +3821,7 @@ async def events_stream():
     Connect to receive real-time notifications about:
     - scheduled_response: Scheduled task responses
     - agent_message: Agent-initiated messages (talk to user)
+    - agent_question: Agent questions for the user
     - alert: System alerts requiring attention
     - task: Task status updates
     - agent: Agent activity updates
@@ -2652,6 +3836,7 @@ async def events_stream():
     Example event types:
     - scheduled_response: {"content": "...", "metadata": {...}, "timestamp": ...}
     - agent_message: {"content": "...", "metadata": {...}, "timestamp": ...}
+    - agent_question: {"content": "...", "metadata": {...}, "timestamp": ...}
     - alert: {"id": "...", "type": "...", "title": "...", "message": "...", "urgent": false}
     """
     return StreamingResponse(
@@ -2660,8 +3845,8 @@ async def events_stream():
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Disable nginx buffering
-        }
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
     )
 
 
@@ -2698,8 +3883,8 @@ async def status_stream():
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Disable nginx buffering
-        }
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
     )
 
 
@@ -2707,13 +3892,15 @@ async def status_stream():
 # BROADCAST FUNCTIONS
 # ============================================================================
 
+
 def broadcast_chat_event(event_type: str, data: dict):
     """
-    Broadcast an event to /chat SSE subscribers.
+    Broadcast an event to /events SSE subscribers.
 
     Use for IPC-related events like:
     - scheduled_response
     - agent_message
+    - agent_question
     - alert
     - task
     - agent
@@ -2724,12 +3911,9 @@ def broadcast_chat_event(event_type: str, data: dict):
     """
     import json
 
-    event = {
-        "type": event_type,
-        "data": json.dumps(data)
-    }
+    event = {"type": event_type, "data": json.dumps(data)}
 
-    # Push to /chat subscribers
+    # Push to /events subscribers
     for queue in _chat_subscribers:
         try:
             queue.put_nowait(event)
@@ -2737,7 +3921,7 @@ def broadcast_chat_event(event_type: str, data: dict):
             logger.warning("Event queue full for chat subscriber")
 
 
-def broadcast_status_event(event_type: str, data: dict):
+def broadcast_status_event(event_type: str, data: Mapping[str, object]):
     """
     Broadcast an event to /status SSE subscribers.
 
@@ -2753,10 +3937,7 @@ def broadcast_status_event(event_type: str, data: dict):
     """
     import json
 
-    event = {
-        "type": event_type,
-        "data": json.dumps(data)
-    }
+    event = {"type": event_type, "data": json.dumps(data)}
 
     # Push to /status subscribers only
     for queue in _status_subscribers:
@@ -2769,20 +3950,26 @@ def broadcast_status_event(event_type: str, data: dict):
 def broadcast_alert(alert: AlertInfo):
     """Broadcast a new alert to all subscribers."""
     # Alerts go to chat stream
-    broadcast_chat_event("alert", {
-        "id": alert.id,
-        "type": alert.type,
-        "title": alert.title,
-        "message": alert.message,
-        "urgent": alert.urgent
-    })
+    broadcast_chat_event(
+        "alert",
+        {
+            "id": alert.id,
+            "type": alert.type,
+            "title": alert.title,
+            "message": alert.message,
+            "urgent": alert.urgent,
+        },
+    )
 
 
 def broadcast_status_change(status: str, details: dict | None = None):
     """Broadcast a status change to all subscribers."""
     # Status changes go to status stream
-    broadcast_status_event("status", {
-        "status": status,
-        "details": details or {},
-        "timestamp": time.time()
-    })
+    broadcast_status_event(
+        "status", {"status": status, "details": details or {}, "timestamp": time.time()}
+    )
+
+
+def broadcast_alerts_state() -> None:
+    """Broadcast full alert payload updates to status subscribers."""
+    broadcast_status_event("alerts", _alerts_payload())

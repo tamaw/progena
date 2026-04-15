@@ -8,7 +8,7 @@ Covers:
 - Tool-spec shape validation for all four new specs
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -22,7 +22,6 @@ from app.progenitor.tools.schedule import (
     resume_scheduled_task,
     update_scheduled_task,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +42,6 @@ def _mock_sm(*, remove_return: bool = True, update_return: bool = True) -> Async
 
 
 class TestDeleteScheduledTask:
-
     @pytest.mark.asyncio
     async def test_delete_blank_id_returns_error(self):
         """Blank schedule_id must be rejected without touching state_manager."""
@@ -96,7 +94,6 @@ class TestDeleteScheduledTask:
 
 
 class TestUpdateScheduledTask:
-
     @pytest.mark.asyncio
     async def test_update_blank_id_returns_error(self):
         result = await update_scheduled_task("", {"message": "new"})
@@ -110,33 +107,25 @@ class TestUpdateScheduledTask:
 
     @pytest.mark.asyncio
     async def test_update_protected_field_id_rejected(self):
-        result = await update_scheduled_task(
-            "sched_abc123", {"id": "sched_new_id"}
-        )
+        result = await update_scheduled_task("sched_abc123", {"id": "sched_new_id"})
         assert result.success is False
         assert "protected" in result.message.lower()
         assert "id" in result.message
 
     @pytest.mark.asyncio
     async def test_update_protected_field_created_at_rejected(self):
-        result = await update_scheduled_task(
-            "sched_abc123", {"created_at": "2020-01-01T00:00:00Z"}
-        )
+        result = await update_scheduled_task("sched_abc123", {"created_at": "2020-01-01T00:00:00Z"})
         assert result.success is False
         assert "created_at" in result.message
 
     @pytest.mark.asyncio
     async def test_update_protected_field_last_run_rejected(self):
-        result = await update_scheduled_task(
-            "sched_abc123", {"last_run": "2020-01-01T00:00:00Z"}
-        )
+        result = await update_scheduled_task("sched_abc123", {"last_run": "2020-01-01T00:00:00Z"})
         assert result.success is False
 
     @pytest.mark.asyncio
     async def test_update_without_state_manager_succeeds(self):
-        result = await update_scheduled_task(
-            "sched_abc123", {"message": "updated text"}
-        )
+        result = await update_scheduled_task("sched_abc123", {"message": "updated text"})
         assert result.success is True
         assert result.schedule_id == "sched_abc123"
 
@@ -151,9 +140,7 @@ class TestUpdateScheduledTask:
     @pytest.mark.asyncio
     async def test_update_not_found_returns_error(self):
         sm = _mock_sm(update_return=False)
-        result = await update_scheduled_task(
-            "sched_missing", {"message": "x"}, state_manager=sm
-        )
+        result = await update_scheduled_task("sched_missing", {"message": "x"}, state_manager=sm)
         assert result.success is False
         assert "not found" in result.message.lower()
 
@@ -172,7 +159,6 @@ class TestUpdateScheduledTask:
 
 
 class TestPauseScheduledTask:
-
     @pytest.mark.asyncio
     async def test_pause_blank_id_returns_error(self):
         result = await pause_scheduled_task("")
@@ -207,7 +193,6 @@ class TestPauseScheduledTask:
 
 
 class TestResumeScheduledTask:
-
     @pytest.mark.asyncio
     async def test_resume_blank_id_returns_error(self):
         result = await resume_scheduled_task("  ")
@@ -240,7 +225,6 @@ class TestResumeScheduledTask:
 
 
 class TestToolSpecShapes:
-
     def _assert_valid_spec(self, spec: dict, expected_name: str, required_params: list[str]):
         assert spec["name"] == expected_name
         assert isinstance(spec["description"], str) and len(spec["description"]) > 10
@@ -271,10 +255,17 @@ class TestToolSpecShapes:
         """Verify that all four specs are re-exported from app.progenitor.tools."""
         from app.progenitor.tools import (
             DELETE_SCHEDULE_TOOL_SPEC as D,
+        )
+        from app.progenitor.tools import (
             PAUSE_SCHEDULE_TOOL_SPEC as P,
+        )
+        from app.progenitor.tools import (
             RESUME_SCHEDULE_TOOL_SPEC as R,
+        )
+        from app.progenitor.tools import (
             UPDATE_SCHEDULE_TOOL_SPEC as U,
         )
+
         assert D["name"] == "delete_schedule"
         assert U["name"] == "update_schedule"
         assert P["name"] == "pause_schedule"
@@ -282,13 +273,15 @@ class TestToolSpecShapes:
 
     def test_all_handlers_importable_via_package(self):
         """Verify that all four handler functions are re-exported from app.progenitor.tools."""
+        import asyncio
+
         from app.progenitor.tools import (
             delete_scheduled_task,
             pause_scheduled_task,
             resume_scheduled_task,
             update_scheduled_task,
         )
-        import asyncio
+
         assert asyncio.iscoroutinefunction(delete_scheduled_task)
         assert asyncio.iscoroutinefunction(update_scheduled_task)
         assert asyncio.iscoroutinefunction(pause_scheduled_task)
