@@ -246,6 +246,7 @@ class WidgetSchemaResponse(BaseModel):
     """Details-pane schema for a widget type."""
 
     type: str
+    help_text: str | None = None
     default_tab: str | None = None
     tabs: list[WidgetTabSchemaResponse] = Field(default_factory=list)
     sections: list[WidgetSectionSchemaResponse] = Field(default_factory=list)
@@ -760,6 +761,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
     return [
         WidgetSchemaResponse(
             type="prompt",
+            help_text="Stores prompt text, targets an agent, and runs or generates code from the latest prompt.",
             default_tab="editor",
             tabs=[
                 WidgetTabSchemaResponse(id="editor", label="Editor"),
@@ -823,6 +825,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="code",
+            help_text="Keeps editable code in the workspace and runs it so linked cards can use the latest output.",
             default_tab="editor",
             tabs=[
                 WidgetTabSchemaResponse(id="editor", label="Editor"),
@@ -865,6 +868,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="webframe",
+            help_text="Renders HTML or a URL inside the canvas so you can preview generated UI without leaving the workspace.",
             default_tab="preview",
             tabs=[
                 WidgetTabSchemaResponse(id="preview", label="Preview"),
@@ -916,6 +920,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="label",
+            help_text="Adds workspace notes and labels so you can annotate the canvas without affecting execution.",
             default_tab="content",
             tabs=[
                 WidgetTabSchemaResponse(id="content", label="Content"),
@@ -946,6 +951,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="group",
+            help_text="Organizes related cards into a visual group so larger workflows stay easier to scan.",
             default_tab="content",
             tabs=[
                 WidgetTabSchemaResponse(id="content", label="Content"),
@@ -969,6 +975,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="schedule",
+            help_text="Creates a timed automation that runs Progenitor once, on an interval, or on a cron schedule.",
             default_tab="details",
             tabs=[
                 WidgetTabSchemaResponse(id="details", label="Details"),
@@ -1027,6 +1034,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="event",
+            help_text="Listens for a workspace event and triggers linked cards when that event fires.",
             default_tab="details",
             tabs=[
                 WidgetTabSchemaResponse(id="details", label="Details"),
@@ -1066,6 +1074,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="user",
+            help_text="Configures a user-facing tool call so the current run can send a message, notification, or question.",
             default_tab="details",
             tabs=[
                 WidgetTabSchemaResponse(id="details", label="Details"),
@@ -1135,6 +1144,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="agent",
+            help_text="Shows a linked agent, its recent activity, and the latest thread-linked output for this card.",
             default_tab="overview",
             tabs=[
                 WidgetTabSchemaResponse(id="overview", label="Overview"),
@@ -1171,6 +1181,7 @@ def _widget_schemas() -> list[WidgetSchemaResponse]:
         ),
         WidgetSchemaResponse(
             type="mcp",
+            help_text="Shows an MCP integration, its recent activity, and the latest thread-linked output for this card.",
             default_tab="overview",
             tabs=[
                 WidgetTabSchemaResponse(id="overview", label="Overview"),

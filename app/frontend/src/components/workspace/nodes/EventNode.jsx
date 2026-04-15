@@ -39,11 +39,12 @@ function formatEventLabel(eventType) {
 
 function EventNode({ id, data, selected }) {
   const { updateNodeData, toggleExpanded, saveEventNode, runEventNode } = useWorkspaceActions();
-  const { getWidgetTabs, getWidgetDefaultTab } = useWorkspaceMeta();
+  const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
   const isSaving = Boolean(data.isSaving && !data.serverManaged);
   const tabs = getWidgetTabs('event');
+  const helpText = getWidgetHelpText('event');
   const defaultTab = useMemo(
     () => resolveWidgetDefaultTab(tabs, getWidgetDefaultTab('event'), 'details'),
     [getWidgetDefaultTab, tabs]
@@ -214,7 +215,7 @@ function EventNode({ id, data, selected }) {
                 {isSaving ? 'Saving...' : 'Save Event'}
               </button>
             )}
-            <NodeHelpButton nodeType="event" title={data.title} alignRight />
+            <NodeHelpButton description={helpText} title={data.title} alignRight />
           </div>
         )}
       </div>
