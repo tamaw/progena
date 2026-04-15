@@ -111,6 +111,7 @@ export function useEventsSSE(onEvent) {
 /**
  * Hook for connecting to the /status SSE stream.
  * Receives status-side events: status, heartbeat, alerts.
+ * The alerts event carries the full alert-center payload.
  *
  * Uses shared HealthContext for health status - no duplicate health checks.
  */
