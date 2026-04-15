@@ -207,6 +207,15 @@ class WidgetsResponse(BaseModel):
     total: int
 
 
+class WidgetDeleteResponse(BaseModel):
+    """Result of deleting a backend-managed widget."""
+
+    widget_id: str
+    removed: bool = True
+    already_removed: bool = False
+    warning: str | None = None
+
+
 class WidgetFieldOptionResponse(BaseModel):
     """Selectable option for a widget field."""
 
@@ -1659,7 +1668,7 @@ def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
     return schedule_path, raw
 
 
-def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> None:
+def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
     """Delete a persisted schedule entry and refresh the cached schedule file."""
     schedule_path, schedule_data = _read_schedule_config(state_reader)
     remaining_entries: list = []
@@ -1671,10 +1680,11 @@ def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> None:
         remaining_entries.append(entry)
 
     if not deleted:
-        raise HTTPException(status_code=404, detail="Widget not found")
+        return False
 
     _atomic_write_json(schedule_path, remaining_entries)
     state_reader.invalidate(schedule_path)
+    return True
 
 
 async def _refresh_live_mcp_runtime(mcp_config_path: Path) -> None:
@@ -2350,7 +2360,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     return _widget_to_response(refreshed)
 
 
-@router.delete("/widgets/{widget_id}", status_code=204)
+@router.delete("/widgets/{widget_id}", response_model=WidgetDeleteResponse)
 async def delete_widget(widget_id: str):
     """Delete a backend-owned widget where a matching state file exists."""
     state_reader = get_state_reader()
@@ -2361,9 +2371,19 @@ async def delete_widget(widget_id: str):
         )
 
     schedule_id = widget_id.split(":", 1)[1]
-    _delete_schedule_entry(state_reader, schedule_id)
+    deleted = _delete_schedule_entry(state_reader, schedule_id)
+    if not deleted:
+        warning = f"Widget {widget_id} was already removed."
+        logger.warning("Schedule widget %s was already removed before delete request", widget_id)
+        return WidgetDeleteResponse(
+            widget_id=widget_id,
+            removed=True,
+            already_removed=True,
+            warning=warning,
+        )
+
     _broadcast_widget_refresh(state_reader)
-    return None
+    return WidgetDeleteResponse(widget_id=widget_id, removed=True)
 
 
 @router.get("/schedules", response_model=ScheduleResponse)
