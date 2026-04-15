@@ -364,6 +364,32 @@ class TestUIRoutes:
         board = client.get("/api/ui/kanban").json()
         assert all(card["id"] != created["id"] for card in board["cards"])
 
+    def test_schedule_widget_delete_persists_removal(self, client, kanban_state_reader):
+        create_response = client.post(
+            "/api/ui/schedules",
+            json={
+                "name": "Morning summary",
+                "instruction": "Send the daily summary",
+                "schedule_type": "cron",
+                "expression": "0 9 * * *",
+                "enabled": True,
+            },
+        )
+
+        assert create_response.status_code == 200
+        created = create_response.json()
+        schedule_path = kanban_state_reader.config_dir / "schedule.json"
+        before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
+        assert [entry["id"] for entry in before_delete] == [created["id"].split(":", 1)[1]]
+
+        delete_response = client.delete(f"/api/ui/widgets/{created['id']}")
+
+        assert delete_response.status_code == 204
+        after_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
+        assert after_delete == []
+        widgets = client.get("/api/ui/widgets").json()
+        assert created["id"] not in {widget["id"] for widget in widgets["items"]}
+
     def test_schedules_alias_endpoint(self, client):
         response = client.get("/api/ui/schedules")
         assert response.status_code == 200

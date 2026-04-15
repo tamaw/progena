@@ -2332,6 +2332,35 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     return _widget_to_response(refreshed)
 
 
+@router.delete("/widgets/{widget_id}", status_code=204)
+async def delete_widget(widget_id: str):
+    """Delete a backend-owned widget where a matching state file exists."""
+    state_reader = get_state_reader()
+    if not widget_id.startswith("schedule:"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only schedule widgets can be deleted from the backend",
+        )
+
+    schedule_id = widget_id.split(":", 1)[1]
+    schedule_path, schedule_data = _read_schedule_config(state_reader)
+    remaining_entries: list = []
+    deleted = False
+    for entry in schedule_data:
+        if isinstance(entry, dict) and entry.get("id") == schedule_id:
+            deleted = True
+            continue
+        remaining_entries.append(entry)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Widget not found")
+
+    _atomic_write_json(schedule_path, remaining_entries)
+    state_reader.invalidate(schedule_path)
+    _broadcast_widget_refresh(state_reader)
+    return None
+
+
 @router.get("/schedules", response_model=ScheduleResponse)
 async def get_schedules():
     """Alias for schedule data using the requested plural path."""
