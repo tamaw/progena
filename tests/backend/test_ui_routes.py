@@ -384,11 +384,26 @@ class TestUIRoutes:
 
         delete_response = client.delete(f"/api/ui/widgets/{created['id']}")
 
-        assert delete_response.status_code == 204
+        assert delete_response.status_code == 200
+        assert delete_response.json() == {
+            "widget_id": created["id"],
+            "removed": True,
+            "already_removed": False,
+            "warning": None,
+        }
         after_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
         assert after_delete == []
         widgets = client.get("/api/ui/widgets").json()
         assert created["id"] not in {widget["id"] for widget in widgets["items"]}
+
+        repeated_delete = client.delete(f"/api/ui/widgets/{created['id']}")
+
+        assert repeated_delete.status_code == 200
+        repeated_payload = repeated_delete.json()
+        assert repeated_payload["widget_id"] == created["id"]
+        assert repeated_payload["removed"] is True
+        assert repeated_payload["already_removed"] is True
+        assert "already removed" in repeated_payload["warning"]
 
     def test_schedules_alias_endpoint(self, client):
         response = client.get("/api/ui/schedules")

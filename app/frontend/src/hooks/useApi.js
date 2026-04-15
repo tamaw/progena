@@ -173,9 +173,10 @@ export function useApi() {
   }, [fetchWithRetry]);
 
   const deleteWidget = useCallback(async (widgetId) => {
-    await fetchWithRetry(`/api/ui/widgets/${widgetId}`, {
+    const response = await fetchWithRetry(`/api/ui/widgets/${widgetId}`, {
       method: 'DELETE',
     });
+    return response.json();
   }, [fetchWithRetry]);
 
   const getSchedules = useCallback(async () => {
