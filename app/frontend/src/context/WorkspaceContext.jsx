@@ -1039,6 +1039,31 @@ export function WorkspaceProvider({ children }) {
     }
   }, []);
 
+  const setNodeSaveError = useCallback((nodeId, message) => {
+    setNodes((currentNodes) => currentNodes.map((entry) => (
+      entry.id === nodeId
+        ? {
+          ...entry,
+          data: {
+            ...entry.data,
+            saveError: message,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+        : entry
+    )));
+  }, []);
+
+  const deleteBackendManagedNode = useCallback(async (node) => {
+    if (node.type !== 'schedule' || !node.data?.serverManaged) {
+      return false;
+    }
+
+    clearQueuedWidgetPatch(node.id);
+    await deleteWidget(node.id);
+    return true;
+  }, [clearQueuedWidgetPatch, deleteWidget]);
+
   const onNodesChange = useCallback((changes) => {
     setNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
   }, []);
@@ -1451,31 +1476,19 @@ export function WorkspaceProvider({ children }) {
   }, [clearQueuedWidgetPatch]);
 
   const removeNodes = useCallback(async (nodeIds) => {
-    const targets = latestNodesRef.current.filter((node) => nodeIds.includes(node.id));
+    const nodeIdSet = new Set(nodeIds);
+    const targets = latestNodesRef.current.filter((node) => nodeIdSet.has(node.id));
     const removableIds = [];
 
     for (const node of targets) {
-      const isPersistedSchedule = node.type === 'schedule' && node.data?.serverManaged;
-      if (isPersistedSchedule) {
-        clearQueuedWidgetPatch(node.id);
-        try {
-          await deleteWidget(node.id);
+      try {
+        if (await deleteBackendManagedNode(node)) {
           removableIds.push(node.id);
-        } catch (deleteError) {
-          const message = deleteError instanceof Error ? deleteError.message : String(deleteError);
-          setNodes((currentNodes) => currentNodes.map((entry) => (
-            entry.id === node.id
-              ? {
-                ...entry,
-                data: {
-                  ...entry.data,
-                  saveError: message,
-                  updatedAt: new Date().toISOString(),
-                },
-              }
-              : entry
-          )));
+          continue;
         }
+      } catch (deleteError) {
+        const message = deleteError instanceof Error ? deleteError.message : String(deleteError);
+        setNodeSaveError(node.id, message);
         continue;
       }
 
@@ -1485,7 +1498,7 @@ export function WorkspaceProvider({ children }) {
     }
 
     removeNodeIdsLocally(removableIds);
-  }, [clearQueuedWidgetPatch, deleteWidget, removeNodeIdsLocally]);
+  }, [deleteBackendManagedNode, removeNodeIdsLocally, setNodeSaveError]);
 
   const duplicateNode = useCallback((nodeId) => {
     setNodes((currentNodes) => {
