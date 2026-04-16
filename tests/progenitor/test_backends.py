@@ -16,6 +16,17 @@ def _file_info_path(info: object) -> str:
     return path
 
 
+def _read_result_text(result: object) -> str:
+    if isinstance(result, str):
+        return result
+    content = getattr(result, "content", None)
+    if isinstance(content, str):
+        return content
+    text = getattr(result, "text", None)
+    assert isinstance(text, str)
+    return text
+
+
 class TestBackendFactory:
     """Tests for the backend factory."""
 
@@ -89,10 +100,11 @@ class TestBackendFactory:
             content = "## Testing\n- Keep tests focused.\n"
             result = backend.write("/memories/patterns/testing.md", content)
             persisted_path = root / "data" / "memories" / "patterns" / "testing.md"
+            read_result = backend.read("/memories/patterns/testing.md")
 
             assert result.error is None
             assert persisted_path.read_text(encoding="utf-8") == content
-            assert "Keep tests focused." in backend.read("/memories/patterns/testing.md")
+            assert "Keep tests focused." in _read_result_text(read_result)
 
             listing = backend.ls_info("/memories/patterns/")
             assert "/memories/patterns/testing.md" in {_file_info_path(info) for info in listing}
