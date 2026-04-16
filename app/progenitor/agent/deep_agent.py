@@ -81,7 +81,7 @@ def create_progenitor_agent(
         tool_registry: Progenitor's tool/agent registry (for tool context).
         llm_client: Progenitor's LLM client (for tools that need AI).
         state_manager: Progenitor's StateManager (for tools that need persistence).
-        store: LangGraph BaseStore for cross-thread memory persistence.
+        store: Optional LangGraph BaseStore for DeepAgent features that need one.
                If None, uses InMemoryStore (dev mode).
         project_root: Root directory for filesystem backend. Defaults to cwd.
         log_dir: Directory for JSONL audit logs. If None, logs to Python logger only.
@@ -107,7 +107,7 @@ def create_progenitor_agent(
         db_path = config.storage.state_dir / "conversations.db"
         checkpointer = _build_checkpointer(db_path)
 
-    # Default to in-memory store for development
+    # Default to in-memory store for DeepAgent features that require a store
     if store is None:
         from langgraph.store.memory import InMemoryStore
 

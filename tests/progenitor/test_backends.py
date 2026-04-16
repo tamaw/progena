@@ -20,16 +20,15 @@ class TestBackendFactory:
 
     def test_factory_creates_composite_backend(self):
         """Factory callable creates a CompositeBackend when called with runtime."""
-        from deepagents.backends import CompositeBackend, StateBackend
+        from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 
         factory = create_progenitor_backend(project_root=".")
         runtime = MagicMock()
-        # StoreBackend needs runtime.store
-        runtime.store = MagicMock()
 
         backend = factory(runtime)
         assert isinstance(backend, CompositeBackend)
         assert isinstance(backend.default, StateBackend)
+        assert isinstance(backend.routes["/memories/"], FilesystemBackend)
 
     def test_factory_uses_project_root(self):
         """project_root is accepted (even though core-only doesn't use it)."""
@@ -38,24 +37,28 @@ class TestBackendFactory:
         with tempfile.TemporaryDirectory() as tmpdir:
             from pathlib import Path
 
+            from deepagents.backends import FilesystemBackend
+
             root = Path(tmpdir)
             for rel in ("app", "data", "data/prompts", "logs"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
 
             factory = create_progenitor_backend(project_root=tmpdir)
             runtime = MagicMock()
-            runtime.store = MagicMock()
 
             backend = factory(runtime)
             assert backend is not None
+            assert "/memories/" in backend.routes
             assert "/self/" in backend.routes
             assert "/data/" in backend.routes
             assert "/logs/" in backend.routes
             assert "/prompts/" in backend.routes
+            assert isinstance(backend.routes["/memories/"], FilesystemBackend)
             assert isinstance(backend.routes["/self/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/data/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/logs/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/prompts/"], ReadOnlyFilesystemBackend)
+            assert (root / "data" / "memories").is_dir()
 
     def test_factory_defaults_to_cwd(self):
         """Factory defaults to cwd when no project_root specified."""
