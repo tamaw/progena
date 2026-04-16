@@ -13,7 +13,7 @@ Usage:
     export PROGENITOR_MOCK_LLM=true
 
     # Or programmatically
-    from app.progenitor.llm.mock_client import MockLLMClient
+    from app.agents.builder_agent.llm.mock_client import MockLLMClient
     client = MockLLMClient()
 """
 
@@ -117,7 +117,9 @@ class MockLLMClient(LLMClientProtocol):
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
         """Return a mock chat response with a synthetic reasoning trace."""
-        response = await self.chat(messages, system_prompt, temperature, max_tokens, response_format)
+        response = await self.chat(
+            messages, system_prompt, temperature, max_tokens, response_format
+        )
         reasoning = "Mock reasoning trace: generated response based on input context."
         return response, reasoning
 
@@ -186,6 +188,7 @@ class MockLLMClient(LLMClientProtocol):
         system_prompt: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream response chunks to satisfy LLMClientProtocol."""
+
         async def _generator() -> AsyncIterator[str]:
             async for chunk in self.stream_chat(
                 [{"role": "user", "content": prompt}],
@@ -254,13 +257,15 @@ class MockLLMClient(LLMClientProtocol):
         items = []
 
         for i in range(num_items):
-            items.append({
-                "title": f"Work item {i + 1}: {user_input[:30]}...",
-                "description": f"Automatically generated work item for: {user_input}",
-                "priority": random.choice(["high", "medium", "low"]),
-                "estimated_effort": random.choice(["small", "medium", "large"]),
-                "status": "pending",
-            })
+            items.append(
+                {
+                    "title": f"Work item {i + 1}: {user_input[:30]}...",
+                    "description": f"Automatically generated work item for: {user_input}",
+                    "priority": random.choice(["high", "medium", "low"]),
+                    "estimated_effort": random.choice(["small", "medium", "large"]),
+                    "status": "pending",
+                }
+            )
 
         return items
 
@@ -336,7 +341,7 @@ class MockLLMClient(LLMClientProtocol):
         if len(content) <= max_length:
             return content
 
-        return content[:max_length - 20] + "... [summarized]"
+        return content[: max_length - 20] + "... [summarized]"
 
     def _generate_contextual_response(
         self,
@@ -385,7 +390,7 @@ class MockLLMClient(LLMClientProtocol):
 
         # Default response
         return (
-            f"I've processed your request: \"{user_input[:50]}{'...' if len(user_input) > 50 else ''}\"\n\n"
+            f'I\'ve processed your request: "{user_input[:50]}{"..." if len(user_input) > 50 else ""}"\n\n'
             "This is a demo mode response. In production with live API access, "
             "I would provide a more detailed and contextual answer based on your specific needs."
         )
@@ -428,6 +433,7 @@ def create_llm_client(
 
     # Import real client only when needed
     from .client import LLMClient
+
     return LLMClient(*args, **kwargs)  # type: ignore[return-value]
 
 

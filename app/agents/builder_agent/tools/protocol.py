@@ -1,8 +1,9 @@
 """
 System Tool Protocol and Base Types.
 
-Defined under app.progenitor.tools to avoid import cycles with app.progenitor.nodes.
+Defined in the builder agent package to avoid import cycles with builder-agent nodes.
 """
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Protocol
