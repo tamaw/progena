@@ -11,46 +11,25 @@ from pathlib import Path
 from typing import Any
 
 
-def _default_project_root() -> Path:
-    """Resolve the project root for both repo and packaged builder layouts."""
-    resolved = Path(__file__).resolve()
-    parents = resolved.parents
-    if len(parents) > 4:
-        return parents[4]
-    if len(parents) > 2:
-        return parents[2]
-    return parents[len(parents) - 1]
-
-
-PROJECT_ROOT = _default_project_root()
-DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
-DEFAULT_PROMPTS_DIR = DEFAULT_DATA_DIR / "prompts"
-
-
 def resolve_data_dir(data_dir: Path | str | None = None) -> Path:
-    """Resolve the canonical data directory from explicit override, env, and default."""
+    """Resolve the canonical data directory from explicit override or env."""
     if data_dir is not None:
         return Path(data_dir).expanduser().resolve()
 
     env_data_dir = os.getenv("PROGENITOR_DATA_DIR", "").strip()
-    if env_data_dir:
-        resolved_env_dir = Path(env_data_dir).expanduser().resolve()
-        if not resolved_env_dir.exists():
-            raise FileNotFoundError(
-                f"PROGENITOR_DATA_DIR points to missing directory: {resolved_env_dir}"
-            )
-        return resolved_env_dir
+    if not env_data_dir:
+        raise RuntimeError("PROGENITOR_DATA_DIR must be set when prompts_dir is not provided.")
 
-    if not DEFAULT_DATA_DIR.exists():
+    resolved_env_dir = Path(env_data_dir).expanduser().resolve()
+    if not resolved_env_dir.exists():
         raise FileNotFoundError(
-            f"Data directory not found: {DEFAULT_DATA_DIR}. "
-            "Ensure the data/ directory exists at the project root."
+            f"PROGENITOR_DATA_DIR points to missing directory: {resolved_env_dir}"
         )
-    return DEFAULT_DATA_DIR
+    return resolved_env_dir
 
 
 def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
-    """Resolve prompt directory from explicit override, env, and project default."""
+    """Resolve prompt directory from explicit override or env."""
     if prompts_dir is not None:
         return Path(prompts_dir).expanduser().resolve()
 
@@ -63,13 +42,14 @@ def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
             )
         return resolved_env_dir
 
-    resolved_default_dir = resolve_data_dir() / "prompts"
-    if not resolved_default_dir.exists():
+    resolved_data_dir = resolve_data_dir()
+    resolved_prompts_dir = resolved_data_dir / "prompts"
+    if not resolved_prompts_dir.exists():
         raise FileNotFoundError(
-            f"Prompts directory not found: {resolved_default_dir}. "
-            "Ensure the data/prompts/ directory exists at the project root."
+            f"Prompts directory not found: {resolved_prompts_dir}. "
+            "Ensure the prompts directory exists under PROGENITOR_DATA_DIR or set PROGENITOR_PROMPTS_DIR."
         )
-    return resolved_default_dir
+    return resolved_prompts_dir
 
 
 def resolve_skills_root(prompts_dir: Path | str | None = None) -> Path:
@@ -97,29 +77,21 @@ def load_repo_skill_context(
     *,
     agent_name: str,
     prompts_dir: Path | str | None = None,
-    fallback_agents: tuple[str, ...] = (),
 ) -> str:
     """Load skill bundles from an agent-scoped skills directory."""
-    search_agents: list[str] = []
-    for candidate in (agent_name, *fallback_agents):
-        if candidate not in search_agents:
-            search_agents.append(candidate)
-    search_dirs = [resolve_skills_dir(candidate, prompts_dir) for candidate in search_agents]
-    if not any(path.is_dir() for path in search_dirs):
-        searched = ", ".join(str(path) for path in search_dirs)
+    skills_dir = resolve_skills_dir(agent_name, prompts_dir)
+    if not skills_dir.is_dir():
         raise FileNotFoundError(
-            f"Skills directory not found. Searched: {searched}. "
+            f"Skills directory not found: {skills_dir}. "
             "Ensure data/skills/<agent-name>/ is mounted and populated."
         )
 
     sections: list[str] = []
     for skill_name in skill_names:
-        searched_files = [skills_dir / skill_name / "SKILL.md" for skills_dir in search_dirs]
-        skill_file = next((path for path in searched_files if path.is_file()), None)
-        if skill_file is None:
-            searched = ", ".join(str(path) for path in searched_files)
+        skill_file = skills_dir / skill_name / "SKILL.md"
+        if not skill_file.is_file():
             raise FileNotFoundError(
-                f"Skill file not found. Searched: {searched}. "
+                f"Skill file not found: {skill_file}. "
                 "Ensure data/skills/<agent-name>/<skill-name>/SKILL.md exists."
             )
         body = strip_skill_frontmatter(skill_file.read_text(encoding="utf-8"))
@@ -154,12 +126,9 @@ class PromptTemplates:
         """
         prompt_file = self.prompts_dir / filename
         if not prompt_file.exists():
-            searched_dirs = [str(self.prompts_dir)]
-            if self.prompts_dir != DEFAULT_PROMPTS_DIR:
-                searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
             raise FileNotFoundError(
                 f"Prompt file not found: {prompt_file}. "
-                f"Ensure data/prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
+                f"Ensure {filename} exists under {self.prompts_dir}."
             )
         return prompt_file.read_text(encoding="utf-8")
 
@@ -207,15 +176,13 @@ class PromptTemplates:
     def get_builder_skill_context(self, skill_names: list[str] | None = None) -> str:
         """Load repo-level builder skills for prompt grounding.
 
-        Builder-specific skills live under data/skills/builder_agent/,
-        with progenitor skills available as a fallback for shared bundles.
+        Builder-specific skills must exist under data/skills/builder_agent/.
         """
         selected = skill_names or ["build-agent", "git-workflow"]
         return load_repo_skill_context(
             selected,
             agent_name="builder_agent",
             prompts_dir=self.prompts_dir,
-            fallback_agents=("progenitor",),
         )
 
     def get_copilot_task_prompt(self, spec: dict) -> str:
