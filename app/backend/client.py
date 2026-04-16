@@ -271,24 +271,13 @@ class ProgenitorClient:
                 self._last_heartbeat = time.time()  # CR-001
                 return response_line.decode().strip() if response_line else ""
 
-    async def send_message_stream(
+    async def send_message_stream_events(
         self,
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> AsyncIterator[str]:
-        """Send a message and stream the response in real-time.
-
-        Reads streaming chunks from the Progenitor subprocess and yields them
-        as they arrive.
-
-        Args:
-            message: The user message to send.
-            request_id: Optional request ID for correlation.
-
-        Yields:
-            Content chunks as they arrive from the LLM.
-        """
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Send a message and stream structured events from the subprocess client."""
         if not self._started:
             await self.start()
 
@@ -312,7 +301,6 @@ class ProgenitorClient:
 
             # Read streaming chunks until we get the final response
             try:
-                full_response = ""
                 while True:
                     response_line = await asyncio.wait_for(
                         self._process.stdout.readline(),
@@ -325,24 +313,38 @@ class ProgenitorClient:
                     try:
                         response = json.loads(response_line.decode())
                     except json.JSONDecodeError:
-                        # Non-JSON output, yield as-is
+                        # Non-JSON output, yield as a synthetic stream chunk
                         text = response_line.decode().strip()
                         if text:
-                            yield text
+                            yield {
+                                "type": "stream_chunk",
+                                "content": text,
+                                "is_final": False,
+                                "request_id": request_id,
+                            }
                         continue
 
                     msg_type = response.get("type", "")
                     content = response.get("content", "")
 
                     if msg_type == "stream_chunk":
-                        # Real streaming chunk
-                        if content:
-                            full_response += content
-                            yield content
-
-                        # Check if this is the final chunk
+                        yield {
+                            "type": "stream_chunk",
+                            "content": content,
+                            "is_final": bool(response.get("is_final", False)),
+                            "request_id": response.get("request_id", request_id),
+                        }
                         if response.get("is_final", False):
                             break
+
+                    elif msg_type == "stream_event":
+                        yield {
+                            "type": "stream_event",
+                            "event_type": response.get("event_type", "unknown"),
+                            "content": content,
+                            "metadata": response.get("metadata", {}),
+                            "request_id": response.get("request_id", request_id),
+                        }
 
                     elif msg_type == "stream_end":
                         # Explicit stream end signal

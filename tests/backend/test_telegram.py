@@ -29,6 +29,12 @@ async def _async_iter(*chunks: str):
         yield chunk
 
 
+async def _async_event_iter(*items):
+    """Yield test stream events as an async iterator."""
+    for item in items:
+        yield item
+
+
 class TestTelegramConfig:
     """Tests for TelegramConfig."""
 
@@ -865,7 +871,13 @@ class TestTelegramBackendStreaming:
 
         progenitor = AsyncMock()
         progenitor.is_running = True
-        progenitor.send_message_stream = MagicMock(return_value=_async_iter("Hello", " world"))
+        progenitor.send_message_stream_events = MagicMock(
+            return_value=_async_event_iter(
+                {"type": "stream_chunk", "content": "Hello"},
+                {"type": "stream_event", "event_type": "node_update", "content": ""},
+                {"type": "stream_chunk", "content": " world"},
+            )
+        )
 
         result = await backend_main._handle_telegram_agent_message(
             telegram,
@@ -890,7 +902,9 @@ class TestTelegramBackendStreaming:
 
         progenitor = AsyncMock()
         progenitor.is_running = True
-        progenitor.send_message_stream = MagicMock(return_value=_async_iter("Hello"))
+        progenitor.send_message_stream_events = MagicMock(
+            return_value=_async_event_iter({"type": "stream_chunk", "content": "Hello"})
+        )
 
         result = await backend_main._handle_telegram_agent_message(
             telegram,

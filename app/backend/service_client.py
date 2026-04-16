@@ -83,30 +83,6 @@ class ServiceProgenitorClient:
 
         return await service.handle_message(message, request_id, metadata=metadata)
 
-    async def send_message_stream(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict | None = None,
-    ) -> AsyncIterator[str]:
-        """Send a message and stream the response.
-
-        Args:
-            message: The user message.
-            request_id: Optional request ID for correlation.
-
-        Yields:
-            Response chunks.
-        """
-        if not self._service or not self._service.is_initialized:
-            await self.start()
-        service = self._service
-        if service is None:
-            raise RuntimeError("Progenitor service failed to start")
-
-        async for chunk in service.handle_message_stream(message, request_id, metadata=metadata):
-            yield chunk
-
     async def send_message_stream_events(
         self,
         message: str,

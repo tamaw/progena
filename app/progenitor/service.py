@@ -10,13 +10,13 @@ backend without subprocess communication, eliminating:
 - Zombie processes
 - Unstructured error handling
 
-Usage:
-    service = ProgenitorService(config)
-    await service.initialize()
+    Usage:
+        service = ProgenitorService(config)
+        await service.initialize()
 
-    response = await service.handle_message("Hello")
-    async for chunk in service.handle_message_stream("Hello"):
-        print(chunk)
+        response = await service.handle_message("Hello")
+        async for event in service.handle_message_stream_events("Hello"):
+            print(event)
 """
 
 import asyncio
@@ -193,32 +193,6 @@ class ProgenitorService:
                 exc_info=True,
             )
             raise
-
-    async def handle_message_stream(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> AsyncIterator[str]:
-        """Handle a message and stream the response.
-
-        Args:
-            message: The user message to process.
-            request_id: Optional request ID for correlation.
-
-        Yields:
-            Response chunks as they become available.
-        """
-        async for event in self.handle_message_stream_events(
-            message,
-            request_id=request_id,
-            metadata=metadata,
-        ):
-            if event.get("type") != "stream_chunk":
-                continue
-            chunk_text = str(event.get("content", ""))
-            if chunk_text:
-                yield chunk_text
 
     async def handle_message_stream_events(
         self,
