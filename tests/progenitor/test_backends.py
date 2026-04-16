@@ -22,6 +22,11 @@ def _read_result_text(result: object) -> str:
     content = getattr(result, "content", None)
     if isinstance(content, str):
         return content
+    file_data = getattr(result, "file_data", None)
+    if isinstance(file_data, dict):
+        file_content = file_data.get("content")
+        if isinstance(file_content, str):
+            return file_content
     text = getattr(result, "text", None)
     assert isinstance(text, str)
     return text
