@@ -9,6 +9,23 @@ import Message from '../components/chat/Message';
 import TypingIndicator from '../components/chat/TypingIndicator';
 import QuickActions from '../components/chat/QuickActions';
 
+function normalizeStreamEvent(event, index) {
+  if (!event || typeof event !== 'object') {
+    return null;
+  }
+
+  return {
+    id: typeof event.id === 'string' ? event.id : `evt_restored_${index}_${Date.now()}`,
+    eventType: typeof event.eventType === 'string'
+      ? event.eventType
+      : (typeof event.event_type === 'string' ? event.event_type : 'stream_event'),
+    content: typeof event.content === 'string' ? event.content : '',
+    metadata: event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+      ? event.metadata
+      : {},
+  };
+}
+
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -35,8 +52,45 @@ function normalizeStoredMessage(message, index) {
     id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
     role,
     content,
+    streamEvents: Array.isArray(message.streamEvents)
+      ? message.streamEvents
+        .map((event, eventIndex) => normalizeStreamEvent(event, eventIndex))
+        .filter(Boolean)
+      : [],
     timestamp,
   };
+}
+
+function createStreamEvent(streamEvent) {
+  if (!streamEvent || typeof streamEvent !== 'object') {
+    return null;
+  }
+
+  return {
+    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    eventType: typeof streamEvent.event_type === 'string' ? streamEvent.event_type : 'stream_event',
+    content: typeof streamEvent.content === 'string' ? streamEvent.content : '',
+    metadata:
+      streamEvent.metadata
+      && typeof streamEvent.metadata === 'object'
+      && !Array.isArray(streamEvent.metadata)
+        ? streamEvent.metadata
+        : {},
+  };
+}
+
+function appendStreamEvent(events, nextEvent) {
+  const currentEvents = Array.isArray(events) ? events : [];
+  const lastEvent = currentEvents[currentEvents.length - 1];
+  if (
+    lastEvent
+    && lastEvent.eventType === nextEvent.eventType
+    && lastEvent.content === nextEvent.content
+    && JSON.stringify(lastEvent.metadata) === JSON.stringify(nextEvent.metadata)
+  ) {
+    return currentEvents;
+  }
+  return currentEvents.concat(nextEvent);
 }
 
 function ChatPage() {
@@ -215,7 +269,8 @@ function ChatPage() {
       role: 'assistant',
       content: '',
       timestamp: Date.now(),
-      isStreaming: true
+      isStreaming: true,
+      streamEvents: [],
     }]);
 
     const history = messages.slice(-10).map(m => ({
@@ -256,7 +311,21 @@ function ChatPage() {
               : m
           ));
           setIsGenerating(false);
-        }
+        },
+        // onStreamEvent
+        (streamEvent) => {
+          const nextEvent = createStreamEvent(streamEvent);
+          if (!nextEvent || nextEvent.eventType === 'message_delta') {
+            return;
+          }
+
+          setTypingState('tool-use');
+          setMessages(prev => prev.map(m =>
+            m.id === assistantId
+              ? { ...m, streamEvents: appendStreamEvent(m.streamEvents, nextEvent) }
+              : m
+          ));
+        },
       );
     } catch (error) {
       show('error', 'Chat Error', error.message);
