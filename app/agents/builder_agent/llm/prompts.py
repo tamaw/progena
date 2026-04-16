@@ -6,16 +6,98 @@ All prompts are stored as markdown files for easy editing.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from app.progenitor.llm.prompts import (
-    DEFAULT_PROMPTS_DIR,
-    resolve_prompts_dir,
-)
-from app.progenitor.llm.prompts import (
-    load_skill_context as load_repo_skill_context,
-)
+
+def resolve_data_dir(data_dir: Path | str | None = None) -> Path:
+    """Resolve the canonical data directory from explicit override or env."""
+    if data_dir is not None:
+        return Path(data_dir).expanduser().resolve()
+
+    env_data_dir = os.getenv("PROGENITOR_DATA_DIR", "").strip()
+    if not env_data_dir:
+        raise RuntimeError("PROGENITOR_DATA_DIR must be set when prompts_dir is not provided.")
+
+    resolved_env_dir = Path(env_data_dir).expanduser().resolve()
+    if not resolved_env_dir.exists():
+        raise FileNotFoundError(
+            f"PROGENITOR_DATA_DIR points to missing directory: {resolved_env_dir}"
+        )
+    return resolved_env_dir
+
+
+def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
+    """Resolve prompt directory from explicit override or env."""
+    if prompts_dir is not None:
+        return Path(prompts_dir).expanduser().resolve()
+
+    env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
+    if env_prompts_dir:
+        resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
+        if not resolved_env_dir.exists():
+            raise FileNotFoundError(
+                f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
+            )
+        return resolved_env_dir
+
+    resolved_data_dir = resolve_data_dir()
+    resolved_prompts_dir = resolved_data_dir / "prompts"
+    if not resolved_prompts_dir.exists():
+        raise FileNotFoundError(
+            f"Prompts directory not found: {resolved_prompts_dir}. "
+            "Ensure the prompts directory exists under PROGENITOR_DATA_DIR or set PROGENITOR_PROMPTS_DIR."
+        )
+    return resolved_prompts_dir
+
+
+def resolve_skills_root(prompts_dir: Path | str | None = None) -> Path:
+    """Return the checked-in skills root adjacent to the resolved prompts directory."""
+    return resolve_prompts_dir(prompts_dir).parent / "skills"
+
+
+def resolve_skills_dir(agent_name: str, prompts_dir: Path | str | None = None) -> Path:
+    """Return the agent-scoped skills directory under data/skills/."""
+    return resolve_skills_root(prompts_dir) / agent_name
+
+
+def strip_skill_frontmatter(content: str) -> str:
+    """Remove optional markdown frontmatter from SKILL.md files."""
+    if not content.startswith("---"):
+        return content.strip()
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return content.strip()
+    return parts[2].strip()
+
+
+def load_repo_skill_context(
+    skill_names: list[str],
+    *,
+    agent_name: str,
+    prompts_dir: Path | str | None = None,
+) -> str:
+    """Load skill bundles from an agent-scoped skills directory."""
+    skills_dir = resolve_skills_dir(agent_name, prompts_dir)
+    if not skills_dir.is_dir():
+        raise FileNotFoundError(
+            f"Skills directory not found: {skills_dir}. "
+            "Ensure data/skills/<agent-name>/ is mounted and populated."
+        )
+
+    sections: list[str] = []
+    for skill_name in skill_names:
+        skill_file = skills_dir / skill_name / "SKILL.md"
+        if not skill_file.is_file():
+            raise FileNotFoundError(
+                f"Skill file not found: {skill_file}. "
+                "Ensure data/skills/<agent-name>/<skill-name>/SKILL.md exists."
+            )
+        body = strip_skill_frontmatter(skill_file.read_text(encoding="utf-8"))
+        if body:
+            sections.append(body)
+    return "\n\n".join(sections)
 
 
 class PromptTemplates:
@@ -44,12 +126,9 @@ class PromptTemplates:
         """
         prompt_file = self.prompts_dir / filename
         if not prompt_file.exists():
-            searched_dirs = [str(self.prompts_dir)]
-            if self.prompts_dir != DEFAULT_PROMPTS_DIR:
-                searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
             raise FileNotFoundError(
                 f"Prompt file not found: {prompt_file}. "
-                f"Ensure data/prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
+                f"Ensure {filename} exists under {self.prompts_dir}."
             )
         return prompt_file.read_text(encoding="utf-8")
 
@@ -97,15 +176,13 @@ class PromptTemplates:
     def get_builder_skill_context(self, skill_names: list[str] | None = None) -> str:
         """Load repo-level builder skills for prompt grounding.
 
-        Builder-specific skills live under data/skills/builder_agent/,
-        with progenitor skills available as a fallback for shared bundles.
+        Builder-specific skills must exist under data/skills/builder_agent/.
         """
         selected = skill_names or ["build-agent", "git-workflow"]
         return load_repo_skill_context(
             selected,
             agent_name="builder_agent",
             prompts_dir=self.prompts_dir,
-            fallback_agents=("progenitor",),
         )
 
     def get_copilot_task_prompt(self, spec: dict) -> str:

@@ -11,12 +11,11 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from pydantic import BaseModel
 
-from app.progenitor.mcp_tool_utils import (
+from ..config import LLMConfig, MCPConfig
+from ..mcp_tool_utils import (
     normalize_mcp_tool_definition,
     parse_mcp_jsonrpc_response,
 )
-
-from ..config import LLMConfig, MCPConfig
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
 from .response_models import (

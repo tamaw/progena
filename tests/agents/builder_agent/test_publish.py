@@ -1,6 +1,10 @@
+import os
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+os.environ.setdefault("PROGENITOR_DATA_DIR", str(Path(__file__).resolve().parents[3] / "data"))
 
 from app.agents.builder_agent.nodes.publish import create_node
 
@@ -25,7 +29,10 @@ async def test_publish_skips_pr_when_nothing_to_commit(tmp_path):
         git_cls.return_value.commit_changes = AsyncMock(return_value=None)
         node = create_node(state_manager, tmp_path)
 
-        with patch("app.agents.builder_agent.nodes.publish.gh_create_pr_from_worktree", new_callable=AsyncMock) as create_pr:
+        with patch(
+            "app.agents.builder_agent.nodes.publish.gh_create_pr_from_worktree",
+            new_callable=AsyncMock,
+        ) as create_pr:
             result = await node(state)
 
     create_pr.assert_not_awaited()
