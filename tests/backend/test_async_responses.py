@@ -87,6 +87,46 @@ class TestAsyncResponseHandling:
         )
         assert response.status_code in [200, 500, 503]
 
+    @pytest.mark.asyncio
+    async def test_stream_response_unified_emits_structured_stream_events(self):
+        """Structured backend stream items should become SSE response.stream_event events."""
+        import app.backend.main as backend_main
+
+        original_client = backend_main.client
+
+        async def _events():
+            yield {"type": "stream_chunk", "content": "Hello"}
+            yield {
+                "type": "stream_event",
+                "event_type": "node_update",
+                "content": "",
+                "metadata": {"node_name": "respond"},
+            }
+            yield {"type": "stream_chunk", "content": "", "is_final": True}
+
+        class _MockClient:
+            def send_message_stream_events(self, message: str, request_id: str | None = None):
+                del message, request_id
+                return _events()
+
+        backend_main.client = _MockClient()
+
+        try:
+            payload = [
+                part
+                async for part in backend_main.stream_response_unified(
+                    "hi",
+                    "progenitor-v1",
+                    request_id="req-structured",
+                )
+            ]
+        finally:
+            backend_main.client = original_client
+
+        assert any("event: response.output_text.delta" in part for part in payload)
+        assert any("event: response.stream_event" in part for part in payload)
+        assert any("event: response.completed" in part for part in payload)
+
 
 class TestConcurrentRequestHandling:
     """Tests for concurrent request handling."""

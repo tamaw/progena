@@ -375,32 +375,6 @@ class IPCClient:
 
         raise ConnectionError("Failed to send message after retries")
 
-    async def send_message_stream(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> AsyncIterator[str]:
-        """Send a message and stream the response.
-
-        Args:
-            message: The user message to send.
-            request_id: Optional request ID for correlation.
-
-        Yields:
-            Response chunks as they arrive.
-
-        Raises:
-            ConnectionError: If not connected and reconnection fails.
-            TimeoutError: If request times out.
-        """
-        async for event in self.send_message_stream_events(message, request_id, metadata):
-            if event.get("type") != "stream_chunk":
-                continue
-            chunk_text = str(event.get("content", ""))
-            if chunk_text:
-                yield chunk_text
-
     async def send_message_stream_events(
         self,
         message: str,

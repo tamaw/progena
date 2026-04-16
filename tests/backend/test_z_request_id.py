@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 def app():
     """Get the FastAPI app instance."""
     from app.backend.main import app
+
     return app
 
 
@@ -67,9 +68,7 @@ class TestClientRequestIdPropagation:
         mock_process.stdin.write = MagicMock()
         mock_process.stdin.drain = AsyncMock()
         mock_process.stdout = MagicMock()
-        mock_process.stdout.readline = AsyncMock(
-            return_value=b'{"content": "test response"}\n'
-        )
+        mock_process.stdout.readline = AsyncMock(return_value=b'{"content": "test response"}\n')
         mock_process.returncode = None  # Process is running
 
         client._process = mock_process
@@ -102,9 +101,7 @@ class TestClientRequestIdPropagation:
         mock_process.stdin.write = MagicMock()
         mock_process.stdin.drain = AsyncMock()
         mock_process.stdout = MagicMock()
-        mock_process.stdout.readline = AsyncMock(
-            return_value=b'{"content": "test response"}\n'
-        )
+        mock_process.stdout.readline = AsyncMock(return_value=b'{"content": "test response"}\n')
         mock_process.returncode = None  # Process is running
 
         client._process = mock_process
@@ -122,8 +119,8 @@ class TestClientRequestIdPropagation:
         assert "request_id" not in payload
 
     @pytest.mark.asyncio
-    async def test_send_message_stream_accepts_request_id(self):
-        """Test that send_message_stream accepts request_id parameter."""
+    async def test_send_message_stream_events_accepts_request_id(self):
+        """Test that send_message_stream_events accepts request_id parameter."""
         from app.backend.client import ProgenitorClient
         from app.backend.config import ChatServerConfig
 
@@ -148,9 +145,11 @@ class TestClientRequestIdPropagation:
         config.progenitor_timeout = 30
 
         # Call with request_id and consume the stream
-        chunks = []
-        async for chunk in client.send_message_stream("test message", request_id="req-xyz789"):
-            chunks.append(chunk)
+        events = []
+        async for event in client.send_message_stream_events(
+            "test message", request_id="req-xyz789"
+        ):
+            events.append(event)
 
         # Verify the payload included request_id
         call_args = mock_process.stdin.write.call_args[0][0]
@@ -158,6 +157,14 @@ class TestClientRequestIdPropagation:
 
         assert payload["request_id"] == "req-xyz789"
         assert payload["stream"] is True
+        assert events == [
+            {
+                "type": "stream_chunk",
+                "content": "test",
+                "is_final": True,
+                "request_id": "req-xyz789",
+            }
+        ]
 
 
 class TestRequestIdInLogs:
@@ -185,20 +192,20 @@ class TestRequestIdHandlerIntegration:
         """Verify /v1/responses handler accesses request.state.request_id."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, encoding='utf-8') as f:
+        with open(main_module.__file__, encoding="utf-8") as f:
             content = f.read()
 
         # Check that the handler gets request_id from state
-        assert 'request.state' in content
-        assert 'request_id' in content
+        assert "request.state" in content
+        assert "request_id" in content
 
     def test_stream_response_unified_accepts_request_id(self):
         """Verify stream_response_unified function accepts request_id parameter."""
         import app.backend.main as main_module
 
-        with open(main_module.__file__, encoding='utf-8') as f:
+        with open(main_module.__file__, encoding="utf-8") as f:
             content = f.read()
 
         # Check function signature
-        assert 'def stream_response_unified(' in content
-        assert 'request_id: str | None = None' in content
+        assert "def stream_response_unified(" in content
+        assert "request_id: str | None = None" in content

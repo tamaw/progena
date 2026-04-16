@@ -320,8 +320,10 @@ class TestIPCStreaming:
 
         # Stream response
         received = []
-        async for chunk in ipc_client.send_message_stream("Test", request_id="stream_1"):
-            received.append(chunk)
+        async for item in ipc_client.send_message_stream_events("Test", request_id="stream_1"):
+            if item.get("type") != "stream_chunk":
+                continue
+            received.append(item.get("content", ""))
             if len(received) >= 2:
                 break
 
