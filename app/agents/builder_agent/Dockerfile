@@ -57,6 +57,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy the builder agent package
 COPY app/agents/builder_agent/ /app/agent/
 
+# Builder Agent reuses shared Progenitor helpers (prompt loading, MCP tool
+# normalization, mock client) via imports under app.progenitor.*. Ship that
+# package subtree in the repo-style layout those modules expect.
+COPY app/progenitor/ /app/app/progenitor/
+
 # Copy prompts and repo-level skills used by inner-loop nodes
 COPY data/prompts/ /app/data/prompts/
 COPY data/skills/ /app/data/skills/
