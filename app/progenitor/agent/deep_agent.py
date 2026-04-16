@@ -82,13 +82,16 @@ def create_progenitor_agent(
         llm_client: Progenitor's LLM client (for tools that need AI).
         state_manager: Progenitor's StateManager (for tools that need persistence).
         store: Optional LangGraph BaseStore for DeepAgent features that need one.
+               This is separate from the persisted `/memories/` filesystem route.
                If None, uses InMemoryStore (dev mode).
         project_root: Root directory for filesystem backend. Defaults to cwd.
         log_dir: Directory for JSONL audit logs. If None, logs to Python logger only.
         skills_dirs: Paths to skill directories for progressive disclosure.
                      If None, auto-discovers from data/skills/progenitor/.
-        memory_paths: Paths to memory files (e.g., AGENTS.md).
-                      If None, auto-discovers from project root.
+        memory_paths: Paths to AGENTS.md-style prompt context files loaded via
+                      Deep Agents' `memory=` middleware. This is separate from
+                      persisted `/memories/*` files. If None, auto-discovers
+                      from project root.
         inner_loop_graph: Compiled LangGraph for the inner build loop.
                           If provided, enables the build subagent.
 
@@ -107,7 +110,8 @@ def create_progenitor_agent(
         db_path = config.storage.state_dir / "conversations.db"
         checkpointer = _build_checkpointer(db_path)
 
-    # Default to in-memory store for DeepAgent features that require a store
+    # Default to in-memory store for DeepAgent features that require a store.
+    # Persisted memory files live on the separate /memories filesystem route.
     if store is None:
         from langgraph.store.memory import InMemoryStore
 
@@ -144,7 +148,7 @@ def create_progenitor_agent(
         if skills_path.is_dir():
             skills_dirs = [str(skills_path)]
 
-    # Auto-discover memory files if not provided
+    # Auto-discover AGENTS.md prompt-context files if not provided.
     if memory_paths is None:
         root = Path(project_root) if project_root else Path.cwd()
         memory_paths = []
@@ -156,6 +160,8 @@ def create_progenitor_agent(
     system_prompt = PromptTemplates(prompts_dir=prompts_dir).get_genesis_prompt().strip()
     subagents = create_progenitor_subagents(inner_loop_graph=inner_loop_graph)
 
+    # Deep Agents' `memory=` parameter injects AGENTS.md-style prompt context.
+    # Persisted lessons and other long-lived files live under `/memories/`.
     agent = create_deep_agent(
         name="progenitor",
         model=model,
