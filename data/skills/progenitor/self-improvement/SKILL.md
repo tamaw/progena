@@ -34,8 +34,35 @@ Track conditions that indicate BAD solutions:
 - These are as valuable as positive criteria for convergence
 
 ## Storing Lessons
-Lessons are stored in `/memories/patterns.txt` and persist across sessions.
+Store lessons as category-based Markdown files under `/memories/` so they stay
+easy to scan with `ls`, `glob`, `grep`, and `read_file`.
+
+- `/memories/patterns/code_quality.md`
+- `/memories/patterns/testing.md`
+- `/memories/patterns/architecture.md`
+- `/memories/patterns/performance.md`
+- `/memories/patterns/user_interaction.md`
+- `/memories/anti-patterns.md`
+
+These files persist across sessions and restarts.
 High-confidence patterns (>0.8) should be promoted to skill instructions.
+
+Before writing a new lesson:
+1. Read the relevant category file first.
+2. Merge with an existing lesson when it describes the same pattern.
+3. Prefer short Markdown bullets with pattern, confidence, and action.
+4. Put anti-patterns in `/memories/anti-patterns.md` instead of mixing them
+   into positive pattern files.
+
+## Memory Compaction
+Do not let memory files grow forever.
+
+1. When a category file becomes repetitive or hard to skim, rewrite it into a
+   compact summary instead of appending more bullets.
+2. Keep durable high-confidence lessons and the most useful recent examples.
+3. Remove duplicates, stale low-confidence notes, and wording that no longer
+   helps future iterations.
+4. Preserve concise anti-patterns separately in `/memories/anti-patterns.md`.
 
 ## File Analysis
 When reflecting on source code:

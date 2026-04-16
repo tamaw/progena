@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `deep_agent.py`: Factory creating configured DeepAgent with LiteLLM routing, tools, middleware, skills, memory, and subagents
   - `langchain_adapter.py`: ChatOpenAI → LiteLLM proxy bridge with Azure structured output bypass
   - `tools_adapter.py`: Auto-discovers and wraps 23+ BaseSystemTool instances as DeepAgent-compatible StructuredTools
-  - `backends.py`: CompositeBackend (LocalShellBackend + StoreBackend + StateBackend) for filesystem, memory, and workspace
+  - `backends.py`: CompositeBackend with persisted `/memories/` on FilesystemBackend, read-only scoped filesystem mounts, and StateBackend workspace
   - `middleware.py`: Custom middleware — SecretRedactionMiddleware, AuditLoggingMiddleware, MetricsMiddleware
   - `subagents.py`: Build loop as CompiledSubAgent, code reviewer, and researcher subagents
 - **Skills System** (`prompts/skills/`): 5 SKILL.md files with YAML frontmatter for progressive disclosure
@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `self-improvement`: Iteration analysis, pattern extraction, anti-criteria learning
   - `agent-architecture`: Dual-loop architecture, state persistence, A2A protocol reference
 - **Runtime Adapter** (`app/progenitor/runtime/deep_agent_adapter.py`): Drop-in DeepAgent integration for ProgenitorLoop
-- **Memory**: Auto-discovers AGENTS.md for system prompt injection, cross-thread persistence via StoreBackend
+- **Memory**: Auto-discovers AGENTS.md for system prompt injection, with persisted `/memories/` files stored on disk under `data/memories`
 - **Mock LLM Client** (EN-004): Demo mode with `PROGENITOR_MOCK_LLM=true` environment variable
 - **Tiktoken Integration**: Accurate token counting for OpenAI models with graceful fallback
 - **Tokenizer Module**: New `app/progenitor/llm/tokenizer.py` with `count_tokens()`, `count_message_tokens()`, `truncate_to_tokens()` functions
