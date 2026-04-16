@@ -1,5 +1,5 @@
 """
-Tests for Phase 3: Backend configuration for DeepAgent.
+Tests for Phase 3: Backend configuration and persisted /memories routing.
 """
 
 from unittest.mock import MagicMock
@@ -8,6 +8,12 @@ from app.progenitor.agent.backends import (
     ReadOnlyFilesystemBackend,
     create_progenitor_backend,
 )
+
+
+def _file_info_path(info: object) -> str:
+    path = info.get("path") if isinstance(info, dict) else getattr(info, "path", None)
+    assert isinstance(path, str)
+    return path
 
 
 class TestBackendFactory:
@@ -66,3 +72,27 @@ class TestBackendFactory:
         factory = create_progenitor_backend()
         # Just verify it returns without error
         assert factory is not None
+
+    def test_memories_route_persists_written_files(self):
+        """Writes to /memories are persisted under data/memories on disk."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for rel in ("app", "data", "data/prompts", "logs"):
+                (root / rel).mkdir(parents=True, exist_ok=True)
+
+            factory = create_progenitor_backend(project_root=tmpdir)
+            backend = factory(MagicMock())
+
+            content = "## Testing\n- Keep tests focused.\n"
+            result = backend.write("/memories/patterns/testing.md", content)
+            persisted_path = root / "data" / "memories" / "patterns" / "testing.md"
+
+            assert result.error is None
+            assert persisted_path.read_text(encoding="utf-8") == content
+            assert "Keep tests focused." in backend.read("/memories/patterns/testing.md")
+
+            listing = backend.ls_info("/memories/patterns/")
+            assert "/memories/patterns/testing.md" in {_file_info_path(info) for info in listing}
