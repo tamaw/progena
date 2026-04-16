@@ -1,4 +1,9 @@
+import os
+from pathlib import Path
+
 import pytest
+
+os.environ.setdefault("PROGENITOR_DATA_DIR", str(Path(__file__).resolve().parents[3] / "data"))
 
 from app.agents.builder_agent.llm.prompts import PromptTemplates
 
