@@ -20,7 +20,7 @@ Error Hierarchy:
     └── ToolError
 
 Usage:
-    from app.progenitor.error_handling import (
+    from app.agents.builder_agent.error_handling import (
         handle_recoverable,
         handle_with_fallback,
         ErrorContext,
@@ -52,6 +52,7 @@ T = TypeVar("T")
 
 class ErrorSeverity(StrEnum):
     """Error severity classification."""
+
     RECOVERABLE = "recoverable"
     FATAL = "fatal"
     TRANSIENT = "transient"
@@ -68,7 +69,9 @@ def classify_error(error: Exception) -> ErrorSeverity:
         ErrorSeverity indicating how to handle the error.
     """
     # Network/timeout errors are recoverable
-    if isinstance(error, (asyncio.TimeoutError, ConnectionError, ConnectionRefusedError, ConnectionResetError)):
+    if isinstance(
+        error, (asyncio.TimeoutError, ConnectionError, ConnectionRefusedError, ConnectionResetError)
+    ):
         return ErrorSeverity.RECOVERABLE
 
     # Our custom errors
@@ -82,6 +85,7 @@ def classify_error(error: Exception) -> ErrorSeverity:
         return ErrorSeverity.TRANSIENT
 
     return ErrorSeverity.UNKNOWN
+
 
 # Re-export errors for convenience
 __all__ = [
@@ -222,6 +226,7 @@ def handle_with_fallback(
 
         # result.value is either parsed data or {}
     """
+
     class ResultContainer:
         value: Any = None
         error: Exception | None = None
@@ -266,6 +271,7 @@ def wrap_recoverable(
         async def make_api_call():
             ...
     """
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -308,6 +314,7 @@ def wrap_recoverable(
             raise RuntimeError(f"{operation} failed without error")  # Should never happen
 
         return wrapper
+
     return decorator
 
 
