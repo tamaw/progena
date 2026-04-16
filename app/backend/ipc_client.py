@@ -212,6 +212,24 @@ class IPCProgenitorClient:
         async for chunk in self._ipc_client.send_message_stream(message, request_id, metadata):
             yield chunk
 
+    async def send_message_stream_events(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Send a message and stream structured IPC events."""
+        if not self._started:
+            await self.start()
+
+        if not self._ipc_client:
+            raise RuntimeError("IPC client not initialized")
+
+        async for event in self._ipc_client.send_message_stream_events(
+            message, request_id, metadata
+        ):
+            yield event
+
     @property
     def is_running(self) -> bool:
         """Check if the client is running."""

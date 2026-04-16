@@ -66,6 +66,10 @@ class MockLoopRunner:
         except (TimeoutError, asyncio.QueueEmpty):
             return None
 
+    async def get_stream_item(self, timeout: float | None = None) -> dict | None:
+        """Get any stream queue item, including structured events."""
+        return await self.get_stream_chunk(timeout=timeout)
+
     async def wait_cycle_complete(self, timeout: float | None = None) -> bool:
         """Wait for cycle to complete (mock always returns True immediately)."""
         return True
@@ -322,6 +326,60 @@ class TestIPCStreaming:
                 break
 
         assert len(received) >= 1
+
+    @pytest.mark.asyncio
+    async def test_stream_response_events(self, ipc_client, ipc_server, mock_loop_runner):
+        """Structured IPC stream events should flow alongside text chunks."""
+        mock_loop_runner._auto_stream = False
+
+        async def add_items():
+            await asyncio.sleep(0.1)
+            await mock_loop_runner._stream_queue.put(
+                {
+                    "type": "stream_event",
+                    "event_type": "node_update",
+                    "content": "",
+                    "metadata": {"node_name": "respond", "output_keys": ["messages"]},
+                }
+            )
+            await mock_loop_runner._stream_queue.put(
+                {"content": "Hello", "is_final": False, "type": "stream_chunk"}
+            )
+            await mock_loop_runner._stream_queue.put(
+                {"content": "", "is_final": True, "type": "stream_chunk"}
+            )
+
+        asyncio.create_task(add_items())
+
+        received = []
+        async for item in ipc_client.send_message_stream_events(
+            "Test", request_id="stream_events_1"
+        ):
+            received.append(item)
+            if item.get("type") == "stream_chunk" and item.get("is_final"):
+                break
+
+        assert received == [
+            {
+                "type": "stream_event",
+                "event_type": "node_update",
+                "content": "",
+                "metadata": {"node_name": "respond", "output_keys": ["messages"]},
+                "request_id": "stream_events_1",
+            },
+            {
+                "type": "stream_chunk",
+                "content": "Hello",
+                "is_final": False,
+                "request_id": "stream_events_1",
+            },
+            {
+                "type": "stream_chunk",
+                "content": "",
+                "is_final": True,
+                "request_id": "stream_events_1",
+            },
+        ]
 
 
 class TestIPCErrorHandling:

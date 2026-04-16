@@ -394,6 +394,20 @@ class IPCClient:
             ConnectionError: If not connected and reconnection fails.
             TimeoutError: If request times out.
         """
+        async for event in self.send_message_stream_events(message, request_id, metadata):
+            if event.get("type") != "stream_chunk":
+                continue
+            chunk_text = str(event.get("content", ""))
+            if chunk_text:
+                yield chunk_text
+
+    async def send_message_stream_events(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Send a message and stream both chunks and structured stream events."""
         for attempt in range(2):
             await self._ensure_connected()
 
@@ -435,17 +449,35 @@ class IPCClient:
                             raise RuntimeError(f"Progenitor error: {msg.content}")
 
                         if msg.type == MessageType.STREAM_CHUNK:
-                            if msg.content:
-                                yield msg.content
+                            yield {
+                                "type": "stream_chunk",
+                                "content": msg.content,
+                                "is_final": msg.is_final,
+                                "request_id": msg.request_id,
+                            }
                             if msg.is_final:
                                 break
+
+                        elif msg.type == MessageType.STREAM_EVENT:
+                            yield {
+                                "type": "stream_event",
+                                "event_type": msg.event_type or "unknown",
+                                "content": msg.content,
+                                "metadata": msg.metadata or {},
+                                "request_id": msg.request_id,
+                            }
 
                         elif msg.type == MessageType.STREAM_END:
                             break
 
                         elif msg.type == MessageType.ASSISTANT_MESSAGE:
                             # Fallback: got complete message instead of stream
-                            yield msg.content
+                            yield {
+                                "type": "stream_chunk",
+                                "content": msg.content,
+                                "is_final": True,
+                                "request_id": msg.request_id,
+                            }
                             break
 
                     break

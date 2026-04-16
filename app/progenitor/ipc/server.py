@@ -17,7 +17,7 @@ import contextlib
 import inspect
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .protocol import (
     IPCMessage,
@@ -29,6 +29,8 @@ from .protocol import (
     read_message,
     ready_message,
     stream_chunk,
+    stream_end,
+    stream_event,
     write_message,
 )
 
@@ -341,11 +343,17 @@ class IPCServer:
             poll_count += 1
             if poll_count % 50 == 0:
                 logger.debug("Still waiting for %s (poll %d)", request_id, poll_count)
-            chunk_data = await self.loop_runner.get_stream_chunk(timeout=0.1)
-            if chunk_data:
-                full_response += str(chunk_data.get("content", ""))
-                if chunk_data.get("is_final"):
-                    return full_response
+            chunk_data = await self._get_stream_item(timeout=0.1)
+            if not chunk_data:
+                continue
+            item_type = str(chunk_data.get("type", "stream_chunk"))
+            if item_type == "stream_event":
+                continue
+            if item_type == "stream_end":
+                return full_response
+            full_response += str(chunk_data.get("content", ""))
+            if chunk_data.get("is_final"):
+                return full_response
         return full_response
 
     async def _handle_streaming_request(
@@ -384,9 +392,30 @@ class IPCServer:
                     poll_count += 1
 
                     # Get stream chunk from the stream queue
-                    chunk_data = await self.loop_runner.get_stream_chunk(timeout=0.1)
+                    chunk_data = await self._get_stream_item(timeout=0.1)
 
                     if chunk_data:
+                        item_type = str(chunk_data.get("type", "stream_chunk"))
+                        if item_type == "stream_event":
+                            await write_message(
+                                writer,
+                                stream_event(
+                                    event_type=str(chunk_data.get("event_type", "unknown")),
+                                    request_id=request_id,
+                                    content=str(chunk_data.get("content", "")),
+                                    metadata=chunk_data.get("metadata"),
+                                ),
+                            )
+                            continue
+
+                        if item_type == "stream_end":
+                            await write_message(writer, stream_end(request_id))
+                            logger.info("Stream complete for %s", request_id)
+                            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                            if not cycle_done:
+                                logger.warning("Cycle complete timeout for %s", request_id)
+                            return
+
                         chunk_content = chunk_data.get("content", "")
                         is_final = chunk_data.get("is_final", False)
 
@@ -434,6 +463,16 @@ class IPCServer:
                     writer,
                     error_message(str(e), error_code="STREAM_ERROR", request_id=request_id),
                 )
+
+    async def _get_stream_item(self, timeout: float | None = None) -> dict[str, Any] | None:
+        """Read the next stream item from loop runners old and new."""
+        get_stream_item = getattr(self.loop_runner, "get_stream_item", None)
+        if callable(get_stream_item):
+            result = get_stream_item(timeout=timeout)
+            if inspect.isawaitable(result):
+                return cast(dict[str, Any] | None, await result)
+            return cast(dict[str, Any] | None, result)
+        return await self.loop_runner.get_stream_chunk(timeout=timeout)
 
     async def _notify_queued_request(self, request_id: str, *, streaming: bool) -> None:
         """Emit a message_queued event when another request already holds the lock."""

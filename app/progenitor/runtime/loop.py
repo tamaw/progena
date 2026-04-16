@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
 from langchain_core.messages import AIMessageChunk
 
 from ..state.models import A2ATaskRecord, ConversationMessage, redact_secrets
+from ..streaming_utils import extract_stream_chunk_text, make_json_safe
 from .a2a_tasks import A2ATaskTracker, build_completion_message
 from .scheduler import Scheduler
 from .time_utils import utcnow, utcnow_isoformat
@@ -583,6 +584,16 @@ class ProgenitorLoop:
                                 "messages": self._coerce_messages_list(node_output.get("messages")),
                             }
                         self._state.update(node_output)
+                        if self._streaming_enabled:
+                            await self._send_stream_event(
+                                "node_update",
+                                metadata={
+                                    "node_name": node_name,
+                                    "output_keys": output_info,
+                                    "contains_messages": "messages" in node_output,
+                                    "contains_pending_response": "pending_response" in node_output,
+                                },
+                            )
 
                 # Check for response to send - stream it if not already streamed
                 pending = self._state.get("pending_response")
@@ -815,13 +826,23 @@ class ProgenitorLoop:
             logger.debug("Ignoring unexpected messages stream payload: %r", event)
             return
 
-        message_chunk, _metadata = event
+        message_chunk, metadata = event
         if not isinstance(message_chunk, AIMessageChunk):
             return
 
         chunk_text = self._extract_stream_chunk_text(message_chunk)
         if chunk_text:
             await self.stream_token(chunk_text)
+        if self._streaming_enabled:
+            await self._send_stream_event(
+                "message_delta",
+                content=chunk_text,
+                metadata={
+                    "message_chunk_type": type(message_chunk).__name__,
+                    "stream_metadata": make_json_safe(metadata),
+                    "text_length": len(chunk_text),
+                },
+            )
 
     def _graph_accepts_stream_mode(self) -> bool:
         """Return True when the graph's astream accepts the stream_mode kwarg."""
@@ -840,6 +861,31 @@ class ProgenitorLoop:
     async def stream_final(self) -> None:
         """Mark the end of a streaming response."""
         await self._send_stream_chunk("", is_final=True)
+
+    async def _send_stream_event(
+        self,
+        event_type: str,
+        *,
+        content: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Send a structured streaming event to the output stream."""
+        try:
+            self._stream_queue.put_nowait(
+                {
+                    "type": "stream_event",
+                    "event_type": event_type,
+                    "content": content,
+                    "metadata": make_json_safe(metadata) if metadata is not None else {},
+                }
+            )
+        except asyncio.QueueFull:
+            logger.warning(
+                "Stream queue full (%d/%d), dropping stream event: %s",
+                self._stream_queue.qsize(),
+                self._stream_queue.maxsize,
+                event_type,
+            )
 
     async def _send_stream_chunk(self, chunk: str, is_final: bool = False) -> None:
         """Send a streaming chunk to the output stream.
@@ -876,12 +922,8 @@ class ProgenitorLoop:
         except asyncio.QueueFull:
             logger.warning("Stream queue full, could not send stream end marker")
 
-    async def get_stream_chunk(self, timeout: float | None = None) -> dict | None:
-        """Get a streaming chunk from the agent.
-
-        Returns:
-            Dict with 'type', 'content', and 'is_final' keys, or None on timeout.
-        """
+    async def get_stream_item(self, timeout: float | None = None) -> dict[str, Any] | None:
+        """Get the next streaming queue item, including structured events."""
         try:
             if timeout:
                 return cast(
@@ -891,6 +933,25 @@ class ProgenitorLoop:
             return cast(dict[str, Any] | None, await self._stream_queue.get())
         except TimeoutError:
             return None
+
+    async def get_stream_chunk(self, timeout: float | None = None) -> dict | None:
+        """Get the next text streaming chunk from the agent.
+
+        Returns:
+            Dict with 'type', 'content', and 'is_final' keys, or None on timeout.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+            item = await self.get_stream_item(timeout=remaining)
+            if item is None:
+                return None
+            if item.get("type") == "stream_chunk":
+                return item
 
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
         """Save full recoverable state checkpoint.
@@ -1062,26 +1123,7 @@ class ProgenitorLoop:
 
     def _extract_stream_chunk_text(self, msg: Any) -> str:
         """Extract token text while preserving streaming whitespace."""
-        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
-        if isinstance(content, str):
-            return content
-
-        if isinstance(content, list):
-            parts: list[str] = []
-            for part in content:
-                if isinstance(part, str):
-                    parts.append(part)
-                    continue
-                if not isinstance(part, dict):
-                    continue
-                part_type = str(part.get("type", "")).lower()
-                if part_type in {"text", "output_text", "message"}:
-                    candidate = part.get("text") or part.get("content")
-                    if isinstance(candidate, str):
-                        parts.append(candidate)
-            return "".join(parts)
-
-        return ""
+        return extract_stream_chunk_text(msg)
 
     def _summarize_message_schema(self, msg: Any) -> dict[str, Any]:
         """Return a compact schema summary for assistant messages."""
