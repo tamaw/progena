@@ -20,18 +20,20 @@ Usage:
 """
 
 import asyncio
+import inspect
 import logging
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from .config import ProgenitorConfig, get_config
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .state.manager import StateManager
+from .streaming_utils import extract_stream_chunk_text, make_json_safe
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -207,6 +209,24 @@ class ProgenitorService:
         Yields:
             Response chunks as they become available.
         """
+        async for event in self.handle_message_stream_events(
+            message,
+            request_id=request_id,
+            metadata=metadata,
+        ):
+            if event.get("type") != "stream_chunk":
+                continue
+            chunk_text = str(event.get("content", ""))
+            if chunk_text:
+                yield chunk_text
+
+    async def handle_message_stream_events(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Handle a message and yield structured streaming events."""
         if not self._initialized:
             await self.initialize()
 
@@ -224,26 +244,86 @@ class ProgenitorService:
             thread_id = await self._get_thread_id(metadata=metadata)
             graph_input = self._build_graph_input(message)
             config = {"configurable": {"thread_id": thread_id}}
-            # Use astream for streaming
+            astream_kwargs: dict[str, Any] = {"config": config}
+            if self._graph_accepts_stream_mode():
+                astream_kwargs["stream_mode"] = ["messages", "updates"]
             full_response = ""
             last_result: dict[str, Any] = {}
-            async for event in self.graph.astream(graph_input, config):
-                # Extract any response updates
-                for _node_name, node_output in event.items():
+            async for stream_item in self.graph.astream(graph_input, **astream_kwargs):
+                mode = "updates"
+                event = stream_item
+                if isinstance(stream_item, tuple) and len(stream_item) == 2:
+                    mode, event = stream_item
+
+                if mode == "messages":
+                    stream_event = self._build_message_stream_event(event, request_id=request_id)
+                    if stream_event is None:
+                        continue
+                    chunk_text = str(stream_event["content"])
+                    if chunk_text:
+                        full_response += chunk_text
+                    yield stream_event
+                    if chunk_text:
+                        yield {
+                            "type": "stream_chunk",
+                            "content": chunk_text,
+                            "is_final": False,
+                            "request_id": request_id,
+                        }
+                    continue
+
+                if mode != "updates" or not isinstance(event, dict):
+                    continue
+
+                for node_name, node_output in event.items():
                     if not isinstance(node_output, dict):
                         continue
+                    if "messages" in node_output:
+                        node_output = {
+                            **node_output,
+                            "messages": self._coerce_messages_list(node_output.get("messages")),
+                        }
                     last_result.update(node_output)
+                    yield {
+                        "type": "stream_event",
+                        "event_type": "node_update",
+                        "content": "",
+                        "request_id": request_id,
+                        "metadata": {
+                            "node_name": node_name,
+                            "output_keys": list(node_output.keys()),
+                            "contains_messages": "messages" in node_output,
+                            "contains_pending_response": "pending_response" in node_output,
+                        },
+                    }
                     if chunk := node_output.get("pending_response"):
-                        # Yield new content
                         new_content = chunk[len(full_response) :]
                         if new_content:
                             full_response = chunk
-                            yield new_content
+                            yield {
+                                "type": "stream_chunk",
+                                "content": new_content,
+                                "is_final": False,
+                                "request_id": request_id,
+                            }
 
             if not full_response:
                 fallback_response = self._extract_response(last_result)
                 if fallback_response:
-                    yield fallback_response
+                    yield {
+                        "type": "stream_chunk",
+                        "content": fallback_response,
+                        "is_final": True,
+                        "request_id": request_id,
+                    }
+                    return
+
+            yield {
+                "type": "stream_chunk",
+                "content": "",
+                "is_final": True,
+                "request_id": request_id,
+            }
 
         except Exception as e:
             logger.error(
@@ -253,6 +333,47 @@ class ProgenitorService:
                 exc_info=True,
             )
             raise
+
+    def _graph_accepts_stream_mode(self) -> bool:
+        """Return True when the graph's astream accepts the stream_mode kwarg."""
+        astream = getattr(self.graph, "astream", None)
+        if not callable(astream):
+            return False
+        try:
+            parameters = inspect.signature(astream).parameters.values()
+            return any(
+                parameter.name == "stream_mode" or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            return False
+
+    def _build_message_stream_event(
+        self,
+        event: Any,
+        *,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        """Normalize a LangGraph messages-mode event into a stream item."""
+        if not isinstance(event, tuple) or len(event) != 2:
+            return None
+
+        message_chunk, metadata = event
+        if not isinstance(message_chunk, AIMessageChunk):
+            return None
+
+        chunk_text = extract_stream_chunk_text(message_chunk)
+        return {
+            "type": "stream_event",
+            "event_type": "message_delta",
+            "content": chunk_text,
+            "request_id": request_id,
+            "metadata": {
+                "message_chunk_type": type(message_chunk).__name__,
+                "stream_metadata": make_json_safe(metadata),
+                "text_length": len(chunk_text),
+            },
+        }
 
     @property
     def is_initialized(self) -> bool:
