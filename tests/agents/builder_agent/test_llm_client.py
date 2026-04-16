@@ -1,10 +1,14 @@
 """Tests for builder_agent schema formatting and MCP helpers."""
 
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+os.environ.setdefault("PROGENITOR_DATA_DIR", str(Path(__file__).resolve().parents[3] / "data"))
 
 from app.agents.builder_agent.llm.client import LLMClient, _build_json_schema_format
 from app.agents.builder_agent.nodes.think import ThinkResponse
