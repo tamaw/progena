@@ -35,3 +35,12 @@ def test_prompt_templates_explicit_dir_is_honored(tmp_path):
     prompts = PromptTemplates(prompts_dir=custom_dir)
     assert prompts.prompts_dir == Path(custom_dir).resolve()
     assert prompts.get("progenitor/decide.md") == "custom decide prompt"
+
+
+def test_genesis_prompt_marks_memories_as_writable():
+    """Genesis prompt distinguishes writable /memories from read-only mounts."""
+    prompts = PromptTemplates()
+    content = prompts.get("progenitor/genesis.md")
+
+    assert "/memories/ maps to persisted agent memory and is writable." in content
+    assert "You may use `write_file` and `edit_file` under `/memories/`" in content
