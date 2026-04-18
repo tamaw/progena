@@ -3,12 +3,14 @@
 import importlib
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 os.environ.setdefault("AGENT_NAME", "builder")
 
 from app.agents.builder import queue_worker
+from app.agents.builder.agent import BuildOutcome
 from app.agents.builder.client import BuildPlan, PlannedBuild
 from app.agents.builder.queue_worker import BuilderTaskQueue, _QueuedTask
 
@@ -48,13 +50,22 @@ class _FakeService:
         task_id: str,
         request_text: str,
         context: dict[str, object],
-        planned_build: PlannedBuild,
-    ) -> str:
+        *,
+        on_planned: Any | None = None,
+    ) -> BuildOutcome:
         del task_id
         del request_text
         del context
-        del planned_build
-        return "Done. PR: https://github.com/org/repo/pull/1"
+        if on_planned is not None:
+            await on_planned(self.planned)
+        return BuildOutcome(
+            result_text="Done. PR: https://github.com/org/repo/pull/1",
+            route="build",
+            planned_build=self.planned,
+            commit_hash="abc1234",
+            pr_url="https://github.com/org/repo/pull/1",
+            phase_completed="pr",
+        )
 
 
 @pytest.mark.asyncio

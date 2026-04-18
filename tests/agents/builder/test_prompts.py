@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 import pytest
 
 from app.agents.builder.prompts import load_prompt, load_skill_context
@@ -73,14 +71,13 @@ def test_load_skill_context_reads_repo_skills():
 
 
 def test_load_skill_context_uses_builder_skills_only():
-    with patch("app.agents.builder.prompts.load_repo_skill_context") as mock_load:
-        mock_load.return_value = "skills"
-
-        result = load_skill_context()
-
-        assert result == "skills"
-        assert mock_load.call_args.kwargs["agent_name"] == "builder"
-        assert mock_load.call_args.kwargs.get("fallback_agents", ()) == ()
+    """``load_skill_context`` reads default skills from ``data/skills/builder/``."""
+    result = load_skill_context()
+    assert result, "expected non-empty default skill context"
+    # The default bundle includes Build Agent, Git Workflow, Task Setup,
+    # Task Teardown — all sourced from the builder skills directory.
+    assert "Build Agent Skill" in result
+    assert "Task Setup Skill" in result
 
 
 def test_load_skill_context_missing_skill_raises():

@@ -22,7 +22,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -59,10 +58,6 @@ TASK_LOG_PATH: Path | None = (
     get_task_log_path() if os.environ.get("AGENT_NAME", "").strip() else None
 )
 
-_PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
-_COMMIT_HASH_RE = re.compile(r"(?:SHA|sha|commit|hash)[:\s]+([0-9a-f]{7,40})\b", re.IGNORECASE)
-
-# In-process lock for multi-threaded safety
 _append_lock = threading.Lock()
 
 
@@ -302,7 +297,7 @@ class BuilderTaskQueue:
             phase_completed: str = "accepted"
             commit_hash: str | None = None
             pr_url: str | None = None
-            planned_build = None
+            planned_holder: dict[str, Any] = {"plan": None}
 
             logger.info(
                 "BuilderTaskQueue: starting task task_id=%s text=%.80r",
@@ -310,67 +305,78 @@ class BuilderTaskQueue:
                 task.request_text,
             )
 
-            try:
-                planned_build = await self._service.plan_task(task.request_text, task.request_ctx)
+            async def _on_planned(planned_build: Any) -> None:
+                """Fire ``build_started`` once the build subagent materialises a plan."""
+                planned_holder["plan"] = planned_build
                 logger.info(
-                    "BuilderTaskQueue: planned task task_id=%s work_item_id=%s branch=%s task_name=%s",
+                    "BuilderTaskQueue: planned task task_id=%s work_item_id=%s "
+                    "branch=%s task_name=%s",
                     task.task_id,
                     planned_build.plan.work_item_id,
                     planned_build.plan.branch_name,
                     planned_build.plan.task_name,
                 )
-                await self._service.emit_hook(
-                    "build_started",
-                    HookContext(
-                        event="build_started",
-                        task_id=task.task_id,
-                        request_text=task.request_text,
-                        request_context=task.request_ctx,
-                        planned_build=planned_build,
-                        metadata={
-                            "branch_name": planned_build.plan.branch_name,
-                            "work_item_id": planned_build.plan.work_item_id,
-                            "task_name": planned_build.plan.task_name,
-                            "planned_at_utc": planned_build.planned_at_utc,
-                        },
-                    ),
-                )
-                response = await self._service.run_task(
+                try:
+                    await self._service.emit_hook(
+                        "build_started",
+                        HookContext(
+                            event="build_started",
+                            task_id=task.task_id,
+                            request_text=task.request_text,
+                            request_context=task.request_ctx,
+                            planned_build=planned_build,
+                            metadata={
+                                "branch_name": planned_build.plan.branch_name,
+                                "work_item_id": planned_build.plan.work_item_id,
+                                "task_name": planned_build.plan.task_name,
+                                "planned_at_utc": planned_build.planned_at_utc,
+                            },
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "BuilderTaskQueue: build_started hook failed task_id=%s",
+                        task.task_id,
+                    )
+
+            try:
+                outcome = await self._service.run_task(
                     task.task_id,
                     task.request_text,
                     task.request_ctx,
-                    planned_build,
+                    on_planned=_on_planned,
                 )
-                status = "success"
-                phase_completed = "pr"
-
-                pr_match = _PR_URL_RE.search(response)
-                if pr_match:
-                    pr_url = pr_match.group(0)
-
-                commit_match = _COMMIT_HASH_RE.search(response)
-                if commit_match:
-                    commit_hash = commit_match.group(1)
+                planned_build = planned_holder["plan"] or outcome.planned_build
+                commit_hash = outcome.commit_hash
+                pr_url = outcome.pr_url
+                phase_completed = outcome.phase_completed
+                status = "failure" if phase_completed == "validation_failed" else "success"
 
                 logger.info(
-                    "BuilderTaskQueue: task completed task_id=%s pr_url=%s",
+                    "BuilderTaskQueue: task completed task_id=%s status=%s phase=%s pr_url=%s",
                     task.task_id,
+                    status,
+                    phase_completed,
                     pr_url,
                 )
+                event = "build_completed" if status == "success" else "build_failed"
                 await self._service.emit_hook(
-                    "build_completed",
+                    event,
                     HookContext(
-                        event="build_completed",
+                        event=event,
                         task_id=task.task_id,
                         request_text=task.request_text,
                         request_context=task.request_ctx,
                         planned_build=planned_build,
-                        result_text=response,
+                        result_text=outcome.result_text,
                         metadata={
                             "pr_url": pr_url,
                             "commit_hash": commit_hash,
                             "phase_completed": phase_completed,
+                            "validation_report": outcome.validation_report,
+                            "route": outcome.route,
                         },
+                        error=(outcome.result_text if status == "failure" else None),
                     ),
                 )
 
@@ -385,7 +391,7 @@ class BuilderTaskQueue:
                         task_id=task.task_id,
                         request_text=task.request_text,
                         request_context=task.request_ctx,
-                        planned_build=planned_build,
+                        planned_build=planned_holder["plan"],
                         error="Build was cancelled.",
                     ),
                 )
@@ -404,7 +410,7 @@ class BuilderTaskQueue:
                         task_id=task.task_id,
                         request_text=task.request_text,
                         request_context=task.request_ctx,
-                        planned_build=planned_build,
+                        planned_build=planned_holder["plan"],
                         metadata={"error_type": type(exc).__name__},
                         error=str(exc),
                     ),

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ import pytest
 
 os.environ.setdefault("AGENT_NAME", "builder")
 
+from app.agents.builder.agent import BuildOutcome
 from app.agents.builder.client import BuildPlan, PlannedBuild
 from app.agents.builder.queue_worker import (
     BuilderTaskQueue,
@@ -64,9 +66,34 @@ def _make_mock_service(response: str = "Done. PR: https://github.com/org/repo/pu
         reasoning="Mock planning result.",
         planned_at_utc="2026-01-01T00:00:00Z",
     )
-    svc.process = AsyncMock(return_value=response)
+
+    pr_match = re.search(r"https://github\.com/\S+/pull/\d+", response)
+    pr_url = pr_match.group(0) if pr_match else None
+
+    async def _run_task(
+        task_id: str,
+        request_text: str,
+        context: dict[str, Any],
+        *,
+        on_planned: Any | None = None,
+    ) -> BuildOutcome:
+        del task_id
+        del request_text
+        del context
+        if on_planned is not None:
+            await on_planned(planned_build)
+        return BuildOutcome(
+            result_text=response,
+            route="build",
+            planned_build=planned_build,
+            commit_hash=None,
+            pr_url=pr_url,
+            phase_completed="pr",
+        )
+
+    svc.process = AsyncMock(return_value=BuildOutcome(result_text=response))
     svc.plan_task = AsyncMock(return_value=planned_build)
-    svc.run_task = AsyncMock(return_value=response)
+    svc.run_task = AsyncMock(side_effect=_run_task)
     svc.emit_hook = AsyncMock(return_value=None)
     svc.cancel_task = AsyncMock(return_value=False)
     return svc
@@ -295,6 +322,7 @@ async def test_task_queue_logs_failure_on_exception(tmp_path: Path) -> None:
     service = AsyncMock()
     service.process = AsyncMock(side_effect=RuntimeError("LLM timeout"))
     service.run_task = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+    service.emit_hook = AsyncMock(return_value=None)
     service.cancel_task = AsyncMock(return_value=False)
 
     queue = BuilderTaskQueue(service, log_path=log_path)

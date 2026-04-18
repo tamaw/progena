@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypedDict
 
 from ..client import PlannedBuild
@@ -16,6 +17,10 @@ class RouterState(TypedDict, total=False):
     classifier's choice, an optional pre-computed plan (set by callers that
     have already planned), the result string from whichever subagent runs,
     and a free-form metadata bag for downstream consumers.
+
+    ``on_planned`` is an optional async callback fired by the build subagent
+    immediately after it materialises a plan (so the queue worker can emit a
+    ``build_started`` hook with planning metadata before execution starts).
     """
 
     request_text: str
@@ -26,3 +31,4 @@ class RouterState(TypedDict, total=False):
     route_reason: str
     result_text: str
     metadata: dict[str, Any]
+    on_planned: Callable[[PlannedBuild], Awaitable[None]] | None

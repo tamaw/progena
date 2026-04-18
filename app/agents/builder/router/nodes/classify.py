@@ -35,12 +35,6 @@ def create_classify_node(
     system_prompt = load_prompt("router_system.md").strip()
 
     async def classify(state: RouterState) -> dict:
-        # Skip classification when the caller has already supplied a plan —
-        # the queue-worker path always asks for a full build.
-        if state.get("planned_build") is not None and not state.get("route"):
-            logger.info("Router: planned_build pre-supplied, forcing route=build")
-            return {"route": "build", "route_reason": "planned_build supplied by caller"}
-
         if state.get("route"):
             logger.info("Router: explicit route=%s, skipping classification", state["route"])
             return {}

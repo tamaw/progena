@@ -65,29 +65,29 @@ def create_dispatch_build(
     async def dispatch(state: RouterState) -> dict:
         planned_build = state.get("planned_build")
         if planned_build is None:
-            return {
-                "result_text": (
-                    "Build subagent requires a planned_build but none was supplied. "
-                    "Either pre-plan via plan_task or invoke the plan subagent first."
-                ),
-                "metadata": {"subagent": "build", "error": "missing_planned_build"},
-            }
-        logger.info(
-            "Router dispatch: build subagent (work_item_id=%s)",
-            planned_build.plan.work_item_id,
-        )
+            logger.info("Router dispatch: build subagent (no plan supplied — will plan on demand)")
+        else:
+            logger.info(
+                "Router dispatch: build subagent (work_item_id=%s)",
+                planned_build.plan.work_item_id,
+            )
         result = await build_graph.ainvoke(
             {
                 "request_text": state.get("request_text", ""),
                 "request_context": state.get("request_context", {}),
                 "planned_build": planned_build,
+                "on_planned": state.get("on_planned"),
             }
         )
         return {
             "result_text": result.get("result_text", ""),
+            "planned_build": result.get("planned_build") or planned_build,
             "metadata": {
                 "subagent": "build",
                 "validation": result.get("validation_report"),
+                "teardown_path": result.get("teardown_path"),
+                "commit_hash": result.get("commit_hash"),
+                "pr_url": result.get("pr_url"),
             },
         }
 

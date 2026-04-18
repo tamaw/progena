@@ -20,6 +20,8 @@ Repository skills:
 Teardown requirements:
 - This is the teardown phase only.
 - Review the work completed earlier in this thread before deciding what to do.
+- The validate subagent has already scored this run (verdict is included below)
+  and only `pass` or `pass_with_concerns` reach this teardown path.
 - If `commit_changes` produced a commit, push the branch and call `create_pull_request`.
 - If no commit was created, say that clearly and do not invent a PR.
 - Always clean up the task worktree with `remove_worktree` before finishing.

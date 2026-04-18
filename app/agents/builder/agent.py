@@ -8,7 +8,9 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,8 +41,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
 
-from app.progenitor.llm.prompts import resolve_prompts_dir, resolve_skills_dir
-
+from ._paths import resolve_skills_dir
 from .client import BuilderClient, PlannedBuild
 from .config import BuilderConfig, get_config, setup_logging
 from .hooks import HookContext, HookManager, create_default_hook_manager
@@ -268,10 +269,9 @@ def _resolve_builder_skill_dirs() -> list[str]:
     builder skill pack. It intentionally does not inherit the main
     Progenitor skill pack.
     """
-    prompts_dir = resolve_prompts_dir()
     candidates = [
         Path(__file__).resolve().parent / "skills",
-        resolve_skills_dir("builder", prompts_dir=prompts_dir),
+        resolve_skills_dir("builder"),
     ]
 
     skill_dirs: list[str] = []
@@ -295,6 +295,27 @@ def _resolve_builder_memory_paths(project_root: Path) -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class BuildOutcome:
+    """Structured result from ``BuilderService.process``.
+
+    The queue worker uses these fields directly so it does not have to scrape
+    the assistant's free-text response for things like PR URLs or commit
+    hashes. ``phase_completed`` follows the existing JSONL log vocabulary
+    (``"pr"``, ``"validation_failed"``, ``"planned"``, ``"validated"``,
+    ``"completed"``).
+    """
+
+    result_text: str
+    route: str | None = None
+    planned_build: PlannedBuild | None = None
+    validation_report: dict[str, Any] | None = None
+    commit_hash: str | None = None
+    pr_url: str | None = None
+    phase_completed: str = "completed"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 class BuilderService:
     """Lazy-initialized wrapper around the Builder router graph."""
 
@@ -309,7 +330,7 @@ class BuilderService:
         self._initialized = False
         self._shutting_down = False
         self._start_time = time.time()
-        self._active_tasks: dict[str, asyncio.Task[str]] = {}
+        self._active_tasks: dict[str, asyncio.Task[BuildOutcome]] = {}
         self._task_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -351,6 +372,7 @@ class BuilderService:
         build_graph = create_build_graph(
             deep_agent=deep_agent,
             validate_graph=validate_graph,
+            client=self._planner,
         )
         self._router_graph = create_router_graph(
             client=self._planner,
@@ -370,12 +392,19 @@ class BuilderService:
         return await self._planner.plan_build(request_text, context)
 
     async def process(
-        self, request_text: str, context: dict[str, Any], planned_build: PlannedBuild
-    ) -> str:
-        """Run a pre-planned build through the router graph.
+        self,
+        request_text: str,
+        context: dict[str, Any],
+        *,
+        on_planned: Callable[[PlannedBuild], Awaitable[None]] | None = None,
+    ) -> BuildOutcome:
+        """Run a request through the router graph.
 
-        Callers (the queue worker) always supply ``planned_build`` so the
-        router classifier short-circuits to the ``build`` subagent.
+        The router classifier picks ``plan|build|validate`` from the request
+        text and delegates to the corresponding subagent. When ``build`` is
+        chosen, the build subagent plans on demand and fires ``on_planned``
+        once the plan is materialised so callers can emit a ``build_started``
+        event without pre-planning outside the graph.
         """
         if self._shutting_down:
             raise RuntimeError("Builder is shutting down")
@@ -385,19 +414,43 @@ class BuilderService:
         initial: RouterState = {
             "request_text": request_text,
             "request_context": context,
-            "planned_build": planned_build,
+            "on_planned": on_planned,
         }
         result = await self._router_graph.ainvoke(initial)
-        return result.get("result_text") or "Builder produced no response."
+        metadata = result.get("metadata") or {}
+        validation = metadata.get("validation") if isinstance(metadata, dict) else None
+        teardown_path = metadata.get("teardown_path") if isinstance(metadata, dict) else None
+        verdict = (validation or {}).get("verdict") if isinstance(validation, dict) else None
+        if teardown_path == "failed" or verdict == "fail":
+            phase_completed = "validation_failed"
+        elif teardown_path == "success":
+            phase_completed = "pr"
+        elif result.get("route") == "plan":
+            phase_completed = "planned"
+        elif result.get("route") == "validate":
+            phase_completed = "validated"
+        else:
+            phase_completed = "completed"
+        return BuildOutcome(
+            result_text=result.get("result_text") or "Builder produced no response.",
+            route=result.get("route"),
+            planned_build=result.get("planned_build"),
+            validation_report=validation if isinstance(validation, dict) else None,
+            commit_hash=metadata.get("commit_hash") if isinstance(metadata, dict) else None,
+            pr_url=metadata.get("pr_url") if isinstance(metadata, dict) else None,
+            phase_completed=phase_completed,
+            metadata=metadata if isinstance(metadata, dict) else {},
+        )
 
     async def run_task(
         self,
         task_id: str,
         request_text: str,
         context: dict[str, Any],
-        planned_build: PlannedBuild,
-    ) -> str:
-        task = asyncio.create_task(self.process(request_text, context, planned_build))
+        *,
+        on_planned: Callable[[PlannedBuild], Awaitable[None]] | None = None,
+    ) -> BuildOutcome:
+        task = asyncio.create_task(self.process(request_text, context, on_planned=on_planned))
         async with self._task_lock:
             self._active_tasks[task_id] = task
         try:
