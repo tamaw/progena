@@ -1273,7 +1273,7 @@ def _kanban_default_columns() -> list[dict]:
             "id": "build",
             "label": "Build",
             "description": "Implement the change, create code, and prepare a pull request.",
-            "agent_name": "builder_progenitor",
+            "agent_name": "builder",
             "allows_create": False,
             "stage_kind": "build",
         },

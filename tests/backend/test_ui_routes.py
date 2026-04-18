@@ -268,7 +268,7 @@ class TestUIRoutes:
             json={
                 "column_id": "build",
                 "status": "running",
-                "agent_name": "builder_progenitor",
+                "agent_name": "builder",
                 "branch_name": "feat/kanban-board",
                 "labels": ["frontend", "live-first"],
             },
@@ -278,7 +278,7 @@ class TestUIRoutes:
         updated = patch_response.json()
         assert updated["column_id"] == "build"
         assert updated["status"] == "running"
-        assert updated["agent_name"] == "builder_progenitor"
+        assert updated["agent_name"] == "builder"
         assert updated["branch_name"] == "feat/kanban-board"
         assert updated["labels"] == ["frontend", "live-first"]
         assert updated["started_at"] is not None
@@ -558,7 +558,7 @@ class TestLogsEndpoint:
             encoding="utf-8",
         )
         (builder_dir / "builder.log").write_text(
-            "2026-03-08 00:33:35 - app.agents.builder_progenitor.agent - INFO - Builder ready\n",
+            "2026-03-08 00:33:35 - app.agents.builder.agent - INFO - Builder ready\n",
             encoding="utf-8",
         )
 
@@ -579,7 +579,7 @@ class TestLogsEndpoint:
             entry for entry in data["entries"] if entry["relative_path"] == "builder/builder.log"
         )
         assert builder_entry["timestamp"] == "2026-03-08 00:33:35"
-        assert builder_entry["source"] == "app.agents.builder_progenitor.agent"
+        assert builder_entry["source"] == "app.agents.builder.agent"
 
     def test_logs_json_supports_incremental_cursor_and_regex_search(
         self, client, kanban_state_reader
