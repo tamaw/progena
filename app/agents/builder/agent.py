@@ -126,10 +126,17 @@ AGENT_NAME = "Builder"
 AGENT_VERSION = "0.2.0"
 DEFAULT_PORT = 8108
 STEP_SKILLS = [
-    ("plan", "Plan a repository change before editing."),
-    ("build", "Implement changes in a worktree with Copilot."),
-    ("validate", "Run pytest, pyright, and ruff to verify code quality."),
-    ("pr", "Commit, push, and create a pull request."),
+    ("plan", "Shape an unstructured request into a concrete BuildPlan."),
+    (
+        "build",
+        "Implement the planned change end-to-end in an isolated git worktree, "
+        "validate it, and open a pull request when the work passes verification.",
+    ),
+    (
+        "validate",
+        "Run pytest, pyright, ruff, and other quality gates against an existing "
+        "change and return a structured verdict.",
+    ),
 ]
 
 BUILDER_SYSTEM_PROMPT = load_prompt("system.md").strip()
@@ -421,14 +428,16 @@ class BuilderService:
         validation = metadata.get("validation") if isinstance(metadata, dict) else None
         teardown_path = metadata.get("teardown_path") if isinstance(metadata, dict) else None
         verdict = (validation or {}).get("verdict") if isinstance(validation, dict) else None
-        if teardown_path == "failed" or verdict == "fail":
+        route = result.get("route")
+
+        if route == "plan":
+            phase_completed = "planned"
+        elif route == "validate":
+            phase_completed = "validated"
+        elif teardown_path == "failed" or (route == "build" and verdict == "fail"):
             phase_completed = "validation_failed"
         elif teardown_path == "success":
             phase_completed = "pr"
-        elif result.get("route") == "plan":
-            phase_completed = "planned"
-        elif result.get("route") == "validate":
-            phase_completed = "validated"
         else:
             phase_completed = "completed"
         return BuildOutcome(
@@ -705,7 +714,15 @@ _task_queue: BuilderTaskQueue | None = None
 
 AGENT_CARD = AgentCard(
     name=AGENT_NAME,
-    description="Development agent: git worktrees, Copilot ACP, validation, pull requests.",
+    description=(
+        "Router-based development agent. A thin top-level coordinator classifies "
+        "each request as plan, build, or validate and dispatches to a dedicated "
+        "LangGraph subagent. The build subagent owns the full setup → execute → "
+        "validate → teardown loop, including git worktrees, Copilot ACP, and "
+        "pull-request creation; the plan subagent shapes requests into a "
+        "structured BuildPlan; the validate subagent grades existing changes "
+        "against pytest/pyright/ruff evidence."
+    ),
     version=AGENT_VERSION,
     url=f"http://{_HOST}:{_PORT}",
     capabilities=AgentCapabilities(streaming=False, state_transition_history=True),

@@ -127,6 +127,40 @@ async def test_builder_service_process_marks_failure_on_validation_fail():
 
 
 @pytest.mark.asyncio
+async def test_builder_service_process_validate_route_fail_is_validated_outcome():
+    """Validate-only routes returning a fail verdict are completed validations.
+
+    A ``fail`` verdict from the standalone validate subagent means the validator
+    successfully evaluated the change and reported problems. That is a
+    completed validation result, not a build failure.
+    """
+    service = BuilderService()
+    router_graph = SimpleNamespace(
+        ainvoke=AsyncMock(
+            return_value={
+                "result_text": "Validation found 2 failing tests.",
+                "route": "validate",
+                "metadata": {
+                    "subagent": "validate",
+                    "validation": {
+                        "verdict": "fail",
+                        "summary": "pytest failed",
+                    },
+                },
+            }
+        ),
+    )
+    service._router_graph = router_graph  # type: ignore[assignment]
+    service._initialized = True
+
+    outcome = await service.process("validate the change", {})
+
+    assert outcome.phase_completed == "validated"
+    assert outcome.route == "validate"
+    assert outcome.validation_report == {"verdict": "fail", "summary": "pytest failed"}
+
+
+@pytest.mark.asyncio
 async def test_builder_service_process_propagates_on_planned_callback():
     service = BuilderService()
     router_graph = SimpleNamespace(

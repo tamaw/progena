@@ -19,9 +19,10 @@ The top-level graph (see [`router/graph.py`](router/graph.py)) does **only**
 two things:
 
 1. **classify** — call Azure OpenAI to decide whether the incoming request is
-   primarily a planning, building, or validation task. When the runtime has
-   already produced a `PlannedBuild` (the queue-worker path), the classifier
-   short-circuits straight to `build`.
+   primarily a planning, building, or validation task. The classifier is the
+   single source of truth for routing — every request, including queue-worker
+   tasks, flows through it. Planning happens on demand inside the build
+   subagent when needed, not as a precondition for routing.
 2. **dispatch** — invoke the appropriate compiled subagent graph with a fresh
    state object so each subagent runs in isolation.
 

@@ -7,5 +7,6 @@ def test_agent_card_includes_expected_metadata():
     assert AGENT_CARD.name == AGENT_NAME
     assert AGENT_CARD.url.startswith("http://")
     assert len(AGENT_CARD.skills) == len(STEP_SKILLS)
-    assert any(skill.id == "pr" for skill in AGENT_CARD.skills)
-    assert any(skill.id == "validate" for skill in AGENT_CARD.skills)
+    skill_ids = {skill.id for skill in AGENT_CARD.skills}
+    assert skill_ids == {"plan", "build", "validate"}
+    assert "router" in AGENT_CARD.description.lower()
