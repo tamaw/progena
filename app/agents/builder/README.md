@@ -51,11 +51,20 @@ flow** (DeepAgent setup → execute → teardown driven by the prompts in
 LangGraph. The current topology is:
 
 ```
-setup → execute → validate → teardown
+setup → execute → validate → ┬─► teardown          (verdict ∈ {pass, pass_with_concerns})
+                             └─► teardown_failed   (verdict == fail)
 ```
 
-`validate` runs **before** `teardown` so the validation verdict is computed
-from the actual execution evidence rather than from post-cleanup state.
+`validate` runs **before** any teardown step so the verdict is computed from
+real execution evidence. The graph then branches on
+`validation_report.verdict`: a passing verdict reaches the standard `teardown`
+node which commits, pushes, and opens a pull request; a failing verdict is
+routed to `teardown_failed`, which only cleans up the worktree and does not
+push or create a PR. Validation therefore gates shipping.
+
+If no `PlannedBuild` is supplied to the build subagent (the normal queue-worker
+case), `setup` plans on demand by calling `BuilderClient.plan_build` and fires
+the optional `on_planned` callback so the queue worker can emit `build_started`.
 
 ### `validate`
 Owns verification and quality gates. Calls Azure OpenAI with a
@@ -70,10 +79,14 @@ project.
 Externally there is **one** builder agent. Its A2A description advertises the
 router behaviour and the three specialists so that callers understand the
 internal model from the agent card alone, but it is invoked as a single
-endpoint. The queue-worker path (`BuilderService.plan_task` followed by
-`BuilderService.process(..., planned_build=...)`) is unchanged: callers still
-get a single string result, and the router is responsible for steering the
-work through the build subagent.
+endpoint. The queue-worker path no longer preplans: every request — interactive
+or queued — is sent through `BuilderService.process(request_text, context, *,
+on_planned=None)`, which invokes the router graph. Classification picks the
+specialist; planning happens on demand inside the build subagent when needed
+and is reported back through the optional `on_planned` callback. The queue
+worker uses the structured `BuildOutcome` returned by `process` (and the
+`run_task` wrapper that adds task tracking) to decide success vs failure and
+to surface PR/commit metadata, with no regex scraping of the assistant text.
 
 ## Source layout
 
