@@ -25,7 +25,7 @@ Repository skills:
 {skill_context}
 
 Execution requirements:
-- Create the requested worktree using the provided metadata.
+- A task setup phase already ran in this thread. Reuse the prepared worktree when available; only create a new worktree if setup explicitly failed to produce one.
 - Use `render_copilot_prompt` before `copilot_build` so the ACP prompt is assembled from prompt files instead of inline text.
 - Keep the work aligned with the task metadata above.
 - Validate the work before committing.

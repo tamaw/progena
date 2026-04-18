@@ -107,7 +107,12 @@ class ToolRuntime:
         except TimeoutError:
             proc.kill()
             await proc.communicate()
-            return {"success": False, "returncode": -1, "stdout": "", "stderr": f"Timeout ({timeout}s)"}
+            return {
+                "success": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": f"Timeout ({timeout}s)",
+            }
         return {
             "success": proc.returncode == 0,
             "returncode": proc.returncode,
@@ -133,7 +138,12 @@ class ToolRuntime:
         except TimeoutError:
             proc.kill()
             await proc.communicate()
-            return {"success": False, "returncode": -1, "stdout": "", "stderr": f"Timeout ({timeout}s)"}
+            return {
+                "success": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": f"Timeout ({timeout}s)",
+            }
         return {
             "success": proc.returncode == 0,
             "returncode": proc.returncode,
@@ -167,7 +177,12 @@ class ToolRuntime:
         except TimeoutError:
             proc.kill()
             await proc.communicate()
-            return {"success": False, "returncode": -1, "stdout": "", "stderr": f"Timeout ({timeout}s)"}
+            return {
+                "success": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": f"Timeout ({timeout}s)",
+            }
         return {
             "success": proc.returncode == 0,
             "returncode": proc.returncode,
@@ -264,6 +279,31 @@ def create_builder_tools(
         """
         return await rt.worktrees.prune_worktrees()
 
+    async def prepare_worktree(worktree_path: str) -> dict[str, Any]:
+        """Prepare an existing worktree for a build task.
+
+        Fetches from remote and fast-forwards only when safe. Returns a
+        structured readiness result so the model can decide whether to proceed,
+        stop for manual intervention, or create a fresh worktree.
+        """
+        branch = await rt.current_branch(worktree_path)
+        result = await rt.worktrees.preflight_update(Path(worktree_path))
+        reason = str(result.get("reason") or "")
+        ready = bool(result.get("success")) and reason not in {
+            "fetch_failed",
+            "status_failed",
+            "local_changes",
+            "no_branch",
+            "no_shas",
+            "non_ff",
+        }
+        return {
+            **result,
+            "worktree_path": worktree_path,
+            "branch": branch,
+            "ready": ready,
+        }
+
     # --- Git Operations ---
 
     async def git_status(worktree_path: str) -> dict[str, Any]:
@@ -275,14 +315,10 @@ def create_builder_tools(
         cmd = "git diff --cached" if staged else "git diff"
         return await rt.run_command(worktree_path, cmd, timeout=60)
 
-    async def git_log(
-        worktree_path: str, count: int = 10, oneline: bool = True
-    ) -> dict[str, Any]:
+    async def git_log(worktree_path: str, count: int = 10, oneline: bool = True) -> dict[str, Any]:
         """Get recent git commits in a worktree."""
         fmt = "--oneline" if oneline else "--pretty=format:'%h %s (%an, %ar)'"
-        return await rt.run_command(
-            worktree_path, f"git log -{count} {fmt}", timeout=30
-        )
+        return await rt.run_command(worktree_path, f"git log -{count} {fmt}", timeout=30)
 
     async def git_branch(
         worktree_path: str, create: str | None = None, delete: str | None = None
@@ -401,6 +437,7 @@ def create_builder_tools(
         variables GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL.
         """
         import os
+
         git_name = str(user_name or os.getenv("GIT_AUTHOR_NAME", "Progenitor Builder"))
         git_email = str(user_email or os.getenv("GIT_AUTHOR_EMAIL", "builder@progenitor.local"))
 
@@ -666,76 +703,102 @@ def create_builder_tools(
     return [
         # --- Worktree Management ---
         StructuredTool.from_function(
-            coroutine=create_worktree, name="create_worktree",
+            coroutine=create_worktree,
+            name="create_worktree",
             description="Create an isolated git worktree for the task.",
         ),
         StructuredTool.from_function(
-            coroutine=cleanup_worktrees, name="cleanup_worktrees",
+            coroutine=cleanup_worktrees,
+            name="cleanup_worktrees",
             description="Remove worktrees older than max_age_hours.",
         ),
         StructuredTool.from_function(
-            coroutine=list_worktrees, name="list_worktrees",
+            coroutine=list_worktrees,
+            name="list_worktrees",
             description="List all active git worktrees with their paths and branches.",
         ),
         StructuredTool.from_function(
-            coroutine=remove_worktree, name="remove_worktree",
+            coroutine=remove_worktree,
+            name="remove_worktree",
             description="Remove a specific worktree by path. Use to clean up stale/conflicting worktrees.",
         ),
         StructuredTool.from_function(
-            coroutine=check_branch_available, name="check_branch_available",
+            coroutine=check_branch_available,
+            name="check_branch_available",
             description="Check if a branch name is available (not in use by another worktree).",
         ),
         StructuredTool.from_function(
-            coroutine=prune_worktrees, name="prune_worktrees",
+            coroutine=prune_worktrees,
+            name="prune_worktrees",
             description="Prune stale worktree references from git.",
+        ),
+        StructuredTool.from_function(
+            coroutine=prepare_worktree,
+            name="prepare_worktree",
+            description=(
+                "Prepare an existing worktree by fetching and ff-only syncing it when safe. "
+                "Returns ready=false for blockers like local changes or non-fast-forward upstreams."
+            ),
         ),
         # --- Git Operations ---
         StructuredTool.from_function(
-            coroutine=git_status, name="git_status",
+            coroutine=git_status,
+            name="git_status",
             description="Get git status in a worktree.",
         ),
         StructuredTool.from_function(
-            coroutine=git_diff, name="git_diff",
+            coroutine=git_diff,
+            name="git_diff",
             description="Get git diff. Set staged=True for staged changes.",
         ),
         StructuredTool.from_function(
-            coroutine=git_log, name="git_log",
+            coroutine=git_log,
+            name="git_log",
             description="Get recent git commits.",
         ),
         StructuredTool.from_function(
-            coroutine=git_branch, name="git_branch",
+            coroutine=git_branch,
+            name="git_branch",
             description="List, create, or delete branches.",
         ),
         StructuredTool.from_function(
-            coroutine=git_checkout, name="git_checkout",
+            coroutine=git_checkout,
+            name="git_checkout",
             description="Checkout a branch or commit.",
         ),
         StructuredTool.from_function(
-            coroutine=git_fetch, name="git_fetch",
+            coroutine=git_fetch,
+            name="git_fetch",
             description="Fetch from remote.",
         ),
         StructuredTool.from_function(
-            coroutine=git_pull, name="git_pull",
+            coroutine=git_pull,
+            name="git_pull",
             description="Pull from remote.",
         ),
         StructuredTool.from_function(
-            coroutine=git_push, name="git_push",
+            coroutine=git_push,
+            name="git_push",
             description="Push to remote. Supports force and set_upstream options.",
         ),
         StructuredTool.from_function(
-            coroutine=git_reset, name="git_reset",
+            coroutine=git_reset,
+            name="git_reset",
             description="Reset the worktree. Use hard=True to discard all changes.",
         ),
         StructuredTool.from_function(
-            coroutine=git_stash, name="git_stash",
+            coroutine=git_stash,
+            name="git_stash",
             description="Stash changes, pop stash, or list stashes.",
         ),
         StructuredTool.from_function(
-            coroutine=git_remote, name="git_remote",
+            coroutine=git_remote,
+            name="git_remote",
             description="List git remotes with URLs.",
         ),
         StructuredTool.from_function(
-            coroutine=git_set_remote_url, name="git_set_remote_url",
+            coroutine=git_set_remote_url,
+            name="git_set_remote_url",
             description="Set the URL for a git remote.",
         ),
         StructuredTool.from_function(
@@ -749,20 +812,24 @@ def create_builder_tools(
         ),
         # --- Git Config ---
         StructuredTool.from_function(
-            coroutine=configure_git, name="configure_git",
+            coroutine=configure_git,
+            name="configure_git",
             description="Configure git user identity in a worktree. Must be called before commit or push operations.",
         ),
         StructuredTool.from_function(
-            coroutine=setup_git_auth, name="setup_git_auth",
+            coroutine=setup_git_auth,
+            name="setup_git_auth",
             description="Setup gh CLI authentication for git operations. Call this if git push fails with authentication errors.",
         ),
         # --- GitHub CLI ---
         StructuredTool.from_function(
-            coroutine=gh_auth_status, name="gh_auth_status",
+            coroutine=gh_auth_status,
+            name="gh_auth_status",
             description="Check GitHub CLI authentication status.",
         ),
         StructuredTool.from_function(
-            coroutine=gh_auth_setup_git, name="gh_auth_setup_git",
+            coroutine=gh_auth_setup_git,
+            name="gh_auth_setup_git",
             description="Configure git to use GitHub CLI for authentication.",
         ),
         StructuredTool.from_function(
@@ -776,32 +843,39 @@ def create_builder_tools(
         ),
         # --- Build & Validation ---
         StructuredTool.from_function(
-            coroutine=render_copilot_prompt, name="render_copilot_prompt",
+            coroutine=render_copilot_prompt,
+            name="render_copilot_prompt",
             description="Render the Copilot ACP prompt from structured task metadata and mounted prompt files.",
         ),
         StructuredTool.from_function(
-            coroutine=copilot_build, name="copilot_build",
+            coroutine=copilot_build,
+            name="copilot_build",
             description="Run Copilot ACP to implement changes in a worktree.",
         ),
         StructuredTool.from_function(
-            coroutine=validate_code, name="validate_code",
+            coroutine=validate_code,
+            name="validate_code",
             description="Run pytest, pyright, and ruff to validate code quality.",
         ),
         StructuredTool.from_function(
-            coroutine=run_command, name="run_command",
+            coroutine=run_command,
+            name="run_command",
             description="Run a shell command in the worktree.",
         ),
         StructuredTool.from_function(
-            coroutine=search, name="search",
+            coroutine=search,
+            name="search",
             description="Search files in the worktree using ripgrep.",
         ),
         # --- Commit & PR ---
         StructuredTool.from_function(
-            coroutine=commit_changes, name="commit_changes",
+            coroutine=commit_changes,
+            name="commit_changes",
             description="Stage and commit all changes in the worktree.",
         ),
         StructuredTool.from_function(
-            coroutine=create_pull_request, name="create_pull_request",
+            coroutine=create_pull_request,
+            name="create_pull_request",
             description="Push branch and create a GitHub pull request.",
         ),
     ]

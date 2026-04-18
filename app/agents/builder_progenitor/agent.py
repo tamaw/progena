@@ -40,6 +40,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
 
+from app.progenitor.llm.prompts import resolve_prompts_dir, resolve_skills_dir
+
 from .client import BuilderClient, PlannedBuild
 from .config import BuilderConfig, get_config, setup_logging
 from .hooks import HookContext, HookManager, create_default_hook_manager
@@ -112,6 +114,7 @@ def _log_llm_request_response(
                 f.write(json.dumps(entry) + "\n")
         except OSError as e:
             logger.warning("Failed to write LLM log to %s: %s", log_file, e)
+
 
 AGENT_NAME = "Builder"
 AGENT_VERSION = "0.2.0"
@@ -241,11 +244,8 @@ def _create_graph(
         timeout=min(config.copilot.timeout_seconds, 1200),
     )
     tools = create_builder_tools(config=config, project_root=project_root, log_dir=log_dir)
-
-    skills_dir = Path(__file__).resolve().parent / "skills"
-    skills: list[str] = []
-    if skills_dir.is_dir():
-        skills = [skills_dir.relative_to(project_root).as_posix()]
+    skills = _resolve_builder_skill_dirs()
+    memory_paths = _resolve_builder_memory_paths(project_root)
 
     return create_deep_agent(
         name=name,
@@ -253,10 +253,40 @@ def _create_graph(
         system_prompt=system_prompt,
         tools=tools,
         skills=skills,
+        memory=memory_paths,
         backend=backend,
         middleware=[],
         checkpointer=MemorySaver(),
     )
+
+
+def _resolve_builder_skill_dirs() -> list[str]:
+    """Return DeepAgent skill directories for the builder harness.
+
+    The builder keeps its local workflow skills plus the checked-in
+    builder_progenitor skill pack. It intentionally does not inherit the main
+    Progenitor skill pack.
+    """
+    prompts_dir = resolve_prompts_dir()
+    candidates = [
+        Path(__file__).resolve().parent / "skills",
+        resolve_skills_dir("builder_progenitor", prompts_dir=prompts_dir),
+    ]
+
+    skill_dirs: list[str] = []
+    for path in candidates:
+        resolved = str(path.resolve())
+        if path.is_dir() and resolved not in skill_dirs:
+            skill_dirs.append(resolved)
+    return skill_dirs
+
+
+def _resolve_builder_memory_paths(project_root: Path) -> list[str] | None:
+    """Return always-on memory files for the builder harness."""
+    agents_md = (project_root / "AGENTS.md").resolve()
+    if not agents_md.is_file():
+        return None
+    return [str(agents_md)]
 
 
 # ---------------------------------------------------------------------------
@@ -321,16 +351,25 @@ class BuilderService:
         assert self._planner is not None
         return await self._planner.plan_build(request_text, context)
 
-    async def process(self, request_text: str, context: dict[str, Any], planned_build: PlannedBuild) -> str:
+    async def process(
+        self, request_text: str, context: dict[str, Any], planned_build: PlannedBuild
+    ) -> str:
         if self._shutting_down:
             raise RuntimeError("Builder is shutting down")
         await self.initialize()
         assert self._graph is not None
 
-        prompt = _build_execution_prompt(request_text, context, planned_build)
         thread_id = f"builder_{uuid.uuid4().hex[:12]}"
-        logger.info("Builder: invoking graph (thread=%s)", thread_id)
+        setup_prompt = _build_setup_prompt(request_text, context, planned_build)
+        logger.info("Builder: invoking setup phase (thread=%s)", thread_id)
+        setup_result = await self._graph.ainvoke(
+            {"messages": [{"role": "user", "content": setup_prompt}]},
+            {"configurable": {"thread_id": thread_id}},
+        )
+        _assert_setup_ready(setup_result)
 
+        prompt = _build_execution_prompt(request_text, context, planned_build)
+        logger.info("Builder: invoking execution phase (thread=%s)", thread_id)
         result = await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
             {"configurable": {"thread_id": thread_id}},
@@ -384,7 +423,12 @@ class BuilderService:
             error=(context.error or "").strip(),
         ).strip()
         thread_id = f"hook_{context.event}_{uuid.uuid4().hex[:12]}"
-        logger.info("Builder hook: invoking %s (thread=%s task_id=%s)", context.event, thread_id, context.task_id)
+        logger.info(
+            "Builder hook: invoking %s (thread=%s task_id=%s)",
+            context.event,
+            thread_id,
+            context.task_id,
+        )
         result = await self._hook_graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
             {"configurable": {"thread_id": thread_id}},
@@ -456,9 +500,8 @@ def _extract_result(result: dict[str, Any]) -> str:
     messages = result.get("messages")
     if isinstance(messages, list):
         for msg in reversed(messages):
-            content = (
-                getattr(msg, "content", None)
-                or (msg.get("content") if isinstance(msg, dict) else None)
+            content = getattr(msg, "content", None) or (
+                msg.get("content") if isinstance(msg, dict) else None
             )
             if isinstance(content, str) and content.strip():
                 return content.strip()
@@ -512,6 +555,28 @@ def _build_execution_prompt(
     ).strip()
 
 
+def _build_setup_prompt(
+    request_text: str,
+    context: dict[str, Any],
+    planned_build: PlannedBuild,
+) -> str:
+    """Build the setup prompt from prompt files and structured metadata."""
+    ctx = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
+    plan = planned_build.plan
+    return load_prompt(
+        "task_setup.md",
+        request_text=request_text.strip(),
+        context_json=ctx,
+        task_name=plan.task_name,
+        work_item_id=plan.work_item_id,
+        branch_name=plan.branch_name,
+        description=plan.description,
+        planned_at_utc=planned_build.planned_at_utc,
+        reasoning=planned_build.reasoning or "No reasoning returned.",
+        skill_context=load_skill_context(["git-workflow", "task-setup"]),
+    ).strip()
+
+
 def _iter_tool_payloads(result: dict[str, Any], tool_name: str) -> list[dict[str, Any]]:
     messages = result.get("messages")
     if not isinstance(messages, list):
@@ -537,6 +602,25 @@ def _iter_tool_payloads(result: dict[str, Any], tool_name: str) -> list[dict[str
     return payloads
 
 
+def _assert_setup_ready(result: dict[str, Any]) -> None:
+    """Ensure the setup phase explicitly prepared a ready worktree."""
+    payloads = _iter_tool_payloads(result, "prepare_worktree")
+    if not payloads:
+        raise RuntimeError("Builder setup failed: prepare_worktree was not called.")
+
+    setup_payload = payloads[-1]
+    if setup_payload.get("ready") is True:
+        return
+
+    detail = (
+        setup_payload.get("error")
+        or setup_payload.get("reason")
+        or setup_payload.get("message")
+        or "unknown setup failure"
+    )
+    raise RuntimeError(f"Builder setup failed: {detail}")
+
+
 def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
     payload = json.dumps(result, default=str)
     payload_lower = payload.lower()
@@ -545,7 +629,9 @@ def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
 
     commit_recorded = any(tool_payload.get("committed") is True for tool_payload in commit_payloads)
     if not commit_recorded:
-        commit_recorded = "commit_changes" in payload_lower and bool(COMMITTED_TRUE_RE.search(payload_lower))
+        commit_recorded = "commit_changes" in payload_lower and bool(
+            COMMITTED_TRUE_RE.search(payload_lower)
+        )
 
     has_pr_url = any(
         isinstance(tool_payload.get("url"), str) and bool(PR_URL_RE.search(tool_payload["url"]))
@@ -553,7 +639,9 @@ def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
     ) or bool(PR_URL_RE.search(payload))
     pr_failed = any(tool_payload.get("success") is False for tool_payload in pr_payloads)
     if not pr_payloads:
-        pr_failed = "create_pull_request" in payload_lower and bool(SUCCESS_FALSE_RE.search(payload_lower))
+        pr_failed = "create_pull_request" in payload_lower and bool(
+            SUCCESS_FALSE_RE.search(payload_lower)
+        )
 
     if pr_failed and not has_pr_url:
         logger.error(
@@ -566,6 +654,7 @@ def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
         raise RuntimeError("Builder execution failed: create_pull_request returned success=false.")
     if commit_recorded and not has_pr_url:
         raise RuntimeError("Builder committed changes but did not produce a pull request URL.")
+
 
 def _text_msg(text: str) -> Message:
     return Message(
@@ -626,7 +715,9 @@ class BuilderExecutor(AgentExecutor):
         if not request_text:
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
-                    task_id=task_id, context_id=ctx_id, final=True,
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    final=True,
                     status=TaskStatus(
                         state=TaskState.failed,
                         message=_text_msg("Empty request."),
@@ -664,12 +755,12 @@ class BuilderExecutor(AgentExecutor):
         # Immediately respond — HTTP connection is released, task runs async.
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                task_id=task_id, context_id=ctx_id, final=True,
+                task_id=task_id,
+                context_id=ctx_id,
+                final=True,
                 status=TaskStatus(
                     state=TaskState.submitted,
-                    message=_text_msg(
-                        f"Task accepted (id={task_id}): {request_text[:120]}"
-                    ),
+                    message=_text_msg(f"Task accepted (id={task_id}): {request_text[:120]}"),
                     timestamp=_utc_now(),
                 ),
             )
