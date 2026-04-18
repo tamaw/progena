@@ -128,6 +128,7 @@ class GitWorktreeManager:
         self,
         work_item_id: str,
         branch_name: str | None = None,
+        base_ref: str = "origin/main",
     ) -> Path:
         """Create a new worktree for a work item.
 
@@ -145,7 +146,7 @@ class GitWorktreeManager:
         if await self.branch_exists(selected_branch):
             command = ["worktree", "add", str(worktree_path), selected_branch]
         else:
-            command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
+            command = ["worktree", "add", "-b", selected_branch, str(worktree_path), base_ref]
 
         result = await self._run_git(command, cwd=self.repo_path)
         if result["returncode"] != 0:
@@ -215,102 +216,6 @@ class GitWorktreeManager:
             raise RuntimeError("git commit completed without advancing HEAD")
 
         return after_sha or None
-
-    async def preflight_update(self, cwd: Path | None = None) -> dict[str, Any]:
-        """Safely fetch and fast-forward a repo/worktree when possible.
-
-        Returns structured readiness data instead of mutating implicitly:
-        - fetches from remote with --prune
-        - refuses to fast-forward when local changes are present
-        - skips branches without upstreams
-        - only updates via ff-only merge
-        """
-        workdir = Path(cwd) if cwd is not None else self.repo_path
-
-        fetch = await self._run_git(["fetch", "--prune"], cwd=workdir)
-        if fetch["returncode"] != 0:
-            return {
-                "success": False,
-                "updated": False,
-                "reason": "fetch_failed",
-                "error": (fetch["stderr"] or fetch["stdout"]).strip(),
-            }
-
-        status = await self._run_git(["status", "--porcelain"], cwd=workdir)
-        if status["returncode"] != 0:
-            return {
-                "success": False,
-                "updated": False,
-                "reason": "status_failed",
-                "error": (status["stderr"] or status["stdout"]).strip(),
-            }
-        if status["stdout"].strip():
-            return {"success": True, "updated": False, "reason": "local_changes"}
-
-        branch_r = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=workdir)
-        if branch_r["returncode"] != 0:
-            return {"success": True, "updated": False, "reason": "no_branch"}
-        branch = branch_r["stdout"].strip()
-
-        upstream_r = await self._run_git(
-            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd=workdir,
-        )
-        if upstream_r["returncode"] != 0:
-            return {
-                "success": True,
-                "updated": False,
-                "reason": "no_upstream",
-                "branch": branch,
-            }
-        upstream = upstream_r["stdout"].strip()
-
-        local_sha_r = await self._run_git(["rev-parse", "HEAD"], cwd=workdir)
-        remote_sha_r = await self._run_git(["rev-parse", "@{u}"], cwd=workdir)
-        if local_sha_r["returncode"] != 0 or remote_sha_r["returncode"] != 0:
-            return {
-                "success": True,
-                "updated": False,
-                "reason": "no_shas",
-                "branch": branch,
-                "upstream": upstream,
-            }
-
-        local_sha = local_sha_r["stdout"].strip()
-        remote_sha = remote_sha_r["stdout"].strip()
-        if local_sha == remote_sha:
-            return {
-                "success": True,
-                "updated": False,
-                "reason": "up_to_date",
-                "branch": branch,
-                "upstream": upstream,
-                "rev": local_sha,
-            }
-
-        merge_r = await self._run_git(["merge", "--ff-only", "@{u}"], cwd=workdir)
-        if merge_r["returncode"] != 0:
-            return {
-                "success": True,
-                "updated": False,
-                "reason": "non_ff",
-                "branch": branch,
-                "upstream": upstream,
-                "local_rev": local_sha,
-                "remote_rev": remote_sha,
-            }
-
-        new_sha_r = await self._run_git(["rev-parse", "HEAD"], cwd=workdir)
-        new_sha = new_sha_r["stdout"].strip() if new_sha_r["returncode"] == 0 else ""
-        return {
-            "success": True,
-            "updated": True,
-            "reason": "fast_forwarded",
-            "branch": branch,
-            "upstream": upstream,
-            "rev": new_sha or remote_sha,
-            "previous_rev": local_sha,
-        }
 
     async def _write_metadata(
         self, worktree_path: Path, work_item_id: str, branch_name: str

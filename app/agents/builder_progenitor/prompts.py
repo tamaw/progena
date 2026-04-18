@@ -33,7 +33,12 @@ def load_prompt(filename: str, **replacements: str) -> str:
 
 def load_skill_context(skill_names: list[str] | None = None) -> str:
     """Load repo-level prompt skills as plain text context."""
-    selected = skill_names or ["build-agent", "git-workflow", "task-setup"]
+    selected = skill_names or [
+        "build-agent",
+        "git-workflow",
+        "task-setup",
+        "task-teardown",
+    ]
     return load_repo_skill_context(
         selected,
         agent_name="builder_progenitor",

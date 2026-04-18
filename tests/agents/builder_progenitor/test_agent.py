@@ -9,8 +9,10 @@ from app.agents.builder_progenitor.agent import (
     BuilderService,
     _assert_result_has_pr_when_committed,
     _assert_setup_ready,
+    _assert_teardown_complete,
     _build_execution_prompt,
     _build_setup_prompt,
+    _build_teardown_prompt,
 )
 from app.agents.builder_progenitor.client import BuildPlan, PlannedBuild
 
@@ -33,40 +35,67 @@ def _planned_build() -> PlannedBuild:
 
 def test_execution_prompt_contains_explicit_pr_requirements():
     prompt = _build_execution_prompt("request", {}, _planned_build())
-    assert "create_pull_request" in prompt
     assert "render_copilot_prompt" in prompt
     assert "task setup phase already ran" in prompt.lower()
     assert "Before finishing, check your own work" in prompt
 
 
-def test_setup_prompt_requires_prepare_worktree():
+def test_setup_prompt_requires_workspace_creation():
     prompt = _build_setup_prompt("request", {}, _planned_build())
-    assert "prepare_worktree" in prompt
     assert "create_worktree" in prompt
+    assert "origin/main" in prompt
     assert "Do not call `copilot_build`" in prompt
 
 
 def test_assert_setup_ready_raises_when_tool_missing():
-    with pytest.raises(RuntimeError, match="prepare_worktree was not called"):
+    with pytest.raises(RuntimeError, match="create_worktree was not called"):
         _assert_setup_ready({"messages": [{"content": "No tools used"}]})
 
 
-def test_assert_setup_ready_raises_on_blocker():
+def test_assert_setup_ready_accepts_created_worktree():
     result = {
         "messages": [
             {
-                "tool_name": "prepare_worktree",
-                "content": '{"success": true, "ready": false, "reason": "non_ff"}',
+                "tool_name": "create_worktree",
+                "content": '{"worktree_path": "/tmp/worktree", "branch": "feature/test"}',
             }
         ]
     }
 
-    with pytest.raises(RuntimeError, match="non_ff"):
-        _assert_setup_ready(result)
+    _assert_setup_ready(result)
+
+
+def test_teardown_prompt_requires_cleanup_and_pr():
+    prompt = _build_teardown_prompt("request", {}, _planned_build())
+    assert "create_pull_request" in prompt
+    assert "remove_worktree" in prompt
+
+
+def test_assert_teardown_complete_requires_cleanup():
+    with pytest.raises(RuntimeError, match="remove_worktree was not called"):
+        _assert_teardown_complete({"messages": [{"content": "no commit"}]}, {"messages": []})
+
+
+def test_assert_teardown_complete_requires_pr_after_commit():
+    execution_result = {
+        "messages": [
+            {"tool_name": "commit_changes", "content": '{"committed": true, "sha": "abc"}'},
+        ]
+    }
+    teardown_result = {
+        "messages": [
+            {"tool_name": "remove_worktree", "content": '{"success": true, "message": "Removed"}'},
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="did not produce a pull request URL"):
+        _assert_teardown_complete(execution_result, teardown_result)
 
 
 @pytest.mark.asyncio
-async def test_builder_service_runs_setup_before_execution(monkeypatch: pytest.MonkeyPatch):
+async def test_builder_service_runs_setup_execution_and_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+):
     service = BuilderService()
     graph = SimpleNamespace(
         ainvoke=AsyncMock(
@@ -74,12 +103,37 @@ async def test_builder_service_runs_setup_before_execution(monkeypatch: pytest.M
                 {
                     "messages": [
                         {
-                            "tool_name": "prepare_worktree",
-                            "content": '{"success": true, "ready": true, "reason": "up_to_date"}',
+                            "tool_name": "create_worktree",
+                            "content": '{"worktree_path": "/tmp/wt", "branch": "feature/test"}',
                         }
                     ]
                 },
-                {"messages": [{"content": "Build complete"}]},
+                {
+                    "messages": [
+                        {
+                            "tool_name": "commit_changes",
+                            "content": '{"committed": true, "sha": "abc"}',
+                        },
+                        {"content": "Build complete"},
+                    ]
+                },
+                {
+                    "messages": [
+                        {
+                            "tool_name": "commit_changes",
+                            "content": '{"committed": true, "sha": "abc"}',
+                        },
+                        {
+                            "tool_name": "create_pull_request",
+                            "content": '{"success": true, "url": "https://github.com/org/repo/pull/123"}',
+                        },
+                        {
+                            "tool_name": "remove_worktree",
+                            "content": '{"success": true, "message": "Removed"}',
+                        },
+                        {"content": "Teardown complete"},
+                    ]
+                },
             ]
         )
     )
@@ -93,13 +147,15 @@ async def test_builder_service_runs_setup_before_execution(monkeypatch: pytest.M
 
     result = await service.process("request", {}, _planned_build())
 
-    assert result == "Build complete"
-    assert graph.ainvoke.await_count == 2
+    assert result == "Teardown complete"
+    assert graph.ainvoke.await_count == 3
     first_call = graph.ainvoke.await_args_list[0]
     second_call = graph.ainvoke.await_args_list[1]
+    third_call = graph.ainvoke.await_args_list[2]
     assert "task setup phase only" in first_call.args[0]["messages"][0]["content"].lower()
     assert "execution requirements" in second_call.args[0]["messages"][0]["content"].lower()
-    assert first_call.args[1] == second_call.args[1]
+    assert "teardown requirements" in third_call.args[0]["messages"][0]["content"].lower()
+    assert first_call.args[1] == second_call.args[1] == third_call.args[1]
 
 
 def test_assert_result_raises_when_commit_without_pr_url():

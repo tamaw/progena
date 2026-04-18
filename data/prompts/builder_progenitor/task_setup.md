@@ -19,9 +19,9 @@ Repository skills:
 
 Setup requirements:
 - This is the task setup phase only.
-- Prepare a usable worktree for the task before any code editing or Copilot build work.
-- Use `create_worktree` if this thread does not already have the planned worktree path.
-- Always call `prepare_worktree` on the worktree you intend to use.
-- If setup finds a blocker such as local changes or a non-fast-forward upstream, stop and report the blocker instead of continuing.
-- Do not call `copilot_build`, `commit_changes`, or `create_pull_request` in this phase.
-- End with the chosen worktree path, branch, and whether setup is ready for execution.
+- Create a fresh worktree for this task from `origin/main`.
+- Use `create_worktree` with the planned branch name and `base_ref="origin/main"`.
+- In that worktree, fetch the latest default branch state and ensure the task branch is ready to build on top of `origin/main`.
+- Use git tools for the setup steps instead of summarizing what should happen.
+- Do not call `copilot_build`, `commit_changes`, `create_pull_request`, or `remove_worktree` in this phase.
+- End with the chosen worktree path, the active branch, and a concise readiness summary.
