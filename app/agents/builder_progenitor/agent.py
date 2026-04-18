@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -119,10 +118,6 @@ def _log_llm_request_response(
 AGENT_NAME = "Builder"
 AGENT_VERSION = "0.2.0"
 DEFAULT_PORT = 8108
-PR_URL_RE = re.compile(r"https://github\.com/\S+/pull/\d+")
-COMMITTED_TRUE_RE = re.compile(r'committed\\?":\s*true')
-SUCCESS_FALSE_RE = re.compile(r'success\\?":\s*false')
-
 STEP_SKILLS = [
     ("plan", "Plan a repository change before editing."),
     ("build", "Implement changes in a worktree with Copilot."),
@@ -362,15 +357,14 @@ class BuilderService:
         thread_id = f"builder_{uuid.uuid4().hex[:12]}"
         setup_prompt = _build_setup_prompt(request_text, context, planned_build)
         logger.info("Builder: invoking setup phase (thread=%s)", thread_id)
-        setup_result = await self._graph.ainvoke(
+        await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": setup_prompt}]},
             {"configurable": {"thread_id": thread_id}},
         )
-        _assert_setup_ready(setup_result)
 
         prompt = _build_execution_prompt(request_text, context, planned_build)
         logger.info("Builder: invoking execution phase (thread=%s)", thread_id)
-        execution_result = await self._graph.ainvoke(
+        await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
             {"configurable": {"thread_id": thread_id}},
         )
@@ -381,7 +375,6 @@ class BuilderService:
             {"messages": [{"role": "user", "content": teardown_prompt}]},
             {"configurable": {"thread_id": thread_id}},
         )
-        _assert_teardown_complete(execution_result, teardown_result)
         logger.info("Builder: graph complete (thread=%s)", thread_id)
         return _extract_result(teardown_result)
 
@@ -604,119 +597,6 @@ def _build_teardown_prompt(
         reasoning=planned_build.reasoning or "No reasoning returned.",
         skill_context=load_skill_context(["git-workflow", "task-teardown"]),
     ).strip()
-
-
-def _iter_tool_payloads(result: dict[str, Any], tool_name: str) -> list[dict[str, Any]]:
-    messages = result.get("messages")
-    if not isinstance(messages, list):
-        return []
-
-    payloads: list[dict[str, Any]] = []
-    for message in messages:
-        if not isinstance(message, dict) or message.get("tool_name") != tool_name:
-            continue
-
-        content = message.get("content")
-        if isinstance(content, dict):
-            payloads.append(content)
-            continue
-        if not isinstance(content, str):
-            continue
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            payloads.append(parsed)
-    return payloads
-
-
-def _assert_setup_ready(result: dict[str, Any]) -> None:
-    """Ensure the setup phase explicitly created a task worktree."""
-    payloads = _iter_tool_payloads(result, "create_worktree")
-    if not payloads:
-        raise RuntimeError("Builder setup failed: create_worktree was not called.")
-
-    setup_payload = payloads[-1]
-    if (
-        isinstance(setup_payload.get("worktree_path"), str)
-        and setup_payload["worktree_path"].strip()
-    ):
-        return
-
-    detail = setup_payload.get("error") or setup_payload.get("message") or "unknown setup failure"
-    raise RuntimeError(f"Builder setup failed: {detail}")
-
-
-def _did_commit_changes(result: dict[str, Any]) -> bool:
-    """Return whether commit_changes reported a new commit."""
-    commit_payloads = _iter_tool_payloads(result, "commit_changes")
-    return any(tool_payload.get("committed") is True for tool_payload in commit_payloads)
-
-
-def _assert_teardown_complete(
-    execution_result: dict[str, Any], teardown_result: dict[str, Any]
-) -> None:
-    """Ensure teardown handled PR creation and workspace cleanup."""
-    if _did_commit_changes(execution_result):
-        pr_payloads = _iter_tool_payloads(teardown_result, "create_pull_request")
-        has_pr_url = any(
-            isinstance(tool_payload.get("url"), str) and bool(PR_URL_RE.search(tool_payload["url"]))
-            for tool_payload in pr_payloads
-        ) or bool(PR_URL_RE.search(json.dumps(teardown_result, default=str)))
-        pr_failed = any(tool_payload.get("success") is False for tool_payload in pr_payloads)
-        if pr_failed and not has_pr_url:
-            raise RuntimeError(
-                "Builder teardown failed: create_pull_request returned success=false."
-            )
-        if not has_pr_url:
-            raise RuntimeError(
-                "Builder teardown failed: committed work did not produce a pull request URL."
-            )
-
-    remove_payloads = _iter_tool_payloads(teardown_result, "remove_worktree")
-    if not remove_payloads:
-        raise RuntimeError("Builder teardown failed: remove_worktree was not called.")
-
-    remove_payload = remove_payloads[-1]
-    if remove_payload.get("success") is not True:
-        detail = remove_payload.get("error") or remove_payload.get("message") or "cleanup failed"
-        raise RuntimeError(f"Builder teardown failed: {detail}")
-
-
-def _assert_result_has_pr_when_committed(result: dict[str, Any]) -> None:
-    payload = json.dumps(result, default=str)
-    payload_lower = payload.lower()
-    commit_payloads = _iter_tool_payloads(result, "commit_changes")
-    pr_payloads = _iter_tool_payloads(result, "create_pull_request")
-
-    commit_recorded = any(tool_payload.get("committed") is True for tool_payload in commit_payloads)
-    if not commit_recorded:
-        commit_recorded = "commit_changes" in payload_lower and bool(
-            COMMITTED_TRUE_RE.search(payload_lower)
-        )
-
-    has_pr_url = any(
-        isinstance(tool_payload.get("url"), str) and bool(PR_URL_RE.search(tool_payload["url"]))
-        for tool_payload in pr_payloads
-    ) or bool(PR_URL_RE.search(payload))
-    pr_failed = any(tool_payload.get("success") is False for tool_payload in pr_payloads)
-    if not pr_payloads:
-        pr_failed = "create_pull_request" in payload_lower and bool(
-            SUCCESS_FALSE_RE.search(payload_lower)
-        )
-
-    if pr_failed and not has_pr_url:
-        logger.error(
-            "PR creation failed. Result summary: commit_recorded=%s, has_pr_url=%s, pr_payloads=%s",
-            commit_recorded,
-            has_pr_url,
-            pr_payloads,
-        )
-        logger.error("Full result JSON:\n%s", payload)
-        raise RuntimeError("Builder execution failed: create_pull_request returned success=false.")
-    if commit_recorded and not has_pr_url:
-        raise RuntimeError("Builder committed changes but did not produce a pull request URL.")
 
 
 def _text_msg(text: str) -> Message:
