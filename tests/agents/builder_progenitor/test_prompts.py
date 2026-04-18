@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 from app.agents.builder_progenitor.prompts import load_prompt, load_skill_context
@@ -24,10 +26,40 @@ def test_execution_prompt_template_exists():
     assert "create_pull_request" in prompt
 
 
+def test_task_setup_prompt_template_exists():
+    prompt = load_prompt(
+        "task_setup.md",
+        request_text="req",
+        context_json="{}",
+        task_name="Task",
+        work_item_id="task-id",
+        branch_name="progenitor/task-id",
+        description="desc",
+        planned_at_utc="2026-03-23T16:00:00Z",
+        reasoning="because",
+        skill_context="skills",
+    )
+
+    assert "prepare_worktree" in prompt
+    assert "create_worktree" in prompt
+
+
 def test_load_skill_context_reads_repo_skills():
     skill_context = load_skill_context()
 
     assert "Build Agent Skill" in skill_context
+    assert "Task Setup Skill" in skill_context
+
+
+def test_load_skill_context_uses_builder_skills_only():
+    with patch("app.agents.builder_progenitor.prompts.load_repo_skill_context") as mock_load:
+        mock_load.return_value = "skills"
+
+        result = load_skill_context()
+
+        assert result == "skills"
+        assert mock_load.call_args.kwargs["agent_name"] == "builder_progenitor"
+        assert mock_load.call_args.kwargs.get("fallback_agents", ()) == ()
 
 
 def test_load_skill_context_missing_skill_raises():

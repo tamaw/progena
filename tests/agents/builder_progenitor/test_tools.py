@@ -111,6 +111,61 @@ async def test_render_copilot_prompt_uses_structured_metadata(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_prepare_worktree_reports_ready_status(tmp_path: Path) -> None:
+    tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
+    tool = next(tool for tool in tools if tool.name == "prepare_worktree")
+
+    with (
+        patch(
+            "app.agents.builder_progenitor.tools.ToolRuntime.current_branch",
+            new=AsyncMock(return_value="feature/test"),
+        ),
+        patch(
+            "app.agents.builder_progenitor.tools.GitWorktreeManager.preflight_update",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "updated": False,
+                    "reason": "no_upstream",
+                }
+            ),
+        ),
+    ):
+        result = await tool.coroutine(worktree_path=str(tmp_path))
+
+    assert result["ready"] is True
+    assert result["branch"] == "feature/test"
+    assert result["reason"] == "no_upstream"
+
+
+@pytest.mark.asyncio
+async def test_prepare_worktree_reports_non_ff_blocker(tmp_path: Path) -> None:
+    tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
+    tool = next(tool for tool in tools if tool.name == "prepare_worktree")
+
+    with (
+        patch(
+            "app.agents.builder_progenitor.tools.ToolRuntime.current_branch",
+            new=AsyncMock(return_value="feature/test"),
+        ),
+        patch(
+            "app.agents.builder_progenitor.tools.GitWorktreeManager.preflight_update",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "updated": False,
+                    "reason": "non_ff",
+                }
+            ),
+        ),
+    ):
+        result = await tool.coroutine(worktree_path=str(tmp_path))
+
+    assert result["ready"] is False
+    assert result["reason"] == "non_ff"
+
+
+@pytest.mark.asyncio
 async def test_gh_cli_accepts_command_string(tmp_path: Path) -> None:
     tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
     tool = next(tool for tool in tools if tool.name == "gh_cli")
