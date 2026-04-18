@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 
 def test_graph_factory_creates_agent_without_middleware():
+    project_root = Path(__file__).resolve().parents[3]
     with (
         patch("app.agents.builder_progenitor.agent.create_deep_agent") as mock_create,
         patch("app.agents.builder_progenitor.agent.ChatOpenAI") as mock_model,
@@ -21,8 +22,8 @@ def test_graph_factory_creates_agent_without_middleware():
         config = BuilderConfig()
         _create_graph(
             config,
-            Path.cwd(),
-            Path.cwd() / "logs",
+            project_root,
+            project_root / "logs",
             name="builder",
             system_prompt=load_prompt("system.md").strip(),
         )
@@ -31,3 +32,11 @@ def test_graph_factory_creates_agent_without_middleware():
         assert call_kwargs["name"] == "builder"
         assert call_kwargs["middleware"] == []
         assert call_kwargs["system_prompt"] == load_prompt("system.md").strip()
+        assert str(project_root / "AGENTS.md") in call_kwargs["memory"]
+        assert any(
+            path.endswith("app/agents/builder_progenitor/skills") for path in call_kwargs["skills"]
+        )
+        assert any(
+            path.endswith("data/skills/builder_progenitor") for path in call_kwargs["skills"]
+        )
+        assert not any(path.endswith("data/skills/progenitor") for path in call_kwargs["skills"])

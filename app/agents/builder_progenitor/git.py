@@ -128,6 +128,7 @@ class GitWorktreeManager:
         self,
         work_item_id: str,
         branch_name: str | None = None,
+        base_ref: str = "origin/main",
     ) -> Path:
         """Create a new worktree for a work item.
 
@@ -145,7 +146,7 @@ class GitWorktreeManager:
         if await self.branch_exists(selected_branch):
             command = ["worktree", "add", str(worktree_path), selected_branch]
         else:
-            command = ["worktree", "add", "-b", selected_branch, str(worktree_path)]
+            command = ["worktree", "add", "-b", selected_branch, str(worktree_path), base_ref]
 
         result = await self._run_git(command, cwd=self.repo_path)
         if result["returncode"] != 0:

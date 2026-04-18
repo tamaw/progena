@@ -111,6 +111,39 @@ async def test_render_copilot_prompt_uses_structured_metadata(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_create_worktree_passes_base_ref_to_manager(tmp_path: Path) -> None:
+    tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
+    tool = next(tool for tool in tools if tool.name == "create_worktree")
+
+    with (
+        patch(
+            "app.agents.builder_progenitor.tools.GitWorktreeManager.create_worktree",
+            new_callable=AsyncMock,
+        ) as create_worktree,
+        patch(
+            "app.agents.builder_progenitor.tools.ToolRuntime.current_branch", new_callable=AsyncMock
+        ) as current_branch,
+    ):
+        create_worktree.return_value = tmp_path / "worktrees" / "task-id_123"
+        current_branch.return_value = "feature/test"
+        result = await tool.coroutine(
+            work_item_id="task-id",
+            branch_name="feature/test",
+            base_ref="origin/main",
+        )
+
+    assert result["worktree_path"].endswith("task-id_123")
+    assert result["branch"] == "feature/test"
+    assert result["base_ref"] == "origin/main"
+    create_worktree.assert_awaited_once_with(
+        "task-id",
+        branch_name="feature/test",
+        base_ref="origin/main",
+    )
+    current_branch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_gh_cli_accepts_command_string(tmp_path: Path) -> None:
     tools = create_builder_tools(config=_test_config(tmp_path), project_root=tmp_path)
     tool = next(tool for tool in tools if tool.name == "gh_cli")
