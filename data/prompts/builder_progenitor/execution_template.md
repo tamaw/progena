@@ -25,9 +25,9 @@ Repository skills:
 {skill_context}
 
 Execution requirements:
-- A task setup phase already ran in this thread. Reuse the prepared worktree when available; only create a new worktree if setup explicitly failed to produce one.
+- A task setup phase already ran in this thread. Reuse the prepared worktree instead of creating a new one.
 - Use `render_copilot_prompt` before `copilot_build` so the ACP prompt is assembled from prompt files instead of inline text.
 - Keep the work aligned with the task metadata above.
 - Validate the work before committing.
-- If `commit_changes` reports `committed=true`, you must call `create_pull_request`.
-- Before finishing, check your own work against the task metadata, validation output, and PR result.
+- If the work is ready, create a commit; leave push, PR creation, and cleanup for the teardown phase.
+- Before finishing, check your own work against the task metadata and validation output.

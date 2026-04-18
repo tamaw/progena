@@ -1,5 +1,7 @@
 """Tests for builder_progenitor git helpers."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.agents.builder_progenitor.git import GitWorktreeManager
@@ -29,55 +31,64 @@ async def test_commit_changes_raises_when_git_commit_fails(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_preflight_update_reports_local_changes(tmp_path):
+async def test_create_worktree_uses_base_ref_for_new_branch(tmp_path):
     manager = GitWorktreeManager(worktrees_dir=tmp_path / "worktrees", repo_path=tmp_path)
 
     responses = iter(
         [
+            {"returncode": 1, "stdout": "", "stderr": ""},
             {"returncode": 0, "stdout": "", "stderr": ""},
-            {"returncode": 0, "stdout": " M file.py\n", "stderr": ""},
         ]
     )
+    calls: list[list[str]] = []
 
     async def fake_run_git(args, cwd, timeout=30.0):
-        del args, cwd, timeout
+        del cwd, timeout
+        calls.append(args)
         return next(responses)
 
     manager._run_git = fake_run_git  # type: ignore[method-assign]
+    manager._write_metadata = AsyncMock()  # type: ignore[method-assign]
 
-    result = await manager.preflight_update()
+    await manager.create_worktree(
+        "task-id", branch_name="progenitor/task-id", base_ref="origin/main"
+    )
 
-    assert result == {"success": True, "updated": False, "reason": "local_changes"}
+    assert calls[0] == ["show-ref", "--verify", "refs/heads/progenitor/task-id"]
+    assert calls[1][:4] == ["worktree", "add", "-b", "progenitor/task-id"]
+    assert calls[1][-1] == "origin/main"
+    assert calls[1][4].startswith(str(tmp_path / "worktrees" / "task-id_"))
 
 
 @pytest.mark.asyncio
-async def test_preflight_update_fast_forwards_when_safe(tmp_path):
+async def test_create_worktree_reuses_existing_branch_without_base_ref(tmp_path):
     manager = GitWorktreeManager(worktrees_dir=tmp_path / "worktrees", repo_path=tmp_path)
 
     responses = iter(
         [
             {"returncode": 0, "stdout": "", "stderr": ""},
             {"returncode": 0, "stdout": "", "stderr": ""},
-            {"returncode": 0, "stdout": "feature/test\n", "stderr": ""},
-            {"returncode": 0, "stdout": "origin/feature/test\n", "stderr": ""},
-            {"returncode": 0, "stdout": "abc123\n", "stderr": ""},
-            {"returncode": 0, "stdout": "def456\n", "stderr": ""},
-            {"returncode": 0, "stdout": "Updating abc123..def456\n", "stderr": ""},
-            {"returncode": 0, "stdout": "def456\n", "stderr": ""},
         ]
     )
+    calls: list[list[str]] = []
 
     async def fake_run_git(args, cwd, timeout=30.0):
-        del args, cwd, timeout
+        del cwd, timeout
+        calls.append(args)
         return next(responses)
 
     manager._run_git = fake_run_git  # type: ignore[method-assign]
+    manager._write_metadata = AsyncMock()  # type: ignore[method-assign]
 
-    result = await manager.preflight_update()
+    async def branch_exists(_: str) -> bool:
+        return True
 
-    assert result["success"] is True
-    assert result["updated"] is True
-    assert result["reason"] == "fast_forwarded"
-    assert result["branch"] == "feature/test"
-    assert result["upstream"] == "origin/feature/test"
-    assert result["rev"] == "def456"
+    manager.branch_exists = branch_exists  # type: ignore[method-assign]
+
+    await manager.create_worktree(
+        "task-id", branch_name="progenitor/task-id", base_ref="origin/main"
+    )
+
+    assert calls[0][:2] == ["worktree", "add"]
+    assert calls[0][-1] == "progenitor/task-id"
+    assert calls[0][2].startswith(str(tmp_path / "worktrees" / "task-id_"))

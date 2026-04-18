@@ -218,11 +218,19 @@ def create_builder_tools(
 
     # --- Worktree ---
 
-    async def create_worktree(work_item_id: str, branch_name: str | None = None) -> dict[str, str]:
+    async def create_worktree(
+        work_item_id: str,
+        branch_name: str | None = None,
+        base_ref: str = "origin/main",
+    ) -> dict[str, str]:
         """Create an isolated git worktree and return its path and branch."""
-        path = await rt.worktrees.create_worktree(work_item_id, branch_name=branch_name)
+        path = await rt.worktrees.create_worktree(
+            work_item_id,
+            branch_name=branch_name,
+            base_ref=base_ref,
+        )
         branch = await rt.current_branch(str(path))
-        return {"worktree_path": str(path), "branch": branch}
+        return {"worktree_path": str(path), "branch": branch, "base_ref": base_ref}
 
     async def cleanup_worktrees(max_age_hours: int = 24) -> dict[str, Any]:
         """Remove worktrees older than max_age_hours."""
@@ -278,31 +286,6 @@ def create_builder_tools(
         deleting worktree directories.
         """
         return await rt.worktrees.prune_worktrees()
-
-    async def prepare_worktree(worktree_path: str) -> dict[str, Any]:
-        """Prepare an existing worktree for a build task.
-
-        Fetches from remote and fast-forwards only when safe. Returns a
-        structured readiness result so the model can decide whether to proceed,
-        stop for manual intervention, or create a fresh worktree.
-        """
-        branch = await rt.current_branch(worktree_path)
-        result = await rt.worktrees.preflight_update(Path(worktree_path))
-        reason = str(result.get("reason") or "")
-        ready = bool(result.get("success")) and reason not in {
-            "fetch_failed",
-            "status_failed",
-            "local_changes",
-            "no_branch",
-            "no_shas",
-            "non_ff",
-        }
-        return {
-            **result,
-            "worktree_path": worktree_path,
-            "branch": branch,
-            "ready": ready,
-        }
 
     # --- Git Operations ---
 
@@ -731,14 +714,6 @@ def create_builder_tools(
             coroutine=prune_worktrees,
             name="prune_worktrees",
             description="Prune stale worktree references from git.",
-        ),
-        StructuredTool.from_function(
-            coroutine=prepare_worktree,
-            name="prepare_worktree",
-            description=(
-                "Prepare an existing worktree by fetching and ff-only syncing it when safe. "
-                "Returns ready=false for blockers like local changes or non-fast-forward upstreams."
-            ),
         ),
         # --- Git Operations ---
         StructuredTool.from_function(
