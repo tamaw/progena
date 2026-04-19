@@ -8,6 +8,7 @@ and forward custom events through the IPC ``stream_event`` channel to the UI.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from langgraph.config import get_stream_writer
@@ -67,7 +68,7 @@ def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
             event_type = CUSTOM_EVENT_FALLBACK_TYPE
 
     safe_metadata = truncate_json_safe(
-        _redact_args(metadata),
+        _redact_value(metadata),
         DEFAULT_STREAM_ARGS_BYTES,
     )
     if not isinstance(safe_metadata, dict):
@@ -86,7 +87,7 @@ def build_tool_start_event(
     raw_args: Any,
 ) -> dict[str, Any]:
     """Build a ``tool_start`` event payload with redacted+truncated args."""
-    redacted = _redact_args(raw_args)
+    redacted = _redact_value(raw_args)
     return {
         "event_type": "tool_start",
         "content": tool_name,
@@ -157,14 +158,23 @@ def emit_stream_event(payload: dict[str, Any]) -> None:
         logger.debug("Stream writer emission failed: %s", exc)
 
 
-def _redact_args(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: _redact_args(item) for key, item in value.items()}
+def _redact_value(value: Any) -> Any:
+    """Return a JSON-friendly value with secrets redacted recursively."""
+    if isinstance(value, Mapping):
+        return {str(key): _redact_value(item) for key, item in value.items()}
     if isinstance(value, list):
-        return [_redact_args(item) for item in value]
+        return [_redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, bytes):
+        return redact_secrets(value.decode("utf-8", errors="replace"))
     if isinstance(value, str):
         return redact_secrets(value)
-    return value
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    return redact_secrets(str(value))
 
 
 def _redact_preview(value: Any) -> str:
