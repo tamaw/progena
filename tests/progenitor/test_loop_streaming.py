@@ -53,6 +53,18 @@ async def _collect_stream_chunks(loop: ProgenitorLoop) -> list[dict]:
     return chunks
 
 
+async def _collect_stream_items(loop: ProgenitorLoop) -> list[dict]:
+    items: list[dict] = []
+    while True:
+        item = await loop.get_stream_item(timeout=0.01)
+        if item is None:
+            break
+        items.append(item)
+        if item.get("type") == "stream_chunk" and item.get("is_final"):
+            break
+    return items
+
+
 class TestProgenitorLoopStreaming:
     @pytest.mark.asyncio
     async def test_graph_message_events_stream_incrementally_without_duplicate_final(self):
@@ -118,6 +130,59 @@ class TestProgenitorLoopStreaming:
 
         assert chunks == [
             {"type": "stream_chunk", "content": "Hello", "is_final": True},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_stream_items_include_structured_events_without_breaking_chunk_reader(self):
+        graph = _FakeGraph(
+            [
+                ("messages", (AIMessageChunk(content="Hi"), {"langgraph_node": "respond"})),
+                (
+                    "updates",
+                    {
+                        "respond": {
+                            "pending_response": "Hi",
+                            "messages": [AIMessage(content="Hi")],
+                        }
+                    },
+                ),
+            ]
+        )
+        loop = ProgenitorLoop(
+            graph=graph,
+            state_manager=AsyncMock(),
+            config=_make_config(),
+        )
+        loop._state = _make_loop_state()
+        loop._streaming_enabled = True
+
+        await loop._run_graph_cycle("run-structured", source="user_input")
+        items = await _collect_stream_items(loop)
+
+        assert items == [
+            {"type": "stream_chunk", "content": "Hi", "is_final": False},
+            {
+                "type": "stream_event",
+                "event_type": "message_delta",
+                "content": "Hi",
+                "metadata": {
+                    "message_chunk_type": "AIMessageChunk",
+                    "stream_metadata": {"langgraph_node": "respond"},
+                    "text_length": 2,
+                },
+            },
+            {
+                "type": "stream_event",
+                "event_type": "node_update",
+                "content": "",
+                "metadata": {
+                    "node_name": "respond",
+                    "output_keys": ["pending_response", "messages"],
+                    "contains_messages": True,
+                    "contains_pending_response": True,
+                },
+            },
+            {"type": "stream_chunk", "content": "", "is_final": True},
         ]
 
     @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 function Message({ message }) {
-  const { role, content, timestamp, isStreaming, error, isScheduled } = message;
+  const { role, content, timestamp, isStreaming, error, isScheduled, streamEvents = [] } = message;
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -25,6 +25,9 @@ function Message({ message }) {
             Scheduled
           </div>
         )}
+        {role === 'assistant' && streamEvents.length > 0 && (
+          <StreamEvents events={streamEvents} />
+        )}
         <div
           className="message-content"
           dangerouslySetInnerHTML={{ __html: formattedContent }}
@@ -34,6 +37,30 @@ function Message({ message }) {
         )}
       </div>
       <MessageActions role={role} content={content} />
+    </div>
+  );
+}
+
+function StreamEvents({ events }) {
+  return (
+    <div className="message-stream-events">
+      {events.map((event) => {
+        const description = describeStreamEvent(event);
+        return (
+          <div
+            key={event.id}
+            className={`message-stream-event ${event.eventType || 'stream_event'}`}
+          >
+            <div className="message-stream-event-header">
+              <span className="message-stream-event-badge">{description.badge}</span>
+              <span className="message-stream-event-title">{description.title}</span>
+            </div>
+            {description.detail && (
+              <div className="message-stream-event-detail">{description.detail}</div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -68,6 +95,92 @@ function MessageActions({ role, content }) {
       )}
     </div>
   );
+}
+
+function describeStreamEvent(event) {
+  const eventType = typeof event?.eventType === 'string' ? event.eventType : 'stream_event';
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+
+  if (eventType === 'node_update') {
+    const nodeName = typeof metadata.node_name === 'string' ? metadata.node_name : 'unknown';
+    const detailParts = [];
+
+    if (Array.isArray(metadata.output_keys) && metadata.output_keys.length > 0) {
+      detailParts.push(`outputs: ${metadata.output_keys.join(', ')}`);
+    }
+    if (metadata.contains_messages) {
+      detailParts.push('messages updated');
+    }
+    if (metadata.contains_pending_response) {
+      detailParts.push('draft updated');
+    }
+
+    return {
+      badge: 'Step',
+      title: prettifyLabel(nodeName),
+      detail: detailParts.join(' • ') || 'Node updated',
+    };
+  }
+
+  const explicitName = [
+    metadata.tool_name,
+    metadata.name,
+    metadata.agent_name,
+    metadata.node_name,
+  ].find((value) => typeof value === 'string' && value.trim().length > 0);
+
+  const detailParts = [];
+  if (typeof event?.content === 'string' && event.content.trim()) {
+    detailParts.push(event.content.trim());
+  }
+
+  const metadataSummary = summarizeMetadata(metadata);
+  if (metadataSummary) {
+    detailParts.push(metadataSummary);
+  }
+
+  return {
+    badge: badgeForEventType(eventType),
+    title: explicitName ? prettifyLabel(explicitName) : prettifyLabel(eventType),
+    detail: detailParts.join(' • '),
+  };
+}
+
+function summarizeMetadata(metadata) {
+  const summaryParts = [];
+
+  if (Array.isArray(metadata.output_keys) && metadata.output_keys.length > 0) {
+    summaryParts.push(`outputs: ${metadata.output_keys.join(', ')}`);
+  }
+  if (typeof metadata.text_length === 'number' && metadata.text_length > 0) {
+    summaryParts.push(`${metadata.text_length} chars`);
+  }
+  if (typeof metadata.stream_metadata?.langgraph_node === 'string') {
+    summaryParts.push(`node: ${metadata.stream_metadata.langgraph_node}`);
+  }
+
+  return summaryParts.join(' • ');
+}
+
+function badgeForEventType(eventType) {
+  if (eventType.includes('tool')) {
+    return 'Tool';
+  }
+  if (eventType.includes('agent')) {
+    return 'Agent';
+  }
+  if (eventType.includes('node')) {
+    return 'Step';
+  }
+  return 'Event';
+}
+
+function prettifyLabel(value) {
+  return value
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function formatMessage(content) {

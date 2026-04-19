@@ -13,6 +13,7 @@ spawning a subprocess, providing:
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from ..progenitor.config import ProgenitorConfig
 from ..progenitor.service import ProgenitorService, get_service
@@ -82,29 +83,25 @@ class ServiceProgenitorClient:
 
         return await service.handle_message(message, request_id, metadata=metadata)
 
-    async def send_message_stream(
+    async def send_message_stream_events(
         self,
         message: str,
         request_id: str | None = None,
         metadata: dict | None = None,
-    ) -> AsyncIterator[str]:
-        """Send a message and stream the response.
-
-        Args:
-            message: The user message.
-            request_id: Optional request ID for correlation.
-
-        Yields:
-            Response chunks.
-        """
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Send a message and stream structured service events."""
         if not self._service or not self._service.is_initialized:
             await self.start()
         service = self._service
         if service is None:
             raise RuntimeError("Progenitor service failed to start")
 
-        async for chunk in service.handle_message_stream(message, request_id, metadata=metadata):
-            yield chunk
+        async for event in service.handle_message_stream_events(
+            message,
+            request_id,
+            metadata=metadata,
+        ):
+            yield event
 
     @property
     def is_running(self) -> bool:

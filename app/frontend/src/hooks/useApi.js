@@ -29,6 +29,34 @@ function buildResponsesInput(history, message) {
     .filter((entry) => entry.content);
 }
 
+function parseSSEEventBlock(block) {
+  if (!block) {
+    return null;
+  }
+
+  let eventType = 'message';
+  const dataLines = [];
+
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) {
+      eventType = line.slice(6).trim() || 'message';
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  return {
+    eventType,
+    data: dataLines.join('\n'),
+  };
+}
+
 export function useApi() {
   const { config, getApiUrl } = useConfig();
   const { isHealthy } = useHealth();
@@ -272,56 +300,67 @@ export function useApi() {
     return data.output?.[0]?.content?.[0]?.text || '';
   }, [config, fetchWithRetry]);
 
-  const sendMessageStream = useCallback(async (message, history = [], onChunk, onComplete, onError) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-
-    abortControllerRef.current = new AbortController();
-    const input = buildResponsesInput(history, message);
-    const url = getApiUrl('responses');
-
-    try {
-      setConnectionState((current) => (isHealthy ? current : 'connecting'));
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: config.chat.defaultModel,
-          input,
-          stream: true
-        }),
-        signal: abortControllerRef.current.signal
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
-        throw new Error(error.error?.message || `HTTP ${response.status}`);
+  const sendMessageStream = useCallback(
+    async (message, history = [], onChunk, onComplete, onError, onStreamEvent) => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
 
-      setConnectionState('connected');
+      abortControllerRef.current = new AbortController();
+      const input = buildResponsesInput(history, message);
+      const url = getApiUrl('responses');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
+      try {
+        setConnectionState((current) => (isHealthy ? current : 'connecting'));
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: config.chat.defaultModel,
+            input,
+            stream: true
+          }),
+          signal: abortControllerRef.current.signal
+        });
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
+          throw new Error(error.error?.message || `HTTP ${response.status}`);
+        }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
+        setConnectionState('connected');
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          const blocks = buffer.split('\n\n');
+          buffer = blocks.pop() || '';
+
+          for (const block of blocks) {
+            const parsedEvent = parseSSEEventBlock(block.trim());
+            if (!parsedEvent) {
+              continue;
+            }
+
             try {
-              const parsed = JSON.parse(data);
-              if (line.startsWith('event: error') || parsed.error) {
-                onError?.(new Error(parsed.error));
+              const parsed = JSON.parse(parsedEvent.data);
+              if (parsedEvent.eventType === 'error' || parsed.error) {
+                const errorMessage = parsed.error?.message || parsed.error || 'Streaming error';
+                onError?.(new Error(errorMessage));
                 return;
               }
+
+              if (parsed.object === 'response.stream_event') {
+                onStreamEvent?.(parsed);
+                continue;
+              }
+
               const text = parsed.delta?.text || parsed.output?.[0]?.content?.[0]?.text;
               if (text) {
                 onChunk?.(text);
@@ -335,17 +374,20 @@ export function useApi() {
             }
           }
         }
+        onComplete?.();
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          onComplete?.('cancelled');
+        } else {
+          setConnectionState('error');
+          onError?.(error);
+        }
+      } finally {
+        abortControllerRef.current = null;
       }
-      onComplete?.();
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        onComplete?.('cancelled');
-      } else {
-        setConnectionState('error');
-        onError?.(error);
-      }
-    }
-  }, [config, getApiUrl, isHealthy]);
+    },
+    [config, getApiUrl, isHealthy]
+  );
 
   const cancelStream = useCallback(() => {
     if (abortControllerRef.current) {

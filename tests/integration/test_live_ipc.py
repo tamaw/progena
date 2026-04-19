@@ -89,13 +89,18 @@ async def send_message_and_collect(
 
     try:
         # Use streaming mode (matches working backend pattern)
-        async for chunk in client.send_message_stream(message):
+        async for item in client.send_message_stream_events(message):
+            if item.get("type") != "stream_chunk":
+                continue
+            chunk = str(item.get("content", ""))
             if chunk:
                 result["chunks"].append(chunk)
                 result["response"] += chunk
 
         result["success"] = True
-        logger.info(f"[{test_name}] Response received ({len(result['chunks'])} chunks, {len(result['response'])} chars)")
+        logger.info(
+            f"[{test_name}] Response received ({len(result['chunks'])} chunks, {len(result['response'])} chars)"
+        )
 
     except TimeoutError:
         result["error"] = f"Timeout after {timeout}s"
@@ -145,12 +150,17 @@ async def send_message_stream_and_collect(
     start_time = asyncio.get_event_loop().time()
 
     try:
-        async for chunk in client.send_message_stream(message):
+        async for item in client.send_message_stream_events(message):
+            if item.get("type") != "stream_chunk":
+                continue
+            chunk = str(item.get("content", ""))
             result["chunks"].append(chunk)
             result["response"] += chunk
 
         result["success"] = True
-        logger.info(f"[{test_name}] Stream complete ({len(result['chunks'])} chunks, {len(result['response'])} chars)")
+        logger.info(
+            f"[{test_name}] Stream complete ({len(result['chunks'])} chunks, {len(result['response'])} chars)"
+        )
 
     except TimeoutError:
         result["error"] = f"Timeout after {timeout}s"
@@ -225,7 +235,9 @@ async def test_chat_streaming(ipc_client):
 
     # Log summary
     if result["success"]:
-        logger.info(f"✓ Streaming test completed in {result['duration_seconds']:.2f}s ({len(result['chunks'])} chunks)")
+        logger.info(
+            f"✓ Streaming test completed in {result['duration_seconds']:.2f}s ({len(result['chunks'])} chunks)"
+        )
     else:
         logger.error(f"✗ Streaming test failed: {result['error']}")
 
@@ -272,7 +284,9 @@ async def test_schedule_task(ipc_client):
 
         # Ask the agent if the scheduled task ran
         logger.info("  Checking if scheduled task executed...")
-        check_message = "Did any scheduled tasks just run in the last 2 minutes? If so, what was the result?"
+        check_message = (
+            "Did any scheduled tasks just run in the last 2 minutes? If so, what was the result?"
+        )
 
         check_result = await send_message_and_collect(
             ipc_client,
@@ -285,7 +299,10 @@ async def test_schedule_task(ipc_client):
         if check_result["success"]:
             logger.info(f"✓ Verification completed in {check_result['duration_seconds']:.2f}s")
             # Check if the test message appeared in the response
-            if "INTEGRATION_TEST_COMPLETED" in check_result["response"] or "integration" in check_result["response"].lower():
+            if (
+                "INTEGRATION_TEST_COMPLETED" in check_result["response"]
+                or "integration" in check_result["response"].lower()
+            ):
                 logger.info("  ✓ Scheduled task appears to have executed!")
             else:
                 logger.warning("  ⚠️ Could not confirm task execution from agent response")
@@ -388,20 +405,27 @@ async def test_mcp_tool(ipc_client):
     events = deduped
 
     result["events"] = events
-    result["mcp_tool_events"] = [e for e in events if str(e.get("event_type", "")).startswith("mcp_tool_")]
-    result["observed_tool_call"] = any(e.get("event_type") == "mcp_tool_call_started" for e in events)
+    result["mcp_tool_events"] = [
+        e for e in events if str(e.get("event_type", "")).startswith("mcp_tool_")
+    ]
+    result["observed_tool_call"] = any(
+        e.get("event_type") == "mcp_tool_call_started" for e in events
+    )
 
     write_result("mcp_tool", result)
 
     # Log summary
     if result["success"]:
         logger.info(f"✓ MCP tool test completed in {result['duration_seconds']:.2f}s")
-        response_lower = result['response'].lower()
+        response_lower = result["response"].lower()
 
         # Check if primer was actually used
-        if 'not available' in response_lower or "can't" in response_lower:
+        if "not available" in response_lower or "can't" in response_lower:
             logger.warning("  ⚠️ MCP tools not available - check configuration")
-        elif any(keyword in response_lower for keyword in ['time', 'location', 'session', 'context', 'primer']):
+        elif any(
+            keyword in response_lower
+            for keyword in ["time", "location", "session", "context", "primer"]
+        ):
             logger.info("  ✓ Response contains primer/session context info (MCP likely working)")
         else:
             logger.info("  Response received (check results for MCP usage)")

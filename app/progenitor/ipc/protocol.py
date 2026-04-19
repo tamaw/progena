@@ -11,6 +11,7 @@ Message Types:
     - user_message: Input from user
     - assistant_message: Complete response from Progenitor
     - stream_chunk: Streaming response chunk
+    - stream_event: Structured request-scoped streaming event
     - stream_end: End of streaming response
     - heartbeat: Keep-alive ping
     - heartbeat_ack: Keep-alive pong
@@ -46,6 +47,7 @@ class MessageType(StrEnum):
     # Response messages (server -> client)
     ASSISTANT_MESSAGE = "assistant_message"
     STREAM_CHUNK = "stream_chunk"
+    STREAM_EVENT = "stream_event"
     STREAM_END = "stream_end"
     HEARTBEAT_ACK = "heartbeat_ack"
     ERROR = "error"
@@ -67,7 +69,7 @@ class IPCMessage:
     metadata: dict[str, Any] | None = None
     error_code: str | None = None
     timestamp: str | None = None
-    event_type: str | None = None  # For AGENT_EVENT: 'backlog_update', 'schedule_triggered', etc.
+    event_type: str | None = None  # For AGENT_EVENT / STREAM_EVENT
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -257,6 +259,22 @@ def stream_chunk(
         content=content,
         request_id=request_id,
         is_final=is_final,
+    )
+
+
+def stream_event(
+    event_type: str,
+    request_id: str | None = None,
+    content: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> IPCMessage:
+    """Create a structured request-scoped streaming event message."""
+    return IPCMessage(
+        type=MessageType.STREAM_EVENT,
+        content=content,
+        request_id=request_id,
+        metadata=metadata,
+        event_type=event_type,
     )
 
 
