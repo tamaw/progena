@@ -29,11 +29,11 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
-from .agent.stream_events import normalize_custom_event
 from .config import ProgenitorConfig, get_config
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .state.manager import StateManager
+from .stream_events import normalize_custom_event
 from .streaming_utils import extract_stream_chunk_text, make_json_safe
 from .tools.registry import ToolRegistry
 
