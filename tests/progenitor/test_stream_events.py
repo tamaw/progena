@@ -67,6 +67,29 @@ def test_normalize_custom_event_redacts_non_dict_payload_secrets():
     assert "REDACTED" in repr(envelope)
 
 
+def test_normalize_custom_event_redacts_tuple_and_object_payloads():
+    api_key = "sk-" + "c" * 48
+
+    class SecretHolder:
+        def __str__(self) -> str:
+            return f"holder {api_key}"
+
+    envelope = normalize_custom_event(
+        {
+            "event_type": "debug_event",
+            "metadata": {
+                "tuple_value": (api_key, "safe"),
+                "set_value": {api_key},
+                "object_value": SecretHolder(),
+            },
+        }
+    )
+    assert envelope is not None
+    serialized = repr(envelope)
+    assert api_key not in serialized
+    assert "REDACTED" in serialized
+
+
 def test_normalize_custom_event_redacts_metadata_secrets():
     api_key = "sk-" + "a" * 48
     envelope = normalize_custom_event(

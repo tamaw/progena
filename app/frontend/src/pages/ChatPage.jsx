@@ -18,6 +18,7 @@ import {
 
 const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
 const MAX_TOKEN_DELTAS_PER_MESSAGE = 500;
+const CANCELLED_SUFFIX = ' [Cancelled]';
 
 function normalizeStreamEvent(event, index) {
   if (!event || typeof event !== 'object') {
@@ -137,6 +138,26 @@ function stripEphemeralStreamEvents(message) {
     return message;
   }
   return { ...message, streamEvents: persistable };
+}
+
+function finalizeSupersededAssistant(message) {
+  if (!message?.isStreaming) {
+    return message;
+  }
+
+  const content = typeof message.content === 'string' ? message.content : '';
+  const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
+  const hasVisibleOutput = content.trim().length > 0 || streamEvents.length > 0;
+
+  if (!hasVisibleOutput) {
+    return null;
+  }
+
+  return {
+    ...message,
+    isStreaming: false,
+    content: content.endsWith(CANCELLED_SUFFIX) ? content : `${content}${CANCELLED_SUFFIX}`,
+  };
 }
 
 function ChatPage() {
@@ -326,7 +347,13 @@ function ChatPage() {
     // placeholder that is being superseded so the spinner doesn't stick.
     setMessages(prev => {
       const next = previousAssistantId
-        ? prev.map(m => (m.id === previousAssistantId && m.isStreaming ? { ...m, isStreaming: false } : m))
+        ? prev
+          .map((m) => (
+            m.id === previousAssistantId
+              ? finalizeSupersededAssistant(m)
+              : m
+          ))
+          .filter(Boolean)
         : prev;
       return [...next, {
         id: assistantId,
