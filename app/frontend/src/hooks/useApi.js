@@ -306,7 +306,8 @@ export function useApi() {
         abortControllerRef.current.abort();
       }
 
-      abortControllerRef.current = new AbortController();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
 
@@ -320,7 +321,7 @@ export function useApi() {
             input,
             stream: true
           }),
-          signal: abortControllerRef.current.signal
+          signal: controller.signal
         });
 
         if (!response.ok) {
@@ -383,7 +384,9 @@ export function useApi() {
           onError?.(error);
         }
       } finally {
-        abortControllerRef.current = null;
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
       }
     },
     [config, getApiUrl, isHealthy]

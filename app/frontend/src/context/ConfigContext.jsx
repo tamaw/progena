@@ -80,7 +80,8 @@ const defaultConfig = {
     chatHistory: 'progenitor_chat_history',
     settings: 'progenitor_settings',
     inputHistory: 'progenitor_input_history',
-    sidebarCollapsed: 'progenitor_sidebar_collapsed'
+    sidebarCollapsed: 'progenitor_sidebar_collapsed',
+    streamFilters: 'progenitor_stream_filters'
   }
 };
 
