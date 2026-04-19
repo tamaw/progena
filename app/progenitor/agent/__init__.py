@@ -15,6 +15,20 @@ Modules:
     subagents: Build loop, code reviewer, researcher
 """
 
-from .deep_agent import create_progenitor_agent
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .deep_agent import create_progenitor_agent as create_progenitor_agent
 
 __all__ = ["create_progenitor_agent"]
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve heavy exports lazily so submodule imports stay side-effect free."""
+    if name == "create_progenitor_agent":
+        from .deep_agent import create_progenitor_agent
+
+        return create_progenitor_agent
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
