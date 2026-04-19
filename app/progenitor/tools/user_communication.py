@@ -19,6 +19,41 @@ logger = logging.getLogger(__name__)
 EventPusher = Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]]
 
 
+def _parameters_for_tool(tool_name: str) -> dict[str, Any]:
+    for entry in USER_COMMUNICATION_TOOLS:
+        if entry.get("name") != tool_name:
+            continue
+        raw_parameters = entry.get("parameters")
+        if not isinstance(raw_parameters, dict):
+            break
+
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        for name, spec in raw_parameters.items():
+            if not isinstance(spec, dict):
+                continue
+            properties[name] = {key: value for key, value in spec.items() if key != "required"}
+            if spec.get("required") is True:
+                required.append(name)
+
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        }
+
+    return {
+        "type": "object",
+        "properties": {
+            "request": {
+                "type": "string",
+                "description": "Natural language request for the tool.",
+            }
+        },
+        "required": ["request"],
+    }
+
+
 class UserCommunicationTools:
     """Tools for agent-to-user communication via IPC events.
 
@@ -251,6 +286,10 @@ class SayToUserTool(BaseSystemTool):
     def description(self) -> str:
         return "Send a one-way message to the user via IPC (agent_message event)"
 
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return _parameters_for_tool(self.name)
+
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         message = str(args.get("message") or context.user_input or "").strip()
@@ -279,6 +318,10 @@ class AskUserTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return "Ask the user a question via IPC (agent_question event; one-way notification)"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return _parameters_for_tool(self.name)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
@@ -315,6 +358,10 @@ class NotifyUserTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return "Create a backend-managed alert and let the backend drive user-facing delivery"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return _parameters_for_tool(self.name)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}

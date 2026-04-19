@@ -7,6 +7,7 @@ executed at the scheduled time as if it were a new user request.
 """
 
 import logging
+import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -20,14 +21,13 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+_SCHEDULE_ID_PATTERN = re.compile(r"\b(sched_[A-Za-z0-9]+)\b")
 
 
 class ScheduleRequest(BaseModel):
     """Request to add a scheduled task."""
 
-    user_request: str = Field(
-        description="The original user request (e.g., 'say hello at 9am')"
-    )
+    user_request: str = Field(description="The original user request (e.g., 'say hello at 9am')")
     time_expression: str = Field(
         description="Time expression (e.g., 'at 9am', 'every day at 9am', 'in 30 minutes')"
     )
@@ -35,9 +35,10 @@ class ScheduleRequest(BaseModel):
         description="Processed instruction for the agent to execute at the scheduled time"
     )
     description: str | None = Field(
-        default=None,
-        description="Human-readable description of the scheduled task"
+        default=None, description="Human-readable description of the scheduled task"
     )
+
+
 class ScheduleResult(BaseModel):
     """Result of a schedule operation."""
 
@@ -100,11 +101,13 @@ async def add_scheduled_task(
         )
     else:
         entry["cron_expression"] = parsed["cron_expression"]
-        next_run = scheduler.next_run_for_entry({
-            "cron_expression": parsed["cron_expression"],
-            "last_run": None,
-            "created_at": created_at,
-        })
+        next_run = scheduler.next_run_for_entry(
+            {
+                "cron_expression": parsed["cron_expression"],
+                "last_run": None,
+                "created_at": created_at,
+            }
+        )
         logger.info(
             "Created schedule entry %s: %s (%s)",
             schedule_id,
@@ -305,7 +308,6 @@ async def resume_scheduled_task(
     )
 
 
-
 async def remove_scheduled_task(schedule_id: str) -> ScheduleResult:
     """
     Remove a scheduled task by ID.
@@ -341,15 +343,17 @@ async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str,
         next_run = next_run_dt.isoformat() if next_run_dt else "Unknown"
         cron_expression = entry_dict.get("cron_expression")
 
-        result.append({
-            "id": entry_dict.get("id"),
-            "message": entry_dict.get("message"),
-            "status": status,
-            "next_run": str(next_run),
-            "cron_expression": cron_expression,
-            "last_run": entry_dict.get("last_run"),
-            "created_at": entry_dict.get("created_at"),
-        })
+        result.append(
+            {
+                "id": entry_dict.get("id"),
+                "message": entry_dict.get("message"),
+                "status": status,
+                "next_run": str(next_run),
+                "cron_expression": cron_expression,
+                "last_run": entry_dict.get("last_run"),
+                "created_at": entry_dict.get("created_at"),
+            }
+        )
 
     return result
 
@@ -373,15 +377,207 @@ class ScheduleTool(BaseSystemTool):
         if context.state_manager and hasattr(context.state_manager, "get_schedule"):
             schedule_entries = await context.state_manager.get_schedule()
             # state_manager may return Pydantic models
-            schedule_dicts = [e.model_dump() if hasattr(e, "model_dump") else e for e in schedule_entries]
+            schedule_dicts = [
+                e.model_dump() if hasattr(e, "model_dump") else e for e in schedule_entries
+            ]
         else:
             schedule_dicts = []
 
         listed = await list_scheduled_tasks(schedule_dicts)
-        return ToolResult.ok({
-            "count": len(listed),
-            "schedule": listed,
-        })
+        return ToolResult.ok(
+            {
+                "count": len(listed),
+                "schedule": listed,
+            }
+        )
+
+
+def _tool_parameters_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    parameters = spec.get("parameters")
+    if isinstance(parameters, dict):
+        return parameters
+    return {
+        "type": "object",
+        "properties": {
+            "request": {
+                "type": "string",
+                "description": "Natural language request for the tool.",
+            }
+        },
+        "required": ["request"],
+    }
+
+
+def _extract_schedule_id(args: dict[str, Any], user_input: str) -> str:
+    schedule_id = str(args.get("schedule_id") or "").strip()
+    if schedule_id:
+        return schedule_id
+
+    request = str(args.get("request") or user_input or "").strip()
+    match = _SCHEDULE_ID_PATTERN.search(request)
+    return match.group(1) if match else ""
+
+
+class DeleteScheduleTool(BaseSystemTool):
+    """Delete a scheduled task from persistent schedule state."""
+
+    @property
+    def name(self) -> str:
+        return "delete_schedule"
+
+    @property
+    def description(self) -> str:
+        return "Permanently delete a scheduled task by its ID"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return _tool_parameters_from_spec(DELETE_SCHEDULE_TOOL_SPEC)
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        if context.state_manager is None:
+            return ToolResult.fail("state_manager unavailable; cannot delete schedule entries")
+
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        schedule_id = _extract_schedule_id(args, context.user_input)
+        if not schedule_id:
+            return ToolResult.fail("Missing 'schedule_id'")
+
+        result = await delete_scheduled_task(schedule_id, state_manager=context.state_manager)
+        if not result.success:
+            return ToolResult.fail(result.message)
+
+        return ToolResult.ok(
+            {
+                "success": True,
+                "schedule_id": schedule_id,
+                "message": result.message,
+            }
+        )
+
+
+class UpdateScheduleTool(BaseSystemTool):
+    """Update an existing scheduled task."""
+
+    @property
+    def name(self) -> str:
+        return "update_schedule"
+
+    @property
+    def description(self) -> str:
+        return "Update fields of an existing scheduled task without recreating it"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return _tool_parameters_from_spec(UPDATE_SCHEDULE_TOOL_SPEC)
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        if context.state_manager is None:
+            return ToolResult.fail("state_manager unavailable; cannot update schedule entries")
+
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        schedule_id = _extract_schedule_id(args, context.user_input)
+        if not schedule_id:
+            return ToolResult.fail("Missing 'schedule_id'")
+
+        updates = {
+            key: value
+            for key, value in args.items()
+            if key in {"message", "cron_expression", "scheduled_at", "user_request"}
+            and value is not None
+        }
+        if not updates:
+            return ToolResult.fail("No schedule updates provided")
+
+        result = await update_scheduled_task(
+            schedule_id,
+            updates,
+            state_manager=context.state_manager,
+        )
+        if not result.success:
+            return ToolResult.fail(result.message)
+
+        return ToolResult.ok(
+            {
+                "success": True,
+                "schedule_id": schedule_id,
+                "message": result.message,
+                "updates": updates,
+            }
+        )
+
+
+class PauseScheduleTool(BaseSystemTool):
+    """Pause a scheduled task without deleting it."""
+
+    @property
+    def name(self) -> str:
+        return "pause_schedule"
+
+    @property
+    def description(self) -> str:
+        return "Pause a scheduled task so it is skipped without being deleted"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return _tool_parameters_from_spec(PAUSE_SCHEDULE_TOOL_SPEC)
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        if context.state_manager is None:
+            return ToolResult.fail("state_manager unavailable; cannot pause schedule entries")
+
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        schedule_id = _extract_schedule_id(args, context.user_input)
+        if not schedule_id:
+            return ToolResult.fail("Missing 'schedule_id'")
+
+        result = await pause_scheduled_task(schedule_id, state_manager=context.state_manager)
+        if not result.success:
+            return ToolResult.fail(result.message)
+
+        return ToolResult.ok(
+            {
+                "success": True,
+                "schedule_id": schedule_id,
+                "message": result.message,
+            }
+        )
+
+
+class ResumeScheduleTool(BaseSystemTool):
+    """Resume a previously paused scheduled task."""
+
+    @property
+    def name(self) -> str:
+        return "resume_schedule"
+
+    @property
+    def description(self) -> str:
+        return "Resume a paused scheduled task"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return _tool_parameters_from_spec(RESUME_SCHEDULE_TOOL_SPEC)
+
+    async def execute(self, context: ToolContext) -> ToolResult:
+        if context.state_manager is None:
+            return ToolResult.fail("state_manager unavailable; cannot resume schedule entries")
+
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        schedule_id = _extract_schedule_id(args, context.user_input)
+        if not schedule_id:
+            return ToolResult.fail("Missing 'schedule_id'")
+
+        result = await resume_scheduled_task(schedule_id, state_manager=context.state_manager)
+        if not result.success:
+            return ToolResult.fail(result.message)
+
+        return ToolResult.ok(
+            {
+                "success": True,
+                "schedule_id": schedule_id,
+                "message": result.message,
+            }
+        )
 
 
 # Tool registration for use by decide/planner nodes
@@ -545,4 +741,3 @@ The tool takes:
         "required": ["schedule_id"],
     },
 }
-

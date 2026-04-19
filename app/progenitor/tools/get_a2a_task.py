@@ -16,6 +16,29 @@ class GetA2ATaskTool(BaseSystemTool):
     """Query progress or final results for a tracked A2A task."""
 
     @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Tracked task ID to look up.",
+                },
+                "refresh": {
+                    "type": "boolean",
+                    "description": "Refresh task state from the remote agent before returning.",
+                    "default": True,
+                },
+                "history_length": {
+                    "type": "integer",
+                    "description": "Maximum number of recent task history events to include.",
+                    "default": DEFAULT_A2A_HISTORY_LENGTH,
+                },
+            },
+            "required": ["task_id"],
+        }
+
+    @property
     def name(self) -> str:
         return "get_a2a_task"
 

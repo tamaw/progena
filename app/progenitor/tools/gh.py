@@ -13,7 +13,7 @@ import os
 import re
 import shlex
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -304,6 +304,29 @@ async def gh_create_pr_from_worktree(
 
 class GhCliTool(BaseSystemTool):
     """Run gh CLI commands from container/project-root scope."""
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "array",
+                    "description": "GitHub CLI arguments, excluding the leading 'gh'.",
+                    "items": {"type": "string"},
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory for the gh command.",
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Command timeout in seconds.",
+                    "default": 60.0,
+                },
+            },
+            "required": [],
+        }
 
     @property
     def name(self) -> str:
