@@ -42,14 +42,7 @@ CUSTOM_EVENT_FALLBACK_TYPE = "custom_event"
 
 
 def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
-    """Validate a custom stream payload and return a normalized envelope.
-
-    Accepts dicts shaped like ``{"event_type": str, "content": str,
-    "metadata": dict}``. Unknown or invalid event_types are coerced to
-    ``custom_event`` and the original payload is preserved under
-    ``metadata.raw``. Returns ``None`` if the payload cannot be turned into
-    a usable envelope at all.
-    """
+    """Validate a custom stream payload and return a normalized envelope."""
     if not isinstance(payload, dict):
         event_type = CUSTOM_EVENT_FALLBACK_TYPE
         metadata: dict[str, Any] = {"raw": payload}
@@ -140,15 +133,10 @@ def build_tool_error_event(
 
 
 def emit_stream_event(payload: dict[str, Any]) -> None:
-    """Best-effort emission via LangGraph's stream writer.
-
-    Silently no-ops if we are not inside a LangGraph streaming context.
-    Tool execution must never depend on emission.
-    """
+    """Best-effort emission via LangGraph's stream writer."""
     try:
         writer = get_stream_writer()
     except RuntimeError:
-        # Not inside a graph context (e.g. plain unit test) — silently skip.
         return
     if writer is None:
         return
