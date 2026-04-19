@@ -3,7 +3,6 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-
 _MODULE_NAMES = [
     "app.progenitor.agent.deep_agent",
     "app.progenitor.runtime.loop",
