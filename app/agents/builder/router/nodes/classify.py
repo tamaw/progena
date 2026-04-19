@@ -35,8 +35,9 @@ def create_classify_node(
     system_prompt = load_prompt("router_system.md").strip()
 
     async def classify(state: RouterState) -> dict:
-        if state.get("route"):
-            logger.info("Router: explicit route=%s, skipping classification", state["route"])
+        route = state.get("route")
+        if route:
+            logger.info("Router: explicit route=%s, skipping classification", route)
             return {}
 
         request_text = (state.get("request_text") or "").strip()

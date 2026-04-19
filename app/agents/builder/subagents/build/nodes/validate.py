@@ -8,9 +8,17 @@ from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
 
+from ....client import PlannedBuild
 from ..state import BuildState
 
 logger = logging.getLogger(__name__)
+
+
+def _require_planned_build(state: BuildState) -> PlannedBuild:
+    planned_build = state.get("planned_build")
+    if planned_build is None:
+        raise ValueError("Build validate node requires planned_build")
+    return planned_build
 
 
 def create_validate_node(
@@ -24,6 +32,7 @@ def create_validate_node(
 
     async def validate(state: BuildState) -> dict:
         evidence = state.get("execution_evidence") or state.get("execution_text") or ""
+        planned_build = _require_planned_build(state)
         logger.info(
             "Build subagent: validate phase (thread=%s evidence_len=%d)",
             state.get("thread_id", "?"),
@@ -33,7 +42,7 @@ def create_validate_node(
             {
                 "request_text": state.get("request_text", ""),
                 "request_context": state.get("request_context", {}),
-                "planned_build": state["planned_build"],
+                "planned_build": planned_build,
                 "evidence_text": evidence,
             }
         )
