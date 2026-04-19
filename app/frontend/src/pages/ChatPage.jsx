@@ -92,6 +92,43 @@ function createStreamEvent(streamEvent) {
 
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
+  if (nextEvent.eventType === 'reasoning_delta') {
+    for (let i = currentEvents.length - 1; i >= 0; i -= 1) {
+      if (currentEvents[i].eventType !== 'reasoning_delta') continue;
+      const mergedContent = `${currentEvents[i].content || ''}${nextEvent.content || ''}`;
+      const mergedMetadata = {
+        ...currentEvents[i].metadata,
+        ...nextEvent.metadata,
+        text_length: mergedContent.length,
+      };
+      return currentEvents.map((event, index) => (
+        index === i
+          ? { ...event, content: mergedContent, metadata: mergedMetadata }
+          : event
+      ));
+    }
+  }
+  if (nextEvent.eventType === 'reasoning_summary') {
+    const nextContent = typeof nextEvent.content === 'string' ? nextEvent.content : '';
+    let accumulatedReasoning = '';
+    const filtered = currentEvents.filter((event) => {
+      if (event.eventType !== 'reasoning_delta' && event.eventType !== 'reasoning_summary') {
+        return true;
+      }
+      if (event.eventType === 'reasoning_delta') {
+        accumulatedReasoning += event.content || '';
+      }
+      return false;
+    });
+    return filtered.concat({
+      ...nextEvent,
+      content: nextContent || accumulatedReasoning,
+      metadata: {
+        ...nextEvent.metadata,
+        text_length: (nextContent || accumulatedReasoning).length,
+      },
+    });
+  }
   const lastEvent = currentEvents[currentEvents.length - 1];
   if (
     lastEvent
@@ -132,7 +169,8 @@ function stripEphemeralStreamEvents(message) {
   const events = Array.isArray(message?.streamEvents) ? message.streamEvents : [];
   if (events.length === 0) return message;
   const persistable = events.filter((event) =>
-    PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType)),
+    PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType))
+    && event.eventType !== 'reasoning_delta',
   );
   if (persistable.length === events.length) {
     return message;
@@ -197,12 +235,18 @@ function ChatPage() {
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
+  const [showThinking, setShowThinking] = useState(true);
   const messagesEndRef = useRef(null);
   const activeAssistantIdRef = useRef(null);
 
   const streamEventFilter = useCallback(
-    (event) => isEventVisible(event, streamFilters),
-    [streamFilters],
+    (event) => {
+      if (categoryForEventType(event?.eventType) === 'reasoning' && !showThinking) {
+        return false;
+      }
+      return isEventVisible(event, streamFilters);
+    },
+    [showThinking, streamFilters],
   );
 
   useEffect(() => {
@@ -213,12 +257,14 @@ function ChatPage() {
         const session = await getSession();
         if (!cancelled) {
           setSessionId(session.session_id);
+          setShowThinking(session?.preferences?.show_thinking !== false);
         }
       } catch {
         try {
           const session = await createSession();
           if (!cancelled) {
             setSessionId(session.session_id);
+            setShowThinking(session?.preferences?.show_thinking !== false);
           }
         } catch (error) {
           console.warn('[ChatPage] Failed to initialize session:', error);
@@ -420,7 +466,9 @@ function ChatPage() {
             return;
           }
 
-          if (nextEvent.eventType !== 'message_delta') {
+          if (nextEvent.eventType === 'reasoning_delta') {
+            setTypingState('thinking');
+          } else if (nextEvent.eventType !== 'message_delta') {
             setTypingState('tool-use');
           }
           setMessages(prev => prev.map(m =>
