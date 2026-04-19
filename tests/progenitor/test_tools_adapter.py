@@ -7,6 +7,8 @@ from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.tools_adapter import create_deepagent_tools, create_dynamic_mcp_tools
 from app.progenitor.state.models import A2ATaskRecord
+from app.progenitor.tools.call_agent import CallAgentArgs
+from app.progenitor.tools.protocol import RequestToolArgs
 
 
 def _tool_by_name(tools, name: str):
@@ -56,19 +58,81 @@ def test_core_only_tools_present() -> None:
     assert len(names) == len(tools)
 
 
-def test_user_communication_tools_expose_request_contract() -> None:
+def test_request_only_tools_keep_default_request_schema() -> None:
+    tools = create_deepagent_tools()
+    tool = _tool_by_name(tools, "current_time")
+    schema = tool.args_schema.model_json_schema()
+    properties = schema.get("properties", {})
+
+    assert set(properties) == {"request"}
+    assert schema.get("required") == ["request"]
+
+
+def test_deepagent_reuses_declared_args_models() -> None:
     tools = create_deepagent_tools()
 
-    for name in ("say_to_user", "ask_user", "notify_user"):
-        tool = _tool_by_name(tools, name)
-        schema = tool.args_schema.model_json_schema()
-        properties = schema.get("properties", {})
+    assert _tool_by_name(tools, "current_time").args_schema is RequestToolArgs
+    assert _tool_by_name(tools, "call_agent").args_schema is CallAgentArgs
 
-        assert {"request", "tool_args"}.issubset(properties)
-        assert "message" not in properties
-        assert "question" not in properties
-        assert "title" not in properties
-        assert "body" not in properties
+
+def test_user_communication_tools_expose_structured_parameters() -> None:
+    tools = create_deepagent_tools()
+
+    say_schema = _tool_by_name(tools, "say_to_user").args_schema.model_json_schema()
+    ask_schema = _tool_by_name(tools, "ask_user").args_schema.model_json_schema()
+    notify_schema = _tool_by_name(tools, "notify_user").args_schema.model_json_schema()
+
+    assert "message" in say_schema.get("properties", {})
+    assert say_schema.get("required") == ["message"]
+
+    ask_properties = ask_schema.get("properties", {})
+    assert {"question", "context", "options"} <= set(ask_properties)
+    assert ask_schema.get("required") == ["question"]
+
+    notify_properties = notify_schema.get("properties", {})
+    assert {"title", "body", "level"} <= set(notify_properties)
+    assert notify_schema.get("required") == ["title", "body"]
+
+
+def test_schedule_and_reflection_tools_expose_structured_parameters() -> None:
+    tools = create_deepagent_tools()
+
+    schedule_schema = _tool_by_name(tools, "schedule_task").args_schema.model_json_schema()
+    delete_schema = _tool_by_name(tools, "delete_schedule").args_schema.model_json_schema()
+    reflect_schema = _tool_by_name(tools, "self_reflect").args_schema.model_json_schema()
+
+    assert {"user_request", "time_expression", "instruction"} <= set(
+        schedule_schema.get("properties", {})
+    )
+    assert schedule_schema.get("required") == ["user_request", "time_expression", "instruction"]
+
+    assert "schedule_id" in delete_schema.get("properties", {})
+    assert delete_schema.get("required") == ["schedule_id"]
+
+    reflect_properties = reflect_schema.get("properties", {})
+    assert {"operation", "file_path", "query", "topic"} <= set(reflect_properties)
+    assert reflect_schema.get("required") == ["operation"]
+
+
+def test_call_agent_and_task_tools_expose_structured_parameters() -> None:
+    tools = create_deepagent_tools()
+
+    call_schema = _tool_by_name(tools, "call_agent").args_schema.model_json_schema()
+    task_schema = _tool_by_name(tools, "get_a2a_task").args_schema.model_json_schema()
+    refresh_schema = _tool_by_name(tools, "mcp_refresh").args_schema.model_json_schema()
+
+    call_properties = call_schema.get("properties", {})
+    assert {"request", "agent", "agent_name", "timeout_seconds", "blocking", "context"} <= set(
+        call_properties
+    )
+    assert call_schema.get("required") == ["request"]
+
+    task_properties = task_schema.get("properties", {})
+    assert {"task_id", "refresh", "history_length"} <= set(task_properties)
+    assert task_schema.get("required") == ["task_id"]
+
+    assert "persist" in refresh_schema.get("properties", {})
+    assert "required" not in refresh_schema or refresh_schema.get("required") == []
 
 
 @pytest.mark.asyncio
@@ -78,7 +142,7 @@ async def test_list_agents_returns_registry_entries() -> None:
     tools = create_deepagent_tools(tool_registry=registry)
     t = _tool_by_name(tools, "list_agents")
 
-    result = await t.ainvoke({})
+    result = await t.ainvoke({"request": "list agents"})
     assert result["total_count"] == 1
     assert result["agents"][0]["name"] == "Hello World Agent"
 
@@ -104,9 +168,7 @@ async def test_call_agent_uses_registry_and_a2a(monkeypatch) -> None:
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke(
-        {"tool_args": {"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0}}
-    )
+    result = await t.ainvoke({"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0})
 
     assert result["task_id"] == "task-123"
     assert result["agent"] == "Builder Agent"
@@ -133,7 +195,7 @@ async def test_call_agent_uses_card_url_when_endpoint_missing(monkeypatch) -> No
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"tool_args": {"agent": "Builder Agent", "request": "hello"}})
+    result = await t.ainvoke({"agent": "Builder Agent", "request": "hello"})
     assert result["task_id"] == "task-123"
     assert dispatch_mock.await_args.kwargs["agent_config"]["status"] == "running"
 
@@ -158,7 +220,7 @@ async def test_call_agent_supports_url_only_registry_entry(monkeypatch) -> None:
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"tool_args": {"agent": "Builder Agent", "request": "hello"}})
+    result = await t.ainvoke({"agent": "Builder Agent", "request": "hello"})
     assert result["task_id"] == "task-123"
     assert dispatch_mock.await_args.kwargs["agent_config"]["url"] == "http://localhost:9200"
 
@@ -172,7 +234,7 @@ async def test_call_agent_unknown_agent_returns_error() -> None:
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"tool_args": {"agent": "does-not-exist", "request": "hello"}})
+    result = await t.ainvoke({"agent": "does-not-exist", "request": "hello"})
     assert result.get("success") is False
     assert "Unknown agent" in str(result.get("error"))
 
@@ -200,6 +262,28 @@ async def test_call_agent_accepts_agent_name_alias(monkeypatch) -> None:
     result = await t.ainvoke({"agent_name": "Builder Agent", "request": "hello"})
     assert result["task_id"] == "task-123"
     dispatch_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_schedule_task_accepts_structured_arguments_without_llm_extraction() -> None:
+    state_manager = AsyncMock()
+    state_manager.get_current_state = AsyncMock(return_value={"schedule": []})
+    registry = MagicMock()
+    tools = create_deepagent_tools(tool_registry=registry, state_manager=state_manager)
+    t = _tool_by_name(tools, "schedule_task")
+
+    result = await t.ainvoke(
+        {
+            "user_request": "Remind me to stretch",
+            "time_expression": "in 5 minutes",
+            "instruction": "Tell the user to stretch.",
+            "description": "Stretch reminder",
+        }
+    )
+
+    assert result["success"] is True
+    assert result["schedule_id"].startswith("sched_")
+    state_manager.add_schedule_entry.assert_awaited_once()
 
 
 @pytest.mark.asyncio

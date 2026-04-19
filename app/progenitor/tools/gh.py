@@ -15,6 +15,8 @@ import shlex
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, Field
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -302,8 +304,26 @@ async def gh_create_pr_from_worktree(
     )
 
 
+class GhCliArgs(BaseModel):
+    """Structured arguments for gh CLI execution."""
+
+    args: list[str] | None = Field(
+        default=None,
+        description="GitHub CLI arguments, excluding the leading 'gh'.",
+    )
+    cwd: str | None = Field(
+        default=None,
+        description="Optional working directory for the gh command.",
+    )
+    timeout: float = Field(default=60.0, description="Command timeout in seconds.")
+
+
 class GhCliTool(BaseSystemTool):
     """Run gh CLI commands from container/project-root scope."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return GhCliArgs
 
     @property
     def name(self) -> str:

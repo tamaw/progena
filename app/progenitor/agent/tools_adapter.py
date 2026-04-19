@@ -35,10 +35,7 @@ def create_deepagent_tools(
     """Create DeepAgent-compatible system tools."""
 
     def _wrap_system_tool(system_tool: Any) -> StructuredTool:
-        async def _execute_wrapped_tool(
-            request: str = "",
-            tool_args: dict[str, Any] | None = None,
-        ) -> dict[str, Any]:
+        async def _execute_wrapped_tool(**kwargs: Any) -> dict[str, Any]:
             # External deploy pipelines can update agents.json; reload best-effort so new
             # agents/tools show up without requiring a restart.
             load_registry = (
@@ -62,12 +59,20 @@ def create_deepagent_tools(
                     with contextlib.suppress(Exception):
                         state = state or await get_state()
 
+            tool_args = dict(kwargs)
+            nested_args = tool_args.get("tool_args")
+            if isinstance(nested_args, dict):
+                merged_args = dict(nested_args)
+                merged_args.update({k: v for k, v in tool_args.items() if k != "tool_args"})
+                tool_args = merged_args
+
+            request = str(tool_args.get("request") or "")
             ctx = ToolContext(
                 tool_registry=tool_registry,
                 llm_client=llm_client,
                 state=cast(Any, state),
                 state_manager=state_manager,
-                user_input=request or "",
+                user_input=request,
                 tool_args=tool_args,
             )
 
@@ -92,38 +97,14 @@ def create_deepagent_tools(
                 "should_retry_slow_path": bool(getattr(result, "should_retry_slow_path", False)),
             }
 
-        async def _run(
-            request: str = "", tool_args: dict[str, Any] | None = None
-        ) -> dict[str, Any]:
-            return await _execute_wrapped_tool(request=request, tool_args=tool_args)
-
-        async def _run_call_agent(
-            request: str = "",
-            agent: str = "",
-            agent_name: str = "",
-            name: str = "",
-            timeout_seconds: float = 60.0,
-            context: dict[str, Any] | None = None,
-            tool_args: dict[str, Any] | None = None,
-        ) -> dict[str, Any]:
-            merged_args: dict[str, Any] = dict(tool_args or {})
-            merged_args.setdefault("agent", agent)
-            merged_args.setdefault("agent_name", agent_name)
-            merged_args.setdefault("name", name)
-            merged_args.setdefault("request", request)
-            merged_args.setdefault("timeout_seconds", timeout_seconds)
-            if isinstance(context, dict) and context:
-                merged_args.setdefault("context", context)
-            return await _execute_wrapped_tool(request=request, tool_args=merged_args)
-
-        coroutine_fn = (
-            _run_call_agent if str(getattr(system_tool, "name", "")) == "call_agent" else _run
-        )
+        async def _run(**kwargs: Any) -> dict[str, Any]:
+            return await _execute_wrapped_tool(**kwargs)
 
         return StructuredTool.from_function(
-            coroutine=coroutine_fn,
+            coroutine=_run,
             name=str(getattr(system_tool, "name", "system_tool")),
             description=str(getattr(system_tool, "description", "Progenitor system tool")),
+            args_schema=system_tool.args_model,
         )
 
     return [_wrap_system_tool(system_tool) for system_tool in get_all_system_tools()]

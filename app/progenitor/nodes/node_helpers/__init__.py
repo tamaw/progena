@@ -24,7 +24,13 @@ if TYPE_CHECKING:
     from ...tools.mcp import MCPTool
     from ...tools.new_conversation import NewConversationTool
     from ...tools.registry import RegistryTool
-    from ...tools.schedule import ScheduleTool
+    from ...tools.schedule import (
+        DeleteScheduleTool,
+        PauseScheduleTool,
+        ResumeScheduleTool,
+        ScheduleTool,
+        UpdateScheduleTool,
+    )
     from ...tools.schedule_task import ScheduleTaskTool
     from ...tools.self_reflect import SelfReflectModuleTool
     from ...tools.self_reflect_tool import SelfReflectTool
@@ -39,6 +45,10 @@ def __getattr__(name: str):
         "ListAgentsTool": "app.progenitor.tools.list_agents",
         "CurrentTimeTool": "app.progenitor.tools.current_time",
         "ListScheduleTool": "app.progenitor.tools.list_schedule",
+        "DeleteScheduleTool": "app.progenitor.tools.schedule",
+        "UpdateScheduleTool": "app.progenitor.tools.schedule",
+        "PauseScheduleTool": "app.progenitor.tools.schedule",
+        "ResumeScheduleTool": "app.progenitor.tools.schedule",
         "SelfReflectTool": "app.progenitor.tools.self_reflect_tool",
         "SelfReflectModuleTool": "app.progenitor.tools.self_reflect",
         "MCPTool": "app.progenitor.tools.mcp",
@@ -77,6 +87,10 @@ __all__ = [
     "ListAgentsTool",
     "CurrentTimeTool",
     "ListScheduleTool",
+    "DeleteScheduleTool",
+    "UpdateScheduleTool",
+    "PauseScheduleTool",
+    "ResumeScheduleTool",
     "SelfReflectTool",
     "SelfReflectModuleTool",
     "MCPTool",
