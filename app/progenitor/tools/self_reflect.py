@@ -9,7 +9,7 @@ All operations are READ-ONLY to ensure safety.
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from ..llm.client import LLMClient
 
 from ..llm.prompts import PromptTemplates
-from .protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ MAX_TOTAL_CONTENT = 100_000  # 100KB
 
 class DirectoryEntry(BaseModel):
     """A file or directory entry."""
+
     name: str
     path: str  # Relative to progenitor root
     is_directory: bool
@@ -61,6 +62,7 @@ class DirectoryEntry(BaseModel):
 
 class DirectoryListing(BaseModel):
     """Result of listing a directory."""
+
     directory: str
     entries: list[DirectoryEntry]
     total_files: int
@@ -69,6 +71,7 @@ class DirectoryListing(BaseModel):
 
 class FileContent(BaseModel):
     """Content of a file."""
+
     path: str
     content: str
     size: int
@@ -78,6 +81,7 @@ class FileContent(BaseModel):
 
 class SearchResult(BaseModel):
     """A search match in a file."""
+
     file_path: str
     line_number: int
     line_content: str
@@ -87,6 +91,7 @@ class SearchResult(BaseModel):
 
 class SearchResults(BaseModel):
     """Results of searching across files."""
+
     query: str
     matches: list[SearchResult]
     total_matches: int
@@ -95,11 +100,54 @@ class SearchResults(BaseModel):
 
 class IntrospectionSummary(BaseModel):
     """Summary of what a module/file does based on LLM analysis."""
+
     file_or_module: str
     purpose: str
     key_components: list[str]
     capabilities: list[str]
     related_files: list[str]
+
+
+class SelfReflectArgs(BaseModel):
+    """Structured arguments for read-only self-reflection operations."""
+
+    operation: Literal[
+        "list_modules",
+        "explore",
+        "read",
+        "search",
+        "find_relevant",
+        "module_overview",
+    ] = Field(description="The operation to perform")
+    directory: str | None = Field(
+        default=None,
+        description="Directory path for 'explore' operation (relative to app/progenitor/)",
+    )
+    file_path: str | None = Field(
+        default=None,
+        description="File path for 'read' operation (relative to app/progenitor/)",
+    )
+    query: str | None = Field(default=None, description="Search query for 'search' operation")
+    topic: str | None = Field(
+        default=None,
+        description="Topic for 'find_relevant' operation (e.g., 'user input', 'scheduling')",
+    )
+    module_name: str | None = Field(
+        default=None,
+        description="Module name for 'module_overview' operation (e.g., 'nodes', 'tools')",
+    )
+    is_regex: bool = Field(
+        default=False,
+        description="Whether search query is a regex (for 'search' operation)",
+    )
+    max_lines: int | None = Field(
+        default=None,
+        description="Maximum lines to read (for 'read' operation)",
+    )
+    max_results: int = Field(
+        default=10,
+        description="Maximum results to return (for 'search' and 'find_relevant' operations)",
+    )
 
 
 class SelfReflection:
@@ -150,12 +198,12 @@ class SelfReflection:
             if match:
                 docstring = match.group(1).strip()
                 # Get first line or first sentence
-                first_line = docstring.split('\n')[0].strip()
+                first_line = docstring.split("\n")[0].strip()
                 if len(first_line) > 100:
                     first_line = first_line[:100] + "..."
                 return first_line
-        except Exception:
-            pass
+        except OSError:
+            return None
         return None
 
     def list_modules(self) -> list[DirectoryEntry]:
@@ -271,7 +319,9 @@ class SelfReflection:
         if size > MAX_FILE_SIZE:
             truncated = True
             content = target.read_text(encoding="utf-8", errors="ignore")[:MAX_FILE_SIZE]
-            content += f"\n\n... (file truncated at {MAX_FILE_SIZE} bytes, total size: {size} bytes)"
+            content += (
+                f"\n\n... (file truncated at {MAX_FILE_SIZE} bytes, total size: {size} bytes)"
+            )
         else:
             content = target.read_text(encoding="utf-8", errors="ignore")
 
@@ -347,7 +397,7 @@ class SelfReflection:
             files_searched += 1
 
             try:
-                lines = py_file.read_text(encoding="utf-8", errors="ignore").split('\n')
+                lines = py_file.read_text(encoding="utf-8", errors="ignore").split("\n")
 
                 for i, line in enumerate(lines):
                     if pattern.search(line):
@@ -359,8 +409,12 @@ class SelfReflection:
                             file_path=self._get_relative_path(py_file),
                             line_number=i + 1,
                             line_content=line.strip(),
-                            context_before=[context_line.strip() for context_line in lines[start:i]],
-                            context_after=[context_line.strip() for context_line in lines[i + 1:end]],
+                            context_before=[
+                                context_line.strip() for context_line in lines[start:i]
+                            ],
+                            context_after=[
+                                context_line.strip() for context_line in lines[i + 1 : end]
+                            ],
                         )
                         matches.append(match)
 
@@ -437,8 +491,8 @@ class SelfReflection:
                     if len(word) > 3:  # Only meaningful words
                         count = content.count(word)
                         score += min(count * 0.1, 1.0)  # Cap per-word score
-            except Exception:
-                pass
+            except OSError:
+                content = ""
 
             if score > 0:
                 entry = DirectoryEntry(
@@ -486,7 +540,7 @@ class SelfReflection:
         # Response could be a string or an object with content attribute
         if isinstance(response, str):
             content = response
-        elif hasattr(response, 'content'):
+        elif hasattr(response, "content"):
             content = str(response.content)
         else:
             content = str(response)
@@ -519,14 +573,14 @@ class SelfReflection:
             init_file = self.root / init_path
             if init_file.exists():
                 init_content = init_file.read_text(encoding="utf-8", errors="ignore")[:3000]
-        except Exception:
-            pass
+        except OSError:
+            init_content = None
 
         # Extract exports from __init__.py
         exports = []
         if init_content:
             # Look for __all__ definition
-            match = re.search(r'__all__\s*=\s*\[(.*?)\]', init_content, re.DOTALL)
+            match = re.search(r"__all__\s*=\s*\[(.*?)\]", init_content, re.DOTALL)
             if match:
                 exports = re.findall(r'"([^"]+)"|\'([^\']+)\'', match.group(1))
                 exports = [e[0] or e[1] for e in exports]
@@ -548,6 +602,7 @@ class SelfReflection:
 # ============================================================================
 # Tool Functions for Integration
 # ============================================================================
+
 
 async def self_reflect_list_modules() -> dict[str, Any]:
     """List all modules in the Progenitor source code."""
@@ -623,9 +678,9 @@ async def self_reflect_module_overview(module_name: str) -> dict[str, Any]:
 # Tool Specification for Registration
 # ============================================================================
 
-SELF_REFLECT_TOOL_SPEC = {
-    "name": "self_reflect",
-    "description": """Introspect Progenitor's own source code to understand what it does.
+SELF_REFLECT_TOOL_SPEC = build_tool_spec(
+    name="self_reflect",
+    description="""Introspect Progenitor's own source code to understand what it does.
 
 Use this tool to discover how Progenitor works by:
 - Listing modules and files in the source tree
@@ -648,52 +703,8 @@ Examples:
 - To see the decide node: use operation="read" with file_path="nodes/decide.py"
 - To search for scheduling code: use operation="search" with query="schedule"
 """,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "operation": {
-                "type": "string",
-                "enum": ["list_modules", "explore", "read", "search", "find_relevant", "module_overview"],
-                "description": "The operation to perform",
-            },
-            "directory": {
-                "type": "string",
-                "description": "Directory path for 'explore' operation (relative to app/progenitor/)",
-            },
-            "file_path": {
-                "type": "string",
-                "description": "File path for 'read' operation (relative to app/progenitor/)",
-            },
-            "query": {
-                "type": "string",
-                "description": "Search query for 'search' operation",
-            },
-            "topic": {
-                "type": "string",
-                "description": "Topic for 'find_relevant' operation (e.g., 'user input', 'scheduling')",
-            },
-            "module_name": {
-                "type": "string",
-                "description": "Module name for 'module_overview' operation (e.g., 'nodes', 'tools')",
-            },
-            "is_regex": {
-                "type": "boolean",
-                "description": "Whether search query is a regex (for 'search' operation)",
-                "default": False,
-            },
-            "max_lines": {
-                "type": "integer",
-                "description": "Maximum lines to read (for 'read' operation)",
-            },
-            "max_results": {
-                "type": "integer",
-                "description": "Maximum results to return (for 'search' and 'find_relevant' operations)",
-                "default": 10,
-            },
-        },
-        "required": ["operation"],
-    },
-}
+    args_model=SelfReflectArgs,
+)
 
 
 async def execute_self_reflect(
@@ -760,8 +771,10 @@ class SelfReflectModuleTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         reflection = SelfReflection(llm_client=context.llm_client)
         modules = reflection.list_modules()
-        return ToolResult.ok({
-            "root_path": str(reflection.root),
-            "modules": [m.model_dump() for m in modules],
-            "tip": "Use the 'self_reflect' system tool for the common entry point; this is a module-level wrapper.",
-        })
+        return ToolResult.ok(
+            {
+                "root_path": str(reflection.root),
+                "modules": [m.model_dump() for m in modules],
+                "tip": "Use the 'self_reflect' system tool for the common entry point; this is a module-level wrapper.",
+            }
+        )

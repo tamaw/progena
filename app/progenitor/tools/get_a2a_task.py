@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from ..runtime.a2a_tasks import (
     DEFAULT_A2A_HISTORY_LENGTH,
     build_task_response,
@@ -12,31 +14,26 @@ from ..runtime.a2a_tasks import (
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 
+class GetA2ATaskArgs(BaseModel):
+    """Structured arguments for tracked A2A task lookup."""
+
+    task_id: str = Field(description="Tracked task ID to look up.")
+    refresh: bool = Field(
+        default=True,
+        description="Refresh task state from the remote agent before returning.",
+    )
+    history_length: int = Field(
+        default=DEFAULT_A2A_HISTORY_LENGTH,
+        description="Maximum number of recent task history events to include.",
+    )
+
+
 class GetA2ATaskTool(BaseSystemTool):
     """Query progress or final results for a tracked A2A task."""
 
     @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "task_id": {
-                    "type": "string",
-                    "description": "Tracked task ID to look up.",
-                },
-                "refresh": {
-                    "type": "boolean",
-                    "description": "Refresh task state from the remote agent before returning.",
-                    "default": True,
-                },
-                "history_length": {
-                    "type": "integer",
-                    "description": "Maximum number of recent task history events to include.",
-                    "default": DEFAULT_A2A_HISTORY_LENGTH,
-                },
-            },
-            "required": ["task_id"],
-        }
+    def args_model(self) -> type[BaseModel]:
+        return GetA2ATaskArgs
 
     @property
     def name(self) -> str:

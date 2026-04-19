@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..runtime.scheduler import Scheduler
 from ..runtime.time_utils import utcnow
-from .protocol import BaseSystemTool, ToolContext, ToolResult
+from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec
 
 if TYPE_CHECKING:
     pass
@@ -36,6 +36,50 @@ class ScheduleRequest(BaseModel):
     )
     description: str | None = Field(
         default=None, description="Human-readable description of the scheduled task"
+    )
+
+
+class DeleteScheduleArgs(BaseModel):
+    """Arguments for deleting a scheduled task."""
+
+    schedule_id: str = Field(
+        description="The ID of the scheduled task to delete (e.g. 'sched_abc123')"
+    )
+
+
+class UpdateScheduleArgs(BaseModel):
+    """Arguments for updating a scheduled task."""
+
+    schedule_id: str = Field(
+        description="The ID of the scheduled task to update (e.g. 'sched_abc123')"
+    )
+    message: str | None = Field(
+        default=None,
+        description="New task message or instruction text",
+    )
+    cron_expression: str | None = Field(
+        default=None,
+        description="New cron expression for recurring tasks (e.g. '0 9 * * *')",
+    )
+    scheduled_at: str | None = Field(
+        default=None,
+        description="New ISO8601 datetime for one-off tasks (e.g. '2026-06-01T09:00:00+00:00')",
+    )
+
+
+class PauseScheduleArgs(BaseModel):
+    """Arguments for pausing a scheduled task."""
+
+    schedule_id: str = Field(
+        description="The ID of the scheduled task to pause (e.g. 'sched_abc123')"
+    )
+
+
+class ResumeScheduleArgs(BaseModel):
+    """Arguments for resuming a scheduled task."""
+
+    schedule_id: str = Field(
+        description="The ID of the scheduled task to resume (e.g. 'sched_abc123')"
     )
 
 
@@ -392,22 +436,6 @@ class ScheduleTool(BaseSystemTool):
         )
 
 
-def _tool_parameters_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    parameters = spec.get("parameters")
-    if isinstance(parameters, dict):
-        return parameters
-    return {
-        "type": "object",
-        "properties": {
-            "request": {
-                "type": "string",
-                "description": "Natural language request for the tool.",
-            }
-        },
-        "required": ["request"],
-    }
-
-
 def _extract_schedule_id(args: dict[str, Any], user_input: str) -> str:
     schedule_id = str(args.get("schedule_id") or "").strip()
     if schedule_id:
@@ -422,16 +450,16 @@ class DeleteScheduleTool(BaseSystemTool):
     """Delete a scheduled task from persistent schedule state."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        return DeleteScheduleArgs
+
+    @property
     def name(self) -> str:
         return "delete_schedule"
 
     @property
     def description(self) -> str:
         return "Permanently delete a scheduled task by its ID"
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return _tool_parameters_from_spec(DELETE_SCHEDULE_TOOL_SPEC)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
@@ -459,16 +487,16 @@ class UpdateScheduleTool(BaseSystemTool):
     """Update an existing scheduled task."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        return UpdateScheduleArgs
+
+    @property
     def name(self) -> str:
         return "update_schedule"
 
     @property
     def description(self) -> str:
         return "Update fields of an existing scheduled task without recreating it"
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return _tool_parameters_from_spec(UPDATE_SCHEDULE_TOOL_SPEC)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
@@ -510,16 +538,16 @@ class PauseScheduleTool(BaseSystemTool):
     """Pause a scheduled task without deleting it."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        return PauseScheduleArgs
+
+    @property
     def name(self) -> str:
         return "pause_schedule"
 
     @property
     def description(self) -> str:
         return "Pause a scheduled task so it is skipped without being deleted"
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return _tool_parameters_from_spec(PAUSE_SCHEDULE_TOOL_SPEC)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
@@ -547,16 +575,16 @@ class ResumeScheduleTool(BaseSystemTool):
     """Resume a previously paused scheduled task."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        return ResumeScheduleArgs
+
+    @property
     def name(self) -> str:
         return "resume_schedule"
 
     @property
     def description(self) -> str:
         return "Resume a paused scheduled task"
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return _tool_parameters_from_spec(RESUME_SCHEDULE_TOOL_SPEC)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
@@ -581,9 +609,9 @@ class ResumeScheduleTool(BaseSystemTool):
 
 
 # Tool registration for use by decide/planner nodes
-SCHEDULE_TOOL_SPEC = {
-    "name": "schedule_task",
-    "description": """Schedule a task to run at a specific time or recurring interval.
+SCHEDULE_TOOL_SPEC = build_tool_spec(
+    name="schedule_task",
+    description="""Schedule a task to run at a specific time or recurring interval.
 
 Use this tool when the user asks to:
 - Do something at a specific time (e.g., "remind me at 9am", "say hello tomorrow")
@@ -599,37 +627,16 @@ Example: If user says "say hello world at 9am", create:
 - time_expression: "every day at 9am" (or "at 9am" for one-time)
 - instruction: "Say 'Hello World!' to the user as they requested."
 """,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "user_request": {
-                "type": "string",
-                "description": "The original user request",
-            },
-            "time_expression": {
-                "type": "string",
-                "description": "Time expression like 'at 9am', 'every day at 10am', 'in 30 minutes'",
-            },
-            "instruction": {
-                "type": "string",
-                "description": "Instruction for the agent to execute at the scheduled time",
-            },
-            "description": {
-                "type": "string",
-                "description": "Optional human-readable description",
-            },
-        },
-        "required": ["user_request", "time_expression", "instruction"],
-    },
-}
+    args_model=ScheduleRequest,
+)
 
 # ------------------------------------------------------------------
 # Lifecycle tool specs – orchestrator-callable, similar to SCHEDULE_TOOL_SPEC
 # ------------------------------------------------------------------
 
-DELETE_SCHEDULE_TOOL_SPEC = {
-    "name": "delete_schedule",
-    "description": """Permanently delete a scheduled task by its ID.
+DELETE_SCHEDULE_TOOL_SPEC = build_tool_spec(
+    name="delete_schedule",
+    description="""Permanently delete a scheduled task by its ID.
 
 Use this tool when the user asks to:
 - Remove, cancel, or delete a scheduled task or reminder
@@ -639,21 +646,12 @@ The tool takes:
 - schedule_id: The ID of the schedule entry to delete (e.g. "sched_abc123").
   Use list_schedule to find the ID if you don't have it.
 """,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "schedule_id": {
-                "type": "string",
-                "description": "The ID of the scheduled task to delete (e.g. 'sched_abc123')",
-            },
-        },
-        "required": ["schedule_id"],
-    },
-}
+    args_model=DeleteScheduleArgs,
+)
 
-UPDATE_SCHEDULE_TOOL_SPEC = {
-    "name": "update_schedule",
-    "description": """Update fields of an existing scheduled task without recreating it.
+UPDATE_SCHEDULE_TOOL_SPEC = build_tool_spec(
+    name="update_schedule",
+    description="""Update fields of an existing scheduled task without recreating it.
 
 Use this tool when the user asks to:
 - Change the time or cron expression of an existing schedule
@@ -670,33 +668,12 @@ The tool takes:
 - cron_expression: (optional) New cron expression for recurring tasks.
 - scheduled_at: (optional) New ISO8601 one-off timestamp.
 """,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "schedule_id": {
-                "type": "string",
-                "description": "The ID of the scheduled task to update (e.g. 'sched_abc123')",
-            },
-            "message": {
-                "type": "string",
-                "description": "New task message or instruction text",
-            },
-            "cron_expression": {
-                "type": "string",
-                "description": "New cron expression for recurring tasks (e.g. '0 9 * * *')",
-            },
-            "scheduled_at": {
-                "type": "string",
-                "description": "New ISO8601 datetime for one-off tasks (e.g. '2026-06-01T09:00:00+00:00')",
-            },
-        },
-        "required": ["schedule_id"],
-    },
-}
+    args_model=UpdateScheduleArgs,
+)
 
-PAUSE_SCHEDULE_TOOL_SPEC = {
-    "name": "pause_schedule",
-    "description": """Pause a scheduled task so it is skipped by the scheduler without being deleted.
+PAUSE_SCHEDULE_TOOL_SPEC = build_tool_spec(
+    name="pause_schedule",
+    description="""Pause a scheduled task so it is skipped by the scheduler without being deleted.
 
 Use this tool when the user asks to:
 - Temporarily stop or suspend a scheduled reminder or task
@@ -707,21 +684,12 @@ The task can be re-enabled later with resume_schedule.
 The tool takes:
 - schedule_id: The ID of the task to pause (e.g. "sched_abc123").
 """,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "schedule_id": {
-                "type": "string",
-                "description": "The ID of the scheduled task to pause (e.g. 'sched_abc123')",
-            },
-        },
-        "required": ["schedule_id"],
-    },
-}
+    args_model=PauseScheduleArgs,
+)
 
-RESUME_SCHEDULE_TOOL_SPEC = {
-    "name": "resume_schedule",
-    "description": """Resume a previously paused scheduled task.
+RESUME_SCHEDULE_TOOL_SPEC = build_tool_spec(
+    name="resume_schedule",
+    description="""Resume a previously paused scheduled task.
 
 Use this tool when the user asks to:
 - Re-enable or resume a paused reminder or task
@@ -730,14 +698,5 @@ Use this tool when the user asks to:
 The tool takes:
 - schedule_id: The ID of the task to resume (e.g. "sched_abc123").
 """,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "schedule_id": {
-                "type": "string",
-                "description": "The ID of the scheduled task to resume (e.g. 'sched_abc123')",
-            },
-        },
-        "required": ["schedule_id"],
-    },
-}
+    args_model=ResumeScheduleArgs,
+)

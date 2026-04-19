@@ -7,7 +7,6 @@ and creates a ScheduleEntry via the scheduler.
 
 import logging
 from inspect import iscoroutinefunction
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -28,6 +27,12 @@ class _ScheduleExtractionResponse(BaseModel):
 
 class ScheduleTaskTool(BaseSystemTool):
     """Schedule a task to run at a specific time."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        from .schedule import ScheduleRequest
+
+        return ScheduleRequest
 
     @property
     def name(self) -> str:
@@ -55,13 +60,6 @@ class ScheduleTaskTool(BaseSystemTool):
             # "in X minutes/hours"
             r"\bin\s+\d+\s+(?:minute|hour|day)s?\b",
         ]
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        from .schedule import SCHEDULE_TOOL_SPEC
-
-        parameters = SCHEDULE_TOOL_SPEC.get("parameters")
-        return parameters if isinstance(parameters, dict) else super().parameters
 
     async def execute(self, context: ToolContext) -> ToolResult:
         from .schedule import add_scheduled_task
