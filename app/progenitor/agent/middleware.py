@@ -29,6 +29,12 @@ from langgraph.types import Command
 
 from app.progenitor.state.models import redact_secrets
 
+from .stream_events import (
+    build_tool_error_event,
+    build_tool_result_event,
+    build_tool_start_event,
+    emit_stream_event,
+)
 from .tools_adapter import create_dynamic_mcp_tools
 
 logger = logging.getLogger(__name__)
@@ -198,7 +204,7 @@ class AuditLoggingMiddleware(AgentMiddleware):
         """Log tool call with timing and redaction."""
         tool_call = request.tool_call
         tool_name = tool_call.get("name", "unknown")
-        tool_id = tool_call.get("id", "")
+        tool_id = tool_call.get("id", "") or ""
 
         # Redact args for logging (not for execution)
         raw_args = tool_call.get("args", {})
@@ -209,8 +215,12 @@ class AuditLoggingMiddleware(AgentMiddleware):
             else:
                 redacted_args[key] = value
 
+        # Best-effort: surface tool start to the UI stream.
+        emit_stream_event(build_tool_start_event(tool_name, tool_id, raw_args))
+
         start_time = time.monotonic()
-        error = None
+        error: str | None = None
+        result: ToolMessage | Command[Any] | None = None
         try:
             result = await handler(request)
             return result
@@ -229,6 +239,12 @@ class AuditLoggingMiddleware(AgentMiddleware):
                 "error": error,
             }
             logger.info("Tool call: %s (%.1fms)", tool_name, duration_ms)
+
+            # Best-effort: surface tool completion to the UI stream.
+            if error is None:
+                emit_stream_event(build_tool_result_event(tool_name, tool_id, duration_ms, result))
+            else:
+                emit_stream_event(build_tool_error_event(tool_name, tool_id, duration_ms, error))
 
             if self._log_dir:
                 log_file = self._log_dir / "tool_calls.jsonl"

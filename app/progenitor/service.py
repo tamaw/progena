@@ -29,6 +29,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
+from .agent.stream_events import normalize_custom_event
 from .config import ProgenitorConfig, get_config
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
@@ -220,7 +221,7 @@ class ProgenitorService:
             config = {"configurable": {"thread_id": thread_id}}
             astream_kwargs: dict[str, Any] = {"config": config}
             if self._graph_accepts_stream_mode():
-                astream_kwargs["stream_mode"] = ["messages", "updates"]
+                astream_kwargs["stream_mode"] = ["messages", "updates", "custom"]
             full_response = ""
             last_result: dict[str, Any] = {}
             async for stream_item in self.graph.astream(graph_input, **astream_kwargs):
@@ -244,6 +245,12 @@ class ProgenitorService:
                             "is_final": False,
                             "request_id": request_id,
                         }
+                    continue
+
+                if mode == "custom":
+                    custom_event = self._build_custom_stream_event(event, request_id=request_id)
+                    if custom_event is not None:
+                        yield custom_event
                     continue
 
                 if mode != "updates" or not isinstance(event, dict):
@@ -347,6 +354,25 @@ class ProgenitorService:
                 "stream_metadata": make_json_safe(metadata),
                 "text_length": len(chunk_text),
             },
+        }
+
+    def _build_custom_stream_event(
+        self,
+        event: Any,
+        *,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        """Normalize a LangGraph custom-mode payload into an IPC stream item."""
+
+        envelope = normalize_custom_event(event)
+        if envelope is None:
+            return None
+        return {
+            "type": "stream_event",
+            "event_type": envelope["event_type"],
+            "content": envelope["content"],
+            "request_id": request_id,
+            "metadata": envelope["metadata"],
         }
 
     @property

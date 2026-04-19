@@ -105,7 +105,7 @@ async def test_handle_message_stream_events_emit_message_and_node_updates() -> N
 
     assert service.graph.last_kwargs == {
         "config": {"configurable": {"thread_id": "persisted-thread"}},
-        "stream_mode": ["messages", "updates"],
+        "stream_mode": ["messages", "updates", "custom"],
     }
     assert events == [
         {
@@ -144,3 +144,66 @@ async def test_handle_message_stream_events_emit_message_and_node_updates() -> N
             "request_id": "req-stream",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_handle_message_stream_events_forwards_custom_tool_events() -> None:
+    """Custom-mode payloads from middleware/tools should pass through to the IPC."""
+    from app.progenitor.service import ProgenitorService
+
+    service = object.__new__(ProgenitorService)
+    service._initialized = True
+    service._message_count = 0
+    service._session_id = "session-1"
+    service.state_manager = StubStateManager(thread_id="persisted-thread")
+    service.graph = StubStreamingGraph(
+        [
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "search",
+                    "metadata": {"tool_name": "search", "tool_call_id": "call_1"},
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_result",
+                    "content": "search",
+                    "metadata": {
+                        "tool_name": "search",
+                        "tool_call_id": "call_1",
+                        "duration_ms": 12.0,
+                        "success": True,
+                        "result_preview": "ok",
+                    },
+                },
+            ),
+            (
+                "custom",
+                {"event_type": "rogue_type", "metadata": {"x": 1}},
+            ),
+        ]
+    )
+    service.llm_client = None
+    service.tool_registry = None
+    service.project_root = None
+    service.config = None
+    service._lock = None
+
+    events = [
+        event async for event in service.handle_message_stream_events("hi", request_id="req-tools")
+    ]
+    stream_events = [e for e in events if e.get("type") == "stream_event"]
+
+    assert [e["event_type"] for e in stream_events] == [
+        "tool_start",
+        "tool_result",
+        "custom_event",
+    ]
+    assert stream_events[0]["metadata"]["tool_name"] == "search"
+    assert stream_events[1]["metadata"]["success"] is True
+    assert stream_events[2]["metadata"]["original_event_type"] == "rogue_type"
+    for ev in stream_events:
+        assert ev["request_id"] == "req-tools"

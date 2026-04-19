@@ -1,7 +1,12 @@
 import { useMemo } from 'react';
 
-function Message({ message }) {
+function Message({ message, streamEventFilter }) {
   const { role, content, timestamp, isStreaming, error, isScheduled, streamEvents = [] } = message;
+
+  const visibleStreamEvents = useMemo(() => {
+    if (typeof streamEventFilter !== 'function') return streamEvents;
+    return streamEvents.filter(streamEventFilter);
+  }, [streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -25,8 +30,8 @@ function Message({ message }) {
             Scheduled
           </div>
         )}
-        {role === 'assistant' && streamEvents.length > 0 && (
-          <StreamEvents events={streamEvents} />
+        {role === 'assistant' && visibleStreamEvents.length > 0 && (
+          <StreamEvents events={visibleStreamEvents} />
         )}
         <div
           className="message-content"
@@ -122,6 +127,59 @@ function describeStreamEvent(event) {
     };
   }
 
+  if (eventType === 'tool_start') {
+    const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
+    const args = formatArgsPreview(metadata.args_preview);
+    return {
+      badge: 'Tool',
+      title: `→ ${prettifyLabel(toolName)}`,
+      detail: args || 'invoking…',
+    };
+  }
+
+  if (eventType === 'tool_result') {
+    const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
+    const parts = [];
+    if (typeof metadata.duration_ms === 'number') {
+      parts.push(formatDuration(metadata.duration_ms));
+    }
+    if (typeof metadata.result_preview === 'string' && metadata.result_preview) {
+      parts.push(metadata.result_preview);
+    }
+    return {
+      badge: 'Tool',
+      title: `✓ ${prettifyLabel(toolName)}`,
+      detail: parts.join(' • ') || 'completed',
+    };
+  }
+
+  if (eventType === 'tool_error') {
+    const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
+    const parts = [];
+    if (typeof metadata.duration_ms === 'number') {
+      parts.push(formatDuration(metadata.duration_ms));
+    }
+    if (typeof metadata.error === 'string' && metadata.error) {
+      parts.push(metadata.error);
+    }
+    return {
+      badge: 'Tool',
+      title: `✗ ${prettifyLabel(toolName)}`,
+      detail: parts.join(' • ') || 'error',
+    };
+  }
+
+  if (eventType === 'message_delta') {
+    const text = typeof event?.content === 'string' ? event.content : '';
+    return {
+      badge: 'Token',
+      title: text || '·',
+      detail: typeof metadata.text_length === 'number'
+        ? `${metadata.text_length} chars`
+        : '',
+    };
+  }
+
   const explicitName = [
     metadata.tool_name,
     metadata.name,
@@ -144,6 +202,23 @@ function describeStreamEvent(event) {
     title: explicitName ? prettifyLabel(explicitName) : prettifyLabel(eventType),
     detail: detailParts.join(' • '),
   };
+}
+
+function formatArgsPreview(args) {
+  if (args === null || args === undefined) return '';
+  if (typeof args === 'string') return args;
+  try {
+    const json = JSON.stringify(args);
+    return json.length > 240 ? `${json.slice(0, 237)}…` : json;
+  } catch {
+    return String(args);
+  }
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
 }
 
 function summarizeMetadata(metadata) {

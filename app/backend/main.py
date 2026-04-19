@@ -1196,6 +1196,7 @@ async def stream_response_unified(
                     "event_type": item.get("event_type", "unknown"),
                     "content": item.get("content", ""),
                     "metadata": item.get("metadata", {}),
+                    "request_id": item.get("request_id"),
                 }
                 yield "event: response.stream_event\n" + f"data: {json.dumps(structured_event)}\n\n"
 
