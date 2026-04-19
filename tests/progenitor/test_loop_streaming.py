@@ -94,7 +94,7 @@ class TestProgenitorLoopStreaming:
         await loop._run_graph_cycle("run-1", source="user_input")
         chunks = await _collect_stream_chunks(loop)
 
-        assert graph.last_kwargs["stream_mode"] == ["messages", "updates"]
+        assert graph.last_kwargs["stream_mode"] == ["messages", "updates", "custom"]
         assert chunks == [
             {"type": "stream_chunk", "content": "Hel", "is_final": False},
             {"type": "stream_chunk", "content": "lo", "is_final": False},
