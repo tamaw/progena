@@ -157,6 +157,11 @@ function ChatPage() {
   );
   const messagesEndRef = useRef(null);
 
+  const streamEventFilter = useCallback(
+    (event) => isEventVisible(event, streamFilters),
+    [streamFilters],
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -399,7 +404,7 @@ function ChatPage() {
                   <Message
                     key={msg.id}
                     message={msg}
-                    streamEventFilter={(event) => isEventVisible(event, streamFilters)}
+                    streamEventFilter={streamEventFilter}
                   />
                 ))}
                 {isGenerating && (
