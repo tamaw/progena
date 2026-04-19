@@ -204,17 +204,26 @@
     margin-top: var(--spacing-xs);
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
-}
-
-/* Message Timestamp */
-.message-timestamp {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    margin-top: var(--spacing-xs);
     opacity: 0.8;
 }
 
-.message.user .message-timestamp {
+.message-timestamp {
+    color: inherit;
+}
+
+.message-token-count {
+    color: inherit;
+}
+
+.message-meta-separator {
+    width: 4px;
+    height: 4px;
+    border-radius: 999px;
+    background-color: currentColor;
+    opacity: 0.7;
+}
+
+.message.user .message-meta {
     color: rgba(255, 255, 255, 0.7);
 }
 
@@ -1003,17 +1012,6 @@
 .reaction-count {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
-}
-
-/* Message Timestamp */
-.message-timestamp {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    margin-top: var(--spacing-xs);
-}
-
-.message.user .message-timestamp {
-    text-align: right;
 }
 
 /* Context Menu */
