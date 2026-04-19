@@ -55,8 +55,8 @@ def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
             "metadata": {"raw": make_json_safe(payload)},
         }
 
-    raw_type = payload.get("event_type") or payload.get("type")
-    event_type = str(raw_type).strip() if isinstance(raw_type, str) else ""
+    raw_type = payload.get("event_type")
+    event_type = raw_type.strip() if isinstance(raw_type, str) else ""
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -138,16 +138,14 @@ def build_tool_error_event(
 def emit_stream_event(payload: dict[str, Any]) -> None:
     """Best-effort emission via LangGraph's stream writer.
 
-    Silently no-ops if we are not inside a LangGraph streaming context or the
-    writer is unavailable. Tool execution must never depend on emission.
+    Silently no-ops if we are not inside a LangGraph streaming context.
+    Tool execution must never depend on emission.
     """
-    try:
-        from langgraph.config import get_stream_writer
-    except Exception:
-        return
+    from langgraph.config import get_stream_writer
+
     try:
         writer = get_stream_writer()
-    except Exception:
+    except RuntimeError:
         # Not inside a graph context (e.g. plain unit test) — silently skip.
         return
     if writer is None:
