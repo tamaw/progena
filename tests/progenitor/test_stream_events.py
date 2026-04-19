@@ -67,6 +67,28 @@ def test_normalize_custom_event_redacts_non_dict_payload_secrets():
     assert "REDACTED" in repr(envelope)
 
 
+def test_normalize_custom_event_redacts_dict_keys_and_handles_broken_str():
+    api_key = "sk-" + "d" * 48
+
+    class Broken:
+        def __str__(self) -> str:
+            raise RuntimeError("boom")
+
+    envelope = normalize_custom_event(
+        {
+            "event_type": "subagent_start",
+            "metadata": {
+                api_key: "value",
+                "broken": Broken(),
+            },
+        }
+    )
+    assert envelope is not None
+    serialized = repr(envelope)
+    assert api_key not in serialized
+    assert "REDACTED" in serialized
+
+
 def test_normalize_custom_event_redacts_tuple_and_object_payloads():
     api_key = "sk-" + "c" * 48
 

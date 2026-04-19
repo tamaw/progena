@@ -161,7 +161,7 @@ def emit_stream_event(payload: dict[str, Any]) -> None:
 def _redact_value(value: Any) -> Any:
     """Return a JSON-friendly value with secrets redacted recursively."""
     if isinstance(value, Mapping):
-        return {str(key): _redact_value(item) for key, item in value.items()}
+        return {redact_secrets(str(key)): _redact_value(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_redact_value(item) for item in value]
     if isinstance(value, tuple):
@@ -174,7 +174,11 @@ def _redact_value(value: Any) -> Any:
         return redact_secrets(value)
     if value is None or isinstance(value, (int, float, bool)):
         return value
-    return redact_secrets(str(value))
+    try:
+        rendered = str(value)
+    except Exception:
+        rendered = repr(type(value))
+    return redact_secrets(rendered)
 
 
 def _redact_preview(value: Any) -> str:
