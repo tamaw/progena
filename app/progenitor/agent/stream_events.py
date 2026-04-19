@@ -16,7 +16,6 @@ from app.progenitor.state.models import redact_secrets
 from app.progenitor.streaming_utils import (
     DEFAULT_STREAM_ARGS_BYTES,
     DEFAULT_STREAM_PREVIEW_BYTES,
-    make_json_safe,
     truncate_json_safe,
     truncate_text,
 )
@@ -51,26 +50,21 @@ def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
     a usable envelope at all.
     """
     if not isinstance(payload, dict):
-        return {
-            "event_type": CUSTOM_EVENT_FALLBACK_TYPE,
-            "content": "",
-            "metadata": {"raw": make_json_safe(payload)},
-        }
-
-    raw_type = payload.get("event_type")
-    event_type = raw_type.strip() if isinstance(raw_type, str) else ""
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-    content = payload.get("content")
-    if not isinstance(content, str):
-        content = ""
-
-    if event_type in _RESERVED_EVENT_TYPES or event_type not in ALLOWED_CUSTOM_EVENT_TYPES:
-        if event_type:
-            metadata = dict(metadata)
-            metadata.setdefault("original_event_type", event_type)
         event_type = CUSTOM_EVENT_FALLBACK_TYPE
+        metadata: dict[str, Any] = {"raw": payload}
+        content = ""
+    else:
+        raw_type = payload.get("event_type")
+        event_type = raw_type.strip() if isinstance(raw_type, str) else ""
+        metadata_in = payload.get("metadata")
+        metadata = dict(metadata_in) if isinstance(metadata_in, dict) else {}
+        content_in = payload.get("content")
+        content = content_in if isinstance(content_in, str) else ""
+
+        if event_type in _RESERVED_EVENT_TYPES or event_type not in ALLOWED_CUSTOM_EVENT_TYPES:
+            if event_type:
+                metadata.setdefault("original_event_type", event_type)
+            event_type = CUSTOM_EVENT_FALLBACK_TYPE
 
     safe_metadata = truncate_json_safe(
         _redact_args(metadata),
