@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langgraph.config import get_stream_writer
+
 from app.progenitor.state.models import redact_secrets
 from app.progenitor.streaming_utils import (
     DEFAULT_STREAM_ARGS_BYTES,
@@ -70,10 +72,17 @@ def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
             metadata.setdefault("original_event_type", event_type)
         event_type = CUSTOM_EVENT_FALLBACK_TYPE
 
+    safe_metadata = truncate_json_safe(
+        _redact_args(metadata),
+        DEFAULT_STREAM_ARGS_BYTES,
+    )
+    if not isinstance(safe_metadata, dict):
+        safe_metadata = {"value": safe_metadata}
+
     return {
         "event_type": event_type,
-        "content": truncate_text(content, DEFAULT_STREAM_PREVIEW_BYTES),
-        "metadata": make_json_safe(metadata),
+        "content": truncate_text(redact_secrets(content), DEFAULT_STREAM_PREVIEW_BYTES),
+        "metadata": safe_metadata,
     }
 
 
@@ -141,8 +150,6 @@ def emit_stream_event(payload: dict[str, Any]) -> None:
     Silently no-ops if we are not inside a LangGraph streaming context.
     Tool execution must never depend on emission.
     """
-    from langgraph.config import get_stream_writer
-
     try:
         writer = get_stream_writer()
     except RuntimeError:
@@ -152,7 +159,7 @@ def emit_stream_event(payload: dict[str, Any]) -> None:
         return
     try:
         writer(payload)
-    except Exception as exc:  # pragma: no cover - emission is best-effort
+    except Exception as exc:
         logger.debug("Stream writer emission failed: %s", exc)
 
 
