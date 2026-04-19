@@ -28,7 +28,34 @@ class AgentSelection(BaseModel):
     reasoning: str = Field(description="One-sentence explanation of the routing choice.")
 
 
+class CallAgentArgs(BaseModel):
+    """Structured arguments for the outbound A2A tool."""
+
+    request: str = Field(description="The complete request to send to the deployed agent.")
+    agent: str | None = Field(
+        default=None,
+        description="Exact registered agent name. Omit to auto-route.",
+    )
+    agent_name: str | None = Field(default=None, description="Alias for agent.")
+    timeout_seconds: float = Field(
+        default=60.0,
+        description="Maximum time to wait before timing out the task submission.",
+    )
+    blocking: bool = Field(
+        default=False,
+        description="Wait for completion instead of returning a tracked async task.",
+    )
+    context: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional structured context to pass through with the task.",
+    )
+
+
 class CallAgentTool(BaseSystemTool):
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return CallAgentArgs
+
     @property
     def name(self) -> str:
         return "call_agent"

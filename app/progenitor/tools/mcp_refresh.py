@@ -4,6 +4,8 @@ MCP Refresh - Refresh live MCP tool discovery from data/config/mcp.json.
 
 import logging
 
+from pydantic import BaseModel, Field
+
 from ..config import MCPConfig
 from .mcp import refresh_mcp_runtime
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -11,7 +13,20 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 logger = logging.getLogger(__name__)
 
 
+class MCPRefreshArgs(BaseModel):
+    """Structured arguments for MCP registry refresh."""
+
+    persist: bool = Field(
+        default=True,
+        description="Persist refreshed MCP discovery into the runtime registry.",
+    )
+
+
 class MCPRefreshTool(BaseSystemTool):
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return MCPRefreshArgs
+
     @property
     def name(self) -> str:
         return "mcp_refresh"

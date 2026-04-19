@@ -29,6 +29,12 @@ class ScheduleTaskTool(BaseSystemTool):
     """Schedule a task to run at a specific time."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        from .schedule import ScheduleRequest
+
+        return ScheduleRequest
+
+    @property
     def name(self) -> str:
         return "schedule_task"
 
@@ -58,46 +64,52 @@ class ScheduleTaskTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         from .schedule import add_scheduled_task
 
-        user_input = context.user_input
+        args = context.tool_args if isinstance(context.tool_args, dict) else {}
+        user_input = str(args.get("user_request") or context.user_input or "").strip()
+        time_expr = str(args.get("time_expression") or "").strip()
+        instruction = str(args.get("instruction") or "").strip()
+        description = str(args.get("description") or "").strip()
         if not user_input:
             return ToolResult.fail("No user input provided for scheduling.")
 
         # Use LLM to extract and process schedule parameters
         system_prompt = _prompts.get("progenitor/schedule_task_extraction_system.md")
 
-        messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
-
         try:
-            chat_structured = getattr(context.llm_client, "chat_structured", None)
-            if not (callable(chat_structured) and iscoroutinefunction(chat_structured)):
-                return ToolResult.fail(
-                    "Structured scheduling is required, but chat_structured is unavailable. "
-                    "Please configure the Azure structured output path."
+            if not (time_expr and instruction):
+                messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
+                chat_structured = getattr(context.llm_client, "chat_structured", None)
+                if not (callable(chat_structured) and iscoroutinefunction(chat_structured)):
+                    return ToolResult.fail(
+                        "Structured scheduling is required, but chat_structured is unavailable. "
+                        "Please configure the Azure structured output path."
+                    )
+
+                structured = await chat_structured(
+                    messages=messages,
+                    response_model=_ScheduleExtractionResponse,
+                    schema_name="schedule_task_extraction",
+                    system_prompt=system_prompt,
+                    temperature=0.3,
+                    tools=[],
                 )
 
-            structured = await chat_structured(
-                messages=messages,
-                response_model=_ScheduleExtractionResponse,
-                schema_name="schedule_task_extraction",
-                system_prompt=system_prompt,
-                temperature=0.3,
-                tools=[],
-            )
+                time_expr = (structured.time_expression or "").strip()
+                instruction = (structured.instruction or "").strip()
+                if not description:
+                    description = (structured.description or "").strip()
 
-            time_expr = (structured.time_expression or "").strip()
-            instruction = (structured.instruction or "").strip()
-            description = (structured.description or "").strip()
+                if not time_expr:
+                    return ToolResult.fail(
+                        "Could not extract time from your request. "
+                        "Please specify when (e.g., 'in 5 minutes', 'at 9am')."
+                    )
+                if not instruction:
+                    return ToolResult.fail(
+                        "Could not extract instruction from your request. "
+                        "Please restate what should happen at that time."
+                    )
 
-            if not time_expr:
-                return ToolResult.fail(
-                    "Could not extract time from your request. "
-                    "Please specify when (e.g., 'in 5 minutes', 'at 9am')."
-                )
-            if not instruction:
-                return ToolResult.fail(
-                    "Could not extract instruction from your request. "
-                    "Please restate what should happen at that time."
-                )
             if not description:
                 description = instruction[:60].strip() or f"Scheduled: {user_input[:50]}"
 
@@ -119,9 +131,12 @@ class ScheduleTaskTool(BaseSystemTool):
                 "message": entry_data.get("message") if entry_data else instruction,
                 "next_run": result.next_run,
                 "recurring": (
-                    False if entry_data and entry_data.get("scheduled_at")
+                    False
+                    if entry_data and entry_data.get("scheduled_at")
                     else (
-                        not scheduler.is_one_shot_expression(str(entry_data.get("cron_expression", "")))
+                        not scheduler.is_one_shot_expression(
+                            str(entry_data.get("cron_expression", ""))
+                        )
                         if entry_data
                         else True
                     )
@@ -137,7 +152,7 @@ class ScheduleTaskTool(BaseSystemTool):
                 new_entry = ScheduleEntry(**entry_data)
                 current_schedule = (
                     list(context.state.get("schedule", []))
-                    if context.state
+                    if isinstance(context.state, dict)
                     else []
                 )
                 state_updates = {"schedule": current_schedule + [new_entry]}

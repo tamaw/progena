@@ -49,14 +49,19 @@ class ListScheduleTool(BaseSystemTool):
         ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        if context.state is None:
-            return ToolResult.ok({
-                "scheduled_tasks": [],
-                "total_count": 0,
-                "message": "No state available - schedule information unavailable",
-            })
-
-        schedule = context.state.get("schedule", [])
+        schedule = []
+        if context.state_manager is not None and hasattr(context.state_manager, "get_schedule"):
+            schedule = await context.state_manager.get_schedule()
+        elif context.state is not None:
+            schedule = context.state.get("schedule", [])
+        else:
+            return ToolResult.ok(
+                {
+                    "scheduled_tasks": [],
+                    "total_count": 0,
+                    "message": "No state available - schedule information unavailable",
+                }
+            )
 
         # Convert schedule entries to readable format
         tasks = []
@@ -68,15 +73,19 @@ class ListScheduleTool(BaseSystemTool):
             else:
                 continue
 
-            tasks.append({
-                "id": item_dict.get("id"),
-                "message": item_dict.get("message", "No message"),
-                "cron_expression": item_dict.get("cron_expression"),
-                "last_run": item_dict.get("last_run"),
-                "created_at": item_dict.get("created_at"),
-            })
+            tasks.append(
+                {
+                    "id": item_dict.get("id"),
+                    "message": item_dict.get("message", "No message"),
+                    "cron_expression": item_dict.get("cron_expression"),
+                    "last_run": item_dict.get("last_run"),
+                    "created_at": item_dict.get("created_at"),
+                }
+            )
 
-        return ToolResult.ok({
-            "scheduled_tasks": tasks,
-            "total_count": len(tasks),
-        })
+        return ToolResult.ok(
+            {
+                "scheduled_tasks": tasks,
+                "total_count": len(tasks),
+            }
+        )

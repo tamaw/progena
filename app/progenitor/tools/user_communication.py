@@ -10,13 +10,55 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, cast
 
-from .protocol import BaseSystemTool, ToolContext, ToolResult
+from pydantic import BaseModel, Field
+
+from .protocol import (
+    BaseSystemTool,
+    ToolContext,
+    ToolResult,
+    legacy_parameters_from_args_model,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # Type alias for event pusher callback
 EventPusher = Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]]
+
+
+class SayToUserArgs(BaseModel):
+    """Structured arguments for sending a one-way user message."""
+
+    message: str = Field(description="The message to send to the user")
+    context: str | None = Field(
+        default=None,
+        description="Optional context about what triggered this message",
+    )
+
+
+class AskUserArgs(BaseModel):
+    """Structured arguments for sending a one-way user question."""
+
+    question: str = Field(description="The question to ask the user")
+    context: str | None = Field(
+        default=None,
+        description="Optional context about why this question is being asked",
+    )
+    options: list[str] | None = Field(
+        default=None,
+        description="Optional list of suggested answers/options",
+    )
+
+
+class NotifyUserArgs(BaseModel):
+    """Structured arguments for backend-managed user notifications."""
+
+    title: str = Field(description="Short notification title")
+    body: str = Field(description="Notification body/details")
+    level: str = Field(
+        default="info",
+        description="Notification level: info, warning, error, success",
+    )
 
 
 class UserCommunicationTools:
@@ -177,71 +219,31 @@ USER_COMMUNICATION_TOOLS = [
         "description": "Send a message to the user. Use this to communicate information, updates, or results. Aliases: 'say', 'tell', 'to user', 'message user'.",
         "type": "system_tool",
         "capabilities": ["messaging", "say", "tell"],
-        "parameters": {
-            "message": {
-                "type": "string",
-                "description": "The message to send to the user",
-                "required": True,
-            },
-            "context": {
-                "type": "string",
-                "description": "Optional context about what triggered this message",
-                "required": False,
-            },
-        },
+        "parameters": legacy_parameters_from_args_model(SayToUserArgs),
     },
     {
         "name": "ask_user",
         "description": "Ask the user a question. Use this when you need clarification or input from the user. Aliases: 'ask', 'question', 'inquire'.",
         "type": "system_tool",
         "capabilities": ["questioning", "ask", "inquire"],
-        "parameters": {
-            "question": {
-                "type": "string",
-                "description": "The question to ask the user",
-                "required": True,
-            },
-            "context": {
-                "type": "string",
-                "description": "Optional context about why this question is being asked",
-                "required": False,
-            },
-            "options": {
-                "type": "array",
-                "description": "Optional list of suggested answers/options",
-                "required": False,
-            },
-        },
+        "parameters": legacy_parameters_from_args_model(AskUserArgs),
     },
     {
         "name": "notify_user",
         "description": "Send a notification to the user with a title and body. Use for important alerts or status updates.",
         "type": "system_tool",
         "capabilities": ["notifications", "alerts"],
-        "parameters": {
-            "title": {
-                "type": "string",
-                "description": "Short notification title",
-                "required": True,
-            },
-            "body": {
-                "type": "string",
-                "description": "Notification body/details",
-                "required": True,
-            },
-            "level": {
-                "type": "string",
-                "description": "Notification level: info, warning, error, success",
-                "required": False,
-                "default": "info",
-            },
-        },
+        "parameters": legacy_parameters_from_args_model(NotifyUserArgs),
     },
 ]
 
 
 class SayToUserTool(BaseSystemTool):
     """Send a one-way agent_message event via IPC."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return SayToUserArgs
 
     @property
     def name(self) -> str:
@@ -271,6 +273,10 @@ class SayToUserTool(BaseSystemTool):
 
 class AskUserTool(BaseSystemTool):
     """Send a one-way agent_question event via IPC."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return AskUserArgs
 
     @property
     def name(self) -> str:
@@ -307,6 +313,10 @@ class AskUserTool(BaseSystemTool):
 
 class NotifyUserTool(BaseSystemTool):
     """Request a backend-managed alert via IPC."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return NotifyUserArgs
 
     @property
     def name(self) -> str:
