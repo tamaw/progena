@@ -8,6 +8,15 @@ import ChatInput from '../components/chat/ChatInput';
 import Message from '../components/chat/Message';
 import TypingIndicator from '../components/chat/TypingIndicator';
 import QuickActions from '../components/chat/QuickActions';
+import StreamFilterMenu from '../components/chat/StreamFilterMenu';
+import {
+  PERSISTED_CATEGORIES,
+  categoryForEventType,
+  isEventVisible,
+  loadStreamFilters,
+} from '../components/chat/streamFilters';
+
+const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
 
 function normalizeStreamEvent(event, index) {
   if (!event || typeof event !== 'object') {
@@ -90,7 +99,23 @@ function appendStreamEvent(events, nextEvent) {
   ) {
     return currentEvents;
   }
-  return currentEvents.concat(nextEvent);
+  const next = currentEvents.concat(nextEvent);
+  if (next.length > MAX_STREAM_EVENTS_PER_MESSAGE) {
+    return next.slice(next.length - MAX_STREAM_EVENTS_PER_MESSAGE);
+  }
+  return next;
+}
+
+function stripEphemeralStreamEvents(message) {
+  const events = Array.isArray(message?.streamEvents) ? message.streamEvents : [];
+  if (events.length === 0) return message;
+  const persistable = events.filter((event) =>
+    PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType)),
+  );
+  if (persistable.length === events.length) {
+    return message;
+  }
+  return { ...message, streamEvents: persistable };
 }
 
 function ChatPage() {
@@ -127,6 +152,9 @@ function ChatPage() {
   const [typingState, setTypingState] = useState('thinking');
   const [tokenCount, setTokenCount] = useState(0);
   const [sessionId, setSessionId] = useState(null);
+  const [streamFilters, setStreamFilters] = useState(() =>
+    loadStreamFilters(config.storage.streamFilters),
+  );
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -156,10 +184,12 @@ function ChatPage() {
     };
   }, [createSession, getSession]);
 
-  // Save chat history to localStorage
+  // Save chat history to localStorage (strip ephemeral stream events to
+  // keep storage bounded; tokens/debug events are session-only).
   useEffect(() => {
     if (messages.length > 0) {
-      localStorage.setItem(config.storage.chatHistory, JSON.stringify(messages.slice(-100)));
+      const persistable = messages.slice(-100).map(stripEphemeralStreamEvents);
+      localStorage.setItem(config.storage.chatHistory, JSON.stringify(persistable));
     }
   }, [messages, config.storage.chatHistory]);
 
@@ -315,11 +345,13 @@ function ChatPage() {
         // onStreamEvent
         (streamEvent) => {
           const nextEvent = createStreamEvent(streamEvent);
-          if (!nextEvent || nextEvent.eventType === 'message_delta') {
+          if (!nextEvent) {
             return;
           }
 
-          setTypingState('tool-use');
+          if (nextEvent.eventType !== 'message_delta') {
+            setTypingState('tool-use');
+          }
           setMessages(prev => prev.map(m =>
             m.id === assistantId
               ? { ...m, streamEvents: appendStreamEvent(m.streamEvents, nextEvent) }
@@ -346,6 +378,13 @@ function ChatPage() {
       <Header connectionState={connectionState} />
       <main className="main-content">
         <div className="chat-container">
+          <div className="chat-toolbar">
+            <StreamFilterMenu
+              storageKey={config.storage.streamFilters}
+              filters={streamFilters}
+              onChange={setStreamFilters}
+            />
+          </div>
           <div className="chat-messages">
             {messages.length === 0 ? (
               <div className="welcome-message">
@@ -357,7 +396,11 @@ function ChatPage() {
             ) : (
               <>
                 {messages.map((msg) => (
-                  <Message key={msg.id} message={msg} />
+                  <Message
+                    key={msg.id}
+                    message={msg}
+                    streamEventFilter={(event) => isEventVisible(event, streamFilters)}
+                  />
                 ))}
                 {isGenerating && (
                   <TypingIndicator state={typingState} tokenCount={tokenCount} />
