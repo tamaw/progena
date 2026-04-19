@@ -26,6 +26,7 @@ from app.progenitor.ipc.protocol import (
     shutdown_message,
     stream_chunk,
     stream_end,
+    stream_event,
     user_message,
     write_message,
 )
@@ -194,6 +195,20 @@ class TestConvenienceFunctions:
         msg = stream_end(request_id="req_1")
         assert msg.type == MessageType.STREAM_END
         assert msg.is_final is True
+
+    def test_stream_event(self):
+        """Test stream_event convenience function."""
+        msg = stream_event(
+            "message_delta",
+            request_id="req_1",
+            content="chunk",
+            metadata={"langgraph_node": "respond"},
+        )
+        assert msg.type == MessageType.STREAM_EVENT
+        assert msg.event_type == "message_delta"
+        assert msg.request_id == "req_1"
+        assert msg.content == "chunk"
+        assert msg.metadata == {"langgraph_node": "respond"}
 
     def test_error_message(self):
         """Test error_message convenience function."""

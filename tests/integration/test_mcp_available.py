@@ -1,4 +1,5 @@
 """Quick test to ask agent about MCP tools."""
+
 import asyncio
 import sys
 from pathlib import Path
@@ -17,11 +18,12 @@ async def ask_about_mcp():
     print("Asking: What MCP tools are available?\n")
     response_parts = []
 
-    async for chunk in client.send_message_stream("What MCP tools do you have available? List them."):
-        if isinstance(chunk, dict):
-            response_parts.append(chunk.get("content", ""))
-        else:
-            response_parts.append(str(chunk))
+    async for event in client.send_message_stream_events(
+        "What MCP tools do you have available? List them."
+    ):
+        if event.get("type") != "stream_chunk":
+            continue
+        response_parts.append(str(event.get("content", "")))
 
     response = "".join(response_parts)
     print("Response:")

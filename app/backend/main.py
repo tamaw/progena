@@ -524,7 +524,9 @@ async def _handle_telegram_agent_message(
             request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
             streamed_chars = await telegram.stream_agent_response_to_chat(
                 chat_id,
-                progenitor.send_message_stream(message, request_id=request_id),
+                _stream_text_chunks(
+                    progenitor.send_message_stream_events(message, request_id=request_id)
+                ),
                 message_thread_id=metadata.get("message_thread_id"),
             )
 
@@ -1167,18 +1169,35 @@ async def stream_response_unified(
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
     try:
-        async for chunk in client.send_message_stream(message, request_id=request_id):
-            delta_event = {
-                "id": response_id,
-                "object": "response.output_text.delta",
-                "model": model,
-                "output_index": 0,
-                "delta": {
-                    "type": "output_text.delta",
-                    "text": chunk,
-                },
-            }
-            yield "event: response.output_text.delta\n" + f"data: {json.dumps(delta_event)}\n\n"
+        async for item in client.send_message_stream_events(message, request_id=request_id):
+            item_type = str(item.get("type", ""))
+            if item_type == "stream_chunk":
+                chunk = str(item.get("content", ""))
+                if not chunk:
+                    continue
+                delta_event = {
+                    "id": response_id,
+                    "object": "response.output_text.delta",
+                    "model": model,
+                    "output_index": 0,
+                    "delta": {
+                        "type": "output_text.delta",
+                        "text": chunk,
+                    },
+                }
+                yield "event: response.output_text.delta\n" + f"data: {json.dumps(delta_event)}\n\n"
+                continue
+
+            if item_type == "stream_event":
+                structured_event = {
+                    "id": response_id,
+                    "object": "response.stream_event",
+                    "model": model,
+                    "event_type": item.get("event_type", "unknown"),
+                    "content": item.get("content", ""),
+                    "metadata": item.get("metadata", {}),
+                }
+                yield "event: response.stream_event\n" + f"data: {json.dumps(structured_event)}\n\n"
 
         completed_event = {
             "id": response_id,
@@ -1191,6 +1210,16 @@ async def stream_response_unified(
         logger.error(f"Streaming error: {e}", exc_info=True)
         error_event = {"error": str(e)}
         yield "event: error\n" + f"data: {json.dumps(error_event)}\n\n"
+
+
+async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:
+    """Yield only plain text chunks from a structured stream iterator."""
+    async for item in events:
+        if item.get("type") != "stream_chunk":
+            continue
+        chunk_text = str(item.get("content", ""))
+        if chunk_text:
+            yield chunk_text
 
 
 # Simple chat endpoint (non-OpenAI format)
