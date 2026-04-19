@@ -319,17 +319,24 @@ function ChatPage() {
 
     let assistantContent = '';
     const assistantId = `msg_${Date.now()}_assistant`;
+    const previousAssistantId = activeAssistantIdRef.current;
     activeAssistantIdRef.current = assistantId;
 
-    // Add placeholder assistant message
-    setMessages(prev => [...prev, {
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      isStreaming: true,
-      streamEvents: [],
-    }]);
+    // Add placeholder assistant message; clear isStreaming on any prior
+    // placeholder that is being superseded so the spinner doesn't stick.
+    setMessages(prev => {
+      const next = previousAssistantId
+        ? prev.map(m => (m.id === previousAssistantId && m.isStreaming ? { ...m, isStreaming: false } : m))
+        : prev;
+      return [...next, {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        isStreaming: true,
+        streamEvents: [],
+      }];
+    });
 
     const history = messages.slice(-10).map(m => ({
       role: m.role,
@@ -337,11 +344,13 @@ function ChatPage() {
     }));
 
     try {
+      const isStale = () => activeAssistantIdRef.current !== assistantId;
       await sendMessageStream(
         content,
         history,
         // onChunk
         (chunk) => {
+          if (isStale()) return;
           setTypingState('generating');
           assistantContent += chunk;
           setTokenCount(prev => prev + 1);
@@ -353,6 +362,7 @@ function ChatPage() {
         },
         // onComplete
         (status) => {
+          if (isStale()) return;
           setMessages(prev => prev.map(m =>
             m.id === assistantId
               ? { ...m, isStreaming: false, content: assistantContent + (status === 'cancelled' ? ' [Cancelled]' : '') }
@@ -362,6 +372,7 @@ function ChatPage() {
         },
         // onError
         (error) => {
+          if (isStale()) return;
           show('error', 'Chat Error', error.message);
           setMessages(prev => prev.map(m =>
             m.id === assistantId
@@ -374,7 +385,7 @@ function ChatPage() {
         (streamEvent) => {
           // Discard frames that arrive after this request was superseded
           // (cancel/retry) so they cannot attach to a newer message.
-          if (activeAssistantIdRef.current !== assistantId) {
+          if (isStale()) {
             return;
           }
           const nextEvent = createStreamEvent(streamEvent);

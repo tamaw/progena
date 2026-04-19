@@ -59,6 +59,14 @@ def test_normalize_custom_event_handles_non_dict_payload():
     assert envelope["metadata"]["raw"] == "not-a-dict"
 
 
+def test_normalize_custom_event_redacts_non_dict_payload_secrets():
+    api_key = "sk-" + "b" * 48
+    envelope = normalize_custom_event(f"leaked {api_key}")
+    assert envelope is not None
+    assert api_key not in repr(envelope)
+    assert "REDACTED" in repr(envelope)
+
+
 def test_normalize_custom_event_redacts_metadata_secrets():
     api_key = "sk-" + "a" * 48
     envelope = normalize_custom_event(
