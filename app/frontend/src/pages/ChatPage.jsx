@@ -63,6 +63,7 @@ function normalizeStoredMessage(message, index) {
     id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
     role,
     content,
+    tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
     streamEvents: Array.isArray(message.streamEvents)
       ? message.streamEvents
         .map((event, eventIndex) => normalizeStreamEvent(event, eventIndex))
@@ -360,6 +361,7 @@ function ChatPage() {
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
+        tokenCount: 0,
         isStreaming: true,
         streamEvents: [],
       }];
@@ -383,7 +385,7 @@ function ChatPage() {
           setTokenCount(prev => prev + 1);
           setMessages(prev => prev.map(m =>
             m.id === assistantId
-              ? { ...m, content: assistantContent }
+              ? { ...m, content: assistantContent, tokenCount: (m.tokenCount || 0) + 1 }
               : m
           ));
         },
