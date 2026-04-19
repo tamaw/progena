@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import ToolMessage
@@ -57,6 +57,44 @@ def test_normalize_custom_event_handles_non_dict_payload():
     assert envelope is not None
     assert envelope["event_type"] == CUSTOM_EVENT_FALLBACK_TYPE
     assert envelope["metadata"]["raw"] == "not-a-dict"
+
+
+def test_normalize_custom_event_redacts_metadata_secrets():
+    api_key = "sk-" + "a" * 48
+    envelope = normalize_custom_event(
+        {
+            "event_type": "subagent_result",
+            "content": f"finished with {api_key}",
+            "metadata": {
+                "summary": f"used key {api_key}",
+                "nested": {"token": api_key},
+                "items": [api_key, "harmless"],
+            },
+        }
+    )
+    assert envelope is not None
+    serialized = repr(envelope)
+    assert api_key not in serialized
+    assert "REDACTED" in serialized
+
+
+def test_normalize_custom_event_truncates_oversized_metadata():
+    huge = "x" * 5000
+    envelope = normalize_custom_event(
+        {
+            "event_type": "debug_event",
+            "content": "ok",
+            "metadata": {"blob": huge},
+        }
+    )
+    assert envelope is not None
+    # truncate_json_safe collapses to a string preview when the encoded size
+    # exceeds DEFAULT_STREAM_ARGS_BYTES (2048).
+    metadata = envelope["metadata"]
+    assert isinstance(metadata, dict)
+    rendered = next(iter(metadata.values()))
+    assert isinstance(rendered, str)
+    assert len(rendered.encode("utf-8")) <= 2048
 
 
 def test_build_tool_start_event_redacts_args():
@@ -170,12 +208,11 @@ async def test_audit_middleware_swallows_writer_failure():
     def boom(_payload):
         raise RuntimeError("writer dead")
 
-    # emit_stream_event itself catches; this verifies the middleware uses it
-    # rather than calling get_stream_writer directly.
+    # get_stream_writer returns a writer that raises when invoked; emit_stream_event
+    # must swallow the failure so tool execution is unaffected.
     with patch(
         "app.progenitor.agent.stream_events.get_stream_writer",
-        AsyncMock(side_effect=boom),
-        create=True,
+        return_value=boom,
     ):
         result = await middleware.awrap_tool_call(request, handler)
     assert isinstance(result, ToolMessage)

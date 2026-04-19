@@ -17,6 +17,7 @@ import {
 } from '../components/chat/streamFilters';
 
 const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
+const MAX_TOKEN_DELTAS_PER_MESSAGE = 500;
 
 function normalizeStreamEvent(event, index) {
   if (!event || typeof event !== 'object') {
@@ -100,8 +101,28 @@ function appendStreamEvent(events, nextEvent) {
     return currentEvents;
   }
   const next = currentEvents.concat(nextEvent);
-  if (next.length > MAX_STREAM_EVENTS_PER_MESSAGE) {
-    return next.slice(next.length - MAX_STREAM_EVENTS_PER_MESSAGE);
+  // Token deltas have their own bounded budget so a long answer cannot
+  // evict the tool/step events that motivated this feature.
+  const tokenLimit = MAX_TOKEN_DELTAS_PER_MESSAGE;
+  let tokenCount = 0;
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    if (next[i].eventType === 'message_delta') {
+      tokenCount += 1;
+      if (tokenCount > tokenLimit) {
+        next.splice(i, 1);
+      }
+    }
+  }
+  // Cap non-token events independently of token volume.
+  const nonTokenLimit = MAX_STREAM_EVENTS_PER_MESSAGE;
+  let nonTokenCount = 0;
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    if (next[i].eventType !== 'message_delta') {
+      nonTokenCount += 1;
+      if (nonTokenCount > nonTokenLimit) {
+        next.splice(i, 1);
+      }
+    }
   }
   return next;
 }
@@ -156,6 +177,7 @@ function ChatPage() {
     loadStreamFilters(config.storage.streamFilters),
   );
   const messagesEndRef = useRef(null);
+  const activeAssistantIdRef = useRef(null);
 
   const streamEventFilter = useCallback(
     (event) => isEventVisible(event, streamFilters),
@@ -297,6 +319,7 @@ function ChatPage() {
 
     let assistantContent = '';
     const assistantId = `msg_${Date.now()}_assistant`;
+    activeAssistantIdRef.current = assistantId;
 
     // Add placeholder assistant message
     setMessages(prev => [...prev, {
@@ -349,6 +372,11 @@ function ChatPage() {
         },
         // onStreamEvent
         (streamEvent) => {
+          // Discard frames that arrive after this request was superseded
+          // (cancel/retry) so they cannot attach to a newer message.
+          if (activeAssistantIdRef.current !== assistantId) {
+            return;
+          }
           const nextEvent = createStreamEvent(streamEvent);
           if (!nextEvent) {
             return;
