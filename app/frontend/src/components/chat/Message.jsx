@@ -1,7 +1,16 @@
 import { useMemo } from 'react';
 
 function Message({ message, streamEventFilter }) {
-  const { role, content, timestamp, isStreaming, error, isScheduled, streamEvents = [] } = message;
+  const {
+    role,
+    content,
+    timestamp,
+    isStreaming,
+    error,
+    isScheduled,
+    streamEvents = [],
+    tokenCount = 0,
+  } = message;
 
   const visibleStreamEvents = useMemo(() => {
     if (typeof streamEventFilter !== 'function') return streamEvents;
@@ -17,6 +26,16 @@ function Message({ message, streamEventFilter }) {
     if (!timestamp) return '';
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }, [timestamp]);
+
+  const formattedTokenCount = useMemo(() => {
+    if (role !== 'assistant' || isStreaming || !Number.isFinite(tokenCount) || tokenCount <= 0) {
+      return '';
+    }
+    const count = new Intl.NumberFormat().format(tokenCount);
+    return `${count} ${tokenCount === 1 ? 'token' : 'tokens'}`;
+  }, [isStreaming, role, tokenCount]);
+
+  const hasMessageMeta = formattedTime || formattedTokenCount;
 
   return (
     <div className={`message-wrapper ${role}`}>
@@ -37,8 +56,12 @@ function Message({ message, streamEventFilter }) {
           className="message-content"
           dangerouslySetInnerHTML={{ __html: formattedContent }}
         />
-        {formattedTime && (
-          <div className="message-timestamp">{formattedTime}</div>
+        {hasMessageMeta && (
+          <div className="message-meta">
+            {formattedTime && <span className="message-timestamp">{formattedTime}</span>}
+            {formattedTime && formattedTokenCount && <span className="message-meta-separator" aria-hidden="true" />}
+            {formattedTokenCount && <span className="message-token-count">{formattedTokenCount}</span>}
+          </div>
         )}
       </div>
       <MessageActions role={role} content={content} />
