@@ -24,7 +24,9 @@ from app.progenitor.streaming_utils import (
 logger = logging.getLogger(__name__)
 
 # Reserved event_type values already used by the loop / service.
-_RESERVED_EVENT_TYPES = frozenset({"message_delta", "node_update"})
+_RESERVED_EVENT_TYPES = frozenset(
+    {"message_delta", "node_update", "reasoning_delta", "reasoning_summary"}
+)
 
 # Event types middleware/subagents may emit via get_stream_writer.
 ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
@@ -132,6 +134,38 @@ def build_tool_error_event(
     }
 
 
+def build_reasoning_delta_event(
+    content: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a ``reasoning_delta`` event payload for live summary fragments."""
+    safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_PREVIEW_BYTES)
+    safe_metadata = _normalize_metadata(metadata)
+    safe_metadata["text_length"] = len(safe_content)
+    return {
+        "event_type": "reasoning_delta",
+        "content": safe_content,
+        "metadata": safe_metadata,
+    }
+
+
+def build_reasoning_summary_event(
+    content: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a ``reasoning_summary`` event payload for the final summary item."""
+    safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_ARGS_BYTES)
+    safe_metadata = _normalize_metadata(metadata)
+    safe_metadata["text_length"] = len(safe_content)
+    return {
+        "event_type": "reasoning_summary",
+        "content": safe_content,
+        "metadata": safe_metadata,
+    }
+
+
 def emit_stream_event(payload: dict[str, Any]) -> None:
     """Best-effort emission via LangGraph's stream writer."""
     try:
@@ -183,3 +217,13 @@ def _redact_preview(value: Any) -> str:
         text = str(value)
     redacted = redact_secrets(text) if text else ""
     return truncate_text(redacted, DEFAULT_STREAM_PREVIEW_BYTES)
+
+
+def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    safe_metadata = truncate_json_safe(
+        _redact_value(dict(metadata) if metadata is not None else {}),
+        DEFAULT_STREAM_ARGS_BYTES,
+    )
+    if isinstance(safe_metadata, dict):
+        return safe_metadata
+    return {"value": safe_metadata}

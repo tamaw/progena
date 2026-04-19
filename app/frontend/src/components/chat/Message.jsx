@@ -203,6 +203,30 @@ function describeStreamEvent(event) {
     };
   }
 
+  if (eventType === 'reasoning_delta') {
+    const text = typeof event?.content === 'string' ? event.content : '';
+    return {
+      badge: 'Reasoning',
+      title: 'Thinking…',
+      detail: text || 'Generating reasoning summary…',
+    };
+  }
+
+  if (eventType === 'reasoning_summary') {
+    const detailParts = [];
+    if (typeof event?.content === 'string' && event.content.trim()) {
+      detailParts.push(event.content.trim());
+    }
+    if (typeof metadata.reasoning_tokens === 'number') {
+      detailParts.push(`${metadata.reasoning_tokens} reasoning tokens`);
+    }
+    return {
+      badge: 'Reasoning',
+      title: 'Reasoning summary',
+      detail: detailParts.join(' • ') || 'Reasoning completed',
+    };
+  }
+
   const explicitName = [
     metadata.tool_name,
     metadata.name,
@@ -269,6 +293,9 @@ function badgeForEventType(eventType) {
   }
   if (eventType.includes('node')) {
     return 'Step';
+  }
+  if (eventType.includes('reasoning')) {
+    return 'Reasoning';
   }
   return 'Event';
 }
