@@ -129,20 +129,58 @@ class TestProgenitorLoopStreaming:
         chunks = await _collect_stream_chunks(loop)
 
         assert chunks == [
-            {"type": "stream_chunk", "content": "Hello", "is_final": True},
+            {"type": "stream_chunk", "content": "Hello", "is_final": False},
+            {"type": "stream_chunk", "content": "", "is_final": True},
         ]
 
     @pytest.mark.asyncio
     async def test_stream_items_include_structured_events_without_breaking_chunk_reader(self):
         graph = _FakeGraph(
             [
-                ("messages", (AIMessageChunk(content="Hi"), {"langgraph_node": "respond"})),
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content=[
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {"type": "summary_text", "text": "Checked constraints. "}
+                                    ],
+                                },
+                                {"type": "text", "text": "Hi"},
+                            ]
+                        ),
+                        {"langgraph_node": "respond"},
+                    ),
+                ),
                 (
                     "updates",
                     {
                         "respond": {
                             "pending_response": "Hi",
-                            "messages": [AIMessage(content="Hi")],
+                            "messages": [
+                                {
+                                    "role": "assistant",
+                                    "content": [
+                                        {
+                                            "type": "reasoning",
+                                            "summary": [
+                                                {
+                                                    "type": "summary_text",
+                                                    "text": "Checked constraints before answering.",
+                                                }
+                                            ],
+                                        },
+                                        {"type": "text", "text": "Hi"},
+                                    ],
+                                    "response_metadata": {
+                                        "token_usage": {
+                                            "completion_tokens_details": {"reasoning_tokens": 17}
+                                        }
+                                    },
+                                }
+                            ],
                         }
                     },
                 ),
@@ -160,6 +198,16 @@ class TestProgenitorLoopStreaming:
         items = await _collect_stream_items(loop)
 
         assert items == [
+            {
+                "type": "stream_event",
+                "event_type": "reasoning_delta",
+                "content": "Checked constraints. ",
+                "metadata": {
+                    "message_chunk_type": "AIMessageChunk",
+                    "stream_metadata": {"langgraph_node": "respond"},
+                    "text_length": 21,
+                },
+            },
             {"type": "stream_chunk", "content": "Hi", "is_final": False},
             {
                 "type": "stream_event",
@@ -180,6 +228,15 @@ class TestProgenitorLoopStreaming:
                     "output_keys": ["pending_response", "messages"],
                     "contains_messages": True,
                     "contains_pending_response": True,
+                },
+            },
+            {
+                "type": "stream_event",
+                "event_type": "reasoning_summary",
+                "content": "Checked constraints before answering.",
+                "metadata": {
+                    "reasoning_tokens": 17,
+                    "text_length": 37,
                 },
             },
             {"type": "stream_chunk", "content": "", "is_final": True},

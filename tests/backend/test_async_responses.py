@@ -98,9 +98,9 @@ class TestAsyncResponseHandling:
             yield {"type": "stream_chunk", "content": "Hello"}
             yield {
                 "type": "stream_event",
-                "event_type": "node_update",
-                "content": "",
-                "metadata": {"node_name": "respond"},
+                "event_type": "reasoning_summary",
+                "content": "Checked constraints before answering.",
+                "metadata": {"reasoning_tokens": 17},
             }
             yield {"type": "stream_chunk", "content": "", "is_final": True}
 
@@ -125,6 +125,7 @@ class TestAsyncResponseHandling:
 
         assert any("event: response.output_text.delta" in part for part in payload)
         assert any("event: response.stream_event" in part for part in payload)
+        assert any("reasoning_summary" in part for part in payload)
         assert any("event: response.completed" in part for part in payload)
 
 
