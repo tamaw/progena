@@ -35,8 +35,29 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     parsed = urlsplit(raw)
     path = (parsed.path or "").rstrip("/")
     if path.endswith("/responses"):
-        path = path[:-len("/responses")]
+        path = path[: -len("/responses")]
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _resolve_reasoning_effort(model_name: str, budget_tokens: int | None) -> str:
+    """Map config to a provider-supported reasoning effort."""
+    if budget_tokens is None or budget_tokens <= 1024:
+        effort = "low"
+    elif budget_tokens <= 4096:
+        effort = "medium"
+    else:
+        effort = "high"
+
+    normalized_model_name = model_name.strip().lower()
+    if normalized_model_name.startswith("gpt-5.3-chat") and effort != "medium":
+        logger.info(
+            "Model %s only supports medium reasoning effort; using medium instead of %s",
+            model_name,
+            effort,
+        )
+        return "medium"
+
+    return effort
 
 
 def create_langchain_model(
@@ -63,16 +84,7 @@ def create_langchain_model(
     # Build model kwargs for extended reasoning if enabled.
     reasoning_effort: str | None = None
     if config.reasoning_enabled:
-        budget = config.reasoning_budget_tokens
-        if budget is not None:
-            if budget <= 1024:
-                reasoning_effort = "low"
-            elif budget <= 4096:
-                reasoning_effort = "medium"
-            else:
-                reasoning_effort = "high"
-        else:
-            reasoning_effort = "medium"
+        reasoning_effort = _resolve_reasoning_effort(model_name, config.reasoning_budget_tokens)
         logger.info(
             "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
             model_name,

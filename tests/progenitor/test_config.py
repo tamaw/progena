@@ -104,12 +104,14 @@ class TestLLMConfig:
             assert config.base_url == "https://example.openai.azure.com/openai/v1"
             assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
+            assert config.reasoning_enabled is True
 
     def test_defaults(self):
         """Test default values."""
         config = LLMConfig()
         assert config.base_url == ""
         assert config.model_default == "gpt-5.1-codex-max"
+        assert config.reasoning_enabled is True
 
     def test_get_model_for_role(self):
         """Test per-role model selection."""

@@ -91,6 +91,28 @@ class TestLangChainAdapter:
         assert "thinking" not in model.model_kwargs
         assert model.reasoning_effort == "medium"
 
+    def test_reasoning_defaults_to_low_effort(self):
+        """Reasoning defaults to low effort when no budget is set."""
+        config = LLMConfig(
+            base_url="https://example.openai.azure.com/openai/v1",
+            api_key="test-key",
+            model_default="gpt-5.2-chat",
+            reasoning_enabled=True,
+        )
+        model = create_langchain_model(config)
+        assert model.reasoning_effort == "low"
+
+    def test_gpt_5_3_chat_clamps_reasoning_effort_to_medium(self):
+        """gpt-5.3-chat only supports medium reasoning effort."""
+        config = LLMConfig(
+            base_url="https://example.openai.azure.com/openai/v1",
+            api_key="test-key",
+            model_default="gpt-5.3-chat-2026-03-03",
+            reasoning_enabled=True,
+        )
+        model = create_langchain_model(config)
+        assert model.reasoning_effort == "medium"
+
 
 class TestDeepAgentFactory:
     """Tests for the DeepAgent factory."""

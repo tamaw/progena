@@ -179,7 +179,7 @@ class LLMConfig:
     model_builder: str | None = None
     model_summary: str | None = None
     # Reasoning/thinking feature (for models that support it)
-    reasoning_enabled: bool = False
+    reasoning_enabled: bool = True
     reasoning_budget_tokens: int | None = None
 
     @classmethod
@@ -195,7 +195,7 @@ class LLMConfig:
             model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
-            reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", False),
+            reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             reasoning_budget_tokens=budget_tokens,
         )
 
