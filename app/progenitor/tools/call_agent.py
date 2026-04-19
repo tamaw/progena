@@ -30,6 +30,41 @@ class AgentSelection(BaseModel):
 
 class CallAgentTool(BaseSystemTool):
     @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": "The complete request to send to the deployed agent.",
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "Exact registered agent name. Omit to auto-route.",
+                },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Alias for agent.",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": "Maximum time to wait before timing out the task submission.",
+                    "default": 60.0,
+                },
+                "blocking": {
+                    "type": "boolean",
+                    "description": "Wait for completion instead of returning a tracked async task.",
+                    "default": False,
+                },
+                "context": {
+                    "type": "object",
+                    "description": "Optional structured context to pass through with the task.",
+                },
+            },
+            "required": ["request"],
+        }
+
+    @property
     def name(self) -> str:
         return "call_agent"
 

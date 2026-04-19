@@ -3,6 +3,7 @@ System Tool Protocol and Base Types.
 
 Defined under app.progenitor.tools to avoid import cycles with app.progenitor.nodes.
 """
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Protocol
@@ -74,6 +75,19 @@ class BaseSystemTool(ABC):
     @abstractmethod
     async def execute(self, context: ToolContext) -> ToolResult:
         pass
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": "Natural language request for the tool.",
+                }
+            },
+            "required": ["request"],
+        }
 
     def to_dict(self) -> dict[str, str]:
         return {

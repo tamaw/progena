@@ -3,6 +3,7 @@ MCP Refresh - Refresh live MCP tool discovery from data/config/mcp.json.
 """
 
 import logging
+from typing import Any
 
 from ..config import MCPConfig
 from .mcp import refresh_mcp_runtime
@@ -12,6 +13,20 @@ logger = logging.getLogger(__name__)
 
 
 class MCPRefreshTool(BaseSystemTool):
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "persist": {
+                    "type": "boolean",
+                    "description": "Persist refreshed MCP discovery into the runtime registry.",
+                    "default": True,
+                },
+            },
+            "required": [],
+        }
+
     @property
     def name(self) -> str:
         return "mcp_refresh"
