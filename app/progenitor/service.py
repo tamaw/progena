@@ -33,8 +33,18 @@ from .config import ProgenitorConfig, get_config
 from .llm.client import LLMClient
 from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .state.manager import StateManager
-from .stream_events import normalize_custom_event
-from .streaming_utils import extract_stream_chunk_text, make_json_safe
+from .stream_events import (
+    build_reasoning_delta_event,
+    build_reasoning_summary_event,
+    normalize_custom_event,
+)
+from .streaming_utils import (
+    extract_reasoning_summary_text,
+    extract_reasoning_token_count,
+    extract_stream_chunk_text,
+    extract_stream_reasoning_deltas,
+    make_json_safe,
+)
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -231,20 +241,25 @@ class ProgenitorService:
                     mode, event = stream_item
 
                 if mode == "messages":
-                    stream_event = self._build_message_stream_event(event, request_id=request_id)
-                    if stream_event is None:
+                    stream_events = self._build_message_stream_events(event, request_id=request_id)
+                    if not stream_events:
                         continue
-                    chunk_text = str(stream_event["content"])
-                    if chunk_text:
-                        full_response += chunk_text
-                    yield stream_event
-                    if chunk_text:
-                        yield {
-                            "type": "stream_chunk",
-                            "content": chunk_text,
-                            "is_final": False,
-                            "request_id": request_id,
-                        }
+                    for stream_event in stream_events:
+                        if stream_event["event_type"] == "message_delta":
+                            chunk_text = str(stream_event["content"])
+                            if chunk_text:
+                                full_response += chunk_text
+                        yield stream_event
+                        if (
+                            stream_event["event_type"] == "message_delta"
+                            and stream_event["content"]
+                        ):
+                            yield {
+                                "type": "stream_chunk",
+                                "content": str(stream_event["content"]),
+                                "is_final": False,
+                                "request_id": request_id,
+                            }
                     continue
 
                 if mode == "custom":
@@ -288,6 +303,24 @@ class ProgenitorService:
                                 "request_id": request_id,
                             }
 
+            last_ai_message = self._get_last_ai_message(last_result.get("messages"))
+            reasoning_summary = extract_reasoning_summary_text(last_ai_message)
+            reasoning_tokens = extract_reasoning_token_count(last_ai_message)
+            if reasoning_summary or reasoning_tokens is not None:
+                summary_event = build_reasoning_summary_event(
+                    reasoning_summary or "",
+                    metadata={
+                        "reasoning_tokens": reasoning_tokens,
+                    },
+                )
+                yield {
+                    "type": "stream_event",
+                    "event_type": summary_event["event_type"],
+                    "content": summary_event["content"],
+                    "request_id": request_id,
+                    "metadata": summary_event["metadata"],
+                }
+
             if not full_response:
                 fallback_response = self._extract_response(last_result)
                 if fallback_response:
@@ -329,32 +362,55 @@ class ProgenitorService:
         except (TypeError, ValueError):
             return False
 
-    def _build_message_stream_event(
+    def _build_message_stream_events(
         self,
         event: Any,
         *,
         request_id: str,
-    ) -> dict[str, Any] | None:
-        """Normalize a LangGraph messages-mode event into a stream item."""
+    ) -> list[dict[str, Any]]:
+        """Normalize a LangGraph messages-mode event into stream items."""
         if not isinstance(event, tuple) or len(event) != 2:
-            return None
+            return []
 
         message_chunk, metadata = event
         if not isinstance(message_chunk, AIMessageChunk):
-            return None
+            return []
+
+        stream_metadata = make_json_safe(metadata)
+        events: list[dict[str, Any]] = []
+        for reasoning_delta in extract_stream_reasoning_deltas(message_chunk):
+            reasoning_event = build_reasoning_delta_event(
+                reasoning_delta,
+                metadata={
+                    "message_chunk_type": type(message_chunk).__name__,
+                    "stream_metadata": stream_metadata,
+                },
+            )
+            events.append(
+                {
+                    "type": "stream_event",
+                    "event_type": reasoning_event["event_type"],
+                    "content": reasoning_event["content"],
+                    "request_id": request_id,
+                    "metadata": reasoning_event["metadata"],
+                }
+            )
 
         chunk_text = extract_stream_chunk_text(message_chunk)
-        return {
-            "type": "stream_event",
-            "event_type": "message_delta",
-            "content": chunk_text,
-            "request_id": request_id,
-            "metadata": {
-                "message_chunk_type": type(message_chunk).__name__,
-                "stream_metadata": make_json_safe(metadata),
-                "text_length": len(chunk_text),
-            },
-        }
+        events.append(
+            {
+                "type": "stream_event",
+                "event_type": "message_delta",
+                "content": chunk_text,
+                "request_id": request_id,
+                "metadata": {
+                    "message_chunk_type": type(message_chunk).__name__,
+                    "stream_metadata": stream_metadata,
+                    "text_length": len(chunk_text),
+                },
+            }
+        )
+        return events
 
     def _build_custom_stream_event(
         self,

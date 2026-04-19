@@ -81,10 +81,12 @@ def create_langchain_model(
 
     base_url = _normalize_langchain_base_url(config.base_url)
 
-    # Build model kwargs for extended reasoning if enabled.
-    reasoning_effort: str | None = None
+    # Request provider reasoning summaries when reasoning is enabled so the
+    # stream path can surface live summary deltas and the final summary item.
+    reasoning: dict[str, str] | None = None
     if config.reasoning_enabled:
         reasoning_effort = _resolve_reasoning_effort(model_name, config.reasoning_budget_tokens)
+        reasoning = {"effort": reasoning_effort, "summary": "auto"}
         logger.info(
             "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
             model_name,
@@ -102,7 +104,7 @@ def create_langchain_model(
         use_responses_api=True,
         output_version="responses/v1",
         streaming=True,
-        reasoning_effort=reasoning_effort,
+        reasoning=reasoning,
     )
 
     logger.info(
