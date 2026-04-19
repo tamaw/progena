@@ -36,13 +36,18 @@ jobs:
   backend:
     needs: runner-context
     runs-on: [self-hosted, Linux]
+    env:
+      PIP_CACHE_DIR: /tmp/pip-cache
+    defaults:
+      run:
+        working-directory: repo
     container:
       image: python:3.12-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
-    env:
-      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: repo
 
       - name: Install Python deps
         run: |
@@ -66,13 +71,18 @@ jobs:
   progenitor:
     needs: runner-context
     runs-on: [self-hosted, Linux]
+    env:
+      PIP_CACHE_DIR: /tmp/pip-cache
+    defaults:
+      run:
+        working-directory: repo
     container:
       image: python:3.12-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
-    env:
-      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: repo
 
       - name: Install Python deps
         run: |
@@ -111,15 +121,17 @@ jobs:
     runs-on: self-hosted
     defaults:
       run:
-        working-directory: app/frontend
+        working-directory: repo/app/frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: repo
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: app/frontend/package-lock.json
+          cache-dependency-path: repo/app/frontend/package-lock.json
 
       - name: Install deps
         run: npm ci
@@ -136,8 +148,13 @@ jobs:
     needs: [backend, progenitor, frontend]
     # Keep push-based image publishing on main, but allow explicit manual dispatches from a branch.
     if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    defaults:
+      run:
+        working-directory: repo
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: repo
 
       - uses: docker/setup-buildx-action@v3
 
@@ -150,8 +167,8 @@ jobs:
       - name: Build and push progenitor image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: docker/progenitor/Dockerfile
+          context: repo
+          file: repo/docker/progenitor/Dockerfile
           push: true
           labels: |
             com.progenitor.managed=true
@@ -165,8 +182,8 @@ jobs:
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: docker/backend/Dockerfile
+          context: repo
+          file: repo/docker/backend/Dockerfile
           push: true
           labels: |
             com.progenitor.managed=true
@@ -180,8 +197,8 @@ jobs:
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
         with:
-          context: app/frontend
-          file: docker/frontend/Dockerfile
+          context: repo/app/frontend
+          file: repo/docker/frontend/Dockerfile
           push: true
           labels: |
             com.progenitor.managed=true
@@ -199,8 +216,13 @@ jobs:
     needs: [build-and-push]
     # Keep push-based deploys on main, but allow explicit manual dispatches from a branch.
     if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    defaults:
+      run:
+        working-directory: repo
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: repo
 
       - name: Ensure external network
         run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
