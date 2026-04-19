@@ -27,8 +27,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
 
 from langchain_core.messages import AIMessageChunk
 
-from ..agent.stream_events import normalize_custom_event
 from ..state.models import A2ATaskRecord, ConversationMessage, redact_secrets
+from ..stream_events import normalize_custom_event
 from ..streaming_utils import extract_stream_chunk_text, make_json_safe
 from .a2a_tasks import A2ATaskTracker, build_completion_message
 from .scheduler import Scheduler
