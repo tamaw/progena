@@ -4,6 +4,8 @@ Self Reflect Tool - Introspect own source code to understand how Progenitor work
 
 import logging
 
+from pydantic import BaseModel
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -11,6 +13,12 @@ logger = logging.getLogger(__name__)
 
 class SelfReflectTool(BaseSystemTool):
     """Introspect own source code to understand how Progenitor works."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        from .self_reflect import SelfReflectArgs
+
+        return SelfReflectArgs
 
     @property
     def name(self) -> str:
@@ -45,13 +53,6 @@ class SelfReflectTool(BaseSystemTool):
             r"\bhow do you (?:work|handle|process)\b",
             r"\b(?:explain|describe) your\b",
         ]
-
-    @property
-    def parameters(self) -> dict[str, object]:
-        from .self_reflect import SELF_REFLECT_TOOL_SPEC
-
-        parameters = SELF_REFLECT_TOOL_SPEC.get("parameters")
-        return parameters if isinstance(parameters, dict) else super().parameters
 
     async def execute(self, context: ToolContext) -> ToolResult:
         from .self_reflect import SelfReflection, execute_self_reflect

@@ -8,6 +8,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel, Field
 
 from app.progenitor.nodes.node_helpers import (
     BaseSystemTool,
@@ -126,6 +127,38 @@ class TestBaseSystemTool:
 
         tool = TestTool()
         assert tool.description == "Test description"
+
+    def test_parameters_are_derived_from_args_model(self):
+        """args_model should be the source of truth for public tool parameters."""
+
+        class TestArgs(BaseModel):
+            value: str = Field(description="Primary value")
+            note: str | None = Field(default=None, description="Optional note")
+
+        class TestTool(BaseSystemTool):
+            @property
+            def name(self):
+                return "test_tool"
+
+            @property
+            def description(self):
+                return "Test description"
+
+            @property
+            def args_model(self):
+                return TestArgs
+
+            async def execute(self, context: ToolContext) -> ToolResult:
+                return ToolResult.ok(data={"status": "done"})
+
+        params = TestTool().parameters
+
+        assert params["type"] == "object"
+        assert params["required"] == ["value"]
+        assert params["properties"]["value"]["type"] == "string"
+        assert params["properties"]["note"]["type"] == "string"
+        assert "anyOf" not in params["properties"]["note"]
+        assert "title" not in params
 
 
 class TestListToolsTool:

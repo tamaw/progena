@@ -7,6 +7,8 @@ from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.tools_adapter import create_deepagent_tools, create_dynamic_mcp_tools
 from app.progenitor.state.models import A2ATaskRecord
+from app.progenitor.tools.call_agent import CallAgentArgs
+from app.progenitor.tools.protocol import RequestToolArgs
 
 
 def _tool_by_name(tools, name: str):
@@ -64,6 +66,13 @@ def test_request_only_tools_keep_default_request_schema() -> None:
 
     assert set(properties) == {"request"}
     assert schema.get("required") == ["request"]
+
+
+def test_deepagent_reuses_declared_args_models() -> None:
+    tools = create_deepagent_tools()
+
+    assert _tool_by_name(tools, "current_time").args_schema is RequestToolArgs
+    assert _tool_by_name(tools, "call_agent").args_schema is CallAgentArgs
 
 
 def test_user_communication_tools_expose_structured_parameters() -> None:

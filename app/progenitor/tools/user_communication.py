@@ -10,7 +10,14 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, cast
 
-from .protocol import BaseSystemTool, ToolContext, ToolResult
+from pydantic import BaseModel, Field
+
+from .protocol import (
+    BaseSystemTool,
+    ToolContext,
+    ToolResult,
+    legacy_parameters_from_args_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,39 +26,39 @@ logger = logging.getLogger(__name__)
 EventPusher = Callable[[str, str, dict[str, Any] | None], Coroutine[Any, Any, None]]
 
 
-def _parameters_for_tool(tool_name: str) -> dict[str, Any]:
-    for entry in USER_COMMUNICATION_TOOLS:
-        if entry.get("name") != tool_name:
-            continue
-        raw_parameters = entry.get("parameters")
-        if not isinstance(raw_parameters, dict):
-            break
+class SayToUserArgs(BaseModel):
+    """Structured arguments for sending a one-way user message."""
 
-        properties: dict[str, Any] = {}
-        required: list[str] = []
-        for name, spec in raw_parameters.items():
-            if not isinstance(spec, dict):
-                continue
-            properties[name] = {key: value for key, value in spec.items() if key != "required"}
-            if spec.get("required") is True:
-                required.append(name)
+    message: str = Field(description="The message to send to the user")
+    context: str | None = Field(
+        default=None,
+        description="Optional context about what triggered this message",
+    )
 
-        return {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        }
 
-    return {
-        "type": "object",
-        "properties": {
-            "request": {
-                "type": "string",
-                "description": "Natural language request for the tool.",
-            }
-        },
-        "required": ["request"],
-    }
+class AskUserArgs(BaseModel):
+    """Structured arguments for sending a one-way user question."""
+
+    question: str = Field(description="The question to ask the user")
+    context: str | None = Field(
+        default=None,
+        description="Optional context about why this question is being asked",
+    )
+    options: list[str] | None = Field(
+        default=None,
+        description="Optional list of suggested answers/options",
+    )
+
+
+class NotifyUserArgs(BaseModel):
+    """Structured arguments for backend-managed user notifications."""
+
+    title: str = Field(description="Short notification title")
+    body: str = Field(description="Notification body/details")
+    level: str = Field(
+        default="info",
+        description="Notification level: info, warning, error, success",
+    )
 
 
 class UserCommunicationTools:
@@ -212,65 +219,21 @@ USER_COMMUNICATION_TOOLS = [
         "description": "Send a message to the user. Use this to communicate information, updates, or results. Aliases: 'say', 'tell', 'to user', 'message user'.",
         "type": "system_tool",
         "capabilities": ["messaging", "say", "tell"],
-        "parameters": {
-            "message": {
-                "type": "string",
-                "description": "The message to send to the user",
-                "required": True,
-            },
-            "context": {
-                "type": "string",
-                "description": "Optional context about what triggered this message",
-                "required": False,
-            },
-        },
+        "parameters": legacy_parameters_from_args_model(SayToUserArgs),
     },
     {
         "name": "ask_user",
         "description": "Ask the user a question. Use this when you need clarification or input from the user. Aliases: 'ask', 'question', 'inquire'.",
         "type": "system_tool",
         "capabilities": ["questioning", "ask", "inquire"],
-        "parameters": {
-            "question": {
-                "type": "string",
-                "description": "The question to ask the user",
-                "required": True,
-            },
-            "context": {
-                "type": "string",
-                "description": "Optional context about why this question is being asked",
-                "required": False,
-            },
-            "options": {
-                "type": "array",
-                "description": "Optional list of suggested answers/options",
-                "required": False,
-            },
-        },
+        "parameters": legacy_parameters_from_args_model(AskUserArgs),
     },
     {
         "name": "notify_user",
         "description": "Send a notification to the user with a title and body. Use for important alerts or status updates.",
         "type": "system_tool",
         "capabilities": ["notifications", "alerts"],
-        "parameters": {
-            "title": {
-                "type": "string",
-                "description": "Short notification title",
-                "required": True,
-            },
-            "body": {
-                "type": "string",
-                "description": "Notification body/details",
-                "required": True,
-            },
-            "level": {
-                "type": "string",
-                "description": "Notification level: info, warning, error, success",
-                "required": False,
-                "default": "info",
-            },
-        },
+        "parameters": legacy_parameters_from_args_model(NotifyUserArgs),
     },
 ]
 
@@ -279,16 +242,16 @@ class SayToUserTool(BaseSystemTool):
     """Send a one-way agent_message event via IPC."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        return SayToUserArgs
+
+    @property
     def name(self) -> str:
         return "say_to_user"
 
     @property
     def description(self) -> str:
         return "Send a one-way message to the user via IPC (agent_message event)"
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return _parameters_for_tool(self.name)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
@@ -312,16 +275,16 @@ class AskUserTool(BaseSystemTool):
     """Send a one-way agent_question event via IPC."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        return AskUserArgs
+
+    @property
     def name(self) -> str:
         return "ask_user"
 
     @property
     def description(self) -> str:
         return "Ask the user a question via IPC (agent_question event; one-way notification)"
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return _parameters_for_tool(self.name)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
@@ -352,16 +315,16 @@ class NotifyUserTool(BaseSystemTool):
     """Request a backend-managed alert via IPC."""
 
     @property
+    def args_model(self) -> type[BaseModel]:
+        return NotifyUserArgs
+
+    @property
     def name(self) -> str:
         return "notify_user"
 
     @property
     def description(self) -> str:
         return "Create a backend-managed alert and let the backend drive user-facing delivery"
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return _parameters_for_tool(self.name)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
