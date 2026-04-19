@@ -14,6 +14,14 @@ def _clear_imports() -> None:
         sys.modules.pop(name, None)
 
 
+def test_agent_package_import_does_not_pull_in_deep_agent():
+    _clear_imports()
+
+    importlib.import_module("app.progenitor.agent")
+
+    assert "app.progenitor.agent.deep_agent" not in sys.modules
+
+
 def test_stream_events_import_does_not_pull_in_agent_package():
     _clear_imports()
 
