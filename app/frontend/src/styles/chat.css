@@ -529,13 +529,24 @@
 .message-content h3 { font-size: 1.1em; }
 
 .message-content ul,
-.message-content ol {
-    margin: var(--spacing-sm) 0;
-    padding-left: var(--spacing-lg);
+.message-content ol,
+.md-ul,
+.md-ol {
+    margin: var(--spacing-xs) 0;
+    padding-left: calc(var(--spacing-lg) + 0.35rem);
 }
 
-.message-content li {
-    margin-bottom: var(--spacing-xs);
+.message-content li,
+.md-li,
+.md-li-ordered {
+    margin-bottom: 0.2rem;
+    padding-left: 0.1rem;
+}
+
+.message-content li:last-child,
+.md-li:last-child,
+.md-li-ordered:last-child {
+    margin-bottom: 0;
 }
 
 .message-content blockquote {
@@ -655,16 +666,6 @@
 
 .md-table .tbody:nth-child(even) td {
     background-color: var(--color-bg-secondary);
-}
-
-/* Markdown Lists */
-.md-ul, .md-ol {
-    margin: var(--spacing-sm) 0;
-    padding-left: var(--spacing-lg);
-}
-
-.md-li, .md-li-ordered {
-    margin-bottom: var(--spacing-xs);
 }
 
 /* ============================================================================

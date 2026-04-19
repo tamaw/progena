@@ -320,7 +320,79 @@ function formatMessage(content) {
     formatted = `<p>${formatted}</p>`;
   }
 
-  return formatted;
+  return normalizeListMarkup(formatted);
+}
+
+function normalizeListMarkup(html) {
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  if (!container.querySelector('li.md-li, li.md-li-ordered')) {
+    return html;
+  }
+
+  const children = Array.from(container.childNodes);
+  const fragment = document.createDocumentFragment();
+  let activeList = null;
+  let mutated = false;
+
+  const isListItem = (node) =>
+    node instanceof HTMLElement
+    && (node.matches('li.md-li') || node.matches('li.md-li-ordered'));
+
+  const isBreak = (node) =>
+    node instanceof HTMLElement && node.tagName === 'BR';
+
+  const trimTrailingBreaks = (node) => {
+    while (isBreak(node.lastChild)) {
+      node.lastChild.remove();
+      mutated = true;
+    }
+  };
+
+  children.forEach((node, index) => {
+    const previous = children[index - 1];
+    const next = children[index + 1];
+
+    if (node instanceof HTMLParagraphElement) {
+      trimTrailingBreaks(node);
+      if (!node.textContent?.trim() && (isListItem(previous) || isListItem(next))) {
+        mutated = true;
+        return;
+      }
+
+      activeList = null;
+      fragment.appendChild(node);
+      return;
+    }
+
+    if (isListItem(node)) {
+      const tagName = node.matches('li.md-li-ordered') ? 'ol' : 'ul';
+      if (!activeList || activeList.tagName.toLowerCase() !== tagName) {
+        activeList = document.createElement(tagName);
+        activeList.className = tagName === 'ol' ? 'md-ol' : 'md-ul';
+        fragment.appendChild(activeList);
+      }
+
+      activeList.appendChild(node);
+      mutated = true;
+      return;
+    }
+
+    if (isBreak(node) && (isListItem(previous) || isListItem(next))) {
+      mutated = true;
+      return;
+    }
+
+    activeList = null;
+    fragment.appendChild(node);
+  });
+
+  if (mutated) {
+    container.replaceChildren(fragment);
+  }
+
+  return container.innerHTML;
 }
 
 function escapeHtml(text) {
