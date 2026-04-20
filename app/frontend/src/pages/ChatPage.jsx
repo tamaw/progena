@@ -37,6 +37,38 @@ function normalizeStreamEvent(event, index) {
   };
 }
 
+function shouldSuppressStreamEvent(event) {
+  return event?.eventType === 'reasoning_summary';
+}
+
+function extractReasoningTokenCount(event) {
+  const tokenCount = event?.metadata?.reasoning_tokens;
+  return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
+}
+
+function reasoningGroupKey(event) {
+  const streamMetadata = event?.metadata?.stream_metadata;
+  if (!streamMetadata || typeof streamMetadata !== 'object') {
+    return null;
+  }
+
+  const langgraphStep = streamMetadata.langgraph_step;
+  const checkpointNs = typeof streamMetadata.checkpoint_ns === 'string'
+    ? streamMetadata.checkpoint_ns
+    : '';
+  const nodeName = typeof streamMetadata.langgraph_node === 'string'
+    ? streamMetadata.langgraph_node
+    : '';
+
+  if (Number.isFinite(langgraphStep)) {
+    return `step:${langgraphStep}:${nodeName}:${checkpointNs}`;
+  }
+  if (checkpointNs || nodeName) {
+    return `fallback:${nodeName}:${checkpointNs}`;
+  }
+  return null;
+}
+
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -64,9 +96,13 @@ function normalizeStoredMessage(message, index) {
     role,
     content,
     tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
+    reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
+      ? message.reasoningTokenCount
+      : 0,
     streamEvents: Array.isArray(message.streamEvents)
       ? message.streamEvents
         .map((event, eventIndex) => normalizeStreamEvent(event, eventIndex))
+        .filter((event) => event && !shouldSuppressStreamEvent(event))
         .filter(Boolean)
       : [],
     timestamp,
@@ -93,42 +129,28 @@ function createStreamEvent(streamEvent) {
 
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
+  if (shouldSuppressStreamEvent(nextEvent)) {
+    return currentEvents;
+  }
   if (nextEvent.eventType === 'reasoning_delta') {
-    for (let i = currentEvents.length - 1; i >= 0; i -= 1) {
-      if (currentEvents[i].eventType !== 'reasoning_delta') continue;
-      const mergedContent = `${currentEvents[i].content || ''}${nextEvent.content || ''}`;
+    const lastEvent = currentEvents[currentEvents.length - 1];
+    if (
+      lastEvent?.eventType === 'reasoning_delta'
+      && reasoningGroupKey(lastEvent) !== null
+      && reasoningGroupKey(lastEvent) === reasoningGroupKey(nextEvent)
+    ) {
+      const mergedContent = `${lastEvent.content || ''}${nextEvent.content || ''}`;
       const mergedMetadata = {
-        ...currentEvents[i].metadata,
+        ...lastEvent.metadata,
         ...nextEvent.metadata,
         text_length: mergedContent.length,
       };
-      return currentEvents.map((event, index) => (
-        index === i
-          ? { ...event, content: mergedContent, metadata: mergedMetadata }
-          : event
-      ));
+      return currentEvents.slice(0, -1).concat({
+        ...lastEvent,
+        content: mergedContent,
+        metadata: mergedMetadata,
+      });
     }
-  }
-  if (nextEvent.eventType === 'reasoning_summary') {
-    const nextContent = typeof nextEvent.content === 'string' ? nextEvent.content : '';
-    let accumulatedReasoning = '';
-    const filtered = currentEvents.filter((event) => {
-      if (event.eventType !== 'reasoning_delta' && event.eventType !== 'reasoning_summary') {
-        return true;
-      }
-      if (event.eventType === 'reasoning_delta') {
-        accumulatedReasoning += event.content || '';
-      }
-      return false;
-    });
-    return filtered.concat({
-      ...nextEvent,
-      content: nextContent || accumulatedReasoning,
-      metadata: {
-        ...nextEvent.metadata,
-        text_length: (nextContent || accumulatedReasoning).length,
-      },
-    });
   }
   const lastEvent = currentEvents[currentEvents.length - 1];
   if (
@@ -171,7 +193,6 @@ function stripEphemeralStreamEvents(message) {
   if (events.length === 0) return message;
   const persistable = events.filter((event) =>
     PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType))
-    && event.eventType !== 'reasoning_delta',
   );
   if (persistable.length === events.length) {
     return message;
@@ -400,6 +421,7 @@ function ChatPage() {
         content: '',
         timestamp: Date.now(),
         tokenCount: 0,
+        reasoningTokenCount: 0,
         isStreaming: true,
         streamEvents: [],
       }];
@@ -462,12 +484,20 @@ function ChatPage() {
 
           if (nextEvent.eventType === 'reasoning_delta') {
             setTypingState('thinking');
-          } else if (nextEvent.eventType !== 'message_delta') {
+          } else if (
+            nextEvent.eventType !== 'message_delta'
+            && nextEvent.eventType !== 'reasoning_summary'
+          ) {
             setTypingState('tool-use');
           }
+          const reasoningTokenCount = extractReasoningTokenCount(nextEvent);
           setMessages(prev => prev.map(m =>
             m.id === assistantId
-              ? { ...m, streamEvents: appendStreamEvent(m.streamEvents, nextEvent) }
+              ? {
+                ...m,
+                streamEvents: appendStreamEvent(m.streamEvents, nextEvent),
+                reasoningTokenCount: reasoningTokenCount ?? m.reasoningTokenCount ?? 0,
+              }
               : m
           ));
         },
