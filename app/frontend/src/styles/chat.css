@@ -185,21 +185,25 @@
     color: var(--color-accent);
 }
 
-.message-stream-event.reasoning_delta {
+.message-stream-event.reasoning_delta,
+.message-stream-event.reasoning_summary {
     border-color: rgba(188, 140, 255, 0.28);
     background-color: color-mix(in srgb, rgba(188, 140, 255, 0.14) 60%, var(--color-bg-tertiary));
 }
 
-.message-stream-event.reasoning_delta .message-stream-event-badge {
+.message-stream-event.reasoning_delta .message-stream-event-badge,
+.message-stream-event.reasoning_summary .message-stream-event-badge {
     background-color: rgba(188, 140, 255, 0.18);
     color: #c19cff;
 }
 
-.message-stream-event.reasoning_delta .message-stream-event-title {
+.message-stream-event.reasoning_delta .message-stream-event-title,
+.message-stream-event.reasoning_summary .message-stream-event-title {
     color: color-mix(in srgb, var(--color-text-secondary) 88%, white 12%);
 }
 
-.message-stream-event.reasoning_delta .message-stream-event-body {
+.message-stream-event.reasoning_delta .message-stream-event-body,
+.message-stream-event.reasoning_summary .message-stream-event-body {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     font-style: italic;
