@@ -229,12 +229,13 @@ function describeStreamEvent(event) {
     };
   }
 
-  if (eventType === 'reasoning_delta') {
+  if (eventType === 'reasoning_delta' || eventType === 'reasoning_summary') {
     const text = typeof event?.content === 'string' ? event.content : '';
+    const isLiveReasoning = eventType === 'reasoning_delta';
     return {
       badge: 'Reasoning',
-      title: 'Reasoning (live)',
-      bodyHtml: formatMessage(text || 'Generating reasoning summary…'),
+      title: isLiveReasoning ? 'Reasoning (live)' : 'Reasoning',
+      bodyHtml: formatMessage(text || (isLiveReasoning ? 'Generating reasoning summary…' : '')),
       detail: summarizeMetadata(metadata),
     };
   }

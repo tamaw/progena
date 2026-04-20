@@ -37,8 +37,23 @@ function normalizeStreamEvent(event, index) {
   };
 }
 
-function shouldSuppressStreamEvent(event) {
-  return event?.eventType === 'reasoning_summary';
+function hasReasoningContent(event) {
+  return typeof event?.content === 'string' && event.content.trim().length > 0;
+}
+
+function shouldSuppressStreamEvent(event, existingEvents = []) {
+  if (event?.eventType !== 'reasoning_summary') {
+    return false;
+  }
+
+  if (!hasReasoningContent(event)) {
+    return true;
+  }
+
+  return existingEvents.some(
+    (existingEvent) =>
+      existingEvent?.eventType === 'reasoning_delta' && hasReasoningContent(existingEvent),
+  );
 }
 
 function extractReasoningTokenCount(event) {
@@ -100,10 +115,13 @@ function normalizeStoredMessage(message, index) {
       ? message.reasoningTokenCount
       : 0,
     streamEvents: Array.isArray(message.streamEvents)
-      ? message.streamEvents
-        .map((event, eventIndex) => normalizeStreamEvent(event, eventIndex))
-        .filter((event) => event && !shouldSuppressStreamEvent(event))
-        .filter(Boolean)
+      ? message.streamEvents.reduce((events, event, eventIndex) => {
+        const normalizedEvent = normalizeStreamEvent(event, eventIndex);
+        if (!normalizedEvent || shouldSuppressStreamEvent(normalizedEvent, events)) {
+          return events;
+        }
+        return events.concat(normalizedEvent);
+      }, [])
       : [],
     timestamp,
   };
@@ -129,7 +147,7 @@ function createStreamEvent(streamEvent) {
 
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
-  if (shouldSuppressStreamEvent(nextEvent)) {
+  if (shouldSuppressStreamEvent(nextEvent, currentEvents)) {
     return currentEvents;
   }
   if (nextEvent.eventType === 'reasoning_delta') {
