@@ -1099,6 +1099,7 @@ async def responses(request: Request, body: ResponseRequest):
 
     # Get request ID for correlation
     request_id = getattr(request.state, "request_id", None)
+    request_metadata = _build_chat_request_metadata(request)
 
     try:
         last_user_msg, all_inputs = _extract_response_input(body)
@@ -1114,11 +1115,20 @@ async def responses(request: Request, body: ResponseRequest):
                 raise HTTPException(status_code=400, detail=str(e))
 
             return StreamingResponse(
-                stream_response_unified(last_user_msg, body.model, request_id),
+                stream_response_unified(
+                    last_user_msg,
+                    body.model,
+                    request_id,
+                    metadata=request_metadata,
+                ),
                 media_type="text/event-stream",
             )
 
-        response_text = await client.send_message(last_user_msg, request_id=request_id)
+        response_text = await client.send_message(
+            last_user_msg,
+            request_id=request_id,
+            metadata=request_metadata,
+        )
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
         return ResponsePayload(
@@ -1159,17 +1169,30 @@ def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
     return inputs[-1], inputs
 
 
+def _build_chat_request_metadata(request: Request) -> dict[str, Any] | None:
+    """Map the browser session cookie to a stable LangGraph thread id."""
+    session_id = str(request.cookies.get("progenitor_session") or "").strip()
+    if not session_id:
+        return None
+    return {"thread_id": f"thread_{session_id}"}
+
+
 async def stream_response_unified(
     message: str,
     model: str,
     request_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events using the Responses API shape."""
     assert client is not None, "Client must be initialized"
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
     try:
-        async for item in client.send_message_stream_events(message, request_id=request_id):
+        async for item in client.send_message_stream_events(
+            message,
+            request_id=request_id,
+            metadata=metadata,
+        ):
             item_type = str(item.get("type", ""))
             if item_type == "stream_chunk":
                 chunk = str(item.get("content", ""))
@@ -1225,7 +1248,7 @@ async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIte
 
 # Simple chat endpoint (non-OpenAI format)
 @app.post("/chat")
-async def simple_chat(body: SimpleChatRequest):
+async def simple_chat(request: Request, body: SimpleChatRequest):
     """Simple chat endpoint for quick testing (CR-002: now with Pydantic validation).
 
     Request: {"message": "your message here"}
@@ -1235,7 +1258,10 @@ async def simple_chat(body: SimpleChatRequest):
         raise HTTPException(status_code=503, detail="Client not initialized")
 
     try:
-        response = await client.send_message(body.message)
+        response = await client.send_message(
+            body.message,
+            metadata=_build_chat_request_metadata(request),
+        )
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
