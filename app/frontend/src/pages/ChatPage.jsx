@@ -236,18 +236,12 @@ function ChatPage() {
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
-  const [showThinking, setShowThinking] = useState(true);
   const messagesEndRef = useRef(null);
   const activeAssistantIdRef = useRef(null);
 
   const streamEventFilter = useCallback(
-    (event) => {
-      if (categoryForEventType(event?.eventType) === 'reasoning' && !showThinking) {
-        return false;
-      }
-      return isEventVisible(event, streamFilters);
-    },
-    [showThinking, streamFilters],
+    (event) => isEventVisible(event, streamFilters),
+    [streamFilters],
   );
 
   useEffect(() => {
@@ -258,14 +252,12 @@ function ChatPage() {
         const session = await getSession();
         if (!cancelled) {
           setSessionId(session.session_id);
-          setShowThinking(session?.preferences?.show_thinking !== false);
         }
       } catch {
         try {
           const session = await createSession();
           if (!cancelled) {
             setSessionId(session.session_id);
-            setShowThinking(session?.preferences?.show_thinking !== false);
           }
         } catch (error) {
           console.warn('[ChatPage] Failed to initialize session:', error);
