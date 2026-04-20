@@ -81,12 +81,14 @@ def create_langchain_model(
 
     base_url = _normalize_langchain_base_url(config.base_url)
 
-    # Request provider reasoning summaries when reasoning is enabled so the
-    # stream path can surface live summary deltas and the final summary item.
-    reasoning: dict[str, str] | None = None
+    # Azure's ChatOpenAI adapter exposes the final reasoning summary reliably
+    # when effort is passed via `reasoning_effort` and summary mode rides
+    # through `extra_body.reasoning.summary`.
+    reasoning_effort: str | None = None
+    extra_body: dict[str, dict[str, str]] | None = None
     if config.reasoning_enabled:
         reasoning_effort = _resolve_reasoning_effort(model_name, config.reasoning_budget_tokens)
-        reasoning = {"effort": reasoning_effort, "summary": "auto"}
+        extra_body = {"reasoning": {"summary": "auto"}}
         logger.info(
             "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
             model_name,
@@ -104,7 +106,8 @@ def create_langchain_model(
         use_responses_api=True,
         output_version="responses/v1",
         streaming=True,
-        reasoning=reasoning,
+        reasoning_effort=reasoning_effort,
+        extra_body=extra_body,
     )
 
     logger.info(
