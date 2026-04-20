@@ -1,6 +1,6 @@
 import { Fragment, useMemo } from 'react';
 
-function Message({ message, streamEventFilter }) {
+function Message({ message, streamEventFilter, showReasoning = true }) {
   const {
     role,
     content,
@@ -11,6 +11,7 @@ function Message({ message, streamEventFilter }) {
     streamEvents = [],
     tokenCount = 0,
     reasoningTokenCount = 0,
+    reasoningText = '',
   } = message;
 
   const visibleStreamEvents = useMemo(() => {
@@ -22,6 +23,11 @@ function Message({ message, streamEventFilter }) {
     if (!content) return '';
     return formatMessage(content);
   }, [content]);
+
+  const formattedReasoningText = useMemo(() => {
+    if (!reasoningText) return '';
+    return formatMessage(reasoningText);
+  }, [reasoningText]);
 
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
@@ -51,6 +57,8 @@ function Message({ message, streamEventFilter }) {
 
   const metaItems = [formattedTime, formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
   const hasMessageMeta = metaItems.length > 0;
+  const shouldShowReasoningText =
+    role === 'assistant' && showReasoning && formattedReasoningText.trim().length > 0;
 
   return (
     <div className={`message-wrapper ${role}`}>
@@ -66,6 +74,12 @@ function Message({ message, streamEventFilter }) {
         )}
         {role === 'assistant' && visibleStreamEvents.length > 0 && (
           <StreamEvents events={visibleStreamEvents} />
+        )}
+        {shouldShowReasoningText && (
+          <div
+            className="message-reasoning-text"
+            dangerouslySetInnerHTML={{ __html: formattedReasoningText }}
+          />
         )}
         <div
           className="message-content"
@@ -230,13 +244,11 @@ function describeStreamEvent(event) {
   }
 
   if (eventType === 'reasoning_delta' || eventType === 'reasoning_summary') {
-    const text = typeof event?.content === 'string' ? event.content : '';
-    const isLiveReasoning = eventType === 'reasoning_delta';
+    const detail = summarizeMetadata(metadata);
     return {
       badge: 'Reasoning',
-      title: isLiveReasoning ? 'Reasoning (live)' : 'Reasoning',
-      bodyHtml: formatMessage(text || (isLiveReasoning ? 'Generating reasoning summary…' : '')),
-      detail: summarizeMetadata(metadata),
+      title: 'Reasoning',
+      detail: detail || (eventType === 'reasoning_delta' ? 'Tracing response generation' : 'Reasoning captured'),
     };
   }
 
@@ -289,6 +301,9 @@ function summarizeMetadata(metadata) {
   }
   if (typeof metadata.text_length === 'number' && metadata.text_length > 0) {
     summaryParts.push(`${metadata.text_length} chars`);
+  }
+  if (typeof metadata.reasoning_tokens === 'number' && metadata.reasoning_tokens > 0) {
+    summaryParts.push(`${metadata.reasoning_tokens} reasoning tokens`);
   }
   if (typeof metadata.stream_metadata?.langgraph_node === 'string') {
     summaryParts.push(`node: ${metadata.stream_metadata.langgraph_node}`);
