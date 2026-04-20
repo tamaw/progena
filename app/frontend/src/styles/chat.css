@@ -159,6 +159,33 @@
     color: var(--color-text-secondary);
 }
 
+.message-stream-event-meta-badge {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+}
+
+.message-stream-event-body {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    color: var(--color-text-primary);
+}
+
+.message-stream-event-body p {
+    margin-bottom: var(--spacing-xs);
+}
+
+.message-stream-event-body p:last-child {
+    margin-bottom: 0;
+}
+
 .message-stream-event.tool_call .message-stream-event-badge,
 .message-stream-event.tool_result .message-stream-event-badge {
     background-color: rgba(63, 185, 80, 0.16);
@@ -168,6 +195,18 @@
 .message-stream-event.node_update .message-stream-event-badge {
     background-color: rgba(88, 166, 255, 0.14);
     color: var(--color-accent);
+}
+
+.message-stream-event.reasoning_delta,
+.message-stream-event.reasoning_summary {
+    border-color: rgba(188, 140, 255, 0.28);
+    background-color: color-mix(in srgb, rgba(188, 140, 255, 0.14) 60%, var(--color-bg-tertiary));
+}
+
+.message-stream-event.reasoning_delta .message-stream-event-badge,
+.message-stream-event.reasoning_summary .message-stream-event-badge {
+    background-color: rgba(188, 140, 255, 0.18);
+    color: #c19cff;
 }
 
 /* Code in messages */

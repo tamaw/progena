@@ -37,6 +37,10 @@ function normalizeStreamEvent(event, index) {
   };
 }
 
+function shouldSuppressStreamEvent(event) {
+  return event?.eventType === 'reasoning_summary' && event?.metadata?.reasoning_tokens === 0;
+}
+
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -67,6 +71,7 @@ function normalizeStoredMessage(message, index) {
     streamEvents: Array.isArray(message.streamEvents)
       ? message.streamEvents
         .map((event, eventIndex) => normalizeStreamEvent(event, eventIndex))
+        .filter((event) => event && !shouldSuppressStreamEvent(event))
         .filter(Boolean)
       : [],
     timestamp,
@@ -91,8 +96,18 @@ function createStreamEvent(streamEvent) {
   };
 }
 
+function accumulateReasoningText(events) {
+  return (Array.isArray(events) ? events : [])
+    .filter((event) => event.eventType === 'reasoning_delta')
+    .map((event) => event.content || '')
+    .join('');
+}
+
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
+  if (shouldSuppressStreamEvent(nextEvent)) {
+    return currentEvents.filter((event) => event.eventType !== 'reasoning_summary');
+  }
   if (nextEvent.eventType === 'reasoning_delta') {
     for (let i = currentEvents.length - 1; i >= 0; i -= 1) {
       if (currentEvents[i].eventType !== 'reasoning_delta') continue;
@@ -111,22 +126,15 @@ function appendStreamEvent(events, nextEvent) {
   }
   if (nextEvent.eventType === 'reasoning_summary') {
     const nextContent = typeof nextEvent.content === 'string' ? nextEvent.content : '';
-    let accumulatedReasoning = '';
-    const filtered = currentEvents.filter((event) => {
-      if (event.eventType !== 'reasoning_delta' && event.eventType !== 'reasoning_summary') {
-        return true;
-      }
-      if (event.eventType === 'reasoning_delta') {
-        accumulatedReasoning += event.content || '';
-      }
-      return false;
-    });
+    const accumulatedReasoning = accumulateReasoningText(currentEvents);
+    const summaryContent = nextContent || accumulatedReasoning;
+    const filtered = currentEvents.filter((event) => event.eventType !== 'reasoning_summary');
     return filtered.concat({
       ...nextEvent,
-      content: nextContent || accumulatedReasoning,
+      content: summaryContent,
       metadata: {
         ...nextEvent.metadata,
-        text_length: (nextContent || accumulatedReasoning).length,
+        text_length: summaryContent.length,
       },
     });
   }

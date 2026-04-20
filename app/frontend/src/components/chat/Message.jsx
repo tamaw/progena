@@ -82,7 +82,16 @@ function StreamEvents({ events }) {
             <div className="message-stream-event-header">
               <span className="message-stream-event-badge">{description.badge}</span>
               <span className="message-stream-event-title">{description.title}</span>
+              {description.metaBadge && (
+                <span className="message-stream-event-meta-badge">{description.metaBadge}</span>
+              )}
             </div>
+            {description.bodyHtml && (
+              <div
+                className="message-stream-event-body"
+                dangerouslySetInnerHTML={{ __html: description.bodyHtml }}
+              />
+            )}
             {description.detail && (
               <div className="message-stream-event-detail">{description.detail}</div>
             )}
@@ -207,23 +216,18 @@ function describeStreamEvent(event) {
     const text = typeof event?.content === 'string' ? event.content : '';
     return {
       badge: 'Reasoning',
-      title: 'Thinking…',
-      detail: text || 'Generating reasoning summary…',
+      title: 'Reasoning (live)',
+      bodyHtml: formatMessage(text || 'Generating reasoning summary…'),
     };
   }
 
   if (eventType === 'reasoning_summary') {
-    const detailParts = [];
-    if (typeof event?.content === 'string' && event.content.trim()) {
-      detailParts.push(event.content.trim());
-    }
-    if (typeof metadata.reasoning_tokens === 'number') {
-      detailParts.push(`${metadata.reasoning_tokens} reasoning tokens`);
-    }
+    const text = typeof event?.content === 'string' ? event.content : '';
     return {
       badge: 'Reasoning',
-      title: 'Reasoning summary',
-      detail: detailParts.join(' • ') || 'Reasoning completed',
+      title: 'Final reasoning',
+      metaBadge: formatReasoningTokens(metadata.reasoning_tokens),
+      bodyHtml: formatMessage(text || 'No final reasoning summary text returned.'),
     };
   }
 
@@ -266,6 +270,12 @@ function formatDuration(ms) {
   if (!Number.isFinite(ms)) return '';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function formatReasoningTokens(value) {
+  if (!Number.isFinite(value) || value < 0) return '';
+  const count = new Intl.NumberFormat().format(value);
+  return `${count} reasoning token${value === 1 ? '' : 's'}`;
 }
 
 function summarizeMetadata(metadata) {
