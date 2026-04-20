@@ -195,6 +195,17 @@
     color: #c19cff;
 }
 
+.message-stream-event.reasoning_delta .message-stream-event-title {
+    color: color-mix(in srgb, var(--color-text-secondary) 88%, white 12%);
+}
+
+.message-stream-event.reasoning_delta .message-stream-event-body {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-style: italic;
+    line-height: 1.5;
+}
+
 /* Code in messages */
 .message-content code {
     font-family: var(--font-family-mono);

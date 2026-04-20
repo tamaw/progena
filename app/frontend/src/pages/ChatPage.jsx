@@ -41,6 +41,11 @@ function shouldSuppressStreamEvent(event) {
   return event?.eventType === 'reasoning_summary';
 }
 
+function extractReasoningTokenCount(event) {
+  const tokenCount = event?.metadata?.reasoning_tokens;
+  return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
+}
+
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -68,6 +73,9 @@ function normalizeStoredMessage(message, index) {
     role,
     content,
     tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
+    reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
+      ? message.reasoningTokenCount
+      : 0,
     streamEvents: Array.isArray(message.streamEvents)
       ? message.streamEvents
         .map((event, eventIndex) => normalizeStreamEvent(event, eventIndex))
@@ -386,6 +394,7 @@ function ChatPage() {
         content: '',
         timestamp: Date.now(),
         tokenCount: 0,
+        reasoningTokenCount: 0,
         isStreaming: true,
         streamEvents: [],
       }];
@@ -448,12 +457,20 @@ function ChatPage() {
 
           if (nextEvent.eventType === 'reasoning_delta') {
             setTypingState('thinking');
-          } else if (nextEvent.eventType !== 'message_delta') {
+          } else if (
+            nextEvent.eventType !== 'message_delta'
+            && nextEvent.eventType !== 'reasoning_summary'
+          ) {
             setTypingState('tool-use');
           }
+          const reasoningTokenCount = extractReasoningTokenCount(nextEvent);
           setMessages(prev => prev.map(m =>
             m.id === assistantId
-              ? { ...m, streamEvents: appendStreamEvent(m.streamEvents, nextEvent) }
+              ? {
+                ...m,
+                streamEvents: appendStreamEvent(m.streamEvents, nextEvent),
+                reasoningTokenCount: reasoningTokenCount ?? m.reasoningTokenCount ?? 0,
+              }
               : m
           ));
         },
