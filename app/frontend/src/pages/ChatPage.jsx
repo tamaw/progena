@@ -38,7 +38,7 @@ function normalizeStreamEvent(event, index) {
 }
 
 function shouldSuppressStreamEvent(event) {
-  return event?.eventType === 'reasoning_summary' && event?.metadata?.reasoning_tokens === 0;
+  return event?.eventType === 'reasoning_summary';
 }
 
 function normalizeStoredMessage(message, index) {
@@ -96,17 +96,10 @@ function createStreamEvent(streamEvent) {
   };
 }
 
-function accumulateReasoningText(events) {
-  return (Array.isArray(events) ? events : [])
-    .filter((event) => event.eventType === 'reasoning_delta')
-    .map((event) => event.content || '')
-    .join('');
-}
-
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
   if (shouldSuppressStreamEvent(nextEvent)) {
-    return currentEvents.filter((event) => event.eventType !== 'reasoning_summary');
+    return currentEvents;
   }
   if (nextEvent.eventType === 'reasoning_delta') {
     for (let i = currentEvents.length - 1; i >= 0; i -= 1) {
@@ -123,20 +116,6 @@ function appendStreamEvent(events, nextEvent) {
           : event
       ));
     }
-  }
-  if (nextEvent.eventType === 'reasoning_summary') {
-    const nextContent = typeof nextEvent.content === 'string' ? nextEvent.content : '';
-    const accumulatedReasoning = accumulateReasoningText(currentEvents);
-    const summaryContent = nextContent || accumulatedReasoning;
-    const filtered = currentEvents.filter((event) => event.eventType !== 'reasoning_summary');
-    return filtered.concat({
-      ...nextEvent,
-      content: summaryContent,
-      metadata: {
-        ...nextEvent.metadata,
-        text_length: summaryContent.length,
-      },
-    });
   }
   const lastEvent = currentEvents[currentEvents.length - 1];
   if (
@@ -179,7 +158,6 @@ function stripEphemeralStreamEvents(message) {
   if (events.length === 0) return message;
   const persistable = events.filter((event) =>
     PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType))
-    && event.eventType !== 'reasoning_delta',
   );
   if (persistable.length === events.length) {
     return message;
