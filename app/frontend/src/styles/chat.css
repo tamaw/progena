@@ -202,12 +202,25 @@
     color: color-mix(in srgb, var(--color-text-secondary) 88%, white 12%);
 }
 
-.message-stream-event.reasoning_delta .message-stream-event-body,
-.message-stream-event.reasoning_summary .message-stream-event-body {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
+.message-stream-event.reasoning_delta .message-stream-event-detail,
+.message-stream-event.reasoning_summary .message-stream-event-detail {
+    color: color-mix(in srgb, var(--color-text-secondary) 80%, white 20%);
+}
+
+.message-reasoning-text {
+    margin-bottom: var(--spacing-sm);
+    font-size: var(--font-size-sm);
+    line-height: 1.55;
+    color: color-mix(in srgb, var(--color-text-secondary) 88%, white 12%);
     font-style: italic;
-    line-height: 1.5;
+}
+
+.message-reasoning-text p {
+    margin-bottom: var(--spacing-xs);
+}
+
+.message-reasoning-text p:last-child {
+    margin-bottom: 0;
 }
 
 /* Code in messages */
