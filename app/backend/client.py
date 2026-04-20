@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -48,6 +49,33 @@ class ProgenitorClient:
         self._max_restarts: int = 3
         self._restart_delay: float = 1.0
 
+    def _open_stderr_log(self) -> tuple[contextlib.ExitStack | None, IO[str] | None]:
+        """Open a writable stderr log file, falling back outside the checkout if needed."""
+        repo_logs_dir = Path(__file__).resolve().parents[2] / "logs"
+        fallback_logs_dir = Path(tempfile.gettempdir()) / "progenitor-logs"
+        last_error: OSError | None = None
+
+        for logs_dir in (repo_logs_dir, fallback_logs_dir):
+            try:
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                stderr_path = logs_dir / "progenitor.client.stderr.log"
+                log_stack = contextlib.ExitStack()
+                stderr_log = log_stack.enter_context(stderr_path.open("a", encoding="utf-8"))
+                if logs_dir == fallback_logs_dir:
+                    logger.warning(
+                        "Repo logs directory is not writable; using fallback stderr log at %s",
+                        stderr_path,
+                    )
+                return log_stack, stderr_log
+            except OSError as exc:
+                last_error = exc
+
+        logger.warning(
+            "Unable to open progenitor stderr log file; continuing without file logging: %s",
+            last_error,
+        )
+        return None, None
+
     async def start(self) -> None:
         """Start the Progenitor subprocess."""
         if self._started:
@@ -64,13 +92,7 @@ class ProgenitorClient:
             logger.info(f"Starting Progenitor subprocess: {script_path}")
 
             # Capture subprocess stdout/stderr to files for diagnostics
-            logs_dir = Path(__file__).resolve().parents[2] / "logs"
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            stderr_path = logs_dir / "progenitor.client.stderr.log"
-            self._log_stack = contextlib.ExitStack()
-            self._stderr_log = self._log_stack.enter_context(
-                stderr_path.open("a", encoding="utf-8")
-            )
+            self._log_stack, self._stderr_log = self._open_stderr_log()
 
             # Use module invocation to preserve package-relative imports
             self._process = await asyncio.create_subprocess_exec(

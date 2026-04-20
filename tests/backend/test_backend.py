@@ -4,6 +4,7 @@ Tests for Backend.
 Quick and dirty tests for the backend components.
 """
 
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -128,6 +129,47 @@ for line in sys.stdin:
         ):
             response = await client.send_message("hello")
             assert response == "test response"
+
+        await client.stop()
+
+    @pytest.mark.asyncio
+    async def test_send_message_not_started_falls_back_when_repo_logs_unwritable(self, config):
+        """Client should keep working when the repo logs dir is not writable."""
+        client = ProgenitorClient(config)
+
+        mock_process = MagicMock()
+        mock_process.stdin = MagicMock()
+        mock_process.stdin.write = MagicMock()
+        mock_process.stdin.drain = AsyncMock()
+        mock_process.stdout = MagicMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b'{"content": "test response"}\n')
+        mock_process.stderr = MagicMock()
+        mock_process.stderr.readline = AsyncMock(return_value=b"")
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_process.terminate = MagicMock()
+        mock_process.kill = MagicMock()
+        mock_process.wait = AsyncMock()
+
+        real_open = Path.open
+        fallback_logs_dir = Path(tempfile.gettempdir()) / "progenitor-logs"
+
+        def guarded_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if (
+                path.name == "progenitor.client.stderr.log"
+                and "logs" in path.parts
+                and fallback_logs_dir not in path.parents
+            ):
+                raise PermissionError("repo logs not writable")
+            return real_open(path, *args, **kwargs)
+
+        with (
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)),
+            patch.object(Path, "open", autospec=True, side_effect=guarded_open),
+        ):
+            response = await client.send_message("hello")
+            assert response == "test response"
+            assert client._stderr_log is not None
 
         await client.stop()
 
