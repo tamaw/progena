@@ -1,6 +1,10 @@
 import { Fragment, useMemo } from 'react';
 
-function Message({ message, streamEventFilter, showReasoning = true }) {
+function isReasoningEvent(event) {
+  return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
+}
+
+function Message({ message, streamEventFilter }) {
   const {
     role,
     content,
@@ -18,6 +22,10 @@ function Message({ message, streamEventFilter, showReasoning = true }) {
     if (typeof streamEventFilter !== 'function') return streamEvents;
     return streamEvents.filter(streamEventFilter);
   }, [streamEvents, streamEventFilter]);
+  const visibleReasoningEvents = useMemo(
+    () => visibleStreamEvents.filter(isReasoningEvent),
+    [visibleStreamEvents],
+  );
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -58,7 +66,7 @@ function Message({ message, streamEventFilter, showReasoning = true }) {
   const metaItems = [formattedTime, formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
   const hasMessageMeta = metaItems.length > 0;
   const shouldShowReasoningText =
-    role === 'assistant' && showReasoning && formattedReasoningText.trim().length > 0;
+    role === 'assistant' && visibleReasoningEvents.length > 0 && reasoningText.trim().length > 0;
 
   return (
     <div className={`message-wrapper ${role}`}>
@@ -243,7 +251,7 @@ function describeStreamEvent(event) {
     };
   }
 
-  if (eventType === 'reasoning_delta' || eventType === 'reasoning_summary') {
+  if (isReasoningEvent(event)) {
     const detail = summarizeMetadata(metadata);
     return {
       badge: 'Reasoning',
