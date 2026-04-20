@@ -75,7 +75,8 @@ export function useApi() {
   const fetchWithRetry = useCallback(async (endpoint, options = {}) => {
     const url = getApiUrl(endpoint);
     const defaultOptions = {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include'
     };
 
     const mergedOptions = {
@@ -316,6 +317,7 @@ export function useApi() {
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({
             model: config.chat.defaultModel,
             input,

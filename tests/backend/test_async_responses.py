@@ -105,8 +105,13 @@ class TestAsyncResponseHandling:
             yield {"type": "stream_chunk", "content": "", "is_final": True}
 
         class _MockClient:
-            def send_message_stream_events(self, message: str, request_id: str | None = None):
-                del message, request_id
+            def send_message_stream_events(
+                self,
+                message: str,
+                request_id: str | None = None,
+                metadata: dict[str, object] | None = None,
+            ):
+                del message, request_id, metadata
                 return _events()
 
         backend_main.client = _MockClient()
@@ -127,6 +132,83 @@ class TestAsyncResponseHandling:
         assert any("event: response.stream_event" in part for part in payload)
         assert any("reasoning_summary" in part for part in payload)
         assert any("event: response.completed" in part for part in payload)
+
+    def test_streaming_responses_use_session_thread_id(self, client):
+        """Streaming chat should route through a thread scoped to the web session."""
+        import app.backend.main as backend_main
+
+        original_client = backend_main.client
+        captured: dict[str, object] = {}
+
+        class _MockClient:
+            async def send_message_stream_events(
+                self,
+                message: str,
+                request_id: str | None = None,
+                metadata: dict[str, object] | None = None,
+            ):
+                captured["message"] = message
+                captured["request_id"] = request_id
+                captured["metadata"] = metadata
+                yield {"type": "stream_chunk", "content": "Hello"}
+                yield {"type": "stream_chunk", "content": "", "is_final": True}
+
+        backend_main.client = _MockClient()
+
+        try:
+            client.cookies.set("progenitor_session", "sess_thread_abc")
+            response = client.post(
+                "/v1/responses",
+                json={
+                    "model": "progenitor-v1",
+                    "input": "hi",
+                    "stream": True,
+                },
+            )
+        finally:
+            client.cookies.clear()
+            backend_main.client = original_client
+
+        assert response.status_code == 200
+        assert captured["metadata"] == {"thread_id": "thread_sess_thread_abc"}
+
+    def test_non_streaming_responses_use_session_thread_id(self, client):
+        """Non-streaming chat should route through a thread scoped to the web session."""
+        import app.backend.main as backend_main
+
+        original_client = backend_main.client
+        captured: dict[str, object] = {}
+
+        class _MockClient:
+            async def send_message(
+                self,
+                message: str,
+                request_id: str | None = None,
+                metadata: dict[str, object] | None = None,
+            ) -> str:
+                captured["message"] = message
+                captured["request_id"] = request_id
+                captured["metadata"] = metadata
+                return "Hello"
+
+        backend_main.client = _MockClient()
+
+        try:
+            client.cookies.set("progenitor_session", "sess_thread_xyz")
+            response = client.post(
+                "/v1/responses",
+                json={
+                    "model": "progenitor-v1",
+                    "input": "hi",
+                    "stream": False,
+                },
+            )
+        finally:
+            client.cookies.clear()
+            backend_main.client = original_client
+
+        assert response.status_code == 200
+        assert captured["metadata"] == {"thread_id": "thread_sess_thread_xyz"}
 
 
 class TestConcurrentRequestHandling:
