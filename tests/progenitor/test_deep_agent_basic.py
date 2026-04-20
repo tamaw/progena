@@ -78,8 +78,8 @@ class TestLangChainAdapter:
         model = create_langchain_model(config)
         assert str(model.openai_api_base) == "https://example.openai.azure.com/openai/v1"
 
-    def test_reasoning_uses_reasoning_effort(self):
-        """Reasoning config requests summary streaming with the resolved effort."""
+    def test_reasoning_uses_effort_with_summary_extra_body(self):
+        """Reasoning config requests summary text via extra_body with the resolved effort."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
@@ -92,7 +92,8 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning"] == {"effort": "medium", "summary": "auto"}
+        assert kwargs["reasoning_effort"] == "medium"
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
 
     def test_reasoning_defaults_to_low_effort(self):
         """Reasoning defaults to low effort when no budget is set."""
@@ -107,7 +108,8 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning"] == {"effort": "low", "summary": "auto"}
+        assert kwargs["reasoning_effort"] == "low"
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
 
     def test_gpt_5_3_chat_clamps_reasoning_effort_to_medium(self):
         """gpt-5.3-chat only supports medium reasoning effort."""
@@ -122,7 +124,8 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning"] == {"effort": "medium", "summary": "auto"}
+        assert kwargs["reasoning_effort"] == "medium"
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
 
 
 class TestDeepAgentFactory:
