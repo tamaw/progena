@@ -37,12 +37,24 @@ function normalizeStreamEvent(event, index) {
   };
 }
 
+function isReasoningEvent(event) {
+  return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
+}
+
 function hasReasoningContent(event) {
   return typeof event?.content === 'string' && event.content.trim().length > 0;
 }
 
 function shouldSuppressStreamEvent(event, existingEvents = []) {
-  if (event?.eventType !== 'reasoning_summary') {
+  if (!isReasoningEvent(event)) {
+    return false;
+  }
+
+  if (event.eventType === 'reasoning_delta') {
+    return false;
+  }
+
+  if (existingEvents.some(isReasoningEvent)) {
     return false;
   }
 
@@ -50,10 +62,7 @@ function shouldSuppressStreamEvent(event, existingEvents = []) {
     return true;
   }
 
-  return existingEvents.some(
-    (existingEvent) =>
-      existingEvent?.eventType === 'reasoning_delta' && hasReasoningContent(existingEvent),
-  );
+  return false;
 }
 
 function extractReasoningTokenCount(event) {
@@ -61,27 +70,17 @@ function extractReasoningTokenCount(event) {
   return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
 }
 
-function reasoningGroupKey(event) {
-  const streamMetadata = event?.metadata?.stream_metadata;
-  if (!streamMetadata || typeof streamMetadata !== 'object') {
-    return null;
+function appendReasoningText(currentText, event) {
+  if (!isReasoningEvent(event) || !hasReasoningContent(event)) {
+    return currentText;
   }
 
-  const langgraphStep = streamMetadata.langgraph_step;
-  const checkpointNs = typeof streamMetadata.checkpoint_ns === 'string'
-    ? streamMetadata.checkpoint_ns
-    : '';
-  const nodeName = typeof streamMetadata.langgraph_node === 'string'
-    ? streamMetadata.langgraph_node
-    : '';
+  const existingText = typeof currentText === 'string' ? currentText : '';
+  if (event.eventType === 'reasoning_delta') {
+    return `${existingText}${event.content}`;
+  }
 
-  if (Number.isFinite(langgraphStep)) {
-    return `step:${langgraphStep}:${nodeName}:${checkpointNs}`;
-  }
-  if (checkpointNs || nodeName) {
-    return `fallback:${nodeName}:${checkpointNs}`;
-  }
-  return null;
+  return existingText.trim().length > 0 ? existingText : event.content;
 }
 
 function normalizeStoredMessage(message, index) {
@@ -114,13 +113,14 @@ function normalizeStoredMessage(message, index) {
     reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
       ? message.reasoningTokenCount
       : 0,
+    reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
     streamEvents: Array.isArray(message.streamEvents)
       ? message.streamEvents.reduce((events, event, eventIndex) => {
         const normalizedEvent = normalizeStreamEvent(event, eventIndex);
-        if (!normalizedEvent || shouldSuppressStreamEvent(normalizedEvent, events)) {
+        if (!normalizedEvent) {
           return events;
         }
-        return events.concat(normalizedEvent);
+        return appendStreamEvent(events, normalizedEvent);
       }, [])
       : [],
     timestamp,
@@ -147,28 +147,33 @@ function createStreamEvent(streamEvent) {
 
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
+  if (isReasoningEvent(nextEvent)) {
+    const existingReasoningIndex = currentEvents.findIndex(isReasoningEvent);
+    if (existingReasoningIndex !== -1) {
+      const existingReasoningEvent = currentEvents[existingReasoningIndex];
+      const mergedEvent = {
+        ...existingReasoningEvent,
+        eventType:
+          existingReasoningEvent.eventType === 'reasoning_delta'
+          || nextEvent.eventType === 'reasoning_delta'
+            ? 'reasoning_delta'
+            : 'reasoning_summary',
+        content:
+          hasReasoningContent(existingReasoningEvent)
+            ? existingReasoningEvent.content
+            : nextEvent.content,
+        metadata: {
+          ...existingReasoningEvent.metadata,
+          ...nextEvent.metadata,
+        },
+      };
+      return currentEvents.map((event, index) => (
+        index === existingReasoningIndex ? mergedEvent : event
+      ));
+    }
+  }
   if (shouldSuppressStreamEvent(nextEvent, currentEvents)) {
     return currentEvents;
-  }
-  if (nextEvent.eventType === 'reasoning_delta') {
-    const lastEvent = currentEvents[currentEvents.length - 1];
-    if (
-      lastEvent?.eventType === 'reasoning_delta'
-      && reasoningGroupKey(lastEvent) !== null
-      && reasoningGroupKey(lastEvent) === reasoningGroupKey(nextEvent)
-    ) {
-      const mergedContent = `${lastEvent.content || ''}${nextEvent.content || ''}`;
-      const mergedMetadata = {
-        ...lastEvent.metadata,
-        ...nextEvent.metadata,
-        text_length: mergedContent.length,
-      };
-      return currentEvents.slice(0, -1).concat({
-        ...lastEvent,
-        content: mergedContent,
-        metadata: mergedMetadata,
-      });
-    }
   }
   const lastEvent = currentEvents[currentEvents.length - 1];
   if (
@@ -224,8 +229,12 @@ function finalizeSupersededAssistant(message) {
   }
 
   const content = typeof message.content === 'string' ? message.content : '';
+  const reasoningText = typeof message.reasoningText === 'string' ? message.reasoningText : '';
   const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
-  const hasVisibleOutput = content.trim().length > 0 || streamEvents.length > 0;
+  const hasVisibleOutput =
+    content.trim().length > 0
+    || reasoningText.trim().length > 0
+    || streamEvents.length > 0;
 
   if (!hasVisibleOutput) {
     return null;
@@ -441,6 +450,7 @@ function ChatPage() {
         timestamp: Date.now(),
         tokenCount: 0,
         reasoningTokenCount: 0,
+        reasoningText: '',
         isStreaming: true,
         streamEvents: [],
       }];
@@ -515,6 +525,7 @@ function ChatPage() {
               ? {
                 ...m,
                 streamEvents: appendStreamEvent(m.streamEvents, nextEvent),
+                reasoningText: appendReasoningText(m.reasoningText, nextEvent),
                 reasoningTokenCount: reasoningTokenCount ?? m.reasoningTokenCount ?? 0,
               }
               : m
