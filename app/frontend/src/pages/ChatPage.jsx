@@ -46,6 +46,29 @@ function extractReasoningTokenCount(event) {
   return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
 }
 
+function reasoningGroupKey(event) {
+  const streamMetadata = event?.metadata?.stream_metadata;
+  if (!streamMetadata || typeof streamMetadata !== 'object') {
+    return null;
+  }
+
+  const langgraphStep = streamMetadata.langgraph_step;
+  const checkpointNs = typeof streamMetadata.checkpoint_ns === 'string'
+    ? streamMetadata.checkpoint_ns
+    : '';
+  const nodeName = typeof streamMetadata.langgraph_node === 'string'
+    ? streamMetadata.langgraph_node
+    : '';
+
+  if (Number.isFinite(langgraphStep)) {
+    return `step:${langgraphStep}:${nodeName}:${checkpointNs}`;
+  }
+  if (checkpointNs || nodeName) {
+    return `fallback:${nodeName}:${checkpointNs}`;
+  }
+  return null;
+}
+
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -110,19 +133,23 @@ function appendStreamEvent(events, nextEvent) {
     return currentEvents;
   }
   if (nextEvent.eventType === 'reasoning_delta') {
-    for (let i = currentEvents.length - 1; i >= 0; i -= 1) {
-      if (currentEvents[i].eventType !== 'reasoning_delta') continue;
-      const mergedContent = `${currentEvents[i].content || ''}${nextEvent.content || ''}`;
+    const lastEvent = currentEvents[currentEvents.length - 1];
+    if (
+      lastEvent?.eventType === 'reasoning_delta'
+      && reasoningGroupKey(lastEvent) !== null
+      && reasoningGroupKey(lastEvent) === reasoningGroupKey(nextEvent)
+    ) {
+      const mergedContent = `${lastEvent.content || ''}${nextEvent.content || ''}`;
       const mergedMetadata = {
-        ...currentEvents[i].metadata,
+        ...lastEvent.metadata,
         ...nextEvent.metadata,
         text_length: mergedContent.length,
       };
-      return currentEvents.map((event, index) => (
-        index === i
-          ? { ...event, content: mergedContent, metadata: mergedMetadata }
-          : event
-      ));
+      return currentEvents.slice(0, -1).concat({
+        ...lastEvent,
+        content: mergedContent,
+        metadata: mergedMetadata,
+      });
     }
   }
   const lastEvent = currentEvents[currentEvents.length - 1];

@@ -235,6 +235,7 @@ function describeStreamEvent(event) {
       badge: 'Reasoning',
       title: 'Reasoning (live)',
       bodyHtml: formatMessage(text || 'Generating reasoning summary…'),
+      detail: summarizeMetadata(metadata),
     };
   }
 
