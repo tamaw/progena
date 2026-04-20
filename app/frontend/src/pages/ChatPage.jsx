@@ -83,25 +83,6 @@ function appendReasoningText(currentText, event) {
   return existingText.trim().length > 0 ? existingText : event.content;
 }
 
-function deriveReasoningText(reasoningText, streamEvents = []) {
-  if (typeof reasoningText === 'string' && reasoningText.trim().length > 0) {
-    return reasoningText;
-  }
-
-  const deltaText = streamEvents
-    .filter((event) => event?.eventType === 'reasoning_delta' && hasReasoningContent(event))
-    .map((event) => event.content)
-    .join('');
-  if (deltaText.trim().length > 0) {
-    return deltaText;
-  }
-
-  const summaryEvent = streamEvents.find(
-    (event) => event?.eventType === 'reasoning_summary' && hasReasoningContent(event),
-  );
-  return summaryEvent?.content || '';
-}
-
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -132,7 +113,7 @@ function normalizeStoredMessage(message, index) {
     reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
       ? message.reasoningTokenCount
       : 0,
-    reasoningText: deriveReasoningText(message.reasoningText, message.streamEvents),
+    reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
     streamEvents: Array.isArray(message.streamEvents)
       ? message.streamEvents.reduce((events, event, eventIndex) => {
         const normalizedEvent = normalizeStreamEvent(event, eventIndex);
@@ -631,7 +612,6 @@ function ChatPage() {
                     key={msg.id}
                     message={msg}
                     streamEventFilter={streamEventFilter}
-                    showReasoning={streamFilters.reasoning !== false}
                   />
                 ))}
                 {isGenerating && (
