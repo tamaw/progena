@@ -22,10 +22,6 @@ function Message({ message, streamEventFilter }) {
     if (typeof streamEventFilter !== 'function') return streamEvents;
     return streamEvents.filter(streamEventFilter);
   }, [streamEvents, streamEventFilter]);
-  const visibleReasoningEvents = useMemo(
-    () => visibleStreamEvents.filter(isReasoningEvent),
-    [visibleStreamEvents],
-  );
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -65,8 +61,7 @@ function Message({ message, streamEventFilter }) {
 
   const metaItems = [formattedTime, formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
   const hasMessageMeta = metaItems.length > 0;
-  const shouldShowReasoningText =
-    role === 'assistant' && visibleReasoningEvents.length > 0 && reasoningText.trim().length > 0;
+  const shouldShowReasoningText = role === 'assistant' && reasoningText.trim().length > 0;
 
   return (
     <div className={`message-wrapper ${role}`}>
