@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 
 function Message({ message, streamEventFilter }) {
   const {
@@ -10,6 +10,7 @@ function Message({ message, streamEventFilter }) {
     isScheduled,
     streamEvents = [],
     tokenCount = 0,
+    reasoningTokenCount = 0,
   } = message;
 
   const visibleStreamEvents = useMemo(() => {
@@ -35,7 +36,21 @@ function Message({ message, streamEventFilter }) {
     return `${count} ${tokenCount === 1 ? 'token' : 'tokens'}`;
   }, [isStreaming, role, tokenCount]);
 
-  const hasMessageMeta = formattedTime || formattedTokenCount;
+  const formattedReasoningTokenCount = useMemo(() => {
+    if (
+      role !== 'assistant'
+      || isStreaming
+      || !Number.isFinite(reasoningTokenCount)
+      || reasoningTokenCount <= 0
+    ) {
+      return '';
+    }
+    const count = new Intl.NumberFormat().format(reasoningTokenCount);
+    return `${count} reasoning token${reasoningTokenCount === 1 ? '' : 's'}`;
+  }, [isStreaming, reasoningTokenCount, role]);
+
+  const metaItems = [formattedTime, formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
+  const hasMessageMeta = metaItems.length > 0;
 
   return (
     <div className={`message-wrapper ${role}`}>
@@ -58,9 +73,14 @@ function Message({ message, streamEventFilter }) {
         />
         {hasMessageMeta && (
           <div className="message-meta">
-            {formattedTime && <span className="message-timestamp">{formattedTime}</span>}
-            {formattedTime && formattedTokenCount && <span className="message-meta-separator" aria-hidden="true" />}
-            {formattedTokenCount && <span className="message-token-count">{formattedTokenCount}</span>}
+            {metaItems.map((item, index) => (
+              <Fragment key={`${item}-${index}`}>
+                {index > 0 && <span className="message-meta-separator" aria-hidden="true" />}
+                <span className={index === 0 ? 'message-timestamp' : 'message-token-count'}>
+                  {item}
+                </span>
+              </Fragment>
+            ))}
           </div>
         )}
       </div>
