@@ -269,6 +269,7 @@ function ChatPage() {
     }
   });
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isClearingSession, setIsClearingSession] = useState(false);
   const [typingState, setTypingState] = useState('thinking');
   const [tokenCount, setTokenCount] = useState(0);
   const [sessionId, setSessionId] = useState(null);
@@ -534,6 +535,45 @@ function ChatPage() {
     handleSend(message);
   }, [handleSend]);
 
+  const handleCommand = useCallback(async (commandName) => {
+    if (commandName !== 'clear') {
+      return;
+    }
+
+    const previousAssistantId = activeAssistantIdRef.current;
+    setIsClearingSession(true);
+    activeAssistantIdRef.current = null;
+    recentScheduledContent.current.clear();
+    cancelStream();
+
+    try {
+      const session = await createSession();
+      setMessages([]);
+      setIsGenerating(false);
+      setTypingState('thinking');
+      setTokenCount(0);
+      setSessionId(session.session_id);
+      localStorage.removeItem(config.storage.chatHistory);
+      show('success', 'Conversation cleared', 'Started a fresh chat web session.');
+    } catch (error) {
+      if (previousAssistantId) {
+        setMessages((prev) => prev
+          .map((message) => (
+            message.id === previousAssistantId
+              ? finalizeSupersededAssistant(message)
+              : message
+          ))
+          .filter(Boolean));
+      }
+      setIsGenerating(false);
+      setTypingState('thinking');
+      setTokenCount(0);
+      show('error', 'Clear failed', error.message);
+    } finally {
+      setIsClearingSession(false);
+    }
+  }, [cancelStream, config.storage.chatHistory, createSession, show]);
+
   return (
     <div className="app-container">
       <Header connectionState={connectionState} />
@@ -573,8 +613,9 @@ function ChatPage() {
           <ChatInput
             onSend={handleSend}
             onStop={handleStop}
+            onCommand={handleCommand}
             isGenerating={isGenerating}
-            disabled={connectionState === 'error'}
+            disabled={connectionState === 'error' || isClearingSession}
           />
         </div>
       </main>
