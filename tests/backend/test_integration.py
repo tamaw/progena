@@ -1,83 +1,85 @@
 #!/usr/bin/env python
-"""
-Integration test for Backend.
-
-Tests the backend endpoints without needing Progenitor running.
-"""
-
-import sys
-from pathlib import Path
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from fastapi.testclient import TestClient
-
-from app.backend.main import app
+"""Integration test for backend endpoints with a mocked Progenitor client."""
 
 
-def test_endpoints():
+def test_endpoints(client):
     """Test the backend endpoints."""
-    client = TestClient(app)
+    import app.backend.main as backend_main
 
-    # Test 1: Health check
-    print("=" * 60)
-    print("TEST 1: Health Check")
-    print("=" * 60)
-    response = client.get("/health")
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.json()}")
-    assert response.status_code == 200
-    print("✓ PASSED\n")
+    original_client = backend_main.client
 
-    # Test 2: List models
-    print("=" * 60)
-    print("TEST 2: List Models (/v1/models)")
-    print("=" * 60)
-    response = client.get("/v1/models")
-    print(f"Status: {response.status_code}")
-    data = response.json()
-    print(f"Response: {data}")
-    assert response.status_code == 200
-    assert data["object"] == "list"
-    assert len(data["data"]) > 0
-    print("✓ PASSED\n")
+    class _MockClient:
+        async def send_message(
+            self,
+            message: str,
+            request_id: str | None = None,
+            metadata: dict[str, object] | None = None,
+        ) -> str:
+            del message, request_id, metadata
+            return "mocked response"
 
-    # Test 3: Responses endpoint (no Progenitor)
-    print("=" * 60)
-    print("TEST 3: Responses API (no Progenitor - will fail)")
-    print("=" * 60)
-    response = client.post(
-        "/v1/responses",
-        json={
-            "model": "progenitor-v1",
-            "input": "Hello!",
-        },
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:200]}")
-    # Should fail because no Progenitor running
-    assert response.status_code >= 400
-    print("✓ PASSED (expected failure)\n")
+    backend_main.client = _MockClient()
 
-    # Test 4: Simple chat endpoint (no Progenitor)
-    print("=" * 60)
-    print("TEST 4: Simple Chat (no Progenitor - will fail)")
-    print("=" * 60)
-    response = client.post(
-        "/chat",
-        json={"message": "Hello, Progenitor!"},
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:200]}")
-    # Should fail because no Progenitor running
-    assert response.status_code >= 400
-    print("✓ PASSED (expected failure)\n")
+    try:
+        # Test 1: Health check
+        print("=" * 60)
+        print("TEST 1: Health Check")
+        print("=" * 60)
+        response = client.get("/health")
+        print(f"Status: {response.status_code}")
+        print(f"Response: {response.json()}")
+        assert response.status_code == 200
+        print("✓ PASSED\n")
 
-    print("=" * 60)
-    print("ALL TESTS PASSED!")
-    print("=" * 60)
-    print("\nNext step: Implement Progenitor stdin/stdout interface for subprocess mode")
+        # Test 2: List models
+        print("=" * 60)
+        print("TEST 2: List Models (/v1/models)")
+        print("=" * 60)
+        response = client.get("/v1/models")
+        print(f"Status: {response.status_code}")
+        data = response.json()
+        print(f"Response: {data}")
+        assert response.status_code == 200
+        assert data["object"] == "list"
+        assert len(data["data"]) > 0
+        print("✓ PASSED\n")
+
+        # Test 3: Responses endpoint
+        print("=" * 60)
+        print("TEST 3: Responses API")
+        print("=" * 60)
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": "progenitor-v1",
+                "input": "Hello!",
+            },
+        )
+        print(f"Status: {response.status_code}")
+        print(f"Response: {response.text[:200]}")
+        assert response.status_code == 200
+        assert response.json()["output"][0]["content"][0]["text"] == "mocked response"
+        print("✓ PASSED\n")
+
+        # Test 4: Simple chat endpoint
+        print("=" * 60)
+        print("TEST 4: Simple Chat")
+        print("=" * 60)
+        response = client.post(
+            "/chat",
+            json={"message": "Hello, Progenitor!"},
+        )
+        print(f"Status: {response.status_code}")
+        print(f"Response: {response.text[:200]}")
+        assert response.status_code == 200
+        assert response.json() == {"response": "mocked response"}
+        print("✓ PASSED\n")
+
+        print("=" * 60)
+        print("ALL TESTS PASSED!")
+        print("=" * 60)
+    finally:
+        backend_main.client = original_client
 
 
 if __name__ == "__main__":

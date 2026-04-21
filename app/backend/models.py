@@ -1,7 +1,7 @@
 """OpenAI-compatible Responses API models."""
 
 import time
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +41,7 @@ class ResponseRequest(BaseModel):
     model: str = "progenitor-v1"
     input: list[ResponseInputMessage] | str
     stream: bool = False
+    metadata: dict[str, Any] | None = None
 
 
 class ResponsePayload(BaseModel):
@@ -103,8 +104,7 @@ class StreamingResponseRequest(ResponseRequest):
         if isinstance(request.input, str):
             if len(request.input) > 500000:
                 raise ValueError(
-                    f"Input ({len(request.input)} chars) exceeds "
-                    "streaming limit of 500000 chars"
+                    f"Input ({len(request.input)} chars) exceeds streaming limit of 500000 chars"
                 )
             if not request.input.strip():
                 raise ValueError("Input cannot be empty")
@@ -118,8 +118,7 @@ class StreamingResponseRequest(ResponseRequest):
                     total_length += len(content)
             if total_length > 500000:
                 raise ValueError(
-                    f"Total input ({total_length} chars) exceeds "
-                    "streaming limit of 500000 chars"
+                    f"Total input ({total_length} chars) exceeds streaming limit of 500000 chars"
                 )
             if not request.input:
                 raise ValueError("Input cannot be empty")
