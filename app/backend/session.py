@@ -158,6 +158,7 @@ class SessionManager:
         self,
         user_id: str | None = None,
         preferences: UserPreferences | None = None,
+        session_id: str | None = None,
     ) -> SessionState:
         """Create a new session."""
         async with self._lock:
@@ -175,6 +176,7 @@ class SessionManager:
 
             # Create new session
             session = SessionState(
+                session_id=session_id or f"sess_{uuid.uuid4().hex[:16]}",
                 user_id=user_id,
                 preferences=preferences or UserPreferences(),
                 is_authenticated=user_id is not None,
@@ -215,8 +217,33 @@ class SessionManager:
             session = await self.get_session(session_id)
             if session:
                 return session
+            return await self.create_session(user_id=user_id, session_id=session_id)
 
         return await self.create_session(user_id=user_id)
+
+    async def record_chat_activity(
+        self,
+        session_id: str,
+        *,
+        conversation_id: str | None = None,
+        message_increment: int = 0,
+    ) -> SessionState | None:
+        """Update the session with conversation/thread activity."""
+        session = await self.get_session(session_id)
+        if not session:
+            return None
+
+        async with self._lock:
+            current = self._sessions.get(session_id)
+            if current is None:
+                return None
+
+            current.touch()
+            if conversation_id:
+                current.conversation_id = conversation_id
+            if message_increment:
+                current.message_count = max(0, current.message_count + message_increment)
+            return current
 
     async def update_preferences(
         self,
