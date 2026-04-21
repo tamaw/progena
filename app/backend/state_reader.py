@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -369,17 +368,6 @@ class SessionSummary:
 
 
 @dataclass
-class ConversationStoreSummary:
-    """Conversation summary sourced from the LangGraph SQLite checkpointer."""
-
-    total_threads: int
-    latest_thread_id: str | None
-    latest_checkpoint_id: str | None
-    latest_checkpoint_ts: str | None
-    latest_messages_count: int
-
-
-@dataclass
 class StateSnapshot:
     """Complete state snapshot."""
 
@@ -429,10 +417,6 @@ class StateReader:
     @property
     def schedule_config_path(self) -> Path:
         return resolve_schedule_config_path(self.config_dir)
-
-    @property
-    def conversations_db_path(self) -> Path:
-        return self.state_dir / "conversations.db"
 
     def _resolved_logs_dir(self) -> Path:
         return self.logs_dir.resolve()
@@ -486,31 +470,11 @@ class StateReader:
             return []
 
     def get_health(self) -> HealthInfo:
-        data = self._read_json("health.json") or {}
-        conversation = self.get_conversation_store_summary()
+        data = self._read_json("health.json")
         if data:
-            return HealthInfo.from_dict(
-                {
-                    **data,
-                    "thread_id": (
-                        conversation.latest_thread_id
-                        if conversation and conversation.latest_thread_id
-                        else data.get("thread_id")
-                    ),
-                    "last_active": data.get("last_active")
-                    or (
-                        conversation.latest_checkpoint_ts
-                        if conversation and conversation.latest_checkpoint_ts
-                        else None
-                    ),
-                }
-            )
+            return HealthInfo.from_dict(data)
         return HealthInfo(
-            status="unknown",
-            last_active=conversation.latest_checkpoint_ts if conversation else None,
-            thread_id=conversation.latest_thread_id if conversation else None,
-            cycle_count=0,
-            pid=None,
+            status="unknown", last_active=None, thread_id=None, cycle_count=0, pid=None
         )
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
@@ -617,104 +581,6 @@ class StateReader:
             latest_activity=latest,
         )
 
-    def _decode_checkpoint_payload(self, checkpoint_blob: bytes | None) -> dict[str, Any] | None:
-        if checkpoint_blob is None:
-            return None
-        try:
-            import msgpack
-
-            payload = msgpack.unpackb(checkpoint_blob, raw=False, strict_map_key=False)
-        except Exception as e:
-            logger.debug("Failed to decode checkpoint payload: %s", e)
-            return None
-        return payload if isinstance(payload, dict) else None
-
-    def get_conversation_store_summary(self) -> ConversationStoreSummary | None:
-        db_path = self.conversations_db_path
-        try:
-            if not db_path.exists():
-                return None
-
-            cache_key = str(db_path)
-            mtime = db_path.stat().st_mtime
-            if cache_key in self._cache:
-                cached_mtime, cached_summary = self._cache[cache_key]
-                if cached_mtime == mtime:
-                    return cast(ConversationStoreSummary | None, cached_summary)
-
-            with sqlite3.connect(db_path) as conn:
-                cur = conn.cursor()
-                tables = {
-                    row[0]
-                    for row in cur.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    ).fetchall()
-                }
-                if "checkpoints" not in tables:
-                    self._cache[cache_key] = (mtime, None)
-                    return None
-
-                total_threads = int(
-                    (
-                        cur.execute("SELECT COUNT(DISTINCT thread_id) FROM checkpoints").fetchone()
-                        or [0]
-                    )[0]
-                    or 0
-                )
-                latest_row = cur.execute(
-                    "SELECT thread_id, checkpoint_id, checkpoint "
-                    "FROM checkpoints ORDER BY rowid DESC LIMIT 1"
-                ).fetchone()
-                if not latest_row:
-                    summary = ConversationStoreSummary(
-                        total_threads=total_threads,
-                        latest_thread_id=None,
-                        latest_checkpoint_id=None,
-                        latest_checkpoint_ts=None,
-                        latest_messages_count=0,
-                    )
-                    self._cache[cache_key] = (mtime, summary)
-                    return summary
-
-                latest_thread_id, latest_checkpoint_id, checkpoint_blob = latest_row
-                latest_checkpoint_ts = None
-                latest_messages_count = 0
-
-                payload = self._decode_checkpoint_payload(checkpoint_blob)
-                if payload:
-                    latest_checkpoint_ts = str(payload.get("ts") or "").strip() or None
-                    channel_values = payload.get("channel_values")
-                    if isinstance(channel_values, dict):
-                        messages = channel_values.get("messages")
-                        if isinstance(messages, list):
-                            latest_messages_count = len(messages)
-
-                if latest_messages_count == 0 and latest_thread_id and "writes" in tables:
-                    latest_messages_count = int(
-                        (
-                            cur.execute(
-                                "SELECT COUNT(*) FROM writes "
-                                "WHERE thread_id = ? AND channel = 'messages'",
-                                (latest_thread_id,),
-                            ).fetchone()
-                            or [0]
-                        )[0]
-                        or 0
-                    )
-
-                summary = ConversationStoreSummary(
-                    total_threads=total_threads,
-                    latest_thread_id=str(latest_thread_id or "").strip() or None,
-                    latest_checkpoint_id=str(latest_checkpoint_id or "").strip() or None,
-                    latest_checkpoint_ts=latest_checkpoint_ts,
-                    latest_messages_count=latest_messages_count,
-                )
-                self._cache[cache_key] = (mtime, summary)
-                return summary
-        except sqlite3.Error as e:
-            logger.debug("Failed to read conversation store summary from %s: %s", db_path, e)
-            return None
-
     def _status_with_health(self, status: str | None, is_running: bool) -> str:
         candidate = (status or "").strip().lower()
         if candidate:
@@ -782,7 +648,6 @@ class StateReader:
         loops = self.get_loops(health)
         progenitor = self.get_progenitor_state()
         build = self.get_build_state()
-        conversation = self.get_conversation_store_summary()
         return StateSnapshot(
             timestamp=time.time(),
             health=health,
@@ -792,16 +657,8 @@ class StateReader:
             schedule=schedule,
             loops=loops,
             cycle_count=progenitor.get("cycle_count", 0),
-            thread_id=(
-                conversation.latest_thread_id
-                if conversation and conversation.latest_thread_id
-                else progenitor.get("thread_id")
-            ),
-            messages_count=(
-                conversation.latest_messages_count
-                if conversation and conversation.latest_thread_id
-                else len(progenitor.get("messages", []))
-            ),
+            thread_id=progenitor.get("thread_id"),
+            messages_count=len(progenitor.get("messages", [])),
             build=BuildInfo.from_dict(build),
             sessions=self.get_sessions_summary(),
         )
@@ -1347,7 +1204,6 @@ class StateReader:
             self.state_dir / "health.json",
             self.state_dir / "current_state.json",
             self.state_dir / "build_state.json",
-            self.conversations_db_path,
             self.schedule_config_path,
             self.config_dir / "agents.json",
             self.config_dir / "mcp.json",

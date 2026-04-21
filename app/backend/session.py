@@ -225,7 +225,6 @@ class SessionManager:
         self,
         session_id: str,
         *,
-        conversation_id: str | None = None,
         message_increment: int = 0,
     ) -> SessionState | None:
         """Update the session with conversation/thread activity."""
@@ -239,8 +238,6 @@ class SessionManager:
                 return None
 
             current.touch()
-            if conversation_id:
-                current.conversation_id = conversation_id
             if message_increment:
                 current.message_count = max(0, current.message_count + message_increment)
             return current
