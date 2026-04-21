@@ -1113,7 +1113,6 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
 
     await session_manager.record_chat_activity(
         session.session_id,
-        conversation_id=thread_id,
         message_increment=1,
     )
 
@@ -1199,9 +1198,7 @@ def _build_chat_request_metadata(
     requested_thread_id = str(
         metadata.get("thread_id") or metadata.get("conversation_id") or ""
     ).strip()
-    thread_id = requested_thread_id or str(session.conversation_id or "").strip()
-    if not thread_id:
-        thread_id = _default_conversation_id(session)
+    thread_id = requested_thread_id or _default_conversation_id(session)
     metadata["thread_id"] = thread_id
     return thread_id, metadata
 
@@ -1302,7 +1299,6 @@ async def simple_chat(request: Request, response: Response, body: SimpleChatRequ
         thread_id, request_metadata = _build_chat_request_metadata(session)
         await session_manager.record_chat_activity(
             session.session_id,
-            conversation_id=thread_id,
             message_increment=1,
         )
         response_text = await client.send_message(
@@ -1398,7 +1394,7 @@ async def get_session(request: Request, response: Response):
         "last_activity": session.last_activity.isoformat(),
         "is_authenticated": session.is_authenticated,
         "preferences": session.preferences.model_dump(),
-        "conversation_id": session.conversation_id or _default_conversation_id(session),
+        "conversation_id": _default_conversation_id(session),
         "message_count": session.message_count,
         "pending_attachments": session.pending_attachments,
     }
@@ -1412,7 +1408,7 @@ async def create_new_session(request: Request, response: Response):
     return {
         "session_id": session.session_id,
         "created_at": session.created_at.isoformat(),
-        "conversation_id": session.conversation_id or _default_conversation_id(session),
+        "conversation_id": _default_conversation_id(session),
     }
 
 

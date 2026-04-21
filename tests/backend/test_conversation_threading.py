@@ -1,7 +1,5 @@
 import json
-import sqlite3
 
-import msgpack
 from fastapi.testclient import TestClient
 
 from app.backend.main import app
@@ -25,7 +23,26 @@ def test_get_session_sets_cookie_and_default_conversation_id(monkeypatch):
     assert data["message_count"] == 0
 
 
-def test_state_reader_prefers_sqlite_conversation_state(tmp_path):
+def test_get_session_ignores_stale_persisted_conversation_id(monkeypatch):
+    import app.backend.main as backend_main
+
+    session_manager = SessionManager(SessionConfig(persist_dir=None))
+    monkeypatch.setattr(backend_main, "session_manager", session_manager)
+
+    with TestClient(app) as client:
+        initial = client.get("/v1/session")
+        session_id = initial.json()["session_id"]
+
+        stored = session_manager._sessions[session_id]
+        stored.conversation_id = "thread_stale"
+
+        response = client.get("/v1/session")
+
+    assert response.status_code == 200
+    assert response.json()["conversation_id"] == f"thread_{session_id}"
+
+
+def test_state_reader_uses_current_state_for_thread_and_messages(tmp_path):
     data_dir = tmp_path / "data"
     state_dir = data_dir / "state"
     config_dir = data_dir / "config"
@@ -40,7 +57,7 @@ def test_state_reader_prefers_sqlite_conversation_state(tmp_path):
             {
                 "status": "running",
                 "last_active": "2026-04-20T00:00:00Z",
-                "thread_id": "thread_stale",
+                "thread_id": "thread_live",
                 "cycle_count": 12,
                 "pid": 4242,
             }
@@ -50,8 +67,12 @@ def test_state_reader_prefers_sqlite_conversation_state(tmp_path):
     (state_dir / "current_state.json").write_text(
         json.dumps(
             {
-                "thread_id": "thread_stale",
-                "messages": [{"role": "assistant", "content": "stale"}],
+                "thread_id": "thread_live",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "hello"},
+                    {"role": "user", "content": "again"},
+                ],
                 "cycle_count": 12,
             }
         ),
@@ -74,75 +95,6 @@ def test_state_reader_prefers_sqlite_conversation_state(tmp_path):
         ),
         encoding="utf-8",
     )
-
-    db_path = state_dir / "conversations.db"
-    checkpoint_payload = {
-        "v": 4,
-        "ts": "2026-04-21T09:16:00Z",
-        "id": "chk_live",
-        "channel_values": {
-            "messages": ["user-1", "assistant-1", "user-2"],
-        },
-        "channel_versions": {},
-        "versions_seen": {},
-        "updated_channels": ["messages"],
-    }
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE checkpoints (
-                thread_id TEXT NOT NULL,
-                checkpoint_ns TEXT NOT NULL DEFAULT '',
-                checkpoint_id TEXT NOT NULL,
-                parent_checkpoint_id TEXT,
-                type TEXT,
-                checkpoint BLOB,
-                metadata BLOB,
-                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE writes (
-                thread_id TEXT NOT NULL,
-                checkpoint_ns TEXT NOT NULL DEFAULT '',
-                checkpoint_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                idx INTEGER NOT NULL,
-                channel TEXT NOT NULL,
-                type TEXT,
-                value BLOB,
-                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO checkpoints (
-                thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
-            ) VALUES (?, '', ?, NULL, 'msgpack', ?, ?)
-            """,
-            (
-                "thread_live",
-                "chk_live",
-                msgpack.packb(checkpoint_payload, use_bin_type=True),
-                json.dumps({"source": "input"}),
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO writes (
-                thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value
-            ) VALUES (?, '', ?, 'task-1', 0, 'messages', 'msgpack', ?)
-            """,
-            (
-                "thread_live",
-                "chk_live",
-                msgpack.packb(["user-1", "assistant-1", "user-2"], use_bin_type=True),
-            ),
-        )
-        conn.commit()
 
     reader = StateReader(
         state_dir=state_dir,
