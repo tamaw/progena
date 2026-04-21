@@ -2,9 +2,9 @@
 Backend configuration for Progenitor's DeepAgent.
 
 Profile:
-- Ephemeral workspace (StateBackend) + persistent memories
+- Ephemeral workspace (StateBackend) + persistent memories (FilesystemBackend)
 - Scoped filesystem mounts for self-inspection and runtime data access:
-  - /memories/ -> LangGraph store when available, else <data_dir>/memories
+  - /memories/ -> configured data_dir/memories (read-write)
   - /self/ -> <project_root>/app (read-only)
   - /data/ -> configured data dir (read-only)
   - /logs/ -> configured log dir (read-only)
@@ -19,15 +19,9 @@ from deepagents.backends import (
     CompositeBackend,
     FilesystemBackend,
     StateBackend,
-    StoreBackend,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def runtime_memory_namespace(_runtime: Any) -> tuple[str, ...]:
-    """Namespace for persisted runtime memory documents."""
-    return ("progenitor", "memories")
 
 
 class ReadOnlyFilesystemBackend:
@@ -52,7 +46,6 @@ def create_progenitor_backend(
     data_dir: str | Path | None = None,
     log_dir: str | Path | None = None,
     prompts_dir: str | Path | None = None,
-    store: Any | None = None,
 ) -> Any:
     """Create a backend factory for the Progenitor DeepAgent.
 
@@ -64,8 +57,6 @@ def create_progenitor_backend(
         data_dir: Persistent data directory. Defaults to ``<project_root>/data``.
         log_dir: Log directory. Defaults to ``<project_root>/logs``.
         prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
-        store: Optional LangGraph store used for the ``/memories/`` route.
-
     Returns:
         Backend factory callable.
     """
@@ -92,15 +83,11 @@ def create_progenitor_backend(
 
     def _backend_factory(runtime: Any) -> CompositeBackend:
         routes: dict[str, Any] = {}
-        memories_backend: Any | None
-        if store is not None:
-            memories_backend = StoreBackend(runtime, namespace=runtime_memory_namespace)
-        else:
-            memories_backend = _route_backend(
-                resolved_data_dir / "memories",
-                read_only=False,
-                create_if_missing=True,
-            )
+        memories_backend = _route_backend(
+            resolved_data_dir / "memories",
+            read_only=False,
+            create_if_missing=True,
+        )
         if memories_backend is not None:
             routes["/memories/"] = memories_backend
 
