@@ -57,6 +57,7 @@ from .models import (
 from .session import (
     SessionConfig,
     SessionManager,
+    SessionState,
     SettingsManager,
     get_session_from_request,
     set_session_cookie,
@@ -996,7 +997,10 @@ async def health_check_detailed():
             details = client.get_status()
             if inspect.isawaitable(details):
                 details = await details
-            progenitor_status["details"] = details
+            try:
+                progenitor_status["details"] = json.loads(json.dumps(details, default=str))
+            except (TypeError, ValueError):
+                progenitor_status["details"] = str(details)
         except Exception as e:
             logger.debug("Failed to get progenitor status details: %s", e)
 
@@ -1089,7 +1093,7 @@ async def list_models():
 
 
 @app.post("/v1/responses", response_model=ResponsePayload)
-async def responses(request: Request, body: ResponseRequest):
+async def responses(request: Request, response: Response, body: ResponseRequest):
     """Unified Responses API (preferred).
 
     Accepts Responses `input` payloads only.
@@ -1099,12 +1103,18 @@ async def responses(request: Request, body: ResponseRequest):
 
     # Get request ID for correlation
     request_id = getattr(request.state, "request_id", None)
-    request_metadata = _build_chat_request_metadata(request)
+    session = await get_session_from_request(request, session_manager)
+    thread_id, request_metadata = _build_chat_request_metadata(session, body.metadata)
 
     try:
         last_user_msg, all_inputs = _extract_response_input(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    await session_manager.record_chat_activity(
+        session.session_id,
+        message_increment=1,
+    )
 
     try:
         if body.stream:
@@ -1114,14 +1124,18 @@ async def responses(request: Request, body: ResponseRequest):
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
 
-            return StreamingResponse(
-                stream_response_unified(
-                    last_user_msg,
-                    body.model,
-                    request_id,
-                    metadata=request_metadata,
+            return _attach_session_cookie(
+                request,
+                session,
+                StreamingResponse(
+                    stream_response_unified(
+                        last_user_msg,
+                        body.model,
+                        request_id,
+                        metadata=request_metadata,
+                    ),
+                    media_type="text/event-stream",
                 ),
-                media_type="text/event-stream",
             )
 
         response_text = await client.send_message(
@@ -1129,6 +1143,7 @@ async def responses(request: Request, body: ResponseRequest):
             request_id=request_id,
             metadata=request_metadata,
         )
+        _attach_session_cookie(request, session, response)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
         return ResponsePayload(
@@ -1169,12 +1184,34 @@ def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
     return inputs[-1], inputs
 
 
-def _build_chat_request_metadata(request: Request) -> dict[str, Any] | None:
-    """Map the browser session cookie to a stable LangGraph thread id."""
-    session_id = str(request.cookies.get("progenitor_session") or "").strip()
-    if not session_id:
-        return None
-    return {"thread_id": f"thread_{session_id}"}
+def _default_conversation_id(session: SessionState) -> str:
+    """Return the stable default LangGraph thread for a web session."""
+    return f"thread_{session.session_id}"
+
+
+def _build_chat_request_metadata(
+    session: SessionState,
+    request_metadata: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Resolve request metadata onto a stable, session-backed thread id."""
+    metadata = dict(request_metadata or {})
+    requested_thread_id = str(
+        metadata.get("thread_id") or metadata.get("conversation_id") or ""
+    ).strip()
+    thread_id = requested_thread_id or _default_conversation_id(session)
+    metadata["thread_id"] = thread_id
+    return thread_id, metadata
+
+
+def _attach_session_cookie(
+    request: Request,
+    session: SessionState,
+    response: Response,
+) -> Response:
+    """Set the session cookie when the request has no matching cookie yet."""
+    if request.cookies.get("progenitor_session") != session.session_id:
+        set_session_cookie(response, session)
+    return response
 
 
 async def stream_response_unified(
@@ -1248,7 +1285,7 @@ async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIte
 
 # Simple chat endpoint (non-OpenAI format)
 @app.post("/chat")
-async def simple_chat(request: Request, body: SimpleChatRequest):
+async def simple_chat(request: Request, response: Response, body: SimpleChatRequest):
     """Simple chat endpoint for quick testing (CR-002: now with Pydantic validation).
 
     Request: {"message": "your message here"}
@@ -1258,11 +1295,18 @@ async def simple_chat(request: Request, body: SimpleChatRequest):
         raise HTTPException(status_code=503, detail="Client not initialized")
 
     try:
-        response = await client.send_message(
-            body.message,
-            metadata=_build_chat_request_metadata(request),
+        session = await get_session_from_request(request, session_manager)
+        thread_id, request_metadata = _build_chat_request_metadata(session)
+        await session_manager.record_chat_activity(
+            session.session_id,
+            message_increment=1,
         )
-        return {"response": response}
+        response_text = await client.send_message(
+            body.message,
+            metadata=request_metadata,
+        )
+        _attach_session_cookie(request, session, response)
+        return {"response": response_text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1340,15 +1384,17 @@ async def get_attachment(attachment_id: str):
 
 
 @app.get("/v1/session")
-async def get_session(request: Request):
+async def get_session(request: Request, response: Response):
     """Get current session state."""
     session = await get_session_from_request(request, session_manager)
+    _attach_session_cookie(request, session, response)
     return {
         "session_id": session.session_id,
         "created_at": session.created_at.isoformat(),
         "last_activity": session.last_activity.isoformat(),
         "is_authenticated": session.is_authenticated,
         "preferences": session.preferences.model_dump(),
+        "conversation_id": _default_conversation_id(session),
         "message_count": session.message_count,
         "pending_attachments": session.pending_attachments,
     }
@@ -1362,6 +1408,7 @@ async def create_new_session(request: Request, response: Response):
     return {
         "session_id": session.session_id,
         "created_at": session.created_at.isoformat(),
+        "conversation_id": _default_conversation_id(session),
     }
 
 

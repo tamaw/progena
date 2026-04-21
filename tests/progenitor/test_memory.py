@@ -1,94 +1,110 @@
 """
-Tests for Phase 6: AGENTS.md prompt-context wiring.
+Tests for Progenitor runtime memory wiring.
 """
 
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
-def _fake_config() -> SimpleNamespace:
+def _fake_config(base_dir: Path) -> SimpleNamespace:
+    data_dir = base_dir / "data"
+    prompts_dir = data_dir / "prompts"
+    state_dir = data_dir / "state"
+    log_dir = base_dir / "logs"
+    for path in (data_dir, prompts_dir, state_dir, log_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
     return SimpleNamespace(
         llm=SimpleNamespace(model_default="test-model"),
         storage=SimpleNamespace(
-            state_dir=Path("data/state"),
-            prompts_dir=Path("data/prompts"),
+            data_dir=data_dir,
+            state_dir=state_dir,
+            log_dir=log_dir,
+            prompts_dir=prompts_dir,
         ),
     )
 
 
-class TestPromptContextWiring:
-    """Test that AGENTS.md prompt context is wired into the DeepAgent factory."""
+class TestRuntimeMemoryWiring:
+    """Test that Progenitor wires runtime memory from the filesystem."""
 
-    def test_factory_passes_explicit_prompt_context(self):
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
-            mock_create.return_value = MagicMock()
-            with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
-                mock_model.return_value = MagicMock()
-                from app.progenitor.agent.deep_agent import create_progenitor_agent
+    def test_factory_passes_explicit_memory_paths(self, tmp_path: Path):
+        config = _fake_config(tmp_path)
 
-                create_progenitor_agent(
-                    config=_fake_config(),
-                    checkpointer=MagicMock(),
-                    memory_paths=["AGENTS.md", "docs/notes.md"],
-                )
-
-                call_kwargs = mock_create.call_args.kwargs
-                assert call_kwargs["memory"] == ["AGENTS.md", "docs/notes.md"]
-
-    def test_factory_auto_discovers_agents_md_prompt_context(self):
-        """When no memory_paths given, auto-discovers AGENTS.md prompt context."""
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
-            mock_create.return_value = MagicMock()
-            with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
-                mock_model.return_value = MagicMock()
-                from app.progenitor.agent.deep_agent import create_progenitor_agent
-
-                # Project root has AGENTS.md prompt context.
-                create_progenitor_agent(
-                    config=_fake_config(),
-                    checkpointer=MagicMock(),
-                    project_root=".",
-                )
-
-                call_kwargs = mock_create.call_args.kwargs
-                memory = call_kwargs.get("memory")
-                assert memory is not None
-                assert any("AGENTS.md" in p for p in memory)
-
-    def test_factory_no_prompt_context_when_no_agents_md(self):
-        """When AGENTS.md doesn't exist, no prompt context is passed."""
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
             patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
+            mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+
             from app.progenitor.agent.deep_agent import create_progenitor_agent
 
             create_progenitor_agent(
-                config=_fake_config(),
+                config=config,
                 checkpointer=MagicMock(),
-                project_root=tmpdir,
+                memory_paths=["/memories/custom.md", "/memories/notes.md"],
             )
 
-            call_kwargs = mock_create.call_args.kwargs
-            assert call_kwargs.get("memory") is None
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["memory"] == ["/memories/custom.md", "/memories/notes.md"]
 
+    def test_factory_defaults_to_filesystem_runtime_memory(self, tmp_path: Path):
+        config = _fake_config(tmp_path)
 
-class TestAgentsMdContent:
-    """Verify AGENTS.md is suitable as a prompt-context source."""
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
+        ):
+            mock_create.return_value = MagicMock()
+            mock_model.return_value = MagicMock()
+            mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
 
-    def test_agents_md_exists(self):
-        assert Path("AGENTS.md").is_file()
+            from app.progenitor.agent.deep_agent import (
+                DEFAULT_RUNTIME_MEMORY_CONTENT,
+                create_progenitor_agent,
+            )
 
-    def test_agents_md_has_content(self):
-        content = Path("AGENTS.md").read_text(encoding="utf-8")
-        assert len(content) > 100, "AGENTS.md should have substantial content"
+            create_progenitor_agent(
+                config=config,
+                checkpointer=MagicMock(),
+                project_root=tmp_path,
+            )
 
-    def test_agents_md_has_key_sections(self):
-        content = Path("AGENTS.md").read_text(encoding="utf-8")
-        assert "Agent Capabilities" in content or "Capabilities" in content
-        assert "Project Structure" in content or "Structure" in content
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["memory"] == ["/data/memories/AGENTS.md"]
+        memory_file = config.storage.data_dir / "memories" / "AGENTS.md"
+        assert memory_file.read_text(encoding="utf-8") == DEFAULT_RUNTIME_MEMORY_CONTENT
+
+    def test_factory_discovers_filesystem_runtime_memories(self, tmp_path: Path):
+        config = _fake_config(tmp_path)
+        memory_file = config.storage.data_dir / "memories" / "preferences.md"
+        memory_file.parent.mkdir(parents=True, exist_ok=True)
+        memory_file.write_text("Prefer concise summaries.\n", encoding="utf-8")
+
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
+        ):
+            mock_create.return_value = MagicMock()
+            mock_model.return_value = MagicMock()
+            mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+
+            from app.progenitor.agent.deep_agent import create_progenitor_agent
+
+            create_progenitor_agent(
+                config=config,
+                checkpointer=MagicMock(),
+                project_root=tmp_path,
+            )
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["memory"] == [
+            "/data/memories/AGENTS.md",
+            "/data/memories/preferences.md",
+        ]
