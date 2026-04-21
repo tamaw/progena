@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from app.progenitor.agent.backends import (
     ReadOnlyFilesystemBackend,
     create_progenitor_backend,
+    runtime_memory_namespace,
 )
 
 
@@ -32,6 +33,16 @@ def _read_result_text(result: object) -> str:
     return text
 
 
+def _store_item_text(item: object) -> str:
+    value = getattr(item, "value", None)
+    assert isinstance(value, dict)
+    content = value.get("content")
+    if isinstance(content, list):
+        return "\n".join(content)
+    assert isinstance(content, str)
+    return content
+
+
 class TestBackendFactory:
     """Tests for the backend factory."""
 
@@ -51,6 +62,30 @@ class TestBackendFactory:
         assert isinstance(backend, CompositeBackend)
         assert isinstance(backend.default, StateBackend)
         assert isinstance(backend.routes["/memories/"], FilesystemBackend)
+
+    def test_factory_uses_store_backend_when_store_supplied(self):
+        """When a store is supplied, /memories uses StoreBackend."""
+        from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
+        from langgraph.store.memory import InMemoryStore
+
+        store = InMemoryStore()
+        factory = create_progenitor_backend(project_root=".", store=store)
+        runtime = MagicMock()
+        runtime.store = store
+
+        backend = factory(runtime)
+        assert isinstance(backend, CompositeBackend)
+        assert isinstance(backend.default, StateBackend)
+        assert isinstance(backend.routes["/memories/"], StoreBackend)
+
+        result = backend.write("/memories/patterns/testing.md", "Keep responses concise.\n")
+        read_result = backend.read("/memories/patterns/testing.md")
+        item = store.get(runtime_memory_namespace(None), "/patterns/testing.md")
+
+        assert result.error is None
+        assert "Keep responses concise." in _read_result_text(read_result)
+        assert item is not None
+        assert _store_item_text(item) == "Keep responses concise.\n"
 
     def test_factory_uses_project_root(self):
         """project_root is accepted (even though core-only doesn't use it)."""
