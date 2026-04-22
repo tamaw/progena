@@ -5,7 +5,6 @@ from .helpers import (
     get_status_value,
     is_actionable,
     normalize_decision,
-    normalize_schedule_entry,
     normalize_work_item,
     to_dict,
 )
@@ -94,7 +93,6 @@ __all__ = [
     # Helpers
     "normalize_work_item",
     "normalize_decision",
-    "normalize_schedule_entry",
     "to_dict",
     "is_actionable",
     "get_status_value",

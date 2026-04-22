@@ -14,7 +14,6 @@ from .models import (
     BuildPhases,
     Decision,
     DecisionAction,
-    ScheduleEntry,
     WorkItem,
     WorkItemStatus,
     WorkItemType,
@@ -22,7 +21,7 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def is_work_item_actionable(item: Any) -> bool:
@@ -149,40 +148,7 @@ def normalize_decision(item: Any) -> Decision | None:
             reasoning=item.get("reasoning", ""),
             requires_planning=item.get("requires_planning", False),
             target_capabilities=item.get("target_capabilities", []),
-            direct_response=item.get("direct_response"),
-        )
-
-    return None
-
-
-def normalize_schedule_entry(item: Any) -> ScheduleEntry | None:
-    """Convert various formats to ScheduleEntry.
-
-    Args:
-        item: A ScheduleEntry, dict, or None
-
-    Returns:
-        ScheduleEntry instance or None if item is None/invalid
-    """
-    if item is None:
-        return None
-
-    if isinstance(item, ScheduleEntry):
-        return item
-
-    if isinstance(item, dict):
-        cron_expression = item.get("cron_expression")
-        message = item.get("message")
-        created_at = item.get("created_at")
-        if cron_expression is None or message is None or created_at is None:
-            return None
-
-        return ScheduleEntry(
-            id=item.get("id", "unknown"),
-            message=message,
-            cron_expression=cron_expression,
-            created_at=created_at,
-            last_run=item.get("last_run"),
+            user_response=item.get("user_response") or item.get("direct_response"),
         )
 
     return None
@@ -234,26 +200,9 @@ def set_ideal_state(phases: BuildPhases | dict[str, Any] | None, ideal_state: An
 def is_actionable(item: Any) -> bool:
     """Check if a work item is actionable (pending or in_progress).
 
-    Args:
-        item: A WorkItem, dict, or object with status attribute
-
-    Returns:
-        True if actionable
+    Backward-compatible alias for is_work_item_actionable().
     """
-    if isinstance(item, WorkItem):
-        return item.is_actionable
-
-    if isinstance(item, dict):
-        status = item.get("status", "")
-        return status in ("pending", "in_progress")
-
-    if hasattr(item, "status"):
-        status = item.status
-        if hasattr(status, "value"):
-            status = status.value
-        return status in ("pending", "in_progress")
-
-    return False
+    return is_work_item_actionable(item)
 
 
 def get_status_value(item: Any) -> str:
@@ -266,7 +215,10 @@ def get_status_value(item: Any) -> str:
         Status as string
     """
     if isinstance(item, WorkItem):
-        return item.status_value
+        status = item.status
+        if hasattr(status, "value"):
+            return cast(str, status.value)
+        return str(status)
 
     if isinstance(item, dict):
         status = item.get("status", "unknown")
@@ -293,7 +245,10 @@ def get_item_type_value(item: Any) -> str:
         Item type as string
     """
     if isinstance(item, WorkItem):
-        return item.item_type_value
+        item_type = item.item_type
+        if hasattr(item_type, "value"):
+            return cast(str, item_type.value)
+        return str(item_type)
 
     if isinstance(item, dict):
         item_type = item.get("item_type", "unknown")
@@ -308,7 +263,6 @@ def get_item_type_value(item: Any) -> str:
         return str(item_type)
 
     return "unknown"
-
 
 
 def mark_work_item_completed(

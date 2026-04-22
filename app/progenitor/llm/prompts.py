@@ -179,7 +179,7 @@ class PromptTemplates:
         Template variables use {placeholder} syntax.
 
         Args:
-            filename: Name of the prompt file (e.g., 'act.upgrade.md')
+            filename: Name of the prompt file (e.g., 'progenitor/decide.md')
             **replacements: Key-value pairs for template variable substitution.
                            Keys should match {placeholder} names in the template.
 

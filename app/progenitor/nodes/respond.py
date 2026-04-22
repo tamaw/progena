@@ -34,12 +34,18 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
 
         # Check if this is a clarification request
         clarification_updates: dict[str, Any] = {}
-        if state.get("clarification", {}).get("needed") and state.get("clarification_question"):
+        clarification = state.get("clarification", {}) or {}
+        clarification_question = clarification.get("question")
+        if clarification.get("needed") and clarification_question:
             # This is a clarification request - present question to user
-            response_text = str(state.get("clarification_question", ""))
+            response_text = str(clarification_question)
             clarification_updates = {
                 "awaiting_clarification": True,
-                "clarification_needed": False,  # Reset for next iteration
+                "clarification": {
+                    **clarification,
+                    "needed": False,
+                    "awaiting": True,
+                },
             }
 
             # Log the clarification request
@@ -50,7 +56,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 timestamp=utcnow(),
                 metadata={
                     "type": "clarification_request",
-                    "clarification_context": state.get("clarification_context"),
+                    "clarification_context": clarification.get("context"),
                     "iteration": state.get("iteration", {}).get("current", 0),
                 },
             )
@@ -68,7 +74,7 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
                 },
             )
 
-        # Check if response was already streamed by the decide node
+        # Check if response was already streamed by the chat node
         from ..runtime.loop import get_current_loop
 
         loop = get_current_loop()
@@ -185,9 +191,7 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
     """
     Generate compact verification summary per loop.spec.md.
 
-    Per spec:
-    - If stopped early, return best artefact plus unmet criteria
-    - Final output must include compact verification summary
+        Per spec: Final output must include compact verification summary.
     """
     verification_report = state.get("verification", {}).get("current_report")
     stop_reason = state.get("iteration_stop_reason")
@@ -225,20 +229,6 @@ def _generate_verification_summary(state: ProgenitorState) -> str | None:
         if len(gaps) > 3:
             summary_parts.append(f"  (+{len(gaps) - 3} more)")
 
-    # Best artefact info if stopped early (loop.spec.md Stop Conditions requirement)
-    best_artefact: dict[str, Any] | None = state.get("best_artefact")  # type: ignore[assignment]
-    if best_artefact and not passed:
-        best_score = state.get("best_artefact_score", 0)
-        best_iteration = best_artefact.get("iteration", "?")
-        summary_parts.append(f"Best result: score {best_score:.2f} at iteration {best_iteration}")
-
-        # Include excerpt of best output if available (spec: "return best artefact")
-        best_output = best_artefact.get("output")
-        if best_output and len(best_output) > 0:
-            # Truncate for display
-            excerpt = best_output[:200] + "..." if len(best_output) > 200 else best_output
-            summary_parts.append(f"Best output excerpt: {excerpt}")
-
     return "\n".join(summary_parts)
 
 
@@ -247,43 +237,13 @@ def _generate_response(decision, current_item, state: ProgenitorState) -> str | 
     # Check for direct response from decision
     if decision:
         decision_dict = decision.model_dump() if hasattr(decision, "model_dump") else decision
-        direct_response = decision_dict.get("direct_response")
-        if direct_response:
-            return cast(str, direct_response)
+        user_response = decision_dict.get("user_response") or decision_dict.get("direct_response")
+        if user_response:
+            return cast(str, user_response)
 
     # Generate response based on completed work
     if current_item:
         response = _format_work_item_response(current_item)
-
-        # Add newly built agent info if available
-        new_agent_info: dict[str, Any] | None = state.get("new_agent_ready")  # type: ignore[assignment]
-        if new_agent_info:
-            agent_name = new_agent_info.get("name", "unknown")
-            test_passed = new_agent_info.get("test_passed", False)
-            test_response = new_agent_info.get("test_response")
-            entrypoint = new_agent_info.get("entrypoint", "")
-
-            if test_passed:
-                agent_info = "\n\nAgent Ready for Interaction\n"
-                agent_info += f"✓ Agent {agent_name} is built, tested, and registered.\n"
-                agent_info += f"  - Entrypoint: {entrypoint}\n"
-                if test_response:
-                    response_preview = str(test_response)[:200]
-                    agent_info += f"  - Test response: {response_preview}\n"
-                agent_info += "\nYou can now invoke this agent directly!"
-            else:
-                agent_info = "\n\nAgent Built (with warnings)\n"
-                agent_info += f"○ Agent {agent_name} is built and registered.\n"
-                test_error = new_agent_info.get("test_error")
-                if test_error:
-                    agent_info += f"  - Test failed: {test_error[:200]}\n"
-                agent_info += "  - Manual testing recommended before use."
-
-            if response:
-                response += agent_info
-            else:
-                response = agent_info
-
         return response
 
     # Check for pending work
@@ -306,8 +266,7 @@ def _generate_response(decision, current_item, state: ProgenitorState) -> str | 
 def _format_work_item_response(current_item) -> str | None:
     """Format response for a work item."""
     if isinstance(current_item, WorkItem):
-        # Handle both enum and string status due to model_config use_enum_values
-        status = current_item.status_value
+        status = current_item.status
         description = current_item.description
         error_msg = current_item.error_message
         result = current_item.result or {}
