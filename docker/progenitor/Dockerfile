@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.12-slim
 
 # Install system dependencies (curl for healthchecks, ca-certs for TLS)
@@ -18,7 +20,8 @@ COPY app/ ./app/
 COPY data/prompts/ ./data/prompts/
 COPY data/skills/ ./data/skills/
 COPY scripts/ ./scripts/
-RUN pip install --no-cache-dir . \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install . \
     && mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/tmp
 
 # Set environment variables

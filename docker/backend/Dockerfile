@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.12-slim
 
 # Install system dependencies
@@ -14,7 +16,8 @@ COPY app/ ./app/
 COPY data/prompts/ ./data/prompts/
 COPY data/skills/ ./data/skills/
 COPY scripts/ ./scripts/
-RUN pip install --no-cache-dir .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install .
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
