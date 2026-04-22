@@ -35,13 +35,13 @@ Observe → Think → Plan → Build → Execute → Validate → Verify → Lea
 ```
 progenitor/
 ├── config.py            # Configuration dataclasses
-├── graph.py             # LangGraph topology and routing
+├── routing.py           # Graph routing helpers
 ├── main.py              # Entry point
 ├── nodes/               # LangGraph node implementations
-│   ├── decide.py        # Decision routing node
+│   ├── chat.py          # Main LLM tool-calling node
 │   ├── intake.py        # Message intake node
-│   ├── planner.py       # Planning node
-│   ├── builder.py       # Build execution node
+│   ├── pick_next.py     # Backlog selection node
+│   ├── register.py      # Result registration node
 │   ├── respond.py       # Response generation node
 │   └── ...
 ├── runtime/
@@ -71,11 +71,9 @@ def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], A
     return node
 ```
 
-#### Graph Routing (`graph.py`)
+#### Graph Routing (`routing.py`)
 Routing functions determine flow:
-- `should_continue()`: `pick_next` | `idle` | `end`
-- `route_after_decide()`: `planner` | `pick_next` | `respond`
-- `route_after_validate()`: `register` | `pick_next`
+- `route_after_decide()`: `pick_next` | `respond`
 
 ### Development
 

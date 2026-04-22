@@ -1,14 +1,20 @@
 """Tests for secret redaction functionality."""
 
+import re
 import uuid
 
-from app.progenitor.state.models import redact_secrets
+from app.progenitor.state.models import SECRET_PATTERNS, redact_secrets
 
 
 class TestSecretRedaction:
     """Tests for secret redaction to prevent data leaks."""
 
     # === Test that secrets ARE redacted ===
+
+    def test_secret_patterns_are_precompiled(self):
+        """Test that redaction patterns are compiled once at import time."""
+        assert SECRET_PATTERNS
+        assert all(isinstance(pattern, re.Pattern) for pattern, _ in SECRET_PATTERNS)
 
     def test_redact_openai_key(self):
         """Test that OpenAI API keys are redacted."""
@@ -67,7 +73,7 @@ class TestSecretRedaction:
 
     def test_redact_azure_key_in_context(self):
         """Test Azure key redaction with context."""
-        text = 'AZURE_OPENAI_API_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6'
+        text = "AZURE_OPENAI_API_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
         result = redact_secrets(text)
         assert "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6" not in result
 

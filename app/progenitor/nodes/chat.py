@@ -169,7 +169,7 @@ def create_node(
             reasoning="LLM tool-calling chat",
             requires_planning=False,
             target_capabilities=[],
-            direct_response=response_text,
+            user_response=response_text,
         )
 
         state_updates = tool_exec_ctx.get("state_updates") or {}
