@@ -10,14 +10,12 @@ from app.progenitor.state.helpers import (
     mark_actionable_items_completed,
     mark_work_item_completed,
     normalize_decision,
-    normalize_schedule_entry,
     normalize_work_item,
     to_dict,
 )
 from app.progenitor.state.models import (
     Decision,
     DecisionAction,
-    ScheduleEntry,
     WorkItem,
     WorkItemStatus,
     WorkItemType,
@@ -53,7 +51,7 @@ class TestNormalizeWorkItem:
         assert result is not None
         assert isinstance(result, WorkItem)
         assert result.id == "test-2"
-        assert result.item_type_value == "a2a_call"
+        assert result.item_type == "a2a_call"
         assert result.description == "From dict"
 
     def test_normalize_dict_with_invalid_type(self):
@@ -65,7 +63,7 @@ class TestNormalizeWorkItem:
         }
         result = normalize_work_item(data)
         assert result is not None
-        assert result.item_type_value == "direct_answer"
+        assert result.item_type == "direct_answer"
 
     def test_normalize_dict_with_context(self):
         """Test normalizing dict with context."""
@@ -107,39 +105,6 @@ class TestNormalizeDecision:
             "target_capabilities": ["capability_1"],
         }
         result = normalize_decision(data)
-        assert result is None
-
-
-class TestNormalizeScheduleEntry:
-    """Tests for normalize_schedule_entry helper."""
-
-    def test_normalize_none(self):
-        """Test normalizing None returns None."""
-        assert normalize_schedule_entry(None) is None
-
-    def test_normalize_dict(self):
-        """Test normalizing a dict to ScheduleEntry (simplified model)."""
-        data = {
-            "id": "sched-1",
-            "message": "Do something daily",
-            "cron_expression": "0 9 * * *",
-            "created_at": "2026-01-20T09:00:00+00:00",
-        }
-        result = normalize_schedule_entry(data)
-        assert isinstance(result, ScheduleEntry)
-        assert result.id == "sched-1"
-        assert result.cron_expression == "0 9 * * *"
-
-    def test_normalize_dict_legacy_interval(self):
-        """Test that legacy interval_minutes field is not supported."""
-        data = {
-            "id": "sched-2",
-            "description": "Legacy task",
-            "instruction": "Test",
-            "interval_minutes": 60,  # Old field name - no longer supported
-        }
-        result = normalize_schedule_entry(data)
-        # Without cron_expression/next_run, should return None
         assert result is None
 
 
@@ -300,9 +265,24 @@ class TestMarkActionableItemsCompleted:
     def test_mark_all_pending_completed(self):
         """Test marking all pending items as completed."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.PENDING),
-            WorkItem(id="2", item_type=WorkItemType.A2A_CALL, description="B", status=WorkItemStatus.IN_PROGRESS),
-            WorkItem(id="3", item_type=WorkItemType.MCP_CALL, description="C", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.PENDING,
+            ),
+            WorkItem(
+                id="2",
+                item_type=WorkItemType.A2A_CALL,
+                description="B",
+                status=WorkItemStatus.IN_PROGRESS,
+            ),
+            WorkItem(
+                id="3",
+                item_type=WorkItemType.MCP_CALL,
+                description="C",
+                status=WorkItemStatus.COMPLETED,
+            ),
         ]
         result = {"success": True}
 
@@ -321,7 +301,12 @@ class TestMarkActionableItemsCompleted:
     def test_mark_mixed_backlog_completed(self):
         """Test marking a mixed backlog (models and dicts) as completed."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.PENDING),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.PENDING,
+            ),
             {"id": "2", "status": "pending", "description": "B"},
             {"id": "3", "status": "completed", "description": "C"},
         ]
@@ -344,7 +329,12 @@ class TestMarkActionableItemsCompleted:
     def test_no_actionable_items(self):
         """Test backlog with no actionable items."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.COMPLETED,
+            ),
             {"id": "2", "status": "failed", "description": "B"},
         ]
         result = {"success": True}
@@ -465,9 +455,24 @@ class TestGetActionableItems:
     def test_filters_pending_items(self):
         """Test that only pending/in_progress items are returned."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.PENDING),
-            WorkItem(id="2", item_type=WorkItemType.A2A_CALL, description="B", status=WorkItemStatus.IN_PROGRESS),
-            WorkItem(id="3", item_type=WorkItemType.MCP_CALL, description="C", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.PENDING,
+            ),
+            WorkItem(
+                id="2",
+                item_type=WorkItemType.A2A_CALL,
+                description="B",
+                status=WorkItemStatus.IN_PROGRESS,
+            ),
+            WorkItem(
+                id="3",
+                item_type=WorkItemType.MCP_CALL,
+                description="C",
+                status=WorkItemStatus.COMPLETED,
+            ),
             {"id": "4", "status": "pending", "description": "D"},
             {"id": "5", "status": "failed", "description": "E"},
         ]
@@ -486,7 +491,12 @@ class TestGetActionableItems:
     def test_no_actionable_items(self):
         """Test backlog with no actionable items."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.COMPLETED,
+            ),
             {"id": "2", "status": "failed", "description": "B"},
         ]
 

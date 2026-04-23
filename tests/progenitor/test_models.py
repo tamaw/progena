@@ -66,11 +66,11 @@ class TestDecision:
         decision = Decision(
             action=DecisionAction.ANSWER_DIRECTLY,
             reasoning="Simple question",
-            direct_response="The answer is 42",
+            user_response="The answer is 42",
         )
 
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
-        assert decision.direct_response == "The answer is 42"
+        assert decision.user_response == "The answer is 42"
 
 
 class TestScheduleEntry:
@@ -210,7 +210,7 @@ class TestSecretRedaction:
         """Test redacting bearer tokens."""
         from app.progenitor.state.models import redact_secrets
 
-        text = 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
         result = redact_secrets(text)
 
         assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in result
@@ -220,7 +220,7 @@ class TestSecretRedaction:
         """Test redacting OpenAI API keys."""
         from app.progenitor.state.models import redact_secrets
 
-        text = 'using key: sk-abc123xyz789defghijklmnopqrstuvwxyz'
+        text = "using key: sk-abc123xyz789defghijklmnopqrstuvwxyz"
         result = redact_secrets(text)
 
         assert "sk-abc123xyz789defghijklmnopqrstuvwxyz" not in result
@@ -230,7 +230,7 @@ class TestSecretRedaction:
         """Test that non-secret content is preserved."""
         from app.progenitor.state.models import redact_secrets
 
-        text = 'Hello, this is a normal message with no secrets.'
+        text = "Hello, this is a normal message with no secrets."
         result = redact_secrets(text)
 
         assert result == text

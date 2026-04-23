@@ -1,6 +1,5 @@
 """Tests for the self-reflection tool."""
 
-
 import pytest
 
 from app.progenitor.tools.self_reflect import (
@@ -38,9 +37,9 @@ class TestSelfReflection:
 
         assert listing.directory == "nodes"
         assert listing.total_files > 0
-        # Should find decide.py
+        # Should find the live chat node implementation
         file_names = [e.name for e in listing.entries]
-        assert "decide.py" in file_names
+        assert "chat.py" in file_names
 
     def test_read_file(self):
         """Test reading a file."""
@@ -56,7 +55,7 @@ class TestSelfReflection:
         reflection = SelfReflection()
         content = reflection.read_file("config.py", max_lines=10)
 
-        lines = content.content.split('\n')
+        lines = content.content.split("\n")
         # Should be truncated
         assert len(lines) <= 15  # 10 lines + truncation message
 
@@ -209,6 +208,13 @@ class TestToolSpec:
     def test_tool_spec_operations(self):
         """Test that all operations are documented."""
         operations = SELF_REFLECT_TOOL_SPEC["parameters"]["properties"]["operation"]["enum"]
-        expected_ops = ["list_modules", "explore", "read", "search", "find_relevant", "module_overview"]
+        expected_ops = [
+            "list_modules",
+            "explore",
+            "read",
+            "search",
+            "find_relevant",
+            "module_overview",
+        ]
         for op in expected_ops:
             assert op in operations

@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.progenitor.llm.client import _build_json_schema_format
 from app.progenitor.llm.response_models import (
     BuildSpec,
+    DecisionAction,
     DecisionResponse,
     PlannerResponse,
     WorkItemSpec,
@@ -14,6 +15,7 @@ from app.progenitor.llm.response_models import (
     validate_planner_response,
     validate_verification_result,
 )
+from app.progenitor.state.models import DecisionAction as StateDecisionAction
 
 
 class TestBuildJsonSchemaFormat:
@@ -65,6 +67,10 @@ class TestBuildJsonSchemaFormat:
 class TestDecisionResponse:
     """Tests for DecisionResponse validation."""
 
+    def test_uses_canonical_decision_action_enum(self):
+        """LLM response validation should reuse the state-layer enum."""
+        assert DecisionAction is StateDecisionAction
+
     def test_valid_decision(self):
         """Test parsing a valid decision response."""
         data = {
@@ -72,12 +78,13 @@ class TestDecisionResponse:
             "reasoning": "Simple question about time",
             "requires_planning": False,
             "target_capabilities": [],
-            "direct_response": "It is 3pm."
+            "user_response": "It is 3pm.",
         }
         result = validate_decision_response(data)
         assert result.action == "answer_directly"
         assert result.reasoning == "Simple question about time"
         assert result.requires_planning is False
+        assert result.user_response == "It is 3pm."
 
     def test_action_strictness(self):
         """Action must be one of the allowed decide actions (no aliases)."""
@@ -100,7 +107,7 @@ class TestDecisionResponse:
         assert result.reasoning == ""
         assert result.requires_planning is False
         assert result.target_capabilities == []
-        assert result.direct_response is None
+        assert result.user_response is None
 
     def test_null_values_handled(self):
         """Test that null values are handled gracefully."""
@@ -133,6 +140,11 @@ class TestDecisionResponse:
         assert result.action == "build_agent"
         assert result.requires_planning is True
 
+    def test_legacy_direct_response_migrates_to_user_response(self):
+        """Legacy direct_response payloads should still parse."""
+        result = validate_decision_response({"direct_response": "Legacy answer"})
+        assert result.user_response == "Legacy answer"
+
     def test_non_direct_action_requires_user_response(self):
         """Test non-direct actions fail validation without user_response."""
         data = {
@@ -160,7 +172,7 @@ class TestPlannerResponse:
                     "priority": 1,
                 }
             ],
-            "summary": "Building a test agent"
+            "summary": "Building a test agent",
         }
         result = validate_planner_response(data)
         assert len(result.work_items) == 1
@@ -180,13 +192,7 @@ class TestPlannerResponse:
 
     def test_single_item_dict(self):
         """Test that single dict becomes list."""
-        data = {
-            "work_items": {
-                "id": "item_1",
-                "type": "a2a_call",
-                "description": "Call agent"
-            }
-        }
+        data = {"work_items": {"id": "item_1", "type": "a2a_call", "description": "Call agent"}}
         result = validate_planner_response(data)
         assert len(result.work_items) == 1
 
@@ -217,7 +223,7 @@ class TestBuildSpec:
             "capabilities": ["search", "code_generation"],
             "entrypoint": "agent.py",
             "dependencies": ["openai", "langchain"],
-            "config": {"model": "gpt-4"}
+            "config": {"model": "gpt-4"},
         }
         result = validate_build_spec(data)
         assert result.name == "my-agent"
@@ -271,7 +277,7 @@ class TestVerificationResult:
             "criteria_scores": {"test_coverage": 0.9, "code_quality": 0.8},
             "gaps": [],
             "next_actions": [],
-            "evidence": "All tests pass"
+            "evidence": "All tests pass",
         }
         result = validate_verification_result(data)
         assert result.passed is True
@@ -314,11 +320,7 @@ class TestWorkItemSpec:
 
     def test_type_alias(self):
         """Test that 'type' alias works for 'item_type'."""
-        data = {
-            "id": "item_1",
-            "type": "build_agent",
-            "description": "Build test agent"
-        }
+        data = {"id": "item_1", "type": "build_agent", "description": "Build test agent"}
         result = WorkItemSpec.model_validate(data)
         assert result.item_type == "build_agent"
 
