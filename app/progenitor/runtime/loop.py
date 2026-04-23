@@ -124,6 +124,8 @@ class ProgenitorLoop:
         # Timing metadata captured when an input is dequeued.
         self._current_input_wait_seconds = 0.0
         self._current_input_pending_count = 0
+        self._idle_cycles = 0
+        self._current_backoff_seconds = float(config.runtime.idle_backoff_seconds)
 
         # Shared state for the loop (protected by _graph_lock)
         self._state: dict[str, Any] = {}
@@ -153,8 +155,6 @@ class ProgenitorLoop:
             "current_input_metadata": None,
             "input_wait_seconds": 0.0,
             "pending_messages_in_queue": 0,
-            "idle_cycles": 0,
-            "current_backoff_seconds": self.config.runtime.idle_backoff_seconds,
         }
 
         # Load persisted state (recover from previous run)
@@ -258,6 +258,7 @@ class ProgenitorLoop:
 
                 if not queued_input:
                     now = time.monotonic()
+                    self._idle_cycles += 1
                     if now - last_health >= float(self.config.runtime.checkpoint_interval_seconds):
                         await self._update_health_file(self._state)
                         last_health = now
@@ -285,8 +286,8 @@ class ProgenitorLoop:
                 )
 
                 async with self._graph_lock:
-                    self._state["current_backoff_seconds"] = runtime.idle_backoff_seconds
-                    self._state["idle_cycles"] = 0
+                    self._current_backoff_seconds = float(runtime.idle_backoff_seconds)
+                    self._idle_cycles = 0
 
                     self._state["current_input"] = user_input
                     self._state["current_input_role"] = input_role
@@ -1391,8 +1392,8 @@ class ProgenitorLoop:
             "thread_id": current_thread_id,
             "cycle_count": state.get("cycle_count", 0),
             "pid": __import__("os").getpid(),
-            "idle_cycles": state.get("idle_cycles", 0),
-            "current_backoff_seconds": state.get("current_backoff_seconds"),
+            "idle_cycles": self._idle_cycles,
+            "current_backoff_seconds": self._current_backoff_seconds,
             "message_count": len(state.get("messages") or [])
             if isinstance(state.get("messages"), list)
             else 0,
