@@ -36,13 +36,27 @@ from .registry import normalize_tool_name
 logger = logging.getLogger(__name__)
 
 _A2A_TYPES = importlib.import_module("a2a.types")
-Message = cast(Any, _A2A_TYPES.Message)
-MessageSendConfiguration = cast(Any, _A2A_TYPES.MessageSendConfiguration)
-Part = cast(Any, _A2A_TYPES.Part)
-Role = cast(Any, _A2A_TYPES.Role)
-TaskIdParams = cast(Any, _A2A_TYPES.TaskIdParams)
-TaskQueryParams = cast(Any, _A2A_TYPES.TaskQueryParams)
-TextPart = cast(Any, _A2A_TYPES.TextPart)
+
+
+def _resolve_a2a_type(*names: str) -> Any:
+    for name in names:
+        resolved = getattr(_A2A_TYPES, name, None)
+        if resolved is not None:
+            return resolved
+    joined_names = ", ".join(names)
+    raise AttributeError(f"module 'a2a.types' is missing expected symbols: {joined_names}")
+
+
+Message = cast(Any, _resolve_a2a_type("Message"))
+MessageSendConfiguration = cast(
+    Any,
+    _resolve_a2a_type("MessageSendConfiguration", "SendMessageConfiguration"),
+)
+Part = cast(Any, _resolve_a2a_type("Part"))
+Role = cast(Any, _resolve_a2a_type("Role"))
+TaskIdParams = cast(Any, _resolve_a2a_type("TaskIdParams"))
+TaskQueryParams = cast(Any, _resolve_a2a_type("TaskQueryParams"))
+TextPart = cast(Any, _resolve_a2a_type("TextPart"))
 
 
 class MCPTool(BaseSystemTool):
