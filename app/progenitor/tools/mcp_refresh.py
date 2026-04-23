@@ -4,11 +4,20 @@ MCP Refresh - Refresh live MCP tool discovery from data/config/mcp.json.
 
 import logging
 
+from pydantic import BaseModel, Field
+
 from ..config import MCPConfig
 from .mcp import refresh_mcp_runtime
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class MCPRefreshArgs(BaseModel):
+    persist: bool = Field(
+        default=True,
+        description="Persist refreshed MCP discovery to the runtime registry.",
+    )
 
 
 class MCPRefreshTool(BaseSystemTool):
@@ -23,6 +32,13 @@ class MCPRefreshTool(BaseSystemTool):
     @property
     def keywords(self) -> list[str]:
         return ["mcp refresh", "refresh mcp", "reload mcp"]
+
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return MCPRefreshArgs
+
+    def deepagent_prepare_args(self, **kwargs: object) -> tuple[str, dict[str, object] | None]:
+        return "", {"persist": kwargs.get("persist", True)}
 
     async def execute(self, context: ToolContext) -> ToolResult:
         llm_client = context.llm_client

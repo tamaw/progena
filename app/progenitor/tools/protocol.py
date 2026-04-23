@@ -3,9 +3,12 @@ System Tool Protocol and Base Types.
 
 Defined under app.progenitor.tools to avoid import cycles with app.progenitor.nodes.
 """
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Protocol
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from ..state.models import ProgenitorState
@@ -74,6 +77,18 @@ class BaseSystemTool(ABC):
     @abstractmethod
     async def execute(self, context: ToolContext) -> ToolResult:
         pass
+
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return None
+
+    @property
+    def deepagent_requires_state(self) -> bool:
+        return False
+
+    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
+        request = str(kwargs.get("request") or "")
+        return request, kwargs or None
 
     def to_dict(self) -> dict[str, str]:
         return {

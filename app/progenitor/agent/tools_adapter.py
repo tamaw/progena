@@ -34,96 +34,105 @@ def create_deepagent_tools(
 ) -> list[StructuredTool]:
     """Create DeepAgent-compatible system tools."""
 
-    def _wrap_system_tool(system_tool: Any) -> StructuredTool:
-        async def _execute_wrapped_tool(
-            request: str = "",
-            tool_args: dict[str, Any] | None = None,
-        ) -> dict[str, Any]:
-            # External deploy pipelines can update agents.json; reload best-effort so new
-            # agents/tools show up without requiring a restart.
-            load_registry = (
-                getattr(tool_registry, "load", None) if tool_registry is not None else None
-            )
-            if callable(load_registry):
+    async def _resolve_state() -> Any:
+        state = None
+        loop = get_current_loop()
+        if loop is not None and isinstance(getattr(loop, "_state", None), dict):
+            state = loop._state
+        if state_manager is not None:
+            get_state = getattr(state_manager, "get_current_state", None)
+            if callable(get_state) and inspect.iscoroutinefunction(get_state):
                 with contextlib.suppress(Exception):
-                    maybe = load_registry()
-                    if inspect.isawaitable(maybe):
-                        await cast(Any, maybe)
+                    state = state or await get_state()
+        return state
 
-            # Prefer the live loop state when running under ProgenitorLoop so tools that
-            # mutate state (e.g. new_conversation) take effect immediately.
-            state = None
-            loop = get_current_loop()
-            if loop is not None and isinstance(getattr(loop, "_state", None), dict):
-                state = loop._state
-            if state_manager is not None:
-                get_state = getattr(state_manager, "get_current_state", None)
-                if callable(get_state) and inspect.iscoroutinefunction(get_state):
+    async def _execute_stateless_tool(
+        system_tool: Any,
+        *,
+        user_input: str = "",
+        tool_args: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        ctx = ToolContext(
+            tool_registry=tool_registry,
+            llm_client=llm_client,
+            state=None,
+            state_manager=state_manager,
+            user_input=user_input,
+            tool_args=tool_args,
+        )
+
+        result = await system_tool.execute(ctx)
+        if result.success:
+            return result.data or {}
+        return {
+            "success": False,
+            "error": result.error or f"{system_tool.name} failed",
+            "should_retry_slow_path": bool(getattr(result, "should_retry_slow_path", False)),
+        }
+
+    async def _execute_stateful_tool(
+        system_tool: Any,
+        *,
+        user_input: str = "",
+        tool_args: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        state = await _resolve_state()
+        ctx = ToolContext(
+            tool_registry=tool_registry,
+            llm_client=llm_client,
+            state=cast(Any, state),
+            state_manager=state_manager,
+            user_input=user_input,
+            tool_args=tool_args,
+        )
+
+        result = await system_tool.execute(ctx)
+        if result.success:
+            if result.state_updates and isinstance(state, dict):
+                state.update(result.state_updates)
+                update_state = (
+                    getattr(state_manager, "update_current_state", None) if state_manager else None
+                )
+                if callable(update_state) and inspect.iscoroutinefunction(update_state):
                     with contextlib.suppress(Exception):
-                        state = state or await get_state()
+                        await update_state(result.state_updates)
+            return result.data or {}
+        return {
+            "success": False,
+            "error": result.error or f"{system_tool.name} failed",
+            "should_retry_slow_path": bool(getattr(result, "should_retry_slow_path", False)),
+        }
 
-            ctx = ToolContext(
-                tool_registry=tool_registry,
-                llm_client=llm_client,
-                state=cast(Any, state),
-                state_manager=state_manager,
-                user_input=request or "",
-                tool_args=tool_args,
+    def _build_tool(system_tool: Any) -> StructuredTool:
+        name = str(getattr(system_tool, "name", "system_tool"))
+        description = str(getattr(system_tool, "description", "Progenitor system tool"))
+        args_schema = getattr(system_tool, "deepagent_args_schema", None)
+        execute_tool = (
+            _execute_stateful_tool
+            if bool(getattr(system_tool, "deepagent_requires_state", False))
+            else _execute_stateless_tool
+        )
+
+        if args_schema is None:
+
+            async def _run_no_args() -> dict[str, Any]:
+                return await execute_tool(system_tool)
+
+            return StructuredTool.from_function(
+                coroutine=_run_no_args,
+                name=name,
+                description=description,
             )
 
-            result = await system_tool.execute(ctx)
-            if result.success:
-                # Persist/propagate state updates when provided (DeepAgent doesn't
-                # automatically merge ToolResult.state_updates like our node path).
-                if result.state_updates and isinstance(state, dict):
-                    state.update(result.state_updates)
-                    update_state = (
-                        getattr(state_manager, "update_current_state", None)
-                        if state_manager
-                        else None
-                    )
-                    if callable(update_state) and inspect.iscoroutinefunction(update_state):
-                        with contextlib.suppress(Exception):
-                            await update_state(result.state_updates)
-                return result.data or {}
-            return {
-                "success": False,
-                "error": result.error or f"{system_tool.name} failed",
-                "should_retry_slow_path": bool(getattr(result, "should_retry_slow_path", False)),
-            }
-
-        async def _run(
-            request: str = "", tool_args: dict[str, Any] | None = None
-        ) -> dict[str, Any]:
-            return await _execute_wrapped_tool(request=request, tool_args=tool_args)
-
-        async def _run_call_agent(
-            request: str = "",
-            agent: str = "",
-            agent_name: str = "",
-            name: str = "",
-            timeout_seconds: float = 60.0,
-            context: dict[str, Any] | None = None,
-            tool_args: dict[str, Any] | None = None,
-        ) -> dict[str, Any]:
-            merged_args: dict[str, Any] = dict(tool_args or {})
-            merged_args.setdefault("agent", agent)
-            merged_args.setdefault("agent_name", agent_name)
-            merged_args.setdefault("name", name)
-            merged_args.setdefault("request", request)
-            merged_args.setdefault("timeout_seconds", timeout_seconds)
-            if isinstance(context, dict) and context:
-                merged_args.setdefault("context", context)
-            return await _execute_wrapped_tool(request=request, tool_args=merged_args)
-
-        coroutine_fn = (
-            _run_call_agent if str(getattr(system_tool, "name", "")) == "call_agent" else _run
-        )
+        async def _run_with_schema(**kwargs: Any) -> dict[str, Any]:
+            user_input, tool_args = system_tool.deepagent_prepare_args(**kwargs)
+            return await execute_tool(system_tool, user_input=user_input, tool_args=tool_args)
 
         return StructuredTool.from_function(
-            coroutine=coroutine_fn,
-            name=str(getattr(system_tool, "name", "system_tool")),
-            description=str(getattr(system_tool, "description", "Progenitor system tool")),
+            coroutine=_run_with_schema,
+            name=name,
+            description=description,
+            args_schema=args_schema,
         )
 
-    return [_wrap_system_tool(system_tool) for system_tool in get_all_system_tools()]
+    return [_build_tool(system_tool) for system_tool in get_all_system_tools()]
