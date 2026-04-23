@@ -53,7 +53,12 @@ class ListScheduleTool(BaseSystemTool):
         return True
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        if context.state is None:
+        schedule = []
+        if context.state_manager is not None and hasattr(context.state_manager, "get_schedule"):
+            schedule = await context.state_manager.get_schedule()
+        elif context.state is not None:
+            schedule = context.state.get("schedule", [])
+        else:
             return ToolResult.ok(
                 {
                     "scheduled_tasks": [],
@@ -61,8 +66,6 @@ class ListScheduleTool(BaseSystemTool):
                     "message": "No state available - schedule information unavailable",
                 }
             )
-
-        schedule = context.state.get("schedule", [])
 
         # Convert schedule entries to readable format
         tasks = []

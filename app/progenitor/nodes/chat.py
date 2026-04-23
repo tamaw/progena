@@ -43,22 +43,25 @@ def _get_system_tool_definitions() -> list[dict[str, Any]]:
 
     tool_defs: list[dict[str, Any]] = []
     for tool in get_all_system_tools():
+        parameters = getattr(tool, "parameters", None)
+        if not isinstance(parameters, dict):
+            parameters = {
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description": "Natural language request for the tool.",
+                    }
+                },
+                "required": ["request"],
+            }
         tool_defs.append(
             {
                 "type": "function",
                 "function": {
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "request": {
-                                "type": "string",
-                                "description": "Natural language request for the tool.",
-                            }
-                        },
-                        "required": ["request"],
-                    },
+                    "parameters": parameters,
                 },
             }
         )
@@ -166,7 +169,7 @@ def create_node(
             reasoning="LLM tool-calling chat",
             requires_planning=False,
             target_capabilities=[],
-            direct_response=response_text,
+            user_response=response_text,
         )
 
         state_updates = tool_exec_ctx.get("state_updates") or {}

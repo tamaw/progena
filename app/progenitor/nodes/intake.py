@@ -49,8 +49,9 @@ def create_node(state_manager) -> Callable[[ProgenitorState], Coroutine[Any, Any
         # Create message record with metadata about clarification
         metadata = dict(state.get("current_input_metadata") or {})
         if awaiting_clarification:
+            clarification = state.get("clarification", {}) or {}
             metadata["type"] = "clarification_response"
-            metadata["clarification_context"] = state.get("clarification_context")
+            metadata["clarification_context"] = clarification.get("context")
 
         wait_secs = float(state.get("input_wait_seconds") or 0.0)
         pending_count = int(state.get("pending_messages_in_queue") or 0)

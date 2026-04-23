@@ -72,8 +72,8 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
 
 
 @pytest.mark.asyncio
-async def test_handle_message_stream_events_emit_message_and_node_updates() -> None:
-    """Service streaming should expose structured events plus text chunks."""
+async def test_handle_message_stream_events_emit_reasoning_message_and_node_updates() -> None:
+    """Service streaming should expose reasoning, text, and node events."""
     service = object.__new__(ProgenitorService)
     service._initialized = True
     service._message_count = 0
@@ -81,12 +81,47 @@ async def test_handle_message_stream_events_emit_message_and_node_updates() -> N
     service.state_manager = StubStateManager(thread_id="persisted-thread")
     service.graph = StubStreamingGraph(
         [
-            ("messages", (AIMessageChunk(content="Hi"), {"langgraph_node": "respond"})),
+            (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content=[
+                            {
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": "Checked inputs. "}],
+                            },
+                            {"type": "text", "text": "Hi"},
+                        ]
+                    ),
+                    {"langgraph_node": "respond"},
+                ),
+            ),
             (
                 "updates",
                 {
                     "respond": {
-                        "messages": [AIMessage(content="Hi")],
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "reasoning",
+                                        "summary": [
+                                            {
+                                                "type": "summary_text",
+                                                "text": "Checked inputs before answering.",
+                                            }
+                                        ],
+                                    },
+                                    {"type": "text", "text": "Hi"},
+                                ],
+                                "response_metadata": {
+                                    "token_usage": {
+                                        "completion_tokens_details": {"reasoning_tokens": 9}
+                                    }
+                                },
+                            }
+                        ],
                     }
                 },
             ),
@@ -108,6 +143,17 @@ async def test_handle_message_stream_events_emit_message_and_node_updates() -> N
         "stream_mode": ["messages", "updates", "custom"],
     }
     assert events == [
+        {
+            "type": "stream_event",
+            "event_type": "reasoning_delta",
+            "content": "Checked inputs. ",
+            "request_id": "req-stream",
+            "metadata": {
+                "message_chunk_type": "AIMessageChunk",
+                "stream_metadata": {"langgraph_node": "respond"},
+                "text_length": 16,
+            },
+        },
         {
             "type": "stream_event",
             "event_type": "message_delta",
@@ -135,6 +181,16 @@ async def test_handle_message_stream_events_emit_message_and_node_updates() -> N
                 "output_keys": ["messages"],
                 "contains_messages": True,
                 "contains_pending_response": False,
+            },
+        },
+        {
+            "type": "stream_event",
+            "event_type": "reasoning_summary",
+            "content": "Checked inputs before answering.",
+            "request_id": "req-stream",
+            "metadata": {
+                "reasoning_tokens": 9,
+                "text_length": 32,
             },
         },
         {

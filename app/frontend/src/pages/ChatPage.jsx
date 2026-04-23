@@ -37,6 +37,52 @@ function normalizeStreamEvent(event, index) {
   };
 }
 
+function isReasoningEvent(event) {
+  return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
+}
+
+function hasReasoningContent(event) {
+  return typeof event?.content === 'string' && event.content.trim().length > 0;
+}
+
+function shouldSuppressStreamEvent(event, existingEvents = []) {
+  if (!isReasoningEvent(event)) {
+    return false;
+  }
+
+  if (event.eventType === 'reasoning_delta') {
+    return false;
+  }
+
+  if (existingEvents.some(isReasoningEvent)) {
+    return false;
+  }
+
+  if (!hasReasoningContent(event)) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractReasoningTokenCount(event) {
+  const tokenCount = event?.metadata?.reasoning_tokens;
+  return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
+}
+
+function appendReasoningText(currentText, event) {
+  if (!isReasoningEvent(event) || !hasReasoningContent(event)) {
+    return currentText;
+  }
+
+  const existingText = typeof currentText === 'string' ? currentText : '';
+  if (event.eventType === 'reasoning_delta') {
+    return `${existingText}${event.content}`;
+  }
+
+  return existingText.trim().length > 0 ? existingText : event.content;
+}
+
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -63,10 +109,19 @@ function normalizeStoredMessage(message, index) {
     id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
     role,
     content,
+    tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
+    reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
+      ? message.reasoningTokenCount
+      : 0,
+    reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
     streamEvents: Array.isArray(message.streamEvents)
-      ? message.streamEvents
-        .map((event, eventIndex) => normalizeStreamEvent(event, eventIndex))
-        .filter(Boolean)
+      ? message.streamEvents.reduce((events, event, eventIndex) => {
+        const normalizedEvent = normalizeStreamEvent(event, eventIndex);
+        if (!normalizedEvent) {
+          return events;
+        }
+        return appendStreamEvent(events, normalizedEvent);
+      }, [])
       : [],
     timestamp,
   };
@@ -92,6 +147,34 @@ function createStreamEvent(streamEvent) {
 
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
+  if (isReasoningEvent(nextEvent)) {
+    const existingReasoningIndex = currentEvents.findIndex(isReasoningEvent);
+    if (existingReasoningIndex !== -1) {
+      const existingReasoningEvent = currentEvents[existingReasoningIndex];
+      const mergedEvent = {
+        ...existingReasoningEvent,
+        eventType:
+          existingReasoningEvent.eventType === 'reasoning_delta'
+          || nextEvent.eventType === 'reasoning_delta'
+            ? 'reasoning_delta'
+            : 'reasoning_summary',
+        content:
+          hasReasoningContent(existingReasoningEvent)
+            ? existingReasoningEvent.content
+            : nextEvent.content,
+        metadata: {
+          ...existingReasoningEvent.metadata,
+          ...nextEvent.metadata,
+        },
+      };
+      return currentEvents.map((event, index) => (
+        index === existingReasoningIndex ? mergedEvent : event
+      ));
+    }
+  }
+  if (shouldSuppressStreamEvent(nextEvent, currentEvents)) {
+    return currentEvents;
+  }
   const lastEvent = currentEvents[currentEvents.length - 1];
   if (
     lastEvent
@@ -132,7 +215,7 @@ function stripEphemeralStreamEvents(message) {
   const events = Array.isArray(message?.streamEvents) ? message.streamEvents : [];
   if (events.length === 0) return message;
   const persistable = events.filter((event) =>
-    PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType)),
+    PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType))
   );
   if (persistable.length === events.length) {
     return message;
@@ -146,8 +229,12 @@ function finalizeSupersededAssistant(message) {
   }
 
   const content = typeof message.content === 'string' ? message.content : '';
+  const reasoningText = typeof message.reasoningText === 'string' ? message.reasoningText : '';
   const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
-  const hasVisibleOutput = content.trim().length > 0 || streamEvents.length > 0;
+  const hasVisibleOutput =
+    content.trim().length > 0
+    || reasoningText.trim().length > 0
+    || streamEvents.length > 0;
 
   if (!hasVisibleOutput) {
     return null;
@@ -191,6 +278,7 @@ function ChatPage() {
     }
   });
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isClearingSession, setIsClearingSession] = useState(false);
   const [typingState, setTypingState] = useState('thinking');
   const [tokenCount, setTokenCount] = useState(0);
   const [sessionId, setSessionId] = useState(null);
@@ -360,6 +448,9 @@ function ChatPage() {
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
+        tokenCount: 0,
+        reasoningTokenCount: 0,
+        reasoningText: '',
         isStreaming: true,
         streamEvents: [],
       }];
@@ -383,7 +474,7 @@ function ChatPage() {
           setTokenCount(prev => prev + 1);
           setMessages(prev => prev.map(m =>
             m.id === assistantId
-              ? { ...m, content: assistantContent }
+              ? { ...m, content: assistantContent, tokenCount: (m.tokenCount || 0) + 1 }
               : m
           ));
         },
@@ -420,12 +511,23 @@ function ChatPage() {
             return;
           }
 
-          if (nextEvent.eventType !== 'message_delta') {
+          if (nextEvent.eventType === 'reasoning_delta') {
+            setTypingState('thinking');
+          } else if (
+            nextEvent.eventType !== 'message_delta'
+            && nextEvent.eventType !== 'reasoning_summary'
+          ) {
             setTypingState('tool-use');
           }
+          const reasoningTokenCount = extractReasoningTokenCount(nextEvent);
           setMessages(prev => prev.map(m =>
             m.id === assistantId
-              ? { ...m, streamEvents: appendStreamEvent(m.streamEvents, nextEvent) }
+              ? {
+                ...m,
+                streamEvents: appendStreamEvent(m.streamEvents, nextEvent),
+                reasoningText: appendReasoningText(m.reasoningText, nextEvent),
+                reasoningTokenCount: reasoningTokenCount ?? m.reasoningTokenCount ?? 0,
+              }
               : m
           ));
         },
@@ -443,6 +545,45 @@ function ChatPage() {
   const handleQuickAction = useCallback((message) => {
     handleSend(message);
   }, [handleSend]);
+
+  const handleCommand = useCallback(async (commandName) => {
+    if (commandName !== 'clear') {
+      return;
+    }
+
+    const previousAssistantId = activeAssistantIdRef.current;
+    setIsClearingSession(true);
+    activeAssistantIdRef.current = null;
+    recentScheduledContent.current.clear();
+    cancelStream();
+
+    try {
+      const session = await createSession();
+      setMessages([]);
+      setIsGenerating(false);
+      setTypingState('thinking');
+      setTokenCount(0);
+      setSessionId(session.session_id);
+      localStorage.removeItem(config.storage.chatHistory);
+      show('success', 'Conversation cleared', 'Started a fresh chat web session.');
+    } catch (error) {
+      if (previousAssistantId) {
+        setMessages((prev) => prev
+          .map((message) => (
+            message.id === previousAssistantId
+              ? finalizeSupersededAssistant(message)
+              : message
+          ))
+          .filter(Boolean));
+      }
+      setIsGenerating(false);
+      setTypingState('thinking');
+      setTokenCount(0);
+      show('error', 'Clear failed', error.message);
+    } finally {
+      setIsClearingSession(false);
+    }
+  }, [cancelStream, config.storage.chatHistory, createSession, show]);
 
   return (
     <div className="app-container">
@@ -483,8 +624,9 @@ function ChatPage() {
           <ChatInput
             onSend={handleSend}
             onStop={handleStop}
+            onCommand={handleCommand}
             isGenerating={isGenerating}
-            disabled={connectionState === 'error'}
+            disabled={connectionState === 'error' || isClearingSession}
           />
         </div>
       </main>

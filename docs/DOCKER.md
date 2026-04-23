@@ -27,6 +27,10 @@ Common optional overrides:
 - `PROGENITOR_REASONING_BUDGET_TOKENS`
 - `TELEGRAM_*` backend settings
 
+By default, Progenitor now starts with reasoning enabled. When no reasoning budget is set,
+the default effort is low, except for models in the `gpt-5.3-chat` family, which currently
+only accept `medium`.
+
 The compose file also expects the external Docker network `progenitor_network` to exist:
 
 ```bash

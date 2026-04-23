@@ -5,71 +5,53 @@ These models ensure that LLM responses are properly structured
 and validated before being used in the application.
 """
 
-from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
-class DecisionAction(StrEnum):
-    """Valid actions for the decide endpoint."""
-    ANSWER_DIRECTLY = "answer_directly"
-    BUILD_AGENT = "build_agent"
-    BUILD_MCP = "build_mcp"  # Build FastMCP tool/server in app/mcp/
-    BUILD_PROGENITOR = "build_progenitor"  # Improve Progenitor in app/progenitor/
+from ..state.models import DecisionAction
 
 
 class DecisionResponse(BaseModel):
     """Validated response from the decide endpoint."""
 
     action: str = Field(
-        default="answer_directly",
-        description="The action to take for this request"
+        default="answer_directly", description="The action to take for this request"
     )
     confidence: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Confidence score (0.0-1.0) that this is the correct action. BUILD actions require >= 0.95"
+        description="Confidence score (0.0-1.0) that this is the correct action. BUILD actions require >= 0.95",
     )
-    reasoning: str = Field(
-        default="",
-        description="Reasoning behind the decision"
-    )
+    reasoning: str = Field(default="", description="Reasoning behind the decision")
     requires_planning: bool = Field(
-        default=False,
-        description="Whether this task requires planning"
+        default=False, description="Whether this task requires planning"
     )
     target_capabilities: list[str] = Field(
-        default_factory=list,
-        description="List of capabilities needed for this task"
+        default_factory=list, description="List of capabilities needed for this task"
     )
     user_response: str | None = Field(
         default=None,
-        description="A helpful, specific response to show the user about what action will be taken"
-    )
-    direct_response: str | None = Field(
-        default=None,
-        description="Direct response content if action is answer_directly (deprecated, use user_response)"
+        description="A helpful, specific response to show the user about what action will be taken",
     )
     # Build-specific fields (populated when action is build_agent, build_mcp, or build_progenitor)
     project_name: str | None = Field(
         default=None,
         description="For build actions: the agent/project name in snake_case (e.g., 'weather_agent'). "
         "Should be a concise, descriptive name based on what the user wants to build. "
-        "Do NOT include filler words like 'for_me', 'please', 'a', 'the'."
+        "Do NOT include filler words like 'for_me', 'please', 'a', 'the'.",
     )
     build_type: str | None = Field(
-        default=None,
-        description="For build actions: 'agent', 'mcp', or 'progenitor'"
+        default=None, description="For build actions: 'agent', 'mcp', or 'progenitor'"
     )
     build_description: str | None = Field(
         default=None,
         description="For build actions: a clear, refined description of what the user wants to build. "
-        "This should capture the core intent and requirements from the user's request."
+        "This should capture the core intent and requirements from the user's request.",
     )
 
-    @field_validator('confidence', mode='before')
+    @field_validator("confidence", mode="before")
     @classmethod
     def validate_confidence(cls, v):
         """Ensure confidence is a valid float between 0 and 1."""
@@ -81,7 +63,7 @@ class DecisionResponse(BaseModel):
         except (ValueError, TypeError):
             return 0.5
 
-    @field_validator('action', mode='before')
+    @field_validator("action", mode="before")
     @classmethod
     def validate_action(cls, v):
         """Normalize and validate action value."""
@@ -97,7 +79,7 @@ class DecisionResponse(BaseModel):
 
         return v_lower
 
-    @field_validator('reasoning', mode='before')
+    @field_validator("reasoning", mode="before")
     @classmethod
     def validate_reasoning(cls, v):
         """Ensure reasoning is a string."""
@@ -105,7 +87,17 @@ class DecisionResponse(BaseModel):
             return ""
         return str(v)
 
-    @field_validator('target_capabilities', mode='before')
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_direct_response(cls, data: Any) -> Any:
+        """Map legacy direct_response payloads onto user_response."""
+        if isinstance(data, dict) and not data.get("user_response") and data.get("direct_response"):
+            migrated = dict(data)
+            migrated["user_response"] = migrated["direct_response"]
+            return migrated
+        return data
+
+    @field_validator("target_capabilities", mode="before")
     @classmethod
     def validate_capabilities(cls, v):
         """Ensure capabilities is a list of strings."""
@@ -117,7 +109,7 @@ class DecisionResponse(BaseModel):
             return [str(c) for c in v]
         return []
 
-    @field_validator('build_type', mode='before')
+    @field_validator("build_type", mode="before")
     @classmethod
     def validate_build_type(cls, v):
         """Validate build_type to the canonical values expected by downstream code."""
@@ -131,7 +123,7 @@ class DecisionResponse(BaseModel):
             raise ValueError(f"Invalid build_type: {v_str}")
         return v_str
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_user_response_for_action(self):
         """Require a non-empty user_response for non-direct actions."""
         non_direct_actions = {
@@ -156,18 +148,14 @@ class WorkItemSpec(BaseModel):
     model_config = {"populate_by_name": True}
 
     id: str = Field(default="", description="Work item ID")
-    item_type: str = Field(
-        default="direct_answer",
-        alias="type",
-        description="Type of work item"
-    )
+    item_type: str = Field(default="direct_answer", alias="type", description="Type of work item")
     description: str = Field(default="", description="Work item description")
     target_agent: str | None = Field(default=None, description="Target agent for delegation")
     target_tool: str | None = Field(default=None, description="Target MCP tool")
     priority: int = Field(default=0, description="Priority (higher = more urgent)")
     context: dict[str, Any] = Field(default_factory=dict, description="Additional context")
 
-    @field_validator('description', mode='before')
+    @field_validator("description", mode="before")
     @classmethod
     def validate_description(cls, v):
         """Ensure description is a string."""
@@ -177,7 +165,7 @@ class WorkItemSpec(BaseModel):
             return " ".join(str(item) for item in v)
         return str(v)
 
-    @field_validator('item_type', mode='before')
+    @field_validator("item_type", mode="before")
     @classmethod
     def validate_item_type(cls, v):
         """Normalize work item type."""
@@ -206,15 +194,11 @@ class PlannerResponse(BaseModel):
     """Validated response from the planner endpoint."""
 
     work_items: list[WorkItemSpec] = Field(
-        default_factory=list,
-        description="List of work items to execute"
+        default_factory=list, description="List of work items to execute"
     )
-    summary: str = Field(
-        default="",
-        description="Summary of the plan"
-    )
+    summary: str = Field(default="", description="Summary of the plan")
 
-    @field_validator('work_items', mode='before')
+    @field_validator("work_items", mode="before")
     @classmethod
     def validate_work_items(cls, v):
         """Ensure work_items is a list."""
@@ -233,28 +217,15 @@ class BuildSpec(BaseModel):
 
     name: str = Field(default="unnamed", description="Component name")
     description: str = Field(default="", description="Component description")
-    kind: str = Field(
-        default="agent",
-        description="Build type (agent, mcp, tool)"
-    )
+    kind: str = Field(default="agent", description="Build type (agent, mcp, tool)")
     capabilities: list[str] = Field(
-        default_factory=list,
-        description="Capabilities this component provides"
+        default_factory=list, description="Capabilities this component provides"
     )
-    entrypoint: str = Field(
-        default="main.py",
-        description="Entry point file"
-    )
-    dependencies: list[str] = Field(
-        default_factory=list,
-        description="Required dependencies"
-    )
-    config: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Configuration options"
-    )
+    entrypoint: str = Field(default="main.py", description="Entry point file")
+    dependencies: list[str] = Field(default_factory=list, description="Required dependencies")
+    config: dict[str, Any] = Field(default_factory=dict, description="Configuration options")
 
-    @field_validator('capabilities', mode='before')
+    @field_validator("capabilities", mode="before")
     @classmethod
     def validate_capabilities(cls, v):
         """Ensure capabilities is a list of strings."""
@@ -276,7 +247,7 @@ class BuildSpec(BaseModel):
             return []
         return [str(item) for item in v]
 
-    @field_validator('name', mode='before')
+    @field_validator("name", mode="before")
     @classmethod
     def validate_name(cls, v):
         """Ensure name is valid."""
@@ -287,10 +258,10 @@ class BuildSpec(BaseModel):
         # Remove or replace invalid characters
         invalid_chars = '<>:"/\\|?*'
         for char in invalid_chars:
-            name = name.replace(char, '_')
+            name = name.replace(char, "_")
         return name or "unnamed"
 
-    @field_validator('kind', mode='before')
+    @field_validator("kind", mode="before")
     @classmethod
     def validate_kind(cls, v):
         """Normalize build kind."""
@@ -315,30 +286,15 @@ class VerificationResult(BaseModel):
     """Result from verification operations."""
 
     passed: bool = Field(default=False, description="Whether verification passed")
-    score: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=1.0,
-        description="Verification score (0-1)"
-    )
+    score: float = Field(default=0.0, ge=0.0, le=1.0, description="Verification score (0-1)")
     criteria_scores: dict[str, float] = Field(
-        default_factory=dict,
-        description="Scores per criterion"
+        default_factory=dict, description="Scores per criterion"
     )
-    gaps: list[str] = Field(
-        default_factory=list,
-        description="Identified gaps"
-    )
-    next_actions: list[str] = Field(
-        default_factory=list,
-        description="Suggested next actions"
-    )
-    evidence: str = Field(
-        default="",
-        description="Evidence or notes"
-    )
+    gaps: list[str] = Field(default_factory=list, description="Identified gaps")
+    next_actions: list[str] = Field(default_factory=list, description="Suggested next actions")
+    evidence: str = Field(default="", description="Evidence or notes")
 
-    @field_validator('score', mode='before')
+    @field_validator("score", mode="before")
     @classmethod
     def validate_score(cls, v):
         """Ensure score is in valid range."""
@@ -363,14 +319,16 @@ class SuccessCriterionSpec(BaseModel):
     description: str = Field(default="Task completed", description="What success looks like")
     criterion_type: str = Field(
         default="functional",
-        description="One of: functional, quality, performance, security, maintainability, user_experience"
+        description="One of: functional, quality, performance, security, maintainability, user_experience",
     )
     rank: int = Field(default=1, description="Priority rank (1=highest)")
-    measurement: str = Field(default="Manual verification", description="How to verify this criterion")
+    measurement: str = Field(
+        default="Manual verification", description="How to verify this criterion"
+    )
     target_score: float = Field(default=0.8, description="Minimum score to pass (0.0 to 1.0)")
     weight: float = Field(default=1.0, description="Weight in overall score calculation")
 
-    @field_validator('target_score', mode='before')
+    @field_validator("target_score", mode="before")
     @classmethod
     def clamp_target_score(cls, v):
         if v is None:
@@ -380,7 +338,7 @@ class SuccessCriterionSpec(BaseModel):
         except (ValueError, TypeError):
             return 0.8
 
-    @field_validator('weight', mode='before')
+    @field_validator("weight", mode="before")
     @classmethod
     def clamp_weight(cls, v):
         if v is None:
@@ -399,7 +357,7 @@ class AntiCriterionSpec(BaseModel):
     severity: float = Field(default=1.0, description="Penalty multiplier (0.0 to 2.0)")
     detection: str = Field(default="Manual check", description="How to detect violations")
 
-    @field_validator('severity', mode='before')
+    @field_validator("severity", mode="before")
     @classmethod
     def clamp_severity(cls, v):
         if v is None:
@@ -413,17 +371,20 @@ class AntiCriterionSpec(BaseModel):
 class QualityBarSpec(BaseModel):
     """LLM-generated quality bar specification."""
 
-    description: str = Field(default="High quality output", description="What quality means for this task")
+    description: str = Field(
+        default="High quality output", description="What quality means for this task"
+    )
     examples: list[str] = Field(default_factory=list, description="Examples of quality")
-    anti_examples: list[str] = Field(default_factory=list, description="Examples of what is NOT quality")
+    anti_examples: list[str] = Field(
+        default_factory=list, description="Examples of what is NOT quality"
+    )
 
 
 class VerificationMethodSpec(BaseModel):
     """LLM-generated verification method specification."""
 
     method_type: str = Field(
-        default="heuristic",
-        description="One of: test, heuristic, llm_judge, user_feedback"
+        default="heuristic", description="One of: test, heuristic, llm_judge, user_feedback"
     )
     description: str = Field(default="", description="What this verification checks")
     automated: bool = Field(default=True, description="Whether this can run automatically")
@@ -434,11 +395,11 @@ class StopConditionSpec(BaseModel):
 
     condition_type: str = Field(
         default="max_iterations",
-        description="One of: min_score, max_iterations, time_limit, tool_budget"
+        description="One of: min_score, max_iterations, time_limit, tool_budget",
     )
     threshold: float = Field(default=5.0, description="Threshold value for the condition")
 
-    @field_validator('threshold', mode='before')
+    @field_validator("threshold", mode="before")
     @classmethod
     def validate_threshold(cls, v):
         if v is None:
@@ -453,11 +414,15 @@ class TightenedCriterionSpec(BaseModel):
     """Specification for tightening an existing criterion."""
 
     criterion_id: str = Field(description="ID of the existing criterion to tighten")
-    updated_measurement: str = Field(default="", description="New, more specific measurement approach")
-    updated_target_score: float = Field(default=0.8, description="New, higher target score (0.0 to 1.0)")
+    updated_measurement: str = Field(
+        default="", description="New, more specific measurement approach"
+    )
+    updated_target_score: float = Field(
+        default=0.8, description="New, higher target score (0.0 to 1.0)"
+    )
     reason: str = Field(default="", description="Why this criterion was tightened")
 
-    @field_validator('updated_target_score', mode='before')
+    @field_validator("updated_target_score", mode="before")
     @classmethod
     def clamp_score(cls, v):
         if v is None:
@@ -474,7 +439,7 @@ class CriteriaIssue(BaseModel):
     criterion_id: str = Field(description="ID of the problematic criterion")
     issue_type: str = Field(
         default="vague",
-        description="One of: vague, unmeasurable, conflicting, redundant, missing_detection"
+        description="One of: vague, unmeasurable, conflicting, redundant, missing_detection",
     )
     description: str = Field(default="", description="Description of the issue")
     suggested_fix: str = Field(default="", description="How to fix this issue")
@@ -484,61 +449,46 @@ class IdealStateExtractionResponse(BaseModel):
     """Structured LLM response for extracting ideal state from a task."""
 
     success_criteria: list[SuccessCriterionSpec] = Field(
-        default_factory=list,
-        description="Ranked, measurable success criteria"
+        default_factory=list, description="Ranked, measurable success criteria"
     )
     anti_criteria: list[AntiCriterionSpec] = Field(
-        default_factory=list,
-        description="Things to actively avoid and penalize"
+        default_factory=list, description="Things to actively avoid and penalize"
     )
     quality_bar: QualityBarSpec = Field(
-        default_factory=QualityBarSpec,
-        description="Quality standard definition"
+        default_factory=QualityBarSpec, description="Quality standard definition"
     )
     verification_methods: list[VerificationMethodSpec] = Field(
-        default_factory=list,
-        description="How to verify success"
+        default_factory=list, description="How to verify success"
     )
     stop_conditions: list[StopConditionSpec] = Field(
-        default_factory=list,
-        description="When to stop iterating"
+        default_factory=list, description="When to stop iterating"
     )
     constraints: list[str] = Field(
-        default_factory=list,
-        description="Hard constraints for this task"
+        default_factory=list, description="Hard constraints for this task"
     )
-    assumptions: list[str] = Field(
-        default_factory=list,
-        description="Working assumptions"
-    )
+    assumptions: list[str] = Field(default_factory=list, description="Working assumptions")
 
 
 class IdealStateRefinementResponse(BaseModel):
     """Structured LLM response for refining ideal state after an iteration."""
 
     new_success_criteria: list[SuccessCriterionSpec] = Field(
-        default_factory=list,
-        description="New criteria discovered from iteration results"
+        default_factory=list, description="New criteria discovered from iteration results"
     )
     tightened_criteria: list[TightenedCriterionSpec] = Field(
-        default_factory=list,
-        description="Existing criteria that should be tightened"
+        default_factory=list, description="Existing criteria that should be tightened"
     )
     new_anti_criteria: list[AntiCriterionSpec] = Field(
-        default_factory=list,
-        description="New anti-criteria from observed issues"
+        default_factory=list, description="New anti-criteria from observed issues"
     )
     updated_quality_description: str = Field(
-        default="",
-        description="Updated quality bar description, empty string if no change needed"
+        default="", description="Updated quality bar description, empty string if no change needed"
     )
     updated_quality_examples: list[str] = Field(
-        default_factory=list,
-        description="Updated quality examples, empty list if no change"
+        default_factory=list, description="Updated quality examples, empty list if no change"
     )
     updated_quality_anti_examples: list[str] = Field(
-        default_factory=list,
-        description="Updated anti-examples, empty list if no change"
+        default_factory=list, description="Updated anti-examples, empty list if no change"
     )
     reasoning: str = Field(default="", description="Why these refinements are needed")
 
@@ -548,19 +498,16 @@ class IdealStateClarificationResponse(BaseModel):
 
     updated_task_description: str = Field(
         default="",
-        description="Enhanced task description incorporating clarification, empty if no change"
+        description="Enhanced task description incorporating clarification, empty if no change",
     )
     new_success_criteria: list[SuccessCriterionSpec] = Field(
-        default_factory=list,
-        description="New criteria from clarification"
+        default_factory=list, description="New criteria from clarification"
     )
     new_anti_criteria: list[AntiCriterionSpec] = Field(
-        default_factory=list,
-        description="New anti-criteria from clarification"
+        default_factory=list, description="New anti-criteria from clarification"
     )
     additional_constraints: list[str] = Field(
-        default_factory=list,
-        description="New constraints from clarification"
+        default_factory=list, description="New constraints from clarification"
     )
     reasoning: str = Field(default="", description="How the clarification changes the task")
 
@@ -569,8 +516,7 @@ class AntiCriteriaExtractionResponse(BaseModel):
     """Structured LLM response for extracting anti-criteria from violations."""
 
     anti_criteria: list[AntiCriterionSpec] = Field(
-        default_factory=list,
-        description="Anti-criteria derived from observed violations"
+        default_factory=list, description="Anti-criteria derived from observed violations"
     )
     reasoning: str = Field(default="", description="Pattern analysis of violations")
 
@@ -580,19 +526,16 @@ class CriteriaValidationResponse(BaseModel):
 
     is_valid: bool = Field(default=True, description="Whether the criteria set is valid overall")
     issues: list[CriteriaIssue] = Field(
-        default_factory=list,
-        description="Issues found with criteria"
+        default_factory=list, description="Issues found with criteria"
     )
     suggestions: list[str] = Field(
-        default_factory=list,
-        description="General suggestions for improvement"
+        default_factory=list, description="General suggestions for improvement"
     )
     overall_quality_score: float = Field(
-        default=0.5,
-        description="Overall quality score of the criteria set (0.0 to 1.0)"
+        default=0.5, description="Overall quality score of the criteria set (0.0 to 1.0)"
     )
 
-    @field_validator('overall_quality_score', mode='before')
+    @field_validator("overall_quality_score", mode="before")
     @classmethod
     def clamp_quality_score(cls, v):
         if v is None:
@@ -607,8 +550,7 @@ class VerificationMethodSuggestionResponse(BaseModel):
     """Structured LLM response for suggesting verification methods."""
 
     verification_methods: list[VerificationMethodSpec] = Field(
-        default_factory=list,
-        description="Suggested verification methods for the criteria"
+        default_factory=list, description="Suggested verification methods for the criteria"
     )
     reasoning: str = Field(default="", description="Why these methods were chosen")
 
@@ -623,17 +565,15 @@ class FindingSeveritySpec(BaseModel):
 
     finding_id: str = Field(description="The finding_id being assessed")
     severity: str = Field(
-        default="medium",
-        description="Assessed severity: low, medium, high, critical"
+        default="medium", description="Assessed severity: low, medium, high, critical"
     )
     reasoning: str = Field(default="", description="Why this severity was assigned")
     suggested_fix: str = Field(default="", description="Suggested remediation")
     is_root_cause: bool = Field(
-        default=False,
-        description="Whether this finding is a root cause of other issues"
+        default=False, description="Whether this finding is a root cause of other issues"
     )
 
-    @field_validator('severity', mode='before')
+    @field_validator("severity", mode="before")
     @classmethod
     def validate_severity(cls, v):
         valid = {"low", "medium", "high", "critical"}
@@ -646,16 +586,13 @@ class ValidationSeverityResponse(BaseModel):
     """Structured LLM response for assessing validation finding severities."""
 
     assessments: list[FindingSeveritySpec] = Field(
-        default_factory=list,
-        description="Severity assessment for each finding"
+        default_factory=list, description="Severity assessment for each finding"
     )
     overall_assessment: str = Field(
-        default="",
-        description="Overall assessment of the validation findings"
+        default="", description="Overall assessment of the validation findings"
     )
     blocking_finding_ids: list[str] = Field(
-        default_factory=list,
-        description="IDs of findings that should block progress"
+        default_factory=list, description="IDs of findings that should block progress"
     )
 
 
@@ -669,17 +606,11 @@ class LessonConfidence(BaseModel):
 
     description: str = Field(description="The lesson learned")
     confidence: float = Field(
-        default=0.7,
-        ge=0.0,
-        le=1.0,
-        description="Confidence in this lesson (0.0-1.0)"
+        default=0.7, ge=0.0, le=1.0, description="Confidence in this lesson (0.0-1.0)"
     )
-    evidence: str = Field(
-        default="",
-        description="Concrete evidence supporting this lesson"
-    )
+    evidence: str = Field(default="", description="Concrete evidence supporting this lesson")
 
-    @field_validator('confidence', mode='before')
+    @field_validator("confidence", mode="before")
     @classmethod
     def clamp_confidence(cls, v):
         if v is None:
@@ -694,22 +625,19 @@ class AdjustmentPriority(BaseModel):
     """A prioritized adjustment recommendation."""
 
     description: str = Field(description="The adjustment to make")
-    priority: str = Field(
-        default="medium",
-        description="Priority level: high, medium, or low"
-    )
+    priority: str = Field(default="medium", description="Priority level: high, medium, or low")
     impact_score: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Expected impact of making this adjustment (0.0-1.0)"
+        description="Expected impact of making this adjustment (0.0-1.0)",
     )
     category: str = Field(
         default="general",
-        description="Category: architecture, implementation, testing, configuration, general"
+        description="Category: architecture, implementation, testing, configuration, general",
     )
 
-    @field_validator('priority', mode='before')
+    @field_validator("priority", mode="before")
     @classmethod
     def validate_priority(cls, v):
         valid = {"high", "medium", "low"}
@@ -717,7 +645,7 @@ class AdjustmentPriority(BaseModel):
             return v.lower().strip()
         return "medium"
 
-    @field_validator('impact_score', mode='before')
+    @field_validator("impact_score", mode="before")
     @classmethod
     def clamp_impact(cls, v):
         if v is None:
@@ -727,7 +655,7 @@ class AdjustmentPriority(BaseModel):
         except (ValueError, TypeError):
             return 0.5
 
-    @field_validator('category', mode='before')
+    @field_validator("category", mode="before")
     @classmethod
     def validate_category(cls, v):
         valid = {"architecture", "implementation", "testing", "configuration", "general"}
@@ -741,19 +669,15 @@ class PatternDetection(BaseModel):
 
     pattern_type: str = Field(
         default="recurring_issue",
-        description="Type: recurring_issue, improvement_trend, stagnation_signal, regression_pattern"
+        description="Type: recurring_issue, improvement_trend, stagnation_signal, regression_pattern",
     )
     description: str = Field(description="Description of the pattern")
     affected_iterations: list[int] = Field(
-        default_factory=list,
-        description="Which iterations this pattern spans"
+        default_factory=list, description="Which iterations this pattern spans"
     )
-    recommended_action: str = Field(
-        default="",
-        description="What to do about this pattern"
-    )
+    recommended_action: str = Field(default="", description="What to do about this pattern")
 
-    @field_validator('pattern_type', mode='before')
+    @field_validator("pattern_type", mode="before")
     @classmethod
     def validate_pattern_type(cls, v):
         valid = {"recurring_issue", "improvement_trend", "stagnation_signal", "regression_pattern"}
@@ -768,15 +692,11 @@ class ActionOutcomeCorrelation(BaseModel):
     action: str = Field(description="The planned action from the experiment plan")
     outcome: str = Field(description="The observed outcome from verification")
     correlation: str = Field(
-        default="neutral",
-        description="Correlation: positive, negative, neutral"
+        default="neutral", description="Correlation: positive, negative, neutral"
     )
-    explanation: str = Field(
-        default="",
-        description="Why this correlation exists"
-    )
+    explanation: str = Field(default="", description="Why this correlation exists")
 
-    @field_validator('correlation', mode='before')
+    @field_validator("correlation", mode="before")
     @classmethod
     def validate_correlation(cls, v):
         valid = {"positive", "negative", "neutral"}
@@ -790,66 +710,52 @@ class LearningResult(BaseModel):
 
     # Core fields (Phase 1)
     plan_achieved: bool = Field(
-        default=False,
-        description="Whether the experiment plan was achieved this iteration"
+        default=False, description="Whether the experiment plan was achieved this iteration"
     )
     plan_achievement_reasoning: str = Field(
-        default="",
-        description="Why the plan was or was not achieved"
+        default="", description="Why the plan was or was not achieved"
     )
     ideal_state_progress: str = Field(
         default="unknown",
-        description="Progress toward ideal state: improving, stagnating, or regressing"
+        description="Progress toward ideal state: improving, stagnating, or regressing",
     )
     ideal_state_reasoning: str = Field(
-        default="",
-        description="Assessment of progress toward the ideal state"
+        default="", description="Assessment of progress toward the ideal state"
     )
     what_worked: list[str] = Field(
-        default_factory=list,
-        description="List of things that worked well this iteration"
+        default_factory=list, description="List of things that worked well this iteration"
     )
     what_failed: list[str] = Field(
-        default_factory=list,
-        description="List of things that failed or need improvement"
+        default_factory=list, description="List of things that failed or need improvement"
     )
-    root_cause: str = Field(
-        default="",
-        description="Primary root cause if there was a failure"
-    )
+    root_cause: str = Field(default="", description="Primary root cause if there was a failure")
     adjustments: list[str] = Field(
-        default_factory=list,
-        description="Specific actionable adjustments for next iteration"
+        default_factory=list, description="Specific actionable adjustments for next iteration"
     )
     insights: list[str] = Field(
-        default_factory=list,
-        description="Key insights and learnings from this iteration"
+        default_factory=list, description="Key insights and learnings from this iteration"
     )
 
     # Enhanced analysis fields (Phase 2)
     detailed_lessons: list[LessonConfidence] = Field(
-        default_factory=list,
-        description="Lessons with confidence scoring"
+        default_factory=list, description="Lessons with confidence scoring"
     )
     prioritized_adjustments: list[AdjustmentPriority] = Field(
-        default_factory=list,
-        description="Adjustments ranked by priority and impact"
+        default_factory=list, description="Adjustments ranked by priority and impact"
     )
     patterns_detected: list[PatternDetection] = Field(
-        default_factory=list,
-        description="Patterns observed across iteration history"
+        default_factory=list, description="Patterns observed across iteration history"
     )
     action_outcome_correlations: list[ActionOutcomeCorrelation] = Field(
         default_factory=list,
-        description="Correlations between planned actions and observed outcomes"
+        description="Correlations between planned actions and observed outcomes",
     )
 
     reasoning_trace: str | None = Field(
-        default=None,
-        description="Reasoning trace from the LLM, if available"
+        default=None, description="Reasoning trace from the LLM, if available"
     )
 
-    @field_validator('ideal_state_progress', mode='before')
+    @field_validator("ideal_state_progress", mode="before")
     @classmethod
     def validate_progress(cls, v):
         valid = {"improving", "stagnating", "regressing", "unknown"}
@@ -868,22 +774,15 @@ class ThinkTradeOffResponse(BaseModel):
 
     aspect: str = Field(
         default="General",
-        description="What aspect this trade-off affects (e.g., Speed, Complexity, Coverage)"
+        description="What aspect this trade-off affects (e.g., Speed, Complexity, Coverage)",
     )
-    positive: str = Field(
-        default="",
-        description="What we gain from this approach"
-    )
-    negative: str = Field(
-        default="",
-        description="What we give up or risk"
-    )
+    positive: str = Field(default="", description="What we gain from this approach")
+    negative: str = Field(default="", description="What we give up or risk")
     severity: str = Field(
-        default="medium",
-        description="Severity of the trade-off: low, medium, or high"
+        default="medium", description="Severity of the trade-off: low, medium, or high"
     )
 
-    @field_validator('severity', mode='before')
+    @field_validator("severity", mode="before")
     @classmethod
     def validate_severity(cls, v):
         valid = {"low", "medium", "high"}
@@ -895,20 +794,15 @@ class ThinkTradeOffResponse(BaseModel):
 class ThinkRiskResponse(BaseModel):
     """LLM response for a single risk in an approach."""
 
-    description: str = Field(
-        default="",
-        description="What could go wrong"
-    )
+    description: str = Field(default="", description="What could go wrong")
     likelihood: str = Field(
-        default="medium",
-        description="Likelihood of this risk: low, medium, or high"
+        default="medium", description="Likelihood of this risk: low, medium, or high"
     )
     impact: str = Field(
-        default="medium",
-        description="Impact if this risk materializes: low, medium, or high"
+        default="medium", description="Impact if this risk materializes: low, medium, or high"
     )
 
-    @field_validator('likelihood', mode='before')
+    @field_validator("likelihood", mode="before")
     @classmethod
     def validate_likelihood(cls, v):
         valid = {"low", "medium", "high"}
@@ -916,7 +810,7 @@ class ThinkRiskResponse(BaseModel):
             return v.lower().strip()
         return "medium"
 
-    @field_validator('impact', mode='before')
+    @field_validator("impact", mode="before")
     @classmethod
     def validate_impact(cls, v):
         valid = {"low", "medium", "high"}
@@ -930,34 +824,27 @@ class ThinkApproachResponse(BaseModel):
 
     name: str = Field(
         default="",
-        description="Short descriptive name for this approach (e.g., 'Direct Implementation')"
+        description="Short descriptive name for this approach (e.g., 'Direct Implementation')",
     )
-    strategy: str = Field(
-        default="",
-        description="Core strategy or technique to use"
-    )
+    strategy: str = Field(default="", description="Core strategy or technique to use")
     implementation_steps: list[str] = Field(
-        default_factory=list,
-        description="Concrete ordered steps to implement this approach"
+        default_factory=list, description="Concrete ordered steps to implement this approach"
     )
     trade_offs: list[ThinkTradeOffResponse] = Field(
-        default_factory=list,
-        description="Explicit trade-offs of this approach"
+        default_factory=list, description="Explicit trade-offs of this approach"
     )
     risks: list[ThinkRiskResponse] = Field(
-        default_factory=list,
-        description="Known risks with likelihood and impact"
+        default_factory=list, description="Known risks with likelihood and impact"
     )
     expected_success_probability: float = Field(
-        default=0.5,
-        description="Estimated probability of success (0.0 to 1.0)"
+        default=0.5, description="Estimated probability of success (0.0 to 1.0)"
     )
     addresses_gaps: list[str] = Field(
         default_factory=list,
-        description="Which gaps from the previous iteration this approach addresses"
+        description="Which gaps from the previous iteration this approach addresses",
     )
 
-    @field_validator('expected_success_probability', mode='before')
+    @field_validator("expected_success_probability", mode="before")
     @classmethod
     def validate_probability(cls, v):
         try:
@@ -975,24 +862,20 @@ class ThinkResponse(BaseModel):
     """
 
     approaches: list[ThinkApproachResponse] = Field(
-        default_factory=list,
-        description="2-3 distinct approaches to reach the ideal state"
+        default_factory=list, description="2-3 distinct approaches to reach the ideal state"
     )
     recommended_approach_index: int = Field(
-        default=0,
-        description="0-based index of the recommended approach in the approaches list"
+        default=0, description="0-based index of the recommended approach in the approaches list"
     )
     recommendation_reasoning: str = Field(
-        default="",
-        description="Why the recommended approach is preferred over others"
+        default="", description="Why the recommended approach is preferred over others"
     )
 
     reasoning_trace: str | None = Field(
-        default=None,
-        description="Reasoning trace from the LLM, if available"
+        default=None, description="Reasoning trace from the LLM, if available"
     )
 
-    @field_validator('recommended_approach_index', mode='before')
+    @field_validator("recommended_approach_index", mode="before")
     @classmethod
     def validate_index(cls, v):
         try:

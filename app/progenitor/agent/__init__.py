@@ -14,7 +14,3 @@ Modules:
     middleware: SecretRedaction, AuditLogging, Metrics
     subagents: Build loop, code reviewer, researcher
 """
-
-from .deep_agent import create_progenitor_agent
-
-__all__ = ["create_progenitor_agent"]

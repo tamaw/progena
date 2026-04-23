@@ -1,7 +1,22 @@
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
+
+function isReasoningEvent(event) {
+  return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
+}
 
 function Message({ message, streamEventFilter }) {
-  const { role, content, timestamp, isStreaming, error, isScheduled, streamEvents = [] } = message;
+  const {
+    role,
+    content,
+    timestamp,
+    isStreaming,
+    error,
+    isScheduled,
+    streamEvents = [],
+    tokenCount = 0,
+    reasoningTokenCount = 0,
+    reasoningText = '',
+  } = message;
 
   const visibleStreamEvents = useMemo(() => {
     if (typeof streamEventFilter !== 'function') return streamEvents;
@@ -13,10 +28,40 @@ function Message({ message, streamEventFilter }) {
     return formatMessage(content);
   }, [content]);
 
+  const formattedReasoningText = useMemo(() => {
+    if (!reasoningText) return '';
+    return formatMessage(reasoningText);
+  }, [reasoningText]);
+
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }, [timestamp]);
+
+  const formattedTokenCount = useMemo(() => {
+    if (role !== 'assistant' || isStreaming || !Number.isFinite(tokenCount) || tokenCount <= 0) {
+      return '';
+    }
+    const count = new Intl.NumberFormat().format(tokenCount);
+    return `${count} ${tokenCount === 1 ? 'token' : 'tokens'}`;
+  }, [isStreaming, role, tokenCount]);
+
+  const formattedReasoningTokenCount = useMemo(() => {
+    if (
+      role !== 'assistant'
+      || isStreaming
+      || !Number.isFinite(reasoningTokenCount)
+      || reasoningTokenCount <= 0
+    ) {
+      return '';
+    }
+    const count = new Intl.NumberFormat().format(reasoningTokenCount);
+    return `${count} reasoning token${reasoningTokenCount === 1 ? '' : 's'}`;
+  }, [isStreaming, reasoningTokenCount, role]);
+
+  const metaItems = [formattedTime, formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
+  const hasMessageMeta = metaItems.length > 0;
+  const shouldShowReasoningText = role === 'assistant' && reasoningText.trim().length > 0;
 
   return (
     <div className={`message-wrapper ${role}`}>
@@ -33,12 +78,27 @@ function Message({ message, streamEventFilter }) {
         {role === 'assistant' && visibleStreamEvents.length > 0 && (
           <StreamEvents events={visibleStreamEvents} />
         )}
+        {shouldShowReasoningText && (
+          <div
+            className="message-reasoning-text"
+            dangerouslySetInnerHTML={{ __html: formattedReasoningText }}
+          />
+        )}
         <div
           className="message-content"
           dangerouslySetInnerHTML={{ __html: formattedContent }}
         />
-        {formattedTime && (
-          <div className="message-timestamp">{formattedTime}</div>
+        {hasMessageMeta && (
+          <div className="message-meta">
+            {metaItems.map((item, index) => (
+              <Fragment key={`${item}-${index}`}>
+                {index > 0 && <span className="message-meta-separator" aria-hidden="true" />}
+                <span className={index === 0 ? 'message-timestamp' : 'message-token-count'}>
+                  {item}
+                </span>
+              </Fragment>
+            ))}
+          </div>
         )}
       </div>
       <MessageActions role={role} content={content} />
@@ -60,6 +120,12 @@ function StreamEvents({ events }) {
               <span className="message-stream-event-badge">{description.badge}</span>
               <span className="message-stream-event-title">{description.title}</span>
             </div>
+            {description.bodyHtml && (
+              <div
+                className="message-stream-event-body"
+                dangerouslySetInnerHTML={{ __html: description.bodyHtml }}
+              />
+            )}
             {description.detail && (
               <div className="message-stream-event-detail">{description.detail}</div>
             )}
@@ -180,6 +246,15 @@ function describeStreamEvent(event) {
     };
   }
 
+  if (isReasoningEvent(event)) {
+    const detail = summarizeMetadata(metadata);
+    return {
+      badge: 'Reasoning',
+      title: 'Reasoning',
+      detail: detail || (eventType === 'reasoning_delta' ? 'Tracing response generation' : 'Reasoning captured'),
+    };
+  }
+
   const explicitName = [
     metadata.tool_name,
     metadata.name,
@@ -230,6 +305,9 @@ function summarizeMetadata(metadata) {
   if (typeof metadata.text_length === 'number' && metadata.text_length > 0) {
     summaryParts.push(`${metadata.text_length} chars`);
   }
+  if (typeof metadata.reasoning_tokens === 'number' && metadata.reasoning_tokens > 0) {
+    summaryParts.push(`${metadata.reasoning_tokens} reasoning tokens`);
+  }
   if (typeof metadata.stream_metadata?.langgraph_node === 'string') {
     summaryParts.push(`node: ${metadata.stream_metadata.langgraph_node}`);
   }
@@ -246,6 +324,9 @@ function badgeForEventType(eventType) {
   }
   if (eventType.includes('node')) {
     return 'Step';
+  }
+  if (eventType.includes('reasoning')) {
+    return 'Reasoning';
   }
   return 'Event';
 }
@@ -320,7 +401,79 @@ function formatMessage(content) {
     formatted = `<p>${formatted}</p>`;
   }
 
-  return formatted;
+  return normalizeListMarkup(formatted);
+}
+
+function normalizeListMarkup(html) {
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  if (!container.querySelector('li.md-li, li.md-li-ordered')) {
+    return html;
+  }
+
+  const children = Array.from(container.childNodes);
+  const fragment = document.createDocumentFragment();
+  let activeList = null;
+  let mutated = false;
+
+  const isListItem = (node) =>
+    node instanceof HTMLElement
+    && (node.matches('li.md-li') || node.matches('li.md-li-ordered'));
+
+  const isBreak = (node) =>
+    node instanceof HTMLElement && node.tagName === 'BR';
+
+  const trimTrailingBreaks = (node) => {
+    while (isBreak(node.lastChild)) {
+      node.lastChild.remove();
+      mutated = true;
+    }
+  };
+
+  children.forEach((node, index) => {
+    const previous = children[index - 1];
+    const next = children[index + 1];
+
+    if (node instanceof HTMLParagraphElement) {
+      trimTrailingBreaks(node);
+      if (!node.textContent?.trim() && (isListItem(previous) || isListItem(next))) {
+        mutated = true;
+        return;
+      }
+
+      activeList = null;
+      fragment.appendChild(node);
+      return;
+    }
+
+    if (isListItem(node)) {
+      const tagName = node.matches('li.md-li-ordered') ? 'ol' : 'ul';
+      if (!activeList || activeList.tagName.toLowerCase() !== tagName) {
+        activeList = document.createElement(tagName);
+        activeList.className = tagName === 'ol' ? 'md-ol' : 'md-ul';
+        fragment.appendChild(activeList);
+      }
+
+      activeList.appendChild(node);
+      mutated = true;
+      return;
+    }
+
+    if (isBreak(node) && (isListItem(previous) || isListItem(next))) {
+      mutated = true;
+      return;
+    }
+
+    activeList = null;
+    fragment.appendChild(node);
+  });
+
+  if (mutated) {
+    container.replaceChildren(fragment);
+  }
+
+  return container.innerHTML;
 }
 
 function escapeHtml(text) {

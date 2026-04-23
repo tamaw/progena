@@ -159,6 +159,21 @@
     color: var(--color-text-secondary);
 }
 
+.message-stream-event-body {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    color: var(--color-text-primary);
+}
+
+.message-stream-event-body p {
+    margin-bottom: var(--spacing-xs);
+}
+
+.message-stream-event-body p:last-child {
+    margin-bottom: 0;
+}
+
 .message-stream-event.tool_call .message-stream-event-badge,
 .message-stream-event.tool_result .message-stream-event-badge {
     background-color: rgba(63, 185, 80, 0.16);
@@ -168,6 +183,34 @@
 .message-stream-event.node_update .message-stream-event-badge {
     background-color: rgba(88, 166, 255, 0.14);
     color: var(--color-accent);
+}
+
+.message-stream-event.reasoning_delta,
+.message-stream-event.reasoning_summary {
+    border-color: rgba(188, 140, 255, 0.24);
+    background-color: color-mix(in srgb, rgba(188, 140, 255, 0.08) 40%, var(--color-bg-tertiary));
+}
+
+.message-stream-event.reasoning_delta .message-stream-event-badge,
+.message-stream-event.reasoning_summary .message-stream-event-badge {
+    background-color: rgba(188, 140, 255, 0.18);
+    color: #c19cff;
+}
+
+.message-reasoning-text {
+    margin-bottom: var(--spacing-sm);
+    font-size: var(--font-size-sm);
+    line-height: 1.55;
+    color: color-mix(in srgb, var(--color-text-secondary) 88%, white 12%);
+    font-style: italic;
+}
+
+.message-reasoning-text p {
+    margin-bottom: var(--spacing-xs);
+}
+
+.message-reasoning-text p:last-child {
+    margin-bottom: 0;
 }
 
 /* Code in messages */
@@ -204,17 +247,26 @@
     margin-top: var(--spacing-xs);
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
-}
-
-/* Message Timestamp */
-.message-timestamp {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    margin-top: var(--spacing-xs);
     opacity: 0.8;
 }
 
-.message.user .message-timestamp {
+.message-timestamp {
+    color: inherit;
+}
+
+.message-token-count {
+    color: inherit;
+}
+
+.message-meta-separator {
+    width: 4px;
+    height: 4px;
+    border-radius: 999px;
+    background-color: currentColor;
+    opacity: 0.7;
+}
+
+.message.user .message-meta {
     color: rgba(255, 255, 255, 0.7);
 }
 
@@ -307,6 +359,69 @@
     padding: var(--spacing-md) var(--spacing-lg);
     background-color: var(--color-bg-secondary);
     border-top: 1px solid var(--color-border);
+}
+
+.chat-input-stack {
+    position: relative;
+}
+
+.slash-command-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--spacing-sm));
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs);
+    background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+
+.slash-command-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    color: var(--color-text-primary);
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: var(--border-radius-md);
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.slash-command-item:hover,
+.slash-command-item.active {
+    background-color: var(--color-bg-hover);
+}
+
+.slash-command-item-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+}
+
+.slash-command-item-title {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+}
+
+.slash-command-item-syntax {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    color: var(--color-accent);
+}
+
+.slash-command-item-description {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
 }
 
 .input-wrapper {
@@ -529,13 +644,24 @@
 .message-content h3 { font-size: 1.1em; }
 
 .message-content ul,
-.message-content ol {
-    margin: var(--spacing-sm) 0;
-    padding-left: var(--spacing-lg);
+.message-content ol,
+.md-ul,
+.md-ol {
+    margin: var(--spacing-xs) 0;
+    padding-left: calc(var(--spacing-lg) + 0.35rem);
 }
 
-.message-content li {
-    margin-bottom: var(--spacing-xs);
+.message-content li,
+.md-li,
+.md-li-ordered {
+    margin-bottom: 0.2rem;
+    padding-left: 0.1rem;
+}
+
+.message-content li:last-child,
+.md-li:last-child,
+.md-li-ordered:last-child {
+    margin-bottom: 0;
 }
 
 .message-content blockquote {
@@ -655,16 +781,6 @@
 
 .md-table .tbody:nth-child(even) td {
     background-color: var(--color-bg-secondary);
-}
-
-/* Markdown Lists */
-.md-ul, .md-ol {
-    margin: var(--spacing-sm) 0;
-    padding-left: var(--spacing-lg);
-}
-
-.md-li, .md-li-ordered {
-    margin-bottom: var(--spacing-xs);
 }
 
 /* ============================================================================
@@ -1002,17 +1118,6 @@
 .reaction-count {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
-}
-
-/* Message Timestamp */
-.message-timestamp {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    margin-top: var(--spacing-xs);
-}
-
-.message.user .message-timestamp {
-    text-align: right;
 }
 
 /* Context Menu */

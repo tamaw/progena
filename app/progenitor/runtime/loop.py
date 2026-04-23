@@ -27,9 +27,19 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
 
 from langchain_core.messages import AIMessageChunk
 
-from ..agent.stream_events import normalize_custom_event
 from ..state.models import A2ATaskRecord, ConversationMessage, redact_secrets
-from ..streaming_utils import extract_stream_chunk_text, make_json_safe
+from ..stream_events import (
+    build_reasoning_delta_event,
+    build_reasoning_summary_event,
+    normalize_custom_event,
+)
+from ..streaming_utils import (
+    extract_reasoning_summary_text,
+    extract_reasoning_token_count,
+    extract_stream_chunk_text,
+    extract_stream_reasoning_deltas,
+    make_json_safe,
+)
 from .a2a_tasks import A2ATaskTracker, build_completion_message
 from .scheduler import Scheduler
 from .time_utils import utcnow, utcnow_isoformat
@@ -114,6 +124,8 @@ class ProgenitorLoop:
         # Timing metadata captured when an input is dequeued.
         self._current_input_wait_seconds = 0.0
         self._current_input_pending_count = 0
+        self._idle_cycles = 0
+        self._current_backoff_seconds = float(config.runtime.idle_backoff_seconds)
 
         # Shared state for the loop (protected by _graph_lock)
         self._state: dict[str, Any] = {}
@@ -143,8 +155,6 @@ class ProgenitorLoop:
             "current_input_metadata": None,
             "input_wait_seconds": 0.0,
             "pending_messages_in_queue": 0,
-            "idle_cycles": 0,
-            "current_backoff_seconds": self.config.runtime.idle_backoff_seconds,
         }
 
         # Load persisted state (recover from previous run)
@@ -248,6 +258,7 @@ class ProgenitorLoop:
 
                 if not queued_input:
                     now = time.monotonic()
+                    self._idle_cycles += 1
                     if now - last_health >= float(self.config.runtime.checkpoint_interval_seconds):
                         await self._update_health_file(self._state)
                         last_health = now
@@ -275,8 +286,8 @@ class ProgenitorLoop:
                 )
 
                 async with self._graph_lock:
-                    self._state["current_backoff_seconds"] = runtime.idle_backoff_seconds
-                    self._state["idle_cycles"] = 0
+                    self._current_backoff_seconds = float(runtime.idle_backoff_seconds)
+                    self._idle_cycles = 0
 
                     self._state["current_input"] = user_input
                     self._state["current_input_role"] = input_role
@@ -552,6 +563,7 @@ class ProgenitorLoop:
             }
             if self._graph_accepts_stream_mode():
                 astream_kwargs["stream_mode"] = ["messages", "updates", "custom"]
+            pending_stream_final = False
 
             async for stream_item in self.graph.astream(
                 graph_input,
@@ -608,27 +620,16 @@ class ProgenitorLoop:
                     self._last_cycle_response = pending_text
                     self._state["last_cycle_response"] = pending_text
                     if self._streaming_enabled:
-                        if (
-                            self._response_was_streamed
-                            and pending_text == self._streamed_response_content
-                        ):
-                            if not self._stream_final_sent:
-                                await self.stream_final()
-                                self._stream_final_sent = True
-                        else:
-                            await self._stream_response(pending_text)
-                            # _stream_response sends an is_final chunk, so mark stream closed for this cycle.
-                            self._stream_final_sent = True
+                        await self._ensure_response_streamed(pending_text)
+                        pending_stream_final = True
                     self._state["pending_response"] = None
                 elif self._response_was_streamed and not self._stream_final_sent:
                     streamed_text = self._streamed_response_content
                     if streamed_text:
                         self._last_cycle_response = streamed_text
                         self._state["last_cycle_response"] = streamed_text
-                    # Response was already streamed by a node, just send final marker ONCE
                     if self._streaming_enabled:
-                        await self.stream_final()
-                    self._stream_final_sent = True
+                        pending_stream_final = True
                     self._state["pending_response"] = None
 
             # Ensure streaming clients never hang waiting for an is_final marker
@@ -642,19 +643,40 @@ class ProgenitorLoop:
                         "Extracting AI response from messages (%d chars)", len(response_text)
                     )
                     if self._streaming_enabled:
-                        await self._stream_response(response_text)
+                        await self._ensure_response_streamed(response_text)
+                        pending_stream_final = True
                     self._last_cycle_response = response_text
                     self._state["last_cycle_response"] = response_text
-                    self._stream_final_sent = True
-                if self._streaming_enabled and not self._stream_final_sent:
-                    await self.stream_final()
-                    self._stream_final_sent = True
+                elif self._streaming_enabled:
+                    pending_stream_final = True
 
             reasoning_trace = (
                 self._extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
             )
             self._last_reasoning_trace = reasoning_trace
             self._state["last_reasoning_trace"] = reasoning_trace
+            reasoning_tokens = (
+                extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
+            )
+            if (
+                self._streaming_enabled
+                and last_ai_msg is not None
+                and (reasoning_trace or reasoning_tokens is not None)
+            ):
+                summary_event = build_reasoning_summary_event(
+                    reasoning_trace or "",
+                    metadata={
+                        "reasoning_tokens": reasoning_tokens,
+                    },
+                )
+                await self._send_stream_event(
+                    summary_event["event_type"],
+                    content=summary_event["content"],
+                    metadata=cast(dict[str, Any], summary_event["metadata"]),
+                )
+            if self._streaming_enabled and pending_stream_final and not self._stream_final_sent:
+                await self.stream_final()
+                self._stream_final_sent = True
             if reasoning_trace:
                 logger.info("Extracted reasoning trace (%d chars)", len(reasoning_trace))
             elif last_ai_msg is not None and self.config.llm.reasoning_enabled:
@@ -825,6 +847,20 @@ class ProgenitorLoop:
             if self._streaming_enabled:
                 await self._send_stream_chunk(token, is_final=False)
 
+    async def _ensure_response_streamed(self, text: str) -> None:
+        """Send any missing response text without closing the stream."""
+        if not text:
+            return
+        if self._response_was_streamed:
+            if text == self._streamed_response_content:
+                return
+            if text.startswith(self._streamed_response_content):
+                suffix = text[len(self._streamed_response_content) :]
+                if suffix:
+                    await self.stream_token(suffix)
+                return
+        await self.stream_token(text)
+
     async def _handle_message_stream_event(self, event: Any) -> None:
         """Handle LangGraph `messages` stream events for token-level output."""
         if not isinstance(event, tuple) or len(event) != 2:
@@ -835,6 +871,22 @@ class ProgenitorLoop:
         if not isinstance(message_chunk, AIMessageChunk):
             return
 
+        stream_metadata = make_json_safe(metadata)
+        if self._streaming_enabled:
+            for reasoning_delta in extract_stream_reasoning_deltas(message_chunk):
+                reasoning_event = build_reasoning_delta_event(
+                    reasoning_delta,
+                    metadata={
+                        "message_chunk_type": type(message_chunk).__name__,
+                        "stream_metadata": stream_metadata,
+                    },
+                )
+                await self._send_stream_event(
+                    reasoning_event["event_type"],
+                    content=reasoning_event["content"],
+                    metadata=cast(dict[str, Any], reasoning_event["metadata"]),
+                )
+
         chunk_text = self._extract_stream_chunk_text(message_chunk)
         if chunk_text:
             await self.stream_token(chunk_text)
@@ -844,7 +896,7 @@ class ProgenitorLoop:
                 content=chunk_text,
                 metadata={
                     "message_chunk_type": type(message_chunk).__name__,
-                    "stream_metadata": make_json_safe(metadata),
+                    "stream_metadata": stream_metadata,
                     "text_length": len(chunk_text),
                 },
             )
@@ -1059,6 +1111,35 @@ class ProgenitorLoop:
         if msg is None:
             return None
 
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "")).lower()
+                if part_type not in {
+                    "reasoning",
+                    "reasoning_text",
+                    "reasoning_summary",
+                    "thinking",
+                }:
+                    continue
+                if text := extract_reasoning_summary_text({"content": [part]}):
+                    parts.append(text)
+                    continue
+                candidate = part.get("text") or part.get("summary") or part.get("content")
+                if candidate is None:
+                    continue
+                try:
+                    text = json.dumps(candidate, default=str).strip()
+                except Exception:
+                    text = str(candidate).strip()
+                if text:
+                    parts.append(text)
+            if parts:
+                return "\n".join(parts)
+
         def _coerce(value: Any) -> str | None:
             if value is None:
                 return None
@@ -1084,7 +1165,6 @@ class ProgenitorLoop:
             for key in ("reasoning", "thinking"):
                 if key in container and (text := _coerce(container.get(key))):
                     return text
-            # Some providers surface reasoning summary fields directly.
             if "summary" in container or "effort" in container:
                 summary_obj = {
                     "effort": container.get("effort"),
@@ -1092,20 +1172,6 @@ class ProgenitorLoop:
                 }
                 if text := _coerce(summary_obj):
                     return text
-
-        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
-        if isinstance(content, list):
-            parts: list[str] = []
-            for part in content:
-                if not isinstance(part, dict):
-                    continue
-                part_type = str(part.get("type", "")).lower()
-                if part_type in {"reasoning", "reasoning_text", "reasoning_summary", "thinking"}:
-                    candidate = part.get("text") or part.get("summary") or part.get("content")
-                    if text := _coerce(candidate):
-                        parts.append(text)
-            if parts:
-                return "\n".join(parts)
 
         return None
 
@@ -1326,8 +1392,8 @@ class ProgenitorLoop:
             "thread_id": current_thread_id,
             "cycle_count": state.get("cycle_count", 0),
             "pid": __import__("os").getpid(),
-            "idle_cycles": state.get("idle_cycles", 0),
-            "current_backoff_seconds": state.get("current_backoff_seconds"),
+            "idle_cycles": self._idle_cycles,
+            "current_backoff_seconds": self._current_backoff_seconds,
             "message_count": len(state.get("messages") or [])
             if isinstance(state.get("messages"), list)
             else 0,

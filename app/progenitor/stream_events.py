@@ -24,7 +24,9 @@ from app.progenitor.streaming_utils import (
 logger = logging.getLogger(__name__)
 
 # Reserved event_type values already used by the loop / service.
-_RESERVED_EVENT_TYPES = frozenset({"message_delta", "node_update"})
+_RESERVED_EVENT_TYPES = frozenset(
+    {"message_delta", "node_update", "reasoning_delta", "reasoning_summary"}
+)
 
 # Event types middleware/subagents may emit via get_stream_writer.
 ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
@@ -42,14 +44,7 @@ CUSTOM_EVENT_FALLBACK_TYPE = "custom_event"
 
 
 def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
-    """Validate a custom stream payload and return a normalized envelope.
-
-    Accepts dicts shaped like ``{"event_type": str, "content": str,
-    "metadata": dict}``. Unknown or invalid event_types are coerced to
-    ``custom_event`` and the original payload is preserved under
-    ``metadata.raw``. Returns ``None`` if the payload cannot be turned into
-    a usable envelope at all.
-    """
+    """Validate a custom stream payload and return a normalized envelope."""
     if not isinstance(payload, dict):
         event_type = CUSTOM_EVENT_FALLBACK_TYPE
         metadata: dict[str, Any] = {"raw": payload}
@@ -139,16 +134,43 @@ def build_tool_error_event(
     }
 
 
-def emit_stream_event(payload: dict[str, Any]) -> None:
-    """Best-effort emission via LangGraph's stream writer.
+def build_reasoning_delta_event(
+    content: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a ``reasoning_delta`` event payload for live summary fragments."""
+    safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_PREVIEW_BYTES)
+    safe_metadata = _normalize_metadata(metadata)
+    safe_metadata["text_length"] = len(safe_content)
+    return {
+        "event_type": "reasoning_delta",
+        "content": safe_content,
+        "metadata": safe_metadata,
+    }
 
-    Silently no-ops if we are not inside a LangGraph streaming context.
-    Tool execution must never depend on emission.
-    """
+
+def build_reasoning_summary_event(
+    content: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a ``reasoning_summary`` event payload for the final summary item."""
+    safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_ARGS_BYTES)
+    safe_metadata = _normalize_metadata(metadata)
+    safe_metadata["text_length"] = len(safe_content)
+    return {
+        "event_type": "reasoning_summary",
+        "content": safe_content,
+        "metadata": safe_metadata,
+    }
+
+
+def emit_stream_event(payload: dict[str, Any]) -> None:
+    """Best-effort emission via LangGraph's stream writer."""
     try:
         writer = get_stream_writer()
     except RuntimeError:
-        # Not inside a graph context (e.g. plain unit test) — silently skip.
         return
     if writer is None:
         return
@@ -195,3 +217,13 @@ def _redact_preview(value: Any) -> str:
         text = str(value)
     redacted = redact_secrets(text) if text else ""
     return truncate_text(redacted, DEFAULT_STREAM_PREVIEW_BYTES)
+
+
+def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    safe_metadata = truncate_json_safe(
+        _redact_value(dict(metadata) if metadata is not None else {}),
+        DEFAULT_STREAM_ARGS_BYTES,
+    )
+    if isinstance(safe_metadata, dict):
+        return safe_metadata
+    return {"value": safe_metadata}

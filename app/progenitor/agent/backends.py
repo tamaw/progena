@@ -4,11 +4,11 @@ Backend configuration for Progenitor's DeepAgent.
 Profile:
 - Ephemeral workspace (StateBackend) + persistent memories (FilesystemBackend)
 - Scoped filesystem mounts for self-inspection and runtime data access:
-  - /memories/ -> <project_root>/data/memories (read-write)
+  - /memories/ -> configured data_dir/memories (read-write)
   - /self/ -> <project_root>/app (read-only)
-  - /data/ -> <project_root>/data (read-only)
-  - /logs/ -> <project_root>/logs (read-only)
-  - /prompts/ -> <project_root>/data/prompts (read-only)
+  - /data/ -> configured data dir (read-only)
+  - /logs/ -> configured log dir (read-only)
+  - /prompts/ -> configured prompts dir (read-only)
 """
 
 import logging
@@ -42,6 +42,10 @@ class ReadOnlyFilesystemBackend:
 
 def create_progenitor_backend(
     project_root: str | Path | None = None,
+    *,
+    data_dir: str | Path | None = None,
+    log_dir: str | Path | None = None,
+    prompts_dir: str | Path | None = None,
 ) -> Any:
     """Create a backend factory for the Progenitor DeepAgent.
 
@@ -50,11 +54,16 @@ def create_progenitor_backend(
 
     Args:
         project_root: Root directory for filesystem access. Defaults to cwd.
-
+        data_dir: Persistent data directory. Defaults to ``<project_root>/data``.
+        log_dir: Log directory. Defaults to ``<project_root>/logs``.
+        prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
     Returns:
         Backend factory callable.
     """
     root = Path(project_root) if project_root else Path.cwd()
+    resolved_data_dir = Path(data_dir) if data_dir else root / "data"
+    resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
+    resolved_prompts_dir = Path(prompts_dir) if prompts_dir else resolved_data_dir / "prompts"
 
     def _route_backend(
         path: Path,
@@ -73,10 +82,9 @@ def create_progenitor_backend(
         return backend
 
     def _backend_factory(runtime: Any) -> CompositeBackend:
-        memories_path = root / "data" / "memories"
         routes: dict[str, Any] = {}
         memories_backend = _route_backend(
-            memories_path,
+            resolved_data_dir / "memories",
             read_only=False,
             create_if_missing=True,
         )
@@ -85,9 +93,9 @@ def create_progenitor_backend(
 
         mounts: list[tuple[str, Path, bool]] = [
             ("/self/", root / "app", True),
-            ("/data/", root / "data", True),
-            ("/logs/", root / "logs", True),
-            ("/prompts/", root / "data" / "prompts", True),
+            ("/data/", resolved_data_dir, True),
+            ("/logs/", resolved_log_dir, True),
+            ("/prompts/", resolved_prompts_dir, True),
         ]
         for route, mount_path, ro in mounts:
             backend = _route_backend(mount_path, read_only=ro)

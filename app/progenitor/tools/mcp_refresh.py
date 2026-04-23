@@ -14,13 +14,19 @@ logger = logging.getLogger(__name__)
 
 
 class MCPRefreshArgs(BaseModel):
+    """Structured arguments for MCP registry refresh."""
+
     persist: bool = Field(
         default=True,
-        description="Persist refreshed MCP discovery to the runtime registry.",
+        description="Persist refreshed MCP discovery into the runtime registry.",
     )
 
 
 class MCPRefreshTool(BaseSystemTool):
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return MCPRefreshArgs
+
     @property
     def name(self) -> str:
         return "mcp_refresh"
