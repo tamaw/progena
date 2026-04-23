@@ -708,7 +708,7 @@ Operations available via the 'operation' parameter:
 
 Examples:
 - To understand how user input is handled: use operation="find_relevant" with topic="user input"
-- To see the decide node: use operation="read" with file_path="nodes/decide.py"
+- To inspect decision handling: use operation="read" with file_path="nodes/chat.py" or file_path="routing.py"
 - To search for scheduling code: use operation="search" with query="schedule"
 """,
     args_model=SelfReflectArgs,

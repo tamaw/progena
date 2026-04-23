@@ -6,8 +6,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from pydantic import ValidationError
-
+from ..state.helpers import normalize_work_item
 from ..state.models import ProgenitorState, WorkItem
 
 logger = logging.getLogger(__name__)
@@ -24,7 +23,7 @@ def create_node() -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorS
 
         # Find first pending item
         for i, item in enumerate(backlog):
-            work_item = _to_work_item(item)
+            work_item = normalize_work_item(item)
             logger.debug(
                 f"PICK_NEXT: Item {i}: type={type(item).__name__}, work_item={work_item is not None}"
             )
@@ -60,16 +59,3 @@ def create_node() -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorS
         return {"current_work_item": None}
 
     return pick_next_node
-
-
-def _to_work_item(item) -> WorkItem | None:
-    """Convert item to WorkItem if possible."""
-    if isinstance(item, WorkItem):
-        return item
-    if isinstance(item, dict):
-        try:
-            return WorkItem.model_validate(item)
-        except ValidationError:
-            logger.error("Invalid work item payload in backlog: %r", item, exc_info=True)
-            raise
-    return None

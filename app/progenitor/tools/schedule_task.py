@@ -143,7 +143,7 @@ class ScheduleTaskTool(BaseSystemTool):
                 ),
             }
 
-            # Build state_updates so the decide node can merge the new
+            # Build state_updates so the chat node can merge the new
             # schedule entry into graph state without special-case code.
             state_updates = None
             if entry_data:

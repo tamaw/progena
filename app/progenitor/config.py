@@ -8,6 +8,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -102,37 +103,23 @@ def _is_valid_env_name(value: str) -> bool:
 
 
 def _resolve_required_env_template(value: str) -> tuple[str | None, list[str]]:
-    """Resolve ${VAR} placeholders, returning missing variable names when unresolved."""
+    """Resolve $VAR/${VAR} placeholders, returning missing variable names when unresolved."""
+    pattern = re.compile(
+        r"\$(?:{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)}|(?P<named>[A-Za-z_][A-Za-z0-9_]*))"
+    )
     missing: list[str] = []
-    rendered_parts: list[str] = []
-    cursor = 0
 
-    while True:
-        start = value.find("${", cursor)
-        if start == -1:
-            rendered_parts.append(value[cursor:])
-            break
-
-        rendered_parts.append(value[cursor:start])
-        end = value.find("}", start + 2)
-        if end == -1:
-            rendered_parts.append(value[start:])
-            break
-
-        var_name = value[start + 2 : end]
-        if not _is_valid_env_name(var_name):
-            rendered_parts.append(value[start : end + 1])
-            cursor = end + 1
-            continue
-
+    def replace(match: re.Match[str]) -> str:
+        var_name = match.group("braced") or match.group("named")
+        if var_name is None:
+            return match.group(0)
         resolved = os.getenv(var_name)
         if resolved is None:
             missing.append(var_name)
-        else:
-            rendered_parts.append(resolved)
-        cursor = end + 1
+            return match.group(0)
+        return resolved
 
-    rendered = "".join(rendered_parts)
+    rendered = pattern.sub(replace, value)
     if missing:
         return None, missing
     return rendered, []
@@ -808,6 +795,140 @@ class ProgenitorConfig:
         return result
 
 
+def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
+    """Collect non-fatal configuration issues for startup diagnostics."""
+    issues: list[str] = []
+
+    if not config.llm.base_url:
+        issues.append("LLM Config Error: base_url must not be empty")
+    if not config.llm.model_default:
+        issues.append("LLM Config Error: model_default must not be empty")
+
+    runtime_rules = [
+        ("timezone", config.runtime.timezone, lambda v: isinstance(v, str) and len(v) >= 1),
+        (
+            "idle_backoff_seconds",
+            config.runtime.idle_backoff_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 3600,
+        ),
+        (
+            "max_actions_per_cycle",
+            config.runtime.max_actions_per_cycle,
+            lambda v: isinstance(v, int) and 0 < v <= 100,
+        ),
+        (
+            "log_level",
+            config.runtime.log_level,
+            lambda v: isinstance(v, str) and v in {"debug", "info", "warn", "warning", "error"},
+        ),
+        (
+            "log_format",
+            config.runtime.log_format,
+            lambda v: isinstance(v, str) and v in {"text", "json"},
+        ),
+        (
+            "backoff_multiplier",
+            config.runtime.backoff_multiplier,
+            lambda v: isinstance(v, (int, float)) and 1.0 < float(v) <= 10.0,
+        ),
+        (
+            "max_backoff_seconds",
+            config.runtime.max_backoff_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 3600,
+        ),
+        (
+            "checkpoint_interval_seconds",
+            config.runtime.checkpoint_interval_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 3600,
+        ),
+        (
+            "input_timeout_seconds",
+            config.runtime.input_timeout_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 3600,
+        ),
+        (
+            "max_input_queue_size",
+            config.runtime.max_input_queue_size,
+            lambda v: isinstance(v, int) and 0 < v <= 10000,
+        ),
+        (
+            "max_output_queue_size",
+            config.runtime.max_output_queue_size,
+            lambda v: isinstance(v, int) and 0 < v <= 10000,
+        ),
+        (
+            "max_stream_queue_size",
+            config.runtime.max_stream_queue_size,
+            lambda v: isinstance(v, int) and 0 < v <= 100000,
+        ),
+        (
+            "health_stale_seconds",
+            config.runtime.health_stale_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 600,
+        ),
+        (
+            "max_inner_iterations",
+            config.runtime.max_inner_iterations,
+            lambda v: isinstance(v, int) and 0 < v <= 100,
+        ),
+        (
+            "min_verification_score",
+            config.runtime.min_verification_score,
+            lambda v: isinstance(v, (int, float)) and 0.0 <= float(v) <= 1.0,
+        ),
+        (
+            "iteration_time_limit_seconds",
+            config.runtime.iteration_time_limit_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 7200,
+        ),
+    ]
+    for field_name, value, predicate in runtime_rules:
+        if not predicate(value):
+            issues.append(f"Runtime Config Error: invalid {field_name}={value!r}")
+
+    storage_rules = [
+        ("state_dir", config.storage.state_dir),
+        ("log_dir", config.storage.log_dir),
+        ("worktree_dir", config.storage.worktree_dir),
+        ("prompts_dir", config.storage.prompts_dir),
+    ]
+    for field_name, value in storage_rules:
+        if not isinstance(value, Path):
+            issues.append(f"Storage Config Error: {field_name} must be a Path")
+    if not (0 < config.storage.state_lock_timeout_seconds <= 300):
+        issues.append(
+            "Storage Config Error: invalid "
+            f"state_lock_timeout_seconds={config.storage.state_lock_timeout_seconds!r}"
+        )
+
+    if not config.copilot.bin_path:
+        issues.append("Copilot Config Error: bin_path must not be empty")
+    if not (0 < config.copilot.timeout_seconds <= 1800):
+        issues.append(
+            f"Copilot Config Error: invalid timeout_seconds={config.copilot.timeout_seconds!r}"
+        )
+    if not config.copilot.model:
+        issues.append("Copilot Config Error: model must not be empty")
+    if not (0 < config.copilot.max_tokens <= 1000000):
+        issues.append(f"Copilot Config Error: invalid max_tokens={config.copilot.max_tokens!r}")
+
+    if not (0 < config.scheduler.poll_seconds <= 3600):
+        issues.append(
+            f"Scheduler Config Error: invalid poll_seconds={config.scheduler.poll_seconds!r}"
+        )
+
+    return issues
+
+
+def _log_validation_issues(config: ProgenitorConfig) -> None:
+    """Emit warning logs for non-fatal configuration issues."""
+    issues = _collect_validation_issues(config)
+    if issues:
+        logger.warning(
+            "Configuration has %d validation issue(s): %s", len(issues), "; ".join(issues)
+        )
+
+
 # Global configuration instance (loaded lazily)
 _config: ProgenitorConfig | None = None
 
@@ -827,13 +948,7 @@ def get_config(
     if _config is None:
         _config = ProgenitorConfig.load(project_root, config_dir)
         if validate:
-            from .config_validation import validate_config
-
-            is_valid, issues = validate_config(_config)
-            if not is_valid:
-                logger.warning(
-                    f"Configuration has {len(issues)} validation issue(s): {'; '.join(issues)}"
-                )
+            _log_validation_issues(_config)
     return _config
 
 
@@ -850,13 +965,7 @@ def reload_config(
     global _config
     _config = ProgenitorConfig.load(project_root, config_dir)
     if validate:
-        from .config_validation import validate_config
-
-        is_valid, issues = validate_config(_config)
-        if not is_valid:
-            logger.warning(
-                f"Configuration has {len(issues)} validation issue(s): {'; '.join(issues)}"
-            )
+        _log_validation_issues(_config)
     return _config
 
 

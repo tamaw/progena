@@ -19,34 +19,19 @@ permissions:
   packages: write
 
 jobs:
-  runner-context:
-    runs-on: self-hosted
-    outputs:
-      uid: ${{ steps.ids.outputs.uid }}
-      gid: ${{ steps.ids.outputs.gid }}
-    steps:
-      - name: Capture runner uid/gid
-        id: ids
-        run: |
-          RUN_UID="$(id -u)"
-          RUN_GID="$(id -g)"
-          echo "uid=${RUN_UID}" >> "$GITHUB_OUTPUT"
-          echo "gid=${RUN_GID}" >> "$GITHUB_OUTPUT"
-
   backend:
-    needs: runner-context
     runs-on: [self-hosted, Linux]
-    container:
-      image: python:3.12-slim
-      options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
-    env:
-      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
       - name: Install Python deps
         run: |
-          mkdir -p "$PIP_CACHE_DIR"
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
@@ -64,27 +49,26 @@ jobs:
           coverage report --include='app/backend/*' --fail-under=65
 
   progenitor:
-    needs: runner-context
     runs-on: [self-hosted, Linux]
-    container:
-      image: python:3.12-slim
-      options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
-    env:
-      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python deps
-        run: |
-          mkdir -p "$PIP_CACHE_DIR"
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Install Python deps
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
 
       - name: Lint progenitor (ruff)
         run: |
@@ -107,8 +91,7 @@ jobs:
           coverage report --include='app/progenitor/*' --fail-under=59
 
   frontend:
-    needs: runner-context
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
     defaults:
       run:
         working-directory: app/frontend
@@ -122,7 +105,7 @@ jobs:
           cache-dependency-path: app/frontend/package-lock.json
 
       - name: Install deps
-        run: npm ci
+        run: npm ci --prefer-offline
 
       - name: Lint
         run: npm run lint
@@ -131,7 +114,7 @@ jobs:
         run: npm run build
 
   build-and-push:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, docker]
     needs: [backend, progenitor, frontend]
     # Keep push-based image publishing on main, but allow explicit manual dispatches from a branch.
     if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
@@ -158,8 +141,8 @@ jobs:
           tags: |
             ghcr.io/tamaw/progenitor:latest
             ghcr.io/tamaw/progenitor:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=progenitor-image
+          cache-to: type=gha,mode=max,scope=progenitor-image
 
       - name: Build and push backend image
         uses: docker/build-push-action@v6
@@ -173,8 +156,8 @@ jobs:
           tags: |
             ghcr.io/tamaw/progenitor-backend:latest
             ghcr.io/tamaw/progenitor-backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=backend-image
+          cache-to: type=gha,mode=max,scope=backend-image
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -188,12 +171,12 @@ jobs:
           tags: |
             ghcr.io/tamaw/progenitor-frontend:latest
             ghcr.io/tamaw/progenitor-frontend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=frontend-image
+          cache-to: type=gha,mode=max,scope=frontend-image
 
   deploy:
     # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, docker]
     environment: cronix
     needs: [build-and-push]
     # Keep push-based deploys on main, but allow explicit manual dispatches from a branch.

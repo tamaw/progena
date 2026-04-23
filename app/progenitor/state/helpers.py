@@ -126,7 +126,7 @@ def normalize_decision(item: Any) -> Decision | None:
             reasoning=item.get("reasoning", ""),
             requires_planning=item.get("requires_planning", False),
             target_capabilities=item.get("target_capabilities", []),
-            direct_response=item.get("direct_response"),
+            user_response=item.get("user_response") or item.get("direct_response"),
         )
 
     return None

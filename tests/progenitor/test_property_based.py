@@ -15,7 +15,7 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from app.progenitor.state.helpers import get_actionable_items
+from app.progenitor.state.helpers import get_actionable_items, get_item_type_value, get_status_value
 from app.progenitor.state.models import (
     Decision,
     DecisionAction,
@@ -29,11 +29,16 @@ from app.progenitor.state.models import (
 # Custom Strategies
 # ============================================================================
 
+
 @st.composite
 def work_item_strategy(draw):
     """Generate random WorkItem instances."""
     return WorkItem(
-        id=draw(st.text(min_size=1, max_size=20, alphabet=st.characters(whitelist_categories=('L', 'N')))),
+        id=draw(
+            st.text(
+                min_size=1, max_size=20, alphabet=st.characters(whitelist_categories=("L", "N"))
+            )
+        ),
         item_type=draw(st.sampled_from(list(WorkItemType))),
         status=draw(st.sampled_from(list(WorkItemStatus))),
         description=draw(st.text(min_size=1, max_size=100)),
@@ -71,6 +76,7 @@ def progenitor_state_strategy(draw):
 # Property Tests: Iteration Bounds
 # ============================================================================
 
+
 class TestIterationBounds:
     """Tests for iteration count bounds."""
 
@@ -93,6 +99,7 @@ class TestIterationBounds:
 # Property Tests: Work Item Invariants
 # ============================================================================
 
+
 class TestWorkItemInvariants:
     """Tests for work item invariants."""
 
@@ -105,17 +112,20 @@ class TestWorkItemInvariants:
     @given(work_item_strategy())
     def test_work_item_status_valid(self, item: WorkItem):
         """Work item status should be valid."""
-        assert item.status_value in [s.value for s in WorkItemStatus]
+        assert get_status_value(item) in [s.value for s in WorkItemStatus]
 
     @given(work_item_strategy())
     def test_work_item_type_valid(self, item: WorkItem):
         """Work item type should be valid."""
-        assert item.item_type_value in [t.value for t in WorkItemType]
+        assert get_item_type_value(item) in [t.value for t in WorkItemType]
 
     @given(work_item_strategy())
     def test_actionable_consistency(self, item: WorkItem):
         """is_actionable should be consistent with status."""
-        if item.status_value in (WorkItemStatus.PENDING.value, WorkItemStatus.IN_PROGRESS.value):
+        if get_status_value(item) in (
+            WorkItemStatus.PENDING.value,
+            WorkItemStatus.IN_PROGRESS.value,
+        ):
             assert item.is_actionable
         else:
             assert not item.is_actionable
@@ -134,6 +144,7 @@ class TestWorkItemInvariants:
 # ============================================================================
 # Property Tests: Backlog Operations
 # ============================================================================
+
 
 class TestBacklogOperations:
     """Tests for backlog operation properties."""
@@ -154,7 +165,7 @@ class TestBacklogOperations:
         actionable = get_actionable_items(backlog)
 
         for item in actionable:
-            assert item.status_value in (
+            assert get_status_value(item) in (
                 WorkItemStatus.PENDING.value,
                 WorkItemStatus.IN_PROGRESS.value,
             )
@@ -166,12 +177,13 @@ class TestBacklogOperations:
         actionable = get_actionable_items(backlog)
 
         for item in actionable:
-            assert item.status_value != WorkItemStatus.COMPLETED.value
+            assert get_status_value(item) != WorkItemStatus.COMPLETED.value
 
 
 # ============================================================================
 # Property Tests: Decision Invariants
 # ============================================================================
+
 
 class TestDecisionInvariants:
     """Tests for decision invariants."""
@@ -196,6 +208,7 @@ class TestDecisionInvariants:
 # ============================================================================
 # Property Tests: State Consistency
 # ============================================================================
+
 
 class TestStateConsistency:
     """Tests for state consistency invariants."""
@@ -251,32 +264,33 @@ class TestStateConsistency:
 # Property Tests: Mark Operations Idempotency
 # ============================================================================
 
+
 class TestMarkOperationsIdempotency:
     """Tests that mark operations are idempotent where appropriate."""
 
     @given(work_item_strategy())
     def test_mark_completed_idempotent(self, item: WorkItem):
         """Marking completed multiple times should be stable."""
-        assume(item.status_value == WorkItemStatus.PENDING.value)
+        assume(get_status_value(item) == WorkItemStatus.PENDING.value)
 
         item.mark_completed({"result": "test"})
-        first_status = item.status_value
+        first_status = get_status_value(item)
 
         # Mark again
         item.mark_completed({"result": "test2"})
 
         # Status should still be completed
-        assert item.status_value == WorkItemStatus.COMPLETED.value
-        assert item.status_value == first_status
+        assert get_status_value(item) == WorkItemStatus.COMPLETED.value
+        assert get_status_value(item) == first_status
 
     @given(work_item_strategy())
     def test_mark_in_progress_changes_status(self, item: WorkItem):
         """Mark in progress should update status."""
-        assume(item.status_value == WorkItemStatus.PENDING.value)
+        assume(get_status_value(item) == WorkItemStatus.PENDING.value)
 
         item.mark_in_progress()
 
-        assert item.status_value == WorkItemStatus.IN_PROGRESS.value
+        assert get_status_value(item) == WorkItemStatus.IN_PROGRESS.value
         # updated_at should change (though time resolution might be same)
 
 

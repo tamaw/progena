@@ -1,12 +1,13 @@
 """State models for Progenitor using Pydantic v2."""
 
 import logging
+import re
 import uuid
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..runtime.time_utils import utcnow
 
@@ -81,42 +82,59 @@ class IterationStopReason(StrEnum):
 # Patterns for secret redaction - (pattern, replacement_or_handler)
 # Order matters: more specific patterns should come first
 # NOTE: Patterns are carefully crafted to avoid false positives (e.g., UUIDs, hashes)
-SECRET_PATTERNS = [
+SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # OpenAI keys (multiple formats) - very specific prefixes
-    (r"sk-proj-[A-Za-z0-9\-_]{20,}", "[OPENAI_PROJECT_KEY_REDACTED]"),  # OpenAI project keys
-    (r"sk-[A-Za-z0-9]{20,}", "[OPENAI_KEY_REDACTED]"),  # OpenAI keys (sk- prefix)
+    (
+        re.compile(r"sk-proj-[A-Za-z0-9\-_]{20,}"),
+        "[OPENAI_PROJECT_KEY_REDACTED]",
+    ),  # OpenAI project keys
+    (re.compile(r"sk-[A-Za-z0-9]{20,}"), "[OPENAI_KEY_REDACTED]"),  # OpenAI keys (sk- prefix)
     # Azure keys - context-aware patterns only (avoid matching UUIDs/hashes)
     # Match "key": "value" or key=value patterns with Azure context
     (
-        r'(?i)(?:azure|az)[_-]?(?:openai)?[_-]?(?:api)?[_-]?key["\']?\s*[:=]\s*["\']?([A-Za-z0-9]{32,})',
+        re.compile(
+            r'(?i)(?:azure|az)[_-]?(?:openai)?[_-]?(?:api)?[_-]?key["\']?\s*[:=]\s*["\']?([A-Za-z0-9]{32,})'
+        ),
         "[AZURE_KEY_REDACTED]",
     ),
     # Match environment variable style AZURE_*_KEY=value
-    (r"(?i)(AZURE_[A-Z_]*KEY)\s*=\s*([A-Za-z0-9]{32,})", r"\1=[AZURE_KEY_REDACTED]"),
+    (re.compile(r"(?i)(AZURE_[A-Z_]*KEY)\s*=\s*([A-Za-z0-9]{32,})"), r"\1=[AZURE_KEY_REDACTED]"),
     # Only match 32-char hex strings in key/secret/credential contexts (not standalone)
     (
-        r'(?i)(?:key|secret|credential|token)["\']?\s*[:=]\s*["\']?([A-Fa-f0-9]{32})(?![A-Za-z0-9])',
+        re.compile(
+            r'(?i)(?:key|secret|credential|token)["\']?\s*[:=]\s*["\']?([A-Fa-f0-9]{32})(?![A-Za-z0-9])'
+        ),
         "[AZURE_KEY_REDACTED]",
     ),
     # GitHub tokens - very specific prefixes
-    (r"ghp_[A-Za-z0-9]{36,}", "[GITHUB_TOKEN_REDACTED]"),  # GitHub personal access tokens
-    (r"gho_[A-Za-z0-9]{36,}", "[GITHUB_OAUTH_REDACTED]"),  # GitHub OAuth tokens
-    (r"ghs_[A-Za-z0-9]{36,}", "[GITHUB_SERVER_REDACTED]"),  # GitHub server tokens
-    (r"ghu_[A-Za-z0-9]{36,}", "[GITHUB_USER_REDACTED]"),  # GitHub user tokens
-    (r"github_pat_[A-Za-z0-9_]{22,}", "[GITHUB_PAT_REDACTED]"),  # Fine-grained PATs
-    # Anthropic keys
-    (r"sk-ant-[A-Za-z0-9\-_]{20,}", "[ANTHROPIC_KEY_REDACTED]"),
-    # Generic patterns - require context (key/value assignment)
-    (r'(?i)(api[_-]?key|apikey)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})', r"\1=[REDACTED]"),
     (
-        r'(?i)(secret|password|passwd|pwd|credential)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})',
+        re.compile(r"ghp_[A-Za-z0-9]{36,}"),
+        "[GITHUB_TOKEN_REDACTED]",
+    ),  # GitHub personal access tokens
+    (re.compile(r"gho_[A-Za-z0-9]{36,}"), "[GITHUB_OAUTH_REDACTED]"),  # GitHub OAuth tokens
+    (re.compile(r"ghs_[A-Za-z0-9]{36,}"), "[GITHUB_SERVER_REDACTED]"),  # GitHub server tokens
+    (re.compile(r"ghu_[A-Za-z0-9]{36,}"), "[GITHUB_USER_REDACTED]"),  # GitHub user tokens
+    (re.compile(r"github_pat_[A-Za-z0-9_]{22,}"), "[GITHUB_PAT_REDACTED]"),  # Fine-grained PATs
+    # Anthropic keys
+    (re.compile(r"sk-ant-[A-Za-z0-9\-_]{20,}"), "[ANTHROPIC_KEY_REDACTED]"),
+    # Generic patterns - require context (key/value assignment)
+    (
+        re.compile(r'(?i)(api[_-]?key|apikey)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})'),
         r"\1=[REDACTED]",
     ),
-    (r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*", r"\1[REDACTED]"),
-    # AWS patterns - specific prefixes
-    (r"AKIA[A-Z0-9]{16}", "[AWS_ACCESS_KEY_REDACTED]"),
     (
-        r'(?i)(aws[_-]?secret[_-]?access[_-]?key)["\']?\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}',
+        re.compile(
+            r'(?i)(secret|password|passwd|pwd|credential)["\']?\s*[:=]\s*["\']?([^"\',\s]{8,})'
+        ),
+        r"\1=[REDACTED]",
+    ),
+    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*"), r"\1[REDACTED]"),
+    # AWS patterns - specific prefixes
+    (re.compile(r"AKIA[A-Z0-9]{16}"), "[AWS_ACCESS_KEY_REDACTED]"),
+    (
+        re.compile(
+            r'(?i)(aws[_-]?secret[_-]?access[_-]?key)["\']?\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}'
+        ),
         r"\1=[REDACTED]",
     ),
 ]
@@ -131,11 +149,9 @@ def redact_secrets(text: str) -> str:
 
     UUIDs, hashes, and work item IDs should NOT be redacted.
     """
-    import re
-
     result = text
     for pattern, replacement in SECRET_PATTERNS:
-        result = re.sub(pattern, replacement, result)
+        result = pattern.sub(replacement, result)
     return result
 
 
@@ -254,8 +270,18 @@ class Decision(BaseModel):
     reasoning: str
     requires_planning: bool = False
     target_capabilities: list[str] = Field(default_factory=list)
-    direct_response: str | None = None
+    user_response: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_direct_response(cls, data: Any) -> Any:
+        """Map legacy direct_response payloads onto user_response."""
+        if isinstance(data, dict) and not data.get("user_response") and data.get("direct_response"):
+            migrated = dict(data)
+            migrated["user_response"] = migrated["direct_response"]
+            return migrated
+        return data
 
 
 class ScheduleEntry(BaseModel):

@@ -3,7 +3,7 @@ Progenitor Agent - Personal assistant and bootstrap builder for the TARDIS syste
 
 A perpetual loop agent that:
 - Accepts conversational user input
-- Decides whether to answer directly, delegate via A2A, or build/upgrade agents
+- Decides whether to answer directly, delegate via A2A, or build new capabilities
 - Orchestrates via LangGraph with persistent state and logging
 """
 

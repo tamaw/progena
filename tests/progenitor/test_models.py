@@ -92,11 +92,11 @@ class TestDecision:
         decision = Decision(
             action=DecisionAction.ANSWER_DIRECTLY,
             reasoning="Simple question",
-            direct_response="The answer is 42",
+            user_response="The answer is 42",
         )
 
         assert decision.action == DecisionAction.ANSWER_DIRECTLY
-        assert decision.direct_response == "The answer is 42"
+        assert decision.user_response == "The answer is 42"
 
 
 class TestScheduleEntry:

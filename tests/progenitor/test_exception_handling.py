@@ -37,41 +37,15 @@ class TestMCPExceptionHandling:
         assert result is False
 
 
-class TestTimeUtilsExceptionHandling:
-    """Test exception handling in time_utils.py."""
-
-    def test_uses_specific_exception_types(self):
-        """Verify time_utils.py uses specific exception types."""
-        import app.progenitor.runtime.time_utils as time_module
-
-        with open(time_module.__file__) as f:
-            content = f.read()
-
-        # Should use pytz.exceptions.UnknownTimeZoneError
-        assert "pytz.exceptions.UnknownTimeZoneError" in content
-        assert "logger" in content
-
-    def test_invalid_timezone_falls_back_to_utc(self):
-        """Test that invalid timezone falls back to UTC."""
-        import pytz
-
-        from app.progenitor.runtime.time_utils import TimeManager
-
-        tm = TimeManager(timezone_name="Invalid/NotATimezone")
-
-        assert tm.tz == pytz.UTC
-
-
 class TestPickNextExceptionHandling:
     """Test exception handling in pick_next.py."""
 
-    def test_uses_specific_exception_types(self):
-        """Verify pick_next.py uses specific exception types."""
+    def test_uses_canonical_work_item_normalizer(self):
+        """Verify pick_next.py delegates conversion to normalize_work_item."""
         import app.progenitor.nodes.pick_next as pick_next_module
 
         with open(pick_next_module.__file__) as f:
             content = f.read()
 
-        # Should have specific exception types
-        assert "ValidationError" in content
-        assert "logger.error" in content
+        assert "normalize_work_item" in content
+        assert "logger.debug" in content

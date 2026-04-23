@@ -15,6 +15,7 @@ from app.progenitor.config import (
     RuntimeConfig,
     SchedulerConfig,
     StorageConfig,
+    _resolve_required_env_template,
     get_config,
     load_mcp_servers,
     reload_config,
@@ -330,6 +331,16 @@ class TestMCPConfig:
         assert servers[0].name == "jina"
         assert servers[0].headers == {}
 
+    def test_resolve_required_env_template_supports_dollar_var(self):
+        with patch.dict(os.environ, {"JINA_API_KEY": "jina_test_key"}, clear=False):
+            assert _resolve_required_env_template("Bearer $JINA_API_KEY") == (
+                "Bearer jina_test_key",
+                [],
+            )
+
+    def test_resolve_required_env_template_preserves_invalid_placeholder(self):
+        assert _resolve_required_env_template("Bearer ${1INVALID}") == ("Bearer ${1INVALID}", [])
+
     def test_load_reads_checked_in_file(self, tmp_path):
         mcp_dir = tmp_path / "data" / "config"
         mcp_dir.mkdir(parents=True)
@@ -455,6 +466,49 @@ class TestGlobalConfig:
             config2 = reload_config()
 
         assert config1 is not config2
+
+    def test_get_config_validate_logs_non_fatal_issues(self, caplog):
+        """validate=True should log warning-only config issues."""
+        import app.progenitor.config as config_module
+
+        config_module._config = None
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
+                    "PROGENITOR_LOG_FORMAT": "xml",
+                },
+                clear=False,
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            get_config()
+
+        assert "Configuration has 1 validation issue(s)" in caplog.text
+        assert "invalid log_format='xml'" in caplog.text
+
+    def test_get_config_validate_false_skips_non_fatal_issue_logging(self, caplog):
+        """validate=False should skip the warning-only validation pass."""
+        import app.progenitor.config as config_module
+
+        config_module._config = None
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
+                    "PROGENITOR_LOG_FORMAT": "xml",
+                },
+                clear=False,
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            get_config(validate=False)
+
+        assert "Configuration has" not in caplog.text
 
 
 class TestLoggingSetup:
