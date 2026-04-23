@@ -22,15 +22,6 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 logger = logging.getLogger(__name__)
 
 
-class GhCliArgs(BaseModel):
-    args: list[str] = Field(description="GitHub CLI arguments, excluding the leading 'gh'.")
-    timeout: float = Field(default=60.0, description="Command timeout in seconds.")
-    cwd: str | None = Field(
-        default=None,
-        description="Optional working directory for the gh command.",
-    )
-
-
 def _extract_pr_url(text: str) -> str | None:
     m = re.search(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+", text or "")
     return m.group(0) if m else None
@@ -313,8 +304,26 @@ async def gh_create_pr_from_worktree(
     )
 
 
+class GhCliArgs(BaseModel):
+    """Structured arguments for gh CLI execution."""
+
+    args: list[str] | None = Field(
+        default=None,
+        description="GitHub CLI arguments, excluding the leading 'gh'.",
+    )
+    cwd: str | None = Field(
+        default=None,
+        description="Optional working directory for the gh command.",
+    )
+    timeout: float = Field(default=60.0, description="Command timeout in seconds.")
+
+
 class GhCliTool(BaseSystemTool):
     """Run gh CLI commands from container/project-root scope."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return GhCliArgs
 
     @property
     def name(self) -> str:

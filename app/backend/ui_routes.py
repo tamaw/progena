@@ -589,7 +589,7 @@ async def get_ui_status_snapshot():
             # State data
             cycle_count=snapshot.health.cycle_count,
             thread_id=snapshot.health.thread_id,
-            messages_count=len(state_reader.get_progenitor_state().get("messages", [])),
+            messages_count=snapshot.messages_count,
             pid=snapshot.health.pid,
             last_active=snapshot.health.last_active,
             # Build status

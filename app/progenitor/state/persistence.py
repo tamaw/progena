@@ -20,9 +20,10 @@ import logging
 import os
 import sys
 import tempfile
-from contextlib import asynccontextmanager
+import time
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import aiofiles
 
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 # Cross-platform file locking
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import msvcrt
 
     def lock_file(f):
@@ -68,16 +69,20 @@ class StatePersistence:
         state_dir: Path,
         logs_dir: Path,
         lock_timeout: int = 10,
-    ):
+        *,
+        config_dir: Path | None = None,
+    ) -> None:
         """Initialize persistence layer.
 
         Args:
             state_dir: Directory for state JSON files.
             logs_dir: Directory for JSONL log files.
             lock_timeout: Timeout for acquiring file locks.
+            config_dir: Optional directory for config JSON files.
         """
         self.state_dir = Path(state_dir)
         self.logs_dir = Path(logs_dir)
+        self.config_dir = Path(config_dir) if config_dir is not None else None
         self.lock_timeout = lock_timeout
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -85,6 +90,12 @@ class StatePersistence:
         """Initialize directories."""
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        if self.config_dir is not None:
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+
+    def clear_locks(self) -> None:
+        """Forget cached asyncio locks."""
+        self._locks.clear()
 
     def _get_lock(self, name: str) -> asyncio.Lock:
         """Get or create an async lock for a file."""
@@ -93,13 +104,37 @@ class StatePersistence:
         return self._locks[name]
 
     @asynccontextmanager
-    async def file_lock(self, name: str):
+    async def file_lock(self, name: str, *, filepath: Path | None = None):
         """Acquire async lock for a file operation."""
-        lock = self._get_lock(name)
+        target_path = Path(filepath) if filepath is not None else self.state_dir / name
+        lock = self._get_lock(str(target_path))
         async with lock:
-            yield
+            lock_path = target_path.with_suffix(f"{target_path.suffix}.lock")
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    async def read(self, filename: str) -> dict[str, Any] | None:
+            with open(lock_path, "a+b") as lock_handle:
+                if lock_handle.tell() == 0 and lock_handle.seek(0, os.SEEK_END) == 0:
+                    lock_handle.write(b"0")
+                    lock_handle.flush()
+                lock_handle.seek(0)
+
+                deadline = time.monotonic() + self.lock_timeout
+                while True:
+                    try:
+                        await asyncio.to_thread(lock_file, lock_handle)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(f"Timed out acquiring file lock for {name}")
+                        await asyncio.sleep(0.05)
+
+                try:
+                    yield
+                finally:
+                    with suppress(OSError):
+                        await asyncio.to_thread(unlock_file, lock_handle)
+
+    async def read(self, filename: str) -> Any:
         """Read a JSON file asynchronously.
 
         Args:
@@ -108,48 +143,76 @@ class StatePersistence:
         Returns:
             Parsed JSON data or None if file doesn't exist.
         """
-        filepath = self.state_dir / filename
+        return await self.read_json(self.state_dir / filename)
+
+    async def read_json(self, filepath: Path) -> Any:
+        """Read an arbitrary JSON file asynchronously."""
+        filepath = Path(filepath)
         if not filepath.exists():
             return None
 
-        async with aiofiles.open(filepath, encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding="utf-8") as f:
             content = await f.read()
-            return cast(dict[str, Any], json.loads(content))
+            if not content or not content.strip():
+                return None
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as exc:
+                logger.warning("Invalid JSON in %s: %s - treating as empty", filepath.name, exc)
+                return None
 
     async def write(
         self,
         filename: str,
         data: Any,
     ) -> None:
+        """Write a JSON file under state_dir atomically."""
+        await self.write_json(self.state_dir / filename, data)
+
+    async def write_json(self, filepath: Path, data: Any) -> None:
         """Write JSON atomically: temp file → fsync → rename.
 
         This ensures that either the entire write succeeds or the
         original file remains intact. No partial writes possible.
 
         Args:
-            filename: Name of the file (with extension).
+            filepath: Absolute path to the JSON file.
             data: Data to serialize and write.
         """
-        filepath = self.state_dir / filename
-
-        metrics = None
-        span = None
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
 
         # Create temp file in same directory for atomic rename
         fd, tmp_path = tempfile.mkstemp(
             dir=filepath.parent,
             prefix=f".{filepath.name}.",
-            suffix=".tmp"
+            suffix=".tmp",
         )
 
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, default=str)
                 f.flush()
                 os.fsync(f.fileno())
 
-            # Atomic rename
-            os.replace(tmp_path, filepath)
+            max_retries = 5
+            retry_delay = 0.1
+            for attempt in range(max_retries):
+                try:
+                    os.replace(tmp_path, filepath)
+                    break
+                except PermissionError as exc:
+                    if attempt == max_retries - 1:
+                        raise
+                    logger.debug(
+                        "Retry %d/%d: os.replace failed for %s: %s",
+                        attempt + 1,
+                        max_retries,
+                        filepath.name,
+                        exc,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
 
             logger.debug("Atomically wrote %s", filepath)
 
@@ -159,17 +222,6 @@ class StatePersistence:
             # Clean up temp file
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-
-            if metrics:
-                metrics.increment(
-                    "state_write_total",
-                    {"file": filename, "success": "false"}
-                )
-
-            if span:
-                span.record_exception(e)
-                span.end()
-
             raise
 
     async def append_jsonl(
@@ -183,14 +235,16 @@ class StatePersistence:
             filename: Name of the log file (with extension).
             entry: Entry to append as JSON line.
         """
-        filepath = self.logs_dir / filename
-
         line = json.dumps(entry, default=str) + "\n"
+        await self.append_jsonl_line(self.logs_dir / filename, line)
 
-        async with aiofiles.open(filepath, 'a', encoding='utf-8') as f:
+    async def append_jsonl_line(self, filepath: Path, line: str) -> None:
+        """Append a raw JSONL line to an arbitrary file."""
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        async with aiofiles.open(filepath, "a", encoding="utf-8") as f:
             await f.write(line)
             await f.flush()
-            # fsync for durability
             os.fsync(f.fileno())
 
     async def read_jsonl(
@@ -212,7 +266,7 @@ class StatePersistence:
             return []
 
         entries = []
-        async with aiofiles.open(filepath, encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding="utf-8") as f:
             async for line in f:
                 if line.strip():
                     entries.append(json.loads(line))
@@ -242,7 +296,7 @@ class StatePersistence:
             return []
 
         entries = []
-        async with aiofiles.open(filepath, encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding="utf-8") as f:
             async for line in f:
                 if line.strip():
                     entry = json.loads(line)
@@ -265,3 +319,18 @@ class StatePersistence:
         """
         base_dir = self.logs_dir if in_logs else self.state_dir
         return (base_dir / filename).exists()
+
+    def cleanup_stale_temp_files(self, *directories: Path) -> None:
+        """Remove leftover .tmp files from failed atomic writes."""
+        try:
+            for directory in directories:
+                if not directory.exists():
+                    continue
+                for tmp_file in directory.glob(".*.tmp"):
+                    try:
+                        tmp_file.unlink()
+                        logger.info("Cleaned up stale temp file: %s", tmp_file.name)
+                    except Exception as exc:
+                        logger.warning("Failed to clean up %s: %s", tmp_file.name, exc)
+        except Exception as exc:
+            logger.warning("Error scanning for stale temp files: %s", exc)

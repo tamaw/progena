@@ -15,19 +15,25 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 
 class GetA2ATaskArgs(BaseModel):
-    task_id: str = Field(description="Tracked A2A task ID to inspect.")
-    history_length: int = Field(
-        default=DEFAULT_A2A_HISTORY_LENGTH,
-        description="Maximum number of history entries to return.",
-    )
+    """Structured arguments for tracked A2A task lookup."""
+
+    task_id: str = Field(description="Tracked task ID to look up.")
     refresh: bool = Field(
         default=True,
-        description="Refresh the task from the remote agent before returning the payload.",
+        description="Refresh task state from the remote agent before returning.",
+    )
+    history_length: int = Field(
+        default=DEFAULT_A2A_HISTORY_LENGTH,
+        description="Maximum number of recent task history events to include.",
     )
 
 
 class GetA2ATaskTool(BaseSystemTool):
     """Query progress or final results for a tracked A2A task."""
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return GetA2ATaskArgs
 
     @property
     def name(self) -> str:

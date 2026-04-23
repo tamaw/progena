@@ -32,7 +32,7 @@ def create_node(
         state_manager: State manager for logging decisions.
         config: ProgenitorConfig for project root path.
     """
-    if config and hasattr(config, 'storage') and config.storage.worktree_dir:
+    if config and hasattr(config, "storage") and config.storage.worktree_dir:
         project_root = config.storage.worktree_dir.parent
     else:
         project_root = Path.cwd()
@@ -72,8 +72,6 @@ def create_node(
             elif item_type == "build_progenitor":
                 # Core changes do not register new capabilities.
                 pass
-            elif item_type == "upgrade":
-                await _register_upgrade(spec, tool_registry)
         except Exception as exc:
             logger.error("REGISTER: Failed to register %s: %s", item_type, exc, exc_info=True)
             return {}
@@ -108,22 +106,26 @@ def create_node(
             entrypoint=entrypoint,
         )
 
-        await state_manager.log_decision({
-            "event": "agent_tested",
-            "agent_name": agent_name,
-            "test_passed": test_result.success,
-            "test_response": str(test_result.response)[:500] if test_result.response else None,
-            "test_error": test_result.error,
-            "duration_ms": test_result.duration_ms,
-            "timestamp": utcnow_isoformat(),
-        })
+        await state_manager.log_decision(
+            {
+                "event": "agent_tested",
+                "agent_name": agent_name,
+                "test_passed": test_result.success,
+                "test_response": str(test_result.response)[:500] if test_result.response else None,
+                "test_error": test_result.error,
+                "duration_ms": test_result.duration_ms,
+                "timestamp": utcnow_isoformat(),
+            }
+        )
 
-        await state_manager.log_decision({
-            "event": "agent_registered",
-            "agent_name": entry.name,
-            "capabilities": entry.capabilities,
-            "timestamp": utcnow_isoformat(),
-        })
+        await state_manager.log_decision(
+            {
+                "event": "agent_registered",
+                "agent_name": entry.name,
+                "capabilities": entry.capabilities,
+                "timestamp": utcnow_isoformat(),
+            }
+        )
 
     async def _register_tool(spec, tool_registry, state_manager):
         """Register a newly built MCP tool."""
@@ -142,35 +144,13 @@ def create_node(
 
         await tool_registry.register_tool(tool_entry)
 
-        await state_manager.log_decision({
-            "event": "tool_registered",
-            "tool_name": tool_name,
-            "capabilities": tool_entry["capabilities"],
-            "timestamp": utcnow_isoformat(),
-        })
-
-    async def _register_upgrade(spec, tool_registry):
-        """Upgrade capabilities of an existing agent/tool."""
-        target_name = spec.get("name")
-        if not target_name:
-            return
-
-        existing = tool_registry.find_by_name(target_name)
-        if not existing:
-            logger.warning("REGISTER: Upgrade target %r not found in registry", target_name)
-            return
-
-        new_caps = list(set(
-            existing.get("capabilities", []) +
-            spec.get("capabilities", [])
-        ))
-        existing["capabilities"] = new_caps
-        existing["updated_at"] = utcnow_isoformat()
-
-        if existing.get("kind") == "a2a_agent":
-            entry = AgentRegistryEntry(**existing)
-            await tool_registry.register_agent(entry)
-        else:
-            await tool_registry.register_tool(existing)
+        await state_manager.log_decision(
+            {
+                "event": "tool_registered",
+                "tool_name": tool_name,
+                "capabilities": tool_entry["capabilities"],
+                "timestamp": utcnow_isoformat(),
+            }
+        )
 
     return register_node

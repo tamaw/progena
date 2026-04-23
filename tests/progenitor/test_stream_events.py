@@ -8,9 +8,11 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from app.progenitor.agent.middleware import AuditLoggingMiddleware
-from app.progenitor.agent.stream_events import (
+from app.progenitor.stream_events import (
     ALLOWED_CUSTOM_EVENT_TYPES,
     CUSTOM_EVENT_FALLBACK_TYPE,
+    build_reasoning_delta_event,
+    build_reasoning_summary_event,
     build_tool_error_event,
     build_tool_result_event,
     build_tool_start_event,
@@ -188,6 +190,27 @@ def test_build_tool_error_event_redacts_and_truncates():
     assert event["metadata"]["success"] is False
 
 
+def test_build_reasoning_delta_event_tracks_text_length():
+    event = build_reasoning_delta_event(
+        "Checked inputs. ",
+        metadata={"stream_metadata": {"langgraph_node": "respond"}},
+    )
+    assert event["event_type"] == "reasoning_delta"
+    assert event["content"] == "Checked inputs. "
+    assert event["metadata"]["text_length"] == len("Checked inputs. ")
+
+
+def test_build_reasoning_summary_event_redacts_metadata_and_keeps_tokens():
+    api_key = "sk-" + "e" * 48
+    event = build_reasoning_summary_event(
+        "Checked inputs before answering.",
+        metadata={"reasoning_tokens": 17, "debug": api_key},
+    )
+    assert event["event_type"] == "reasoning_summary"
+    assert event["metadata"]["reasoning_tokens"] == 17
+    assert api_key not in repr(event)
+
+
 @pytest.mark.asyncio
 async def test_audit_middleware_emits_tool_start_and_result_events():
     captured: list[dict] = []
@@ -264,7 +287,7 @@ async def test_audit_middleware_swallows_writer_failure():
     # get_stream_writer returns a writer that raises when invoked; emit_stream_event
     # must swallow the failure so tool execution is unaffected.
     with patch(
-        "app.progenitor.agent.stream_events.get_stream_writer",
+        "app.progenitor.stream_events.get_stream_writer",
         return_value=boom,
     ):
         result = await middleware.awrap_tool_call(request, handler)

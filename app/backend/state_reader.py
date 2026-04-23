@@ -557,18 +557,23 @@ class StateReader:
             raw_sessions = data.get("sessions")
             if isinstance(raw_sessions, list):
                 sessions = [entry for entry in raw_sessions if isinstance(entry, dict)]
+            else:
+                sessions = [entry for entry in data.values() if isinstance(entry, dict)]
 
         latest = None
         latest_session_id = None
+        latest_sort_key: tuple[int, str] | None = None
         for session in sessions:
             session_last = (
                 session.get("last_activity")
                 or session.get("updated_at")
                 or session.get("created_at")
             )
-            if session_last and (latest is None or str(session_last) > str(latest)):
+            sort_key = self._sort_key_for_timestamp(session_last)
+            if session_last and (latest_sort_key is None or sort_key > latest_sort_key):
                 latest = str(session_last)
                 latest_session_id = session.get("session_id") or session.get("id")
+                latest_sort_key = sort_key
 
         return SessionSummary(
             total=len(sessions),
@@ -1345,6 +1350,10 @@ class StateReader:
         if new.health.is_running() != old.health.is_running():
             return True
         if new.cycle_count != old.cycle_count:
+            return True
+        if new.thread_id != old.thread_id:
+            return True
+        if new.messages_count != old.messages_count:
             return True
         if len(new.agents) != len(old.agents):
             return True

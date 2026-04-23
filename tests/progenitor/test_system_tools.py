@@ -8,17 +8,22 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel, Field
 
 from app.progenitor.nodes.node_helpers import (
     BaseSystemTool,
     CurrentTimeTool,
+    DeleteScheduleTool,
     ListAgentsTool,
     ListScheduleTool,
     ListToolsTool,
+    PauseScheduleTool,
+    ResumeScheduleTool,
     ScheduleTaskTool,
     SelfReflectTool,
     ToolContext,
     ToolResult,
+    UpdateScheduleTool,
     execute_system_tool,
     format_tool_result,
 )
@@ -89,6 +94,7 @@ class TestBaseSystemTool:
 
     def test_subclass_must_implement_name(self):
         """Subclass must implement name property."""
+
         class TestTool(BaseSystemTool):
             @property
             def name(self):
@@ -106,6 +112,7 @@ class TestBaseSystemTool:
 
     def test_subclass_must_implement_description(self):
         """Subclass must implement description property."""
+
         class TestTool(BaseSystemTool):
             @property
             def name(self):
@@ -120,6 +127,38 @@ class TestBaseSystemTool:
 
         tool = TestTool()
         assert tool.description == "Test description"
+
+    def test_parameters_are_derived_from_args_model(self):
+        """args_model should be the source of truth for public tool parameters."""
+
+        class TestArgs(BaseModel):
+            value: str = Field(description="Primary value")
+            note: str | None = Field(default=None, description="Optional note")
+
+        class TestTool(BaseSystemTool):
+            @property
+            def name(self):
+                return "test_tool"
+
+            @property
+            def description(self):
+                return "Test description"
+
+            @property
+            def args_model(self):
+                return TestArgs
+
+            async def execute(self, context: ToolContext) -> ToolResult:
+                return ToolResult.ok(data={"status": "done"})
+
+        params = TestTool().parameters
+
+        assert params["type"] == "object"
+        assert params["required"] == ["value"]
+        assert params["properties"]["value"]["type"] == "string"
+        assert params["properties"]["note"]["type"] == "string"
+        assert "anyOf" not in params["properties"]["note"]
+        assert "title" not in params
 
 
 class TestListToolsTool:
@@ -226,6 +265,51 @@ class TestListScheduleTool:
         )
         result = await tool.execute(ctx)
         assert result.success is True
+
+    async def test_execute_prefers_state_manager_over_graph_state(self, tool):
+        """Should read the persisted schedule from state_manager when available."""
+        mock_state_manager = MagicMock()
+        mock_state_manager.get_schedule = AsyncMock(
+            return_value=[
+                {
+                    "id": "sched_live",
+                    "message": "Live schedule",
+                    "cron_expression": "0 8 * * *",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "last_run": None,
+                }
+            ]
+        )
+
+        ctx = ToolContext(
+            tool_registry=MagicMock(),
+            llm_client=MagicMock(),
+            state={"schedule": [{"id": "sched_stale", "message": "Stale schedule"}]},
+            state_manager=mock_state_manager,
+        )
+
+        result = await tool.execute(ctx)
+
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["scheduled_tasks"][0]["id"] == "sched_live"
+
+
+class TestScheduleLifecycleTools:
+    """Tests for schedule lifecycle system tool wrappers."""
+
+    @pytest.mark.parametrize(
+        ("tool_cls", "expected_name"),
+        [
+            (DeleteScheduleTool, "delete_schedule"),
+            (UpdateScheduleTool, "update_schedule"),
+            (PauseScheduleTool, "pause_schedule"),
+            (ResumeScheduleTool, "resume_schedule"),
+        ],
+    )
+    def test_name(self, tool_cls, expected_name):
+        tool = tool_cls()
+        assert tool.name == expected_name
 
 
 class TestScheduleTaskTool:
@@ -447,3 +531,25 @@ class TestExecuteSystemTool:
         assert error is None
         assert result is not None
         assert should_retry is False
+
+    async def test_execute_delete_schedule_uses_state_manager(self):
+        """Should execute delete_schedule through the discoverable system tool wrapper."""
+        mock_registry = MagicMock()
+        mock_llm = MagicMock()
+        state_manager = AsyncMock()
+        state_manager.remove_schedule_entry = AsyncMock(return_value=True)
+
+        result, error, state_updates, should_retry = await execute_system_tool(
+            "delete_schedule",
+            mock_registry,
+            mock_llm,
+            state={},
+            state_manager=state_manager,
+            tool_args={"schedule_id": "sched_abc123"},
+        )
+
+        assert error is None
+        assert result is not None
+        assert result["schedule_id"] == "sched_abc123"
+        assert should_retry is False
+        state_manager.remove_schedule_entry.assert_awaited_once_with("sched_abc123")

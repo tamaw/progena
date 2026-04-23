@@ -7,6 +7,8 @@ from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.tools_adapter import create_deepagent_tools, create_dynamic_mcp_tools
 from app.progenitor.state.models import A2ATaskRecord
+from app.progenitor.tools.call_agent import CallAgentArgs
+from app.progenitor.tools.protocol import RequestToolArgs
 
 
 def _tool_by_name(tools, name: str):
@@ -56,65 +58,81 @@ def test_core_only_tools_present() -> None:
     assert len(names) == len(tools)
 
 
-def test_current_system_tools_do_not_expose_generic_tool_args_envelope() -> None:
+def test_request_only_tools_keep_default_request_schema() -> None:
+    tools = create_deepagent_tools()
+    tool = _tool_by_name(tools, "current_time")
+    schema = tool.args_schema.model_json_schema()
+    properties = schema.get("properties", {})
+
+    assert set(properties) == {"request"}
+    assert schema.get("required") == ["request"]
+
+
+def test_deepagent_reuses_declared_args_models() -> None:
     tools = create_deepagent_tools()
 
-    for tool in tools:
-        if tool.args_schema is None:
-            continue
-        properties = tool.args_schema.model_json_schema().get("properties", {})
-        assert "tool_args" not in properties, tool.name
+    assert _tool_by_name(tools, "current_time").args_schema is RequestToolArgs
+    assert _tool_by_name(tools, "call_agent").args_schema is CallAgentArgs
 
 
-def test_user_communication_tools_expose_request_contract() -> None:
+def test_user_communication_tools_expose_structured_parameters() -> None:
     tools = create_deepagent_tools()
 
-    say_tool = _tool_by_name(tools, "say_to_user")
-    say_props = say_tool.args_schema.model_json_schema().get("properties", {})
-    assert "message" in say_props
-    assert "request" not in say_props
-    assert "tool_args" not in say_props
+    say_schema = _tool_by_name(tools, "say_to_user").args_schema.model_json_schema()
+    ask_schema = _tool_by_name(tools, "ask_user").args_schema.model_json_schema()
+    notify_schema = _tool_by_name(tools, "notify_user").args_schema.model_json_schema()
 
-    ask_tool = _tool_by_name(tools, "ask_user")
-    ask_props = ask_tool.args_schema.model_json_schema().get("properties", {})
-    assert {"question", "options"}.issubset(ask_props)
-    assert "request" not in ask_props
+    assert "message" in say_schema.get("properties", {})
+    assert say_schema.get("required") == ["message"]
 
-    notify_tool = _tool_by_name(tools, "notify_user")
-    notify_props = notify_tool.args_schema.model_json_schema().get("properties", {})
-    assert {"title", "body", "level"}.issubset(notify_props)
-    assert "request" not in notify_props
+    ask_properties = ask_schema.get("properties", {})
+    assert {"question", "context", "options"} <= set(ask_properties)
+    assert ask_schema.get("required") == ["question"]
 
-
-def test_call_agent_exposes_explicit_contract() -> None:
-    tools = create_deepagent_tools()
-    tool = _tool_by_name(tools, "call_agent")
-    properties = tool.args_schema.model_json_schema().get("properties", {})
-
-    assert {"agent", "request", "timeout_seconds", "blocking", "context"}.issubset(properties)
-    assert "agent_name" not in properties
-    assert "tool_args" not in properties
+    notify_properties = notify_schema.get("properties", {})
+    assert {"title", "body", "level"} <= set(notify_properties)
+    assert notify_schema.get("required") == ["title", "body"]
 
 
-def test_remaining_adapter_tools_expose_explicit_contracts() -> None:
+def test_schedule_and_reflection_tools_expose_structured_parameters() -> None:
     tools = create_deepagent_tools()
 
-    schedule_task = _tool_by_name(tools, "schedule_task")
-    schedule_props = schedule_task.args_schema.model_json_schema().get("properties", {})
-    assert {"user_request"}.issubset(schedule_props)
-    assert "request" not in schedule_props
+    schedule_schema = _tool_by_name(tools, "schedule_task").args_schema.model_json_schema()
+    delete_schema = _tool_by_name(tools, "delete_schedule").args_schema.model_json_schema()
+    reflect_schema = _tool_by_name(tools, "self_reflect").args_schema.model_json_schema()
 
-    shell_exec = _tool_by_name(tools, "shell_exec")
-    shell_props = shell_exec.args_schema.model_json_schema().get("properties", {})
-    assert {"command", "timeout_seconds", "cwd"}.issubset(shell_props)
+    assert {"user_request", "time_expression", "instruction"} <= set(
+        schedule_schema.get("properties", {})
+    )
+    assert schedule_schema.get("required") == ["user_request", "time_expression", "instruction"]
 
-    gh_cli = _tool_by_name(tools, "gh_cli")
-    gh_props = gh_cli.args_schema.model_json_schema().get("properties", {})
-    assert {"args", "timeout", "cwd"}.issubset(gh_props)
+    assert "schedule_id" in delete_schema.get("properties", {})
+    assert delete_schema.get("required") == ["schedule_id"]
 
-    semantic_registry = _tool_by_name(tools, "semantic_registry")
-    semantic_props = semantic_registry.args_schema.model_json_schema().get("properties", {})
-    assert {"query"}.issubset(semantic_props)
+    reflect_properties = reflect_schema.get("properties", {})
+    assert {"operation", "file_path", "query", "topic"} <= set(reflect_properties)
+    assert reflect_schema.get("required") == ["operation"]
+
+
+def test_call_agent_and_task_tools_expose_structured_parameters() -> None:
+    tools = create_deepagent_tools()
+
+    call_schema = _tool_by_name(tools, "call_agent").args_schema.model_json_schema()
+    task_schema = _tool_by_name(tools, "get_a2a_task").args_schema.model_json_schema()
+    refresh_schema = _tool_by_name(tools, "mcp_refresh").args_schema.model_json_schema()
+
+    call_properties = call_schema.get("properties", {})
+    assert {"request", "agent", "agent_name", "timeout_seconds", "blocking", "context"} <= set(
+        call_properties
+    )
+    assert call_schema.get("required") == ["request"]
+
+    task_properties = task_schema.get("properties", {})
+    assert {"task_id", "refresh", "history_length"} <= set(task_properties)
+    assert task_schema.get("required") == ["task_id"]
+
+    assert "persist" in refresh_schema.get("properties", {})
+    assert "required" not in refresh_schema or refresh_schema.get("required") == []
 
 
 @pytest.mark.asyncio
@@ -124,7 +142,7 @@ async def test_list_agents_returns_registry_entries() -> None:
     tools = create_deepagent_tools(tool_registry=registry)
     t = _tool_by_name(tools, "list_agents")
 
-    result = await t.ainvoke({})
+    result = await t.ainvoke({"request": "list agents"})
     assert result["total_count"] == 1
     assert result["agents"][0]["name"] == "Hello World Agent"
 
@@ -267,6 +285,28 @@ async def test_call_agent_without_agent_routes_via_tool_llm(monkeypatch) -> None
     assert result["task_id"] == "task-123"
     dispatch_mock.assert_awaited_once()
     llm_client.chat_structured.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_schedule_task_accepts_structured_arguments_without_llm_extraction() -> None:
+    state_manager = AsyncMock()
+    state_manager.get_current_state = AsyncMock(return_value={"schedule": []})
+    registry = MagicMock()
+    tools = create_deepagent_tools(tool_registry=registry, state_manager=state_manager)
+    t = _tool_by_name(tools, "schedule_task")
+
+    result = await t.ainvoke(
+        {
+            "user_request": "Remind me to stretch",
+            "time_expression": "in 5 minutes",
+            "instruction": "Tell the user to stretch.",
+            "description": "Stretch reminder",
+        }
+    )
+
+    assert result["success"] is True
+    assert result["schedule_id"].startswith("sched_")
+    state_manager.add_schedule_entry.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -34,5 +34,5 @@ class TestChatNode:
         result = await node({"current_input": "new chat and list tools", "messages": []})
 
         assert isinstance(result.get("current_decision"), Decision)
-        assert result["current_decision"].direct_response == "ok"
+        assert result["current_decision"].user_response == "ok"
         assert result["thread_id"] == "thread_test"

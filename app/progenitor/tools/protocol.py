@@ -5,10 +5,11 @@ Defined under app.progenitor.tools to avoid import cycles with app.progenitor.no
 """
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from ..state.models import ProgenitorState
@@ -47,6 +48,85 @@ class ToolResult:
         return cls(success=False, error=error, should_retry_slow_path=should_retry_slow_path)
 
 
+class RequestToolArgs(BaseModel):
+    """Default argument model for natural-language tools."""
+
+    request: str = Field(description="Natural language request for the tool.")
+
+
+def _normalize_tool_schema(value: Any) -> Any:
+    """Trim Pydantic JSON schema down to the subset we expose to tool callers."""
+    if isinstance(value, dict):
+        normalized = {
+            key: _normalize_tool_schema(item) for key, item in value.items() if key != "title"
+        }
+        any_of = normalized.get("anyOf")
+        if isinstance(any_of, list):
+            non_null_options = [
+                option
+                for option in any_of
+                if not (
+                    isinstance(option, dict)
+                    and option.get("type") == "null"
+                    and set(option.keys()) == {"type"}
+                )
+            ]
+            if len(non_null_options) == 1 and len(non_null_options) != len(any_of):
+                merged = deepcopy(cast(dict[str, Any], non_null_options[0]))
+                for key, item in normalized.items():
+                    if key == "anyOf":
+                        continue
+                    if key == "default" and item is None:
+                        continue
+                    merged[key] = item
+                normalized = merged
+        if normalized.get("default") is None:
+            normalized.pop("default", None)
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_tool_schema(item) for item in value]
+    return value
+
+
+def parameters_from_args_model(args_model: type[BaseModel]) -> dict[str, Any]:
+    """Render a tool argument model as a normalized JSON schema object."""
+    return cast(dict[str, Any], _normalize_tool_schema(args_model.model_json_schema()))
+
+
+def build_tool_spec(
+    *,
+    name: str,
+    description: str,
+    args_model: type[BaseModel],
+) -> dict[str, Any]:
+    """Build a tool registration spec from a Pydantic argument model."""
+    return {
+        "name": name,
+        "description": description,
+        "parameters": parameters_from_args_model(args_model),
+    }
+
+
+def legacy_parameters_from_args_model(args_model: type[BaseModel]) -> dict[str, dict[str, Any]]:
+    """Render a JSON-schema model into the legacy per-field parameter shape."""
+    parameters = parameters_from_args_model(args_model)
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        return {}
+
+    required_fields = parameters.get("required")
+    required = set(required_fields) if isinstance(required_fields, list) else set()
+
+    legacy: dict[str, dict[str, Any]] = {}
+    for field_name, spec in properties.items():
+        if not isinstance(spec, dict):
+            continue
+        entry = dict(spec)
+        entry["required"] = field_name in required
+        legacy[field_name] = entry
+    return legacy
+
+
 class SystemTool(Protocol):
     """Protocol for tools that can be executed inline."""
 
@@ -55,6 +135,12 @@ class SystemTool(Protocol):
 
     @property
     def description(self) -> str: ...
+
+    @property
+    def args_model(self) -> type[BaseModel]: ...
+
+    @property
+    def parameters(self) -> dict[str, Any]: ...
 
     async def execute(self, context: ToolContext) -> ToolResult: ...
 
@@ -79,16 +165,12 @@ class BaseSystemTool(ABC):
         pass
 
     @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return None
+    def args_model(self) -> type[BaseModel]:
+        return RequestToolArgs
 
     @property
-    def deepagent_requires_state(self) -> bool:
-        return False
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        request = str(kwargs.get("request") or "")
-        return request, kwargs or None
+    def parameters(self) -> dict[str, Any]:
+        return parameters_from_args_model(self.args_model)
 
     def to_dict(self) -> dict[str, str]:
         return {
