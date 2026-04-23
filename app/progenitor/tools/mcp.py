@@ -5,6 +5,7 @@ Handles communication with MCP servers via stdio or HTTP transports.
 """
 
 import asyncio
+import importlib
 import inspect
 import json
 import logging
@@ -18,15 +19,6 @@ from typing import Any, cast
 import httpx
 from a2a.client.client import ClientConfig
 from a2a.client.client_factory import ClientFactory
-from a2a.types import (
-    Message,
-    MessageSendConfiguration,
-    Part,
-    Role,
-    TaskIdParams,
-    TaskQueryParams,
-    TextPart,
-)
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import Connection, StreamableHttpConnection
@@ -42,6 +34,15 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 from .registry import normalize_tool_name
 
 logger = logging.getLogger(__name__)
+
+_A2A_TYPES = importlib.import_module("a2a.types")
+Message = cast(Any, _A2A_TYPES.Message)
+MessageSendConfiguration = cast(Any, _A2A_TYPES.MessageSendConfiguration)
+Part = cast(Any, _A2A_TYPES.Part)
+Role = cast(Any, _A2A_TYPES.Role)
+TaskIdParams = cast(Any, _A2A_TYPES.TaskIdParams)
+TaskQueryParams = cast(Any, _A2A_TYPES.TaskQueryParams)
+TextPart = cast(Any, _A2A_TYPES.TextPart)
 
 
 class MCPTool(BaseSystemTool):
@@ -600,7 +601,7 @@ class A2AClient:
                 polling=polling,
                 httpx_client=httpx_client,
             )
-            client = await ClientFactory.connect(
+            client = await cast(Any, ClientFactory).connect(
                 url,
                 client_config=client_config,
                 resolver_http_kwargs={"headers": headers},
@@ -660,7 +661,7 @@ class A2AClient:
                 polling=not blocking,
             ) as client:
                 message = Message(
-                    role=Role.user,
+                    role=cast(Any, getattr(Role, "user", "user")),
                     parts=[Part(root=TextPart(text=request or ""))],
                     message_id=uuid.uuid4().hex,
                     metadata=context or {},
