@@ -5,7 +5,6 @@ Handles communication with MCP servers via stdio or HTTP transports.
 """
 
 import asyncio
-import importlib
 import inspect
 import json
 import logging
@@ -19,6 +18,15 @@ from typing import Any, cast
 import httpx
 from a2a.client.client import ClientConfig
 from a2a.client.client_factory import ClientFactory
+from a2a.types import (
+    Message,
+    MessageSendConfiguration,
+    Part,
+    Role,
+    TaskIdParams,
+    TaskQueryParams,
+    TextPart,
+)
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import Connection, StreamableHttpConnection
@@ -34,29 +42,6 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 from .registry import normalize_tool_name
 
 logger = logging.getLogger(__name__)
-
-_A2A_TYPES = importlib.import_module("a2a.types")
-
-
-def _resolve_a2a_type(*names: str) -> Any:
-    for name in names:
-        resolved = getattr(_A2A_TYPES, name, None)
-        if resolved is not None:
-            return resolved
-    joined_names = ", ".join(names)
-    raise AttributeError(f"module 'a2a.types' is missing expected symbols: {joined_names}")
-
-
-Message = cast(Any, _resolve_a2a_type("Message"))
-MessageSendConfiguration = cast(
-    Any,
-    _resolve_a2a_type("MessageSendConfiguration", "SendMessageConfiguration"),
-)
-Part = cast(Any, _resolve_a2a_type("Part"))
-Role = cast(Any, _resolve_a2a_type("Role"))
-TaskIdParams = cast(Any, _resolve_a2a_type("TaskIdParams"))
-TaskQueryParams = cast(Any, _resolve_a2a_type("TaskQueryParams"))
-TextPart = cast(Any, _resolve_a2a_type("TextPart"))
 
 
 class MCPTool(BaseSystemTool):

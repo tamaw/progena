@@ -37,7 +37,7 @@ jobs:
     needs: runner-context
     runs-on: [self-hosted, Linux]
     container:
-      image: python:3.12-slim
+      image: python:3.14-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
     env:
       PIP_CACHE_DIR: /tmp/pip-cache
@@ -67,7 +67,7 @@ jobs:
     needs: runner-context
     runs-on: [self-hosted, Linux]
     container:
-      image: python:3.12-slim
+      image: python:3.14-slim
       options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
     env:
       PIP_CACHE_DIR: /tmp/pip-cache
