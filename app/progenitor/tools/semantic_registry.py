@@ -20,9 +20,18 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class SemanticRegistryArgs(BaseModel):
+    query: str = Field(
+        default="",
+        description="Optional semantic capability query to run against the registry.",
+    )
 
 
 def _module_available(name: str) -> bool:
@@ -106,7 +115,11 @@ class SemanticRegistry:
 
     def _load_encoder(self) -> None:
         """Lazily load the sentence transformer model."""
-        if self._encoder is not None or not _ensure_semantic_imports() or SentenceTransformer is None:
+        if (
+            self._encoder is not None
+            or not _ensure_semantic_imports()
+            or SentenceTransformer is None
+        ):
             return
 
         try:
@@ -125,8 +138,8 @@ class SemanticRegistry:
                     self._registry = json.load(f)
                 logger.info(
                     "Loaded registry with %d agents and %d tools",
-                    len(self._registry.get('agents', [])),
-                    len(self._registry.get('tools', []))
+                    len(self._registry.get("agents", [])),
+                    len(self._registry.get("tools", [])),
                 )
             except (OSError, json.JSONDecodeError) as e:
                 logger.error("Failed to load registry: %s. Starting fresh.", e)
@@ -162,7 +175,7 @@ class SemanticRegistry:
     async def save(self) -> None:
         """Save registry to disk."""
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.registry_path, 'w') as f:
+        with open(self.registry_path, "w") as f:
             json.dump(self._registry, f, indent=2, default=str)
 
     def get_all_capabilities(self) -> list[str]:
@@ -222,24 +235,28 @@ class SemanticRegistry:
         results = []
         seen = set()
 
-        for capability, similarity in matches[:limit * 2]:  # Get more to dedupe
+        for capability, similarity in matches[: limit * 2]:  # Get more to dedupe
             # Find tool or agent with this capability
             for agent in self._registry.get("agents", []):
                 if capability in agent.get("capabilities", []) and agent.get("name") not in seen:
-                    results.append({
-                        **agent,
-                        "matched_capability": capability,
-                        "similarity": similarity,
-                    })
+                    results.append(
+                        {
+                            **agent,
+                            "matched_capability": capability,
+                            "similarity": similarity,
+                        }
+                    )
                     seen.add(agent.get("name"))
 
             for tool in self._registry.get("tools", []):
                 if capability in tool.get("capabilities", []) and tool.get("name") not in seen:
-                    results.append({
-                        **tool,
-                        "matched_capability": capability,
-                        "similarity": similarity,
-                    })
+                    results.append(
+                        {
+                            **tool,
+                            "matched_capability": capability,
+                            "similarity": similarity,
+                        }
+                    )
                     seen.add(tool.get("name"))
 
             if len(results) >= limit:
@@ -288,6 +305,14 @@ class SemanticRegistryTool(BaseSystemTool):
     @property
     def keywords(self) -> list[str]:
         return []
+
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return SemanticRegistryArgs
+
+    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
+        query = str(kwargs.get("query") or "")
+        return (f"semantic_registry: {query}" if query else ""), None
 
     async def execute(self, context: ToolContext) -> ToolResult:
         registry_path = getattr(context.tool_registry, "registry_path", None)

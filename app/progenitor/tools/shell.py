@@ -16,6 +16,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -24,13 +26,14 @@ _DEFAULT_TIMEOUT_SECONDS = 30.0
 _MAX_TIMEOUT_SECONDS = 300.0
 _MAX_OUTPUT_CHARS = 10_000
 
+
 def _detect_docker() -> bool:
     # Fast path commonly present in containers.
     try:
         if Path("/.dockerenv").exists():
             return True
     except Exception:
-        pass
+        return False
 
     # Fallback: cgroup hints (Linux-only).
     try:
@@ -39,7 +42,7 @@ def _detect_docker() -> bool:
             text = cgroup.read_text(encoding="utf-8", errors="replace")
             return any(k in text for k in ("docker", "kubepods", "containerd"))
     except Exception:
-        pass
+        return False
     return False
 
 
@@ -58,6 +61,18 @@ def _coerce_timeout(value: Any) -> float:
 
 
 _FENCE_RE = re.compile(r"```(?:bash|sh)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+
+
+class ShellExecArgs(BaseModel):
+    command: str = Field(description="Non-interactive shell command to execute.")
+    timeout_seconds: float = Field(
+        default=_DEFAULT_TIMEOUT_SECONDS,
+        description="Command timeout in seconds.",
+    )
+    cwd: str | None = Field(
+        default=None,
+        description="Optional working directory for the command.",
+    )
 
 
 def _extract_command_from_request(request: str) -> str:
@@ -136,8 +151,7 @@ class ShellExecTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Execute a non-interactive shell command inside the container "
-            "(uses bash if available)"
+            "Execute a non-interactive shell command inside the container (uses bash if available)"
         )
 
     @property
@@ -150,6 +164,19 @@ class ShellExecTool(BaseSystemTool):
         # Allow "bash:" / "sh:" / "shell:" only when it looks like an invocation.
         return [r"^\s*(?:bash|sh|shell)\s*[:>-]\s*\S+"]
 
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return ShellExecArgs
+
+    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
+        command = str(kwargs.get("command") or "")
+        timeout_seconds = kwargs.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)
+        cwd = kwargs.get("cwd")
+        prefixes = ["shell_exec", "--timeout", str(timeout_seconds)]
+        if cwd:
+            prefixes.extend(["--cwd", str(cwd)])
+        return " ".join(prefixes) + f" -- {command}", None
+
     async def execute(self, context: ToolContext) -> ToolResult:
         if os.name == "nt":
             return ToolResult.fail("shell_exec is only supported on POSIX (Linux) containers.")
@@ -158,7 +185,9 @@ class ShellExecTool(BaseSystemTool):
 
         # Optional CLI-ish flags before a required "--" delimiter:
         #   shell_exec --timeout 60 --cwd /tmp -- ls -la
-        timeout = _coerce_timeout(os.getenv("PROGENITOR_SHELL_TIMEOUT_SECONDS") or _DEFAULT_TIMEOUT_SECONDS)
+        timeout = _coerce_timeout(
+            os.getenv("PROGENITOR_SHELL_TIMEOUT_SECONDS") or _DEFAULT_TIMEOUT_SECONDS
+        )
         cwd: Path | None = None
         if " -- " in request:
             prefix, cmd_part = request.split(" -- ", 1)
@@ -179,7 +208,9 @@ class ShellExecTool(BaseSystemTool):
                     try:
                         candidate = Path(tokens[i + 1]).expanduser().resolve()
                         if not candidate.exists() or not candidate.is_dir():
-                            return ToolResult.fail(f"cwd does not exist or is not a directory: {candidate}")
+                            return ToolResult.fail(
+                                f"cwd does not exist or is not a directory: {candidate}"
+                            )
                         cwd = candidate
                     except Exception as e:
                         return ToolResult.fail(f"Invalid cwd: {tokens[i + 1]} ({e})")

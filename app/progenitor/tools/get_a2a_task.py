@@ -4,12 +4,26 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from ..runtime.a2a_tasks import (
     DEFAULT_A2A_HISTORY_LENGTH,
     build_task_response,
     refresh_tracked_a2a_task,
 )
 from .protocol import BaseSystemTool, ToolContext, ToolResult
+
+
+class GetA2ATaskArgs(BaseModel):
+    task_id: str = Field(description="Tracked A2A task ID to inspect.")
+    history_length: int = Field(
+        default=DEFAULT_A2A_HISTORY_LENGTH,
+        description="Maximum number of history entries to return.",
+    )
+    refresh: bool = Field(
+        default=True,
+        description="Refresh the task from the remote agent before returning the payload.",
+    )
 
 
 class GetA2ATaskTool(BaseSystemTool):
@@ -32,6 +46,18 @@ class GetA2ATaskTool(BaseSystemTool):
             "task result",
             "check task",
         ]
+
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return GetA2ATaskArgs
+
+    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
+        task_id = str(kwargs.get("task_id") or "")
+        return task_id, {
+            "task_id": task_id,
+            "history_length": kwargs.get("history_length", DEFAULT_A2A_HISTORY_LENGTH),
+            "refresh": kwargs.get("refresh", True),
+        }
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:

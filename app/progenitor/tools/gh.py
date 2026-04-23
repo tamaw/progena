@@ -15,9 +15,20 @@ import shlex
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, Field
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class GhCliArgs(BaseModel):
+    args: list[str] = Field(description="GitHub CLI arguments, excluding the leading 'gh'.")
+    timeout: float = Field(default=60.0, description="Command timeout in seconds.")
+    cwd: str | None = Field(
+        default=None,
+        description="Optional working directory for the gh command.",
+    )
 
 
 def _extract_pr_url(text: str) -> str | None:
@@ -316,6 +327,19 @@ class GhCliTool(BaseSystemTool):
     @property
     def keywords(self) -> list[str]:
         return ["gh", "gh cli", "github cli", "gh auth", "gh api"]
+
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return GhCliArgs
+
+    def deepagent_prepare_args(self, **kwargs: object) -> tuple[str, dict[str, object] | None]:
+        tool_args: dict[str, object] = {
+            "args": kwargs.get("args") or [],
+            "timeout": kwargs.get("timeout", 60.0),
+        }
+        if kwargs.get("cwd"):
+            tool_args["cwd"] = kwargs.get("cwd")
+        return "", tool_args
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}

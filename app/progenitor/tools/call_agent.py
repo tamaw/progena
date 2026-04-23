@@ -28,6 +28,23 @@ class AgentSelection(BaseModel):
     reasoning: str = Field(description="One-sentence explanation of the routing choice.")
 
 
+class CallAgentArgs(BaseModel):
+    agent: str = Field(
+        default="",
+        description="Registered deployed agent name or capability. Leave empty to auto-route.",
+    )
+    request: str = Field(description="Complete request to send to the deployed agent.")
+    timeout_seconds: float = Field(default=60.0, description="Request timeout in seconds.")
+    blocking: bool = Field(
+        default=False,
+        description="Wait for the agent result instead of returning a tracked task immediately.",
+    )
+    context: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional structured context to pass through with the request.",
+    )
+
+
 class CallAgentTool(BaseSystemTool):
     @property
     def name(self) -> str:
@@ -51,6 +68,22 @@ class CallAgentTool(BaseSystemTool):
             "ask hosted agent",
             "a2a",
         ]
+
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return CallAgentArgs
+
+    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
+        request = str(kwargs.get("request") or "")
+        tool_args: dict[str, Any] = {
+            "agent": str(kwargs.get("agent") or ""),
+            "request": request,
+            "timeout_seconds": kwargs.get("timeout_seconds", 60.0),
+            "blocking": kwargs.get("blocking", False),
+        }
+        if kwargs.get("context") is not None:
+            tool_args["context"] = kwargs.get("context")
+        return request, tool_args
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:

@@ -3,10 +3,19 @@
 import logging
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from ..state.models import generate_thread_id
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class NewConversationArgs(BaseModel):
+    request: str = Field(
+        default="",
+        description="Optional instruction accompanying the conversation reset.",
+    )
 
 
 class NewConversationTool(BaseSystemTool):
@@ -34,6 +43,17 @@ class NewConversationTool(BaseSystemTool):
             "new thread id",
             "start over",
         ]
+
+    @property
+    def deepagent_args_schema(self) -> type[BaseModel] | None:
+        return NewConversationArgs
+
+    @property
+    def deepagent_requires_state(self) -> bool:
+        return True
+
+    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
+        return str(kwargs.get("request") or ""), None
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state is None:
