@@ -20,9 +20,10 @@ Usage:
 """
 
 import asyncio
+import inspect
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TypeVar, cast
@@ -34,6 +35,7 @@ T = TypeVar("T")
 
 class CircuitState(StrEnum):
     """Circuit breaker states."""
+
     CLOSED = "closed"
     OPEN = "open"
     HALF_OPEN = "half-open"
@@ -138,7 +140,7 @@ class CircuitBreaker:
                 self._half_open_calls += 1
 
         try:
-            if asyncio.iscoroutinefunction(func):
+            if inspect.iscoroutinefunction(func):
                 result = await func(*args, **kwargs)
             else:
                 result = func(*args, **kwargs)
@@ -156,9 +158,7 @@ class CircuitBreaker:
         async with self._lock:
             if self._state == CircuitState.HALF_OPEN:
                 # Reset circuit on success in half-open state
-                logger.info(
-                    "Circuit breaker reset to CLOSED after successful half-open call"
-                )
+                logger.info("Circuit breaker reset to CLOSED after successful half-open call")
                 self._state = CircuitState.CLOSED
                 self._failures = 0
                 self._half_open_calls = 0
@@ -205,30 +205,21 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         """Synchronous success recording (for sync code)."""
-        import asyncio
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._record_success())
-        except RuntimeError:
-            # No running loop - update directly
-            if self._state == CircuitState.HALF_OPEN:
-                self._state = CircuitState.CLOSED
-                self._failures = 0
-            elif self._failures > 0:
-                self._failures -= 1
+        self._schedule_sync_update(self._record_success)
 
     def record_failure(self) -> None:
         """Synchronous failure recording (for sync code)."""
-        import asyncio
+        self._schedule_sync_update(self._record_failure)
+
+    def _schedule_sync_update(self, update: Callable[[], Coroutine[Any, Any, None]]) -> None:
+        """Run sync-side state updates through the same async locking path."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._record_failure())
         except RuntimeError:
-            # No running loop - update directly
-            self._failures += 1
-            self._last_failure_time = time.time()
-            if self._failures >= self.failure_threshold:
-                self._state = CircuitState.OPEN
+            asyncio.run(update())
+            return
+
+        loop.create_task(update())
 
     def reset(self) -> None:
         """Manually reset the circuit breaker."""

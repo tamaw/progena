@@ -290,6 +290,16 @@ class TestAsyncProtocol:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_read_message_rejects_zero_length_frame(self):
+        """Zero-length frames should be rejected before payload decode."""
+        reader = asyncio.StreamReader()
+        reader.feed_data(struct.pack(">I", 0))
+        reader.feed_eof()
+
+        with pytest.raises(ValueError, match="length 0"):
+            await read_message(reader, timeout=1.0)
+
+    @pytest.mark.asyncio
     async def test_multiple_messages(self):
         """Test sending and receiving multiple messages."""
         reader, writer = await self._create_stream_pair()

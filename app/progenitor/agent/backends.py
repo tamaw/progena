@@ -103,7 +103,7 @@ def create_progenitor_backend(
                 routes[route] = backend
 
         return CompositeBackend(
-            default=StateBackend(runtime),
+            default=StateBackend(),
             routes=routes,
         )
 

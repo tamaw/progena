@@ -202,6 +202,9 @@ class Progenitor:
             host=self.config.runtime.ipc_host,
             port=self.config.runtime.ipc_port,
             max_clients=self.config.runtime.ipc_max_clients,
+            client_read_timeout_seconds=self.config.runtime.ipc_client_read_timeout_seconds,
+            request_timeout_seconds=self.config.runtime.ipc_request_timeout_seconds,
+            cycle_complete_timeout_seconds=(self.config.runtime.ipc_cycle_complete_timeout_seconds),
         )
         await self._ipc_server.start()
         if self._ipc_server:

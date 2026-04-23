@@ -29,6 +29,8 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.progenitor.llm.tokenizer import count_tokens
+
 from .alerts import AlertInfo
 from .attachments import (
     AttachmentConfig,
@@ -1146,14 +1148,17 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
         _attach_session_cookie(request, session, response)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
 
+        prompt_tokens = sum(count_tokens(item, body.model) for item in all_inputs)
+        completion_tokens = count_tokens(response_text, body.model)
+
         return ResponsePayload(
             id=response_id,
             model=body.model,
             output=[ResponseOutputMessage(content=[ResponseOutputText(text=response_text)])],
             usage=Usage(
-                prompt_tokens=len(" ".join(all_inputs).split()),
-                completion_tokens=len(response_text.split()),
-                total_tokens=len(" ".join(all_inputs).split()) + len(response_text.split()),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
             ),
         )
 

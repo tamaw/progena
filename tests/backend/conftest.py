@@ -1,6 +1,4 @@
-"""
-Shared fixtures for backend tests.
-"""
+"""Shared fixtures for backend tests."""
 
 import asyncio
 from unittest.mock import AsyncMock, patch
@@ -31,9 +29,9 @@ def cleanup_event_loop():
         loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_progenitor_client():
-    """Mock the get_client and get_ipc_client to avoid connection issues in tests."""
+    """Provide an opt-in mocked IPC client for backend tests."""
     mock_client = AsyncMock()
     mock_client.send_message.return_value = "mocked response"
     mock_client.list_models.return_value = {"models": []}
@@ -41,10 +39,14 @@ def mock_progenitor_client():
     mock_client.start = AsyncMock()
     mock_client.stop = AsyncMock()
 
-    with (
-        patch("app.backend.main.get_ipc_client", return_value=mock_client),
-        patch("app.backend.main.config.telegram_enabled", False),
-    ):
+    with patch("app.backend.main.get_ipc_client", return_value=mock_client):
+        yield mock_client
+
+
+@pytest.fixture(autouse=True)
+def disable_telegram_for_backend_tests():
+    """Keep Telegram side effects disabled during backend tests."""
+    with patch("app.backend.main.config.telegram_enabled", False):
         yield
 
 

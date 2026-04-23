@@ -19,6 +19,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
+from ..config import RuntimeConfig, get_config
 from .protocol import (
     IPCMessage,
     MessageType,
@@ -32,13 +33,22 @@ from .protocol import (
 logger = logging.getLogger(__name__)
 
 # Client defaults
+_STATIC_RUNTIME_DEFAULTS = RuntimeConfig()
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9500
 DEFAULT_TIMEOUT = 300  # 5 minutes
-RECONNECT_DELAY_INITIAL = 1.0
-RECONNECT_DELAY_MAX = 30.0
-HEARTBEAT_INTERVAL = 5  # 5 seconds for responsive event delivery
-HEARTBEAT_MISS_THRESHOLD = 3  # Disconnect after this many consecutive misses
+RECONNECT_DELAY_INITIAL = _STATIC_RUNTIME_DEFAULTS.ipc_client_reconnect_delay_initial_seconds
+RECONNECT_DELAY_MAX = _STATIC_RUNTIME_DEFAULTS.ipc_client_reconnect_delay_max_seconds
+HEARTBEAT_INTERVAL = _STATIC_RUNTIME_DEFAULTS.ipc_client_heartbeat_interval_seconds
+HEARTBEAT_MISS_THRESHOLD = _STATIC_RUNTIME_DEFAULTS.ipc_client_heartbeat_miss_threshold
+
+
+def _runtime_defaults() -> RuntimeConfig:
+    """Load runtime defaults for IPC client tuning without failing on partial config."""
+    try:
+        return get_config(validate=False).runtime
+    except Exception:
+        return RuntimeConfig()
 
 
 class IPCClient:
@@ -58,6 +68,14 @@ class IPCClient:
         timeout: float = DEFAULT_TIMEOUT,
         auto_reconnect: bool = True,
         max_reconnect_attempts: int = 5,
+        *,
+        connect_timeout_seconds: float | None = None,
+        event_poll_interval_seconds: float | None = None,
+        heartbeat_interval_seconds: float | None = None,
+        heartbeat_ack_timeout_seconds: float | None = None,
+        heartbeat_miss_threshold: int | None = None,
+        reconnect_delay_initial_seconds: float | None = None,
+        reconnect_delay_max_seconds: float | None = None,
     ):
         """Initialize the IPC client.
 
@@ -73,6 +91,42 @@ class IPCClient:
         self.timeout = timeout
         self.auto_reconnect = auto_reconnect
         self.max_reconnect_attempts = max_reconnect_attempts
+        runtime_defaults = _runtime_defaults()
+        self._connect_timeout_seconds = float(
+            connect_timeout_seconds
+            if connect_timeout_seconds is not None
+            else runtime_defaults.ipc_client_connect_timeout_seconds
+        )
+        self._event_poll_interval_seconds = float(
+            event_poll_interval_seconds
+            if event_poll_interval_seconds is not None
+            else runtime_defaults.ipc_client_event_poll_interval_seconds
+        )
+        self._heartbeat_interval_seconds = float(
+            heartbeat_interval_seconds
+            if heartbeat_interval_seconds is not None
+            else runtime_defaults.ipc_client_heartbeat_interval_seconds
+        )
+        self._heartbeat_ack_timeout_seconds = float(
+            heartbeat_ack_timeout_seconds
+            if heartbeat_ack_timeout_seconds is not None
+            else runtime_defaults.ipc_client_heartbeat_ack_timeout_seconds
+        )
+        self._heartbeat_miss_threshold = int(
+            heartbeat_miss_threshold
+            if heartbeat_miss_threshold is not None
+            else runtime_defaults.ipc_client_heartbeat_miss_threshold
+        )
+        self._reconnect_delay_initial_seconds = float(
+            reconnect_delay_initial_seconds
+            if reconnect_delay_initial_seconds is not None
+            else runtime_defaults.ipc_client_reconnect_delay_initial_seconds
+        )
+        self._reconnect_delay_max_seconds = float(
+            reconnect_delay_max_seconds
+            if reconnect_delay_max_seconds is not None
+            else runtime_defaults.ipc_client_reconnect_delay_max_seconds
+        )
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -80,7 +134,7 @@ class IPCClient:
         self._lock = asyncio.Lock()
         self._last_activity = 0.0
         self._reconnect_count = 0
-        self._reconnect_delay = RECONNECT_DELAY_INITIAL
+        self._reconnect_delay = self._reconnect_delay_initial_seconds
         self._heartbeat_task: asyncio.Task | None = None
         self._streaming = False  # Flag to pause heartbeats during streaming
         self._request_in_progress = False  # Flag to pause heartbeats during requests
@@ -104,23 +158,23 @@ class IPCClient:
                 return True
 
             try:
-                logger.info("Connecting to Progenitor at %s:%d", self.host, self.port)
+                logger.info(f"Connecting to Progenitor at {self.host}:{self.port}")
 
                 self._reader, self._writer = await asyncio.wait_for(
                     asyncio.open_connection(self.host, self.port),
-                    timeout=10,
+                    timeout=self._connect_timeout_seconds,
                 )
 
                 # Wait for ready message
                 assert self._reader is not None
-                msg = await read_message(self._reader, timeout=10)
+                msg = await read_message(self._reader, timeout=self._connect_timeout_seconds)
                 if msg is None or msg.type != MessageType.READY:
                     raise ConnectionError("Did not receive ready message from server")
 
                 self._connected = True
                 self._last_activity = time.time()
                 self._reconnect_count = 0
-                self._reconnect_delay = RECONNECT_DELAY_INITIAL
+                self._reconnect_delay = self._reconnect_delay_initial_seconds
 
                 # Start heartbeat task
                 self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
@@ -129,7 +183,7 @@ class IPCClient:
                 return True
 
             except Exception as e:
-                logger.error("Failed to connect to Progenitor: %s", e)
+                logger.error(f"Failed to connect to Progenitor: {e}")
                 await self._cleanup_connection()
                 return False
 
@@ -153,7 +207,7 @@ class IPCClient:
                 self._writer.close()
                 await self._writer.wait_closed()
             except Exception as e:
-                logger.debug("Error closing writer (expected during shutdown): %s", e)
+                logger.debug(f"Error closing writer (expected during shutdown): {e}")
             self._writer = None
 
         self._reader = None
@@ -173,17 +227,17 @@ class IPCClient:
             attempt = self._reconnect_count
             delay = self._reconnect_delay
             logger.info(
-                "Reconnection attempt %d/%d in %.1fs",
-                attempt,
-                self.max_reconnect_attempts,
-                delay,
+                f"Reconnection attempt {attempt}/{self.max_reconnect_attempts} in {delay:.1f}s"
             )
 
             await asyncio.sleep(delay)
-            self._reconnect_delay = min(self._reconnect_delay * 2, RECONNECT_DELAY_MAX)
+            self._reconnect_delay = min(
+                self._reconnect_delay * 2,
+                self._reconnect_delay_max_seconds,
+            )
 
             if await self.connect():
-                logger.info("Reconnected to Progenitor IPC server (attempt %d)", attempt)
+                logger.info(f"Reconnected to Progenitor IPC server (attempt {attempt})")
                 return
 
         raise ConnectionError(f"Failed to reconnect after {self.max_reconnect_attempts} attempts")
@@ -191,7 +245,7 @@ class IPCClient:
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats and poll for events."""
         heartbeat_timer = 0.0
-        poll_interval = 0.5  # Check for events every 0.5 seconds
+        poll_interval = self._event_poll_interval_seconds
 
         while self._connected:
             try:
@@ -226,14 +280,14 @@ class IPCClient:
                         pass  # No events pending, that's fine
 
                 # Send heartbeat only when timer exceeds interval
-                if heartbeat_timer < HEARTBEAT_INTERVAL:
+                if heartbeat_timer < self._heartbeat_interval_seconds:
                     continue
 
                 heartbeat_timer = 0  # Reset timer
 
                 # Skip heartbeat if there was recent activity (within 2x interval)
                 time_since_activity = time.time() - self._last_activity
-                if time_since_activity < HEARTBEAT_INTERVAL * 2:
+                if time_since_activity < self._heartbeat_interval_seconds * 2:
                     self._missed_heartbeats = 0
                     continue
 
@@ -251,7 +305,10 @@ class IPCClient:
 
                     # Wait for ack, but also handle any events that arrive
                     while True:
-                        msg = await read_message(self._reader, timeout=10)
+                        msg = await read_message(
+                            self._reader,
+                            timeout=self._heartbeat_ack_timeout_seconds,
+                        )
                         if msg is None:
                             self._missed_heartbeats += 1
                             break
@@ -267,26 +324,26 @@ class IPCClient:
                             break
                         else:
                             # Unexpected message type during heartbeat
-                            logger.debug("Unexpected message during heartbeat: %s", msg.type)
+                            logger.debug(f"Unexpected message during heartbeat: {msg.type}")
                             self._missed_heartbeats += 1
                             break
 
                     if self._missed_heartbeats > 0:
                         logger.debug(
-                            "Heartbeat issue (miss %d/%d)",
-                            self._missed_heartbeats,
-                            HEARTBEAT_MISS_THRESHOLD,
+                            f"Heartbeat issue (miss {self._missed_heartbeats}/"
+                            f"{self._heartbeat_miss_threshold})"
                         )
-                        if self._missed_heartbeats >= HEARTBEAT_MISS_THRESHOLD:
+                        if self._missed_heartbeats >= self._heartbeat_miss_threshold:
                             logger.warning("Too many missed heartbeats, connection may be stale")
-                            # Don't disconnect yet - let the next request attempt reconnect
+                            self._connected = False
+                            break
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.debug("Heartbeat error (may be normal during requests): %s", e)
+                logger.debug(f"Heartbeat error (may be normal during requests): {e}")
                 self._missed_heartbeats += 1
-                if self._missed_heartbeats >= HEARTBEAT_MISS_THRESHOLD:
+                if self._missed_heartbeats >= self._heartbeat_miss_threshold:
                     logger.warning("Heartbeat errors exceeded threshold, marking disconnected")
                     self._connected = False
                     break
@@ -353,7 +410,7 @@ class IPCClient:
                             return msg.content
 
                         # Unexpected message type - log and use content
-                        logger.warning("Unexpected message type: %s", msg.type)
+                        logger.warning(f"Unexpected message type: {msg.type}")
                         return msg.content or ""
 
                 except TimeoutError:
@@ -481,7 +538,7 @@ class IPCClient:
         try:
             await write_message(self._writer, shutdown_message())
         except Exception as e:
-            logger.error("Error sending shutdown request: %s", e)
+            logger.error(f"Error sending shutdown request: {e}")
 
     @property
     def is_connected(self) -> bool:
@@ -556,13 +613,13 @@ class IPCClient:
             try:
                 await self._event_callback(event)
             except Exception as e:
-                logger.warning("Event callback error: %s", e)
+                logger.warning(f"Event callback error: {e}")
 
         # Also queue the event for polling
         try:
             self._event_queue.put_nowait(event)
         except asyncio.QueueFull:
-            logger.warning("Event queue full, dropping event: %s", event.get("event_type"))
+            logger.warning(f"Event queue full, dropping event: {event.get('event_type')}")
 
 
 # Convenience function for creating clients

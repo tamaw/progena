@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 def create_node(
     tool_registry,
+    config,
     state_manager=None,
     project_root=None,
 ) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
@@ -46,6 +47,7 @@ def create_node(
 
     Args:
         tool_registry: Registry of available tools for execution.
+        config: Runtime configuration with test-harness port ranges.
         state_manager: Optional state manager for logging.
         project_root: Project root path for agent harness.
     """
@@ -61,6 +63,17 @@ def create_node(
         )
     else:
         harness = None
+    runtime_config = getattr(config, "runtime", None)
+    default_test_harness_port_start = getattr(
+        runtime_config,
+        "test_harness_port_range_start",
+        TEST_HARNESS_PORT_START,
+    )
+    default_test_harness_port_end = getattr(
+        runtime_config,
+        "test_harness_port_range_end",
+        TEST_HARNESS_PORT_END,
+    )
 
     async def execute_node(state: ProgenitorState) -> ProgenitorState:
         """
@@ -92,17 +105,25 @@ def create_node(
             build_settings = state.get("build_settings")
             is_agent_build = False
             if build_settings:
-                build_type = build_settings.get("build_type") if isinstance(build_settings, dict) else getattr(build_settings, "build_type", None)
+                build_type = (
+                    build_settings.get("build_type")
+                    if isinstance(build_settings, dict)
+                    else getattr(build_settings, "build_type", None)
+                )
                 if build_type == "agent":
                     is_agent_build = True
-                    logger.info("Detected agent build from build_settings, proceeding with exercise")
+                    logger.info(
+                        "Detected agent build from build_settings, proceeding with exercise"
+                    )
 
             # Also check experiment_plan
             if experiment_plan_data and not is_agent_build:
                 exp_agent_name = experiment_plan_data.get("agent_name")
                 if exp_agent_name and exp_agent_name != "unknown_agent":
                     is_agent_build = True
-                    logger.info("Detected agent build from experiment_plan.agent_name, proceeding with exercise")
+                    logger.info(
+                        "Detected agent build from experiment_plan.agent_name, proceeding with exercise"
+                    )
 
             if is_agent_build and experiment_plan_data and harness:
                 logger.info("Executing agent exercise harness for build without work item")
@@ -113,6 +134,8 @@ def create_node(
                     build_output=build_output,
                     iteration=iteration,
                     state=state,
+                    default_test_harness_port_start=default_test_harness_port_start,
+                    default_test_harness_port_end=default_test_harness_port_end,
                 )
 
                 return {
@@ -168,17 +191,25 @@ def create_node(
         # (fixes issue where item_type defaults to direct_answer)
         build_settings = state.get("build_settings")
         if build_settings and not is_agent_item:
-            build_type = build_settings.get("build_type") if isinstance(build_settings, dict) else getattr(build_settings, "build_type", None)
+            build_type = (
+                build_settings.get("build_type")
+                if isinstance(build_settings, dict)
+                else getattr(build_settings, "build_type", None)
+            )
             if build_type == "agent":
                 is_agent_item = True
-                logger.info("Detected agent build from build_settings despite item_type=%s", item_type)
+                logger.info(
+                    f"Detected agent build from build_settings despite item_type={item_type}"
+                )
 
         # Also check if experiment_plan has an agent_name (indicates agent build)
         if experiment_plan_data and not is_agent_item:
             exp_agent_name = experiment_plan_data.get("agent_name")
             if exp_agent_name and exp_agent_name != "unknown_agent":
                 is_agent_item = True
-                logger.info("Detected agent build from experiment_plan.agent_name=%s", exp_agent_name)
+                logger.info(
+                    f"Detected agent build from experiment_plan.agent_name={exp_agent_name}"
+                )
 
         # BL-004: If we have an experiment plan and harness, exercise the agent
         if experiment_plan_data and harness and is_agent_item:
@@ -190,13 +221,21 @@ def create_node(
                 build_output=build_output,
                 iteration=iteration,
                 state=state,
+                default_test_harness_port_start=default_test_harness_port_start,
+                default_test_harness_port_end=default_test_harness_port_end,
             )
 
             # Mark current work item as completed (run finished, regardless of test outcome)
             # Note: BUILD already marks items completed, but this is a safety net
             backlog = list(state.get("backlog", []))
             if current_item:
-                item_id = current_item.id if hasattr(current_item, "id") else current_item.get("id") if isinstance(current_item, dict) else None
+                item_id = (
+                    current_item.id
+                    if hasattr(current_item, "id")
+                    else current_item.get("id")
+                    if isinstance(current_item, dict)
+                    else None
+                )
                 if item_id:
                     found_item = find_work_item_by_id(backlog, item_id)
                     if found_item:
@@ -208,8 +247,12 @@ def create_node(
             compact_result = {
                 "task_id": exec_result_dict.get("task_id"),
                 "status": exec_result_dict.get("status"),
-                "tests_passed": exec_result_dict.get("build_output", {}).get("tests_passed", 0) if exec_result_dict.get("build_output") else 0,
-                "tests_total": exec_result_dict.get("build_output", {}).get("tests_total", 0) if exec_result_dict.get("build_output") else 0,
+                "tests_passed": exec_result_dict.get("build_output", {}).get("tests_passed", 0)
+                if exec_result_dict.get("build_output")
+                else 0,
+                "tests_total": exec_result_dict.get("build_output", {}).get("tests_total", 0)
+                if exec_result_dict.get("build_output")
+                else 0,
                 "duration_ms": exec_result_dict.get("total_duration_ms"),
                 "smoke_passed": exec_result_dict.get("smoke_test_passed"),
                 "errors": exec_result_dict.get("all_errors", [])[:3],  # Keep only first 3 errors
@@ -271,53 +314,65 @@ def create_node(
                         tool_args=tool_args,
                         tool_registry=tool_registry,
                     )
-                    tool_results.append({
-                        "tool": tool_name,
-                        "result": result,
-                        "success": True,
-                    })
+                    tool_results.append(
+                        {
+                            "tool": tool_name,
+                            "result": result,
+                            "success": True,
+                        }
+                    )
 
                     # Track tool call in current_state for session history
                     if state_manager:
-                        await state_manager.add_tool_call({
-                            "tool": tool_name,
-                            "arguments": tool_args,
-                            "result": str(result)[:500] if result else None,  # Truncate large results
-                            "success": True,
-                            "timestamp": utcnow_isoformat(),
-                            "iteration": iteration,
-                        })
+                        await state_manager.add_tool_call(
+                            {
+                                "tool": tool_name,
+                                "arguments": tool_args,
+                                "result": str(result)[:500]
+                                if result
+                                else None,  # Truncate large results
+                                "success": True,
+                                "timestamp": utcnow_isoformat(),
+                                "iteration": iteration,
+                            }
+                        )
 
                 else:
                     errors.append(f"Tool not found: {tool_name}")
-                    tool_results.append({
-                        "tool": tool_name,
-                        "result": None,
-                        "success": False,
-                        "error": f"Tool not found: {tool_name}",
-                    })
+                    tool_results.append(
+                        {
+                            "tool": tool_name,
+                            "result": None,
+                            "success": False,
+                            "error": f"Tool not found: {tool_name}",
+                        }
+                    )
 
             except Exception as e:
                 logger.error(f"Tool execution error: {e}")
                 errors.append(str(e))
                 failed_tool_name = str(tool_call.get("tool", "unknown"))
-                tool_results.append({
-                    "tool": failed_tool_name,
-                    "result": None,
-                    "success": False,
-                    "error": str(e),
-                })
+                tool_results.append(
+                    {
+                        "tool": failed_tool_name,
+                        "result": None,
+                        "success": False,
+                        "error": str(e),
+                    }
+                )
 
         # Log execution
         if state_manager:
-            await state_manager.log_decision({
-                "event": "execute_phase",
-                "iteration": iteration,
-                "tools_executed": len(pending_tools),
-                "tools_succeeded": sum(1 for r in tool_results if r.get("success")),
-                "errors": errors[:3] if errors else None,
-                "timestamp": utcnow_isoformat(),
-            })
+            await state_manager.log_decision(
+                {
+                    "event": "execute_phase",
+                    "iteration": iteration,
+                    "tools_executed": len(pending_tools),
+                    "tools_succeeded": sum(1 for r in tool_results if r.get("success")),
+                    "errors": errors[:3] if errors else None,
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
         # Combine build output with execution results
         execution_output = {
@@ -370,6 +425,8 @@ async def _exercise_agent(
     build_output: Any,
     iteration: int,
     state: ProgenitorState,
+    default_test_harness_port_start: int,
+    default_test_harness_port_end: int,
 ) -> ExecutionResult:
     """
     Exercise an agent using the experiment harness.
@@ -391,7 +448,7 @@ async def _exercise_agent(
     # Get agent endpoint/entrypoint from context or registry
     agent_endpoint = None
     agent_entrypoint = None
-    agent_port = TEST_HARNESS_PORT_START  # Use test harness port range
+    agent_port = default_test_harness_port_start
 
     # Get project root from harness for path resolution
     project_root = harness.project_root if harness else None
@@ -400,7 +457,7 @@ async def _exercise_agent(
     if isinstance(build_output, dict):
         agent_endpoint = build_output.get("agent_endpoint")
         agent_entrypoint = build_output.get("agent_entrypoint")
-        agent_port = build_output.get("agent_port", TEST_HARNESS_PORT_START)
+        agent_port = build_output.get("agent_port", default_test_harness_port_start)
 
     # Try to discover entrypoint from build settings or experiment plan
     if not agent_entrypoint:
@@ -412,7 +469,11 @@ async def _exercise_agent(
         # Also check build_settings for agent name
         build_settings = state.get("build_settings")
         if not agent_name and build_settings:
-            agent_name = build_settings.get("project_name") if isinstance(build_settings, dict) else getattr(build_settings, "project_name", None)
+            agent_name = (
+                build_settings.get("project_name")
+                if isinstance(build_settings, dict)
+                else getattr(build_settings, "project_name", None)
+            )
 
         if agent_name and project_root:
             # Check for standard agent locations relative to project root
@@ -439,8 +500,8 @@ async def _exercise_agent(
         agent_endpoint = context.get("agent_endpoint")
     if not agent_entrypoint:
         agent_entrypoint = context.get("agent_entrypoint")
-    if agent_port == TEST_HARNESS_PORT_START:
-        agent_port = context.get("agent_port", TEST_HARNESS_PORT_START)
+    if agent_port == default_test_harness_port_start:
+        agent_port = context.get("agent_port", default_test_harness_port_start)
 
     # Check registry for agent info
     agents = state.get("agents", [])
@@ -456,7 +517,7 @@ async def _exercise_agent(
     # Use TEST_HARNESS port range (9500+) to avoid conflicts with backend (8000) and production agents (8080+)
     agent_port = await find_available_port_async(
         start_port=agent_port,
-        end_port=TEST_HARNESS_PORT_END
+        end_port=default_test_harness_port_end,
     )
     logger.info(f"Selected available test harness port for agent: {agent_port}")
 
@@ -518,6 +579,7 @@ async def _execute_tool(tool_name: str, tool_args: dict, tool_registry) -> Any:
     if tool_type == "mcp":
         # Execute via MCP
         from ..tools.mcp import MCPClient
+
         client = MCPClient()
         # MCP call_tool expects (tool_config, method, params)
         tool_config = {
@@ -531,6 +593,7 @@ async def _execute_tool(tool_name: str, tool_args: dict, tool_registry) -> Any:
     elif tool_type == "a2a":
         # Execute via A2A
         from ..tools.mcp import A2AClient
+
         a2a_client = A2AClient()
         endpoint = tool.get("endpoint", "")
         request = tool_args.get("request", "")
@@ -542,6 +605,7 @@ async def _execute_tool(tool_name: str, tool_args: dict, tool_registry) -> Any:
         if func and callable(func) and callable(func):
             # Check if async
             import asyncio
+
             if asyncio.iscoroutinefunction(func):
                 return await func(**tool_args)
             else:

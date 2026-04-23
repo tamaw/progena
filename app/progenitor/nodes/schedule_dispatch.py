@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, cast
 
 from ..llm.prompts import PromptTemplates
-from ..runtime.scheduler import Scheduler
+from ..runtime.scheduler import SCHEDULER_ERROR_METADATA_KEY, Scheduler
 from ..runtime.time_utils import utcnow
 from ..state.helpers import get_actionable_items
 from ..state.models import ProgenitorState
@@ -60,28 +60,55 @@ def create_schedule_dispatch_node(
         ]
 
         due_items = scheduler.get_due_items(schedule_dicts, current_time)
+        for schedule_id, updates in scheduler.drain_pending_updates(schedule_dicts):
+            await state_manager.update_schedule_entry(schedule_id, updates)
+            if event_pusher:
+                scheduler_error = (
+                    updates.get("metadata", {}).get(SCHEDULER_ERROR_METADATA_KEY)
+                    if isinstance(updates.get("metadata"), dict)
+                    else None
+                )
+                await event_pusher(
+                    "scheduled_task_paused",
+                    f"Paused scheduled task {schedule_id} due to an invalid cron expression.",
+                    {
+                        "schedule_id": schedule_id,
+                        "reason": "invalid_cron_expression",
+                        "error": scheduler_error,
+                    },
+                )
 
         if not due_items:
             # Nothing scheduled — check whether the backlog has pending items.
             backlog = state.get("backlog", [])
             if get_actionable_items(backlog):
-                return cast(ProgenitorState, {
+                return cast(
+                    ProgenitorState,
+                    {
+                        "current_time": current_time,
+                        "bg_had_work": True,
+                        "bg_schedule_id": None,
+                        "bg_work_type": "backlog",
+                    },
+                )
+            return cast(
+                ProgenitorState,
+                {
                     "current_time": current_time,
-                    "bg_had_work": True,
+                    "bg_had_work": False,
                     "bg_schedule_id": None,
-                    "bg_work_type": "backlog",
-                })
-            return cast(ProgenitorState, {
-                "current_time": current_time,
-                "bg_had_work": False,
-                "bg_schedule_id": None,
-                "bg_work_type": None,
-            })
+                    "bg_work_type": None,
+                },
+            )
 
         entry = due_items[0]
         schedule_id = str(entry["id"])
         message = entry.get("message") or "Scheduled task"
         user_request = (entry.get("user_request") or "").strip()
+        await state_manager.update_schedule_entry(
+            schedule_id,
+            {"last_fired_at": current_time.isoformat()},
+        )
 
         prefix = _prompts.get("progenitor/scheduled_prefix.md").strip()
         if user_request:
@@ -96,20 +123,23 @@ def create_schedule_dispatch_node(
                 {"work_type": "scheduled", "schedule_id": schedule_id},
             )
 
-        return cast(ProgenitorState, {
-            "current_time": current_time,
-            "bg_had_work": True,
-            "bg_schedule_id": schedule_id,
-            "bg_work_type": "scheduled",
-            "current_input": scheduled_input,
-            "current_input_role": "user",
-            "current_input_metadata": {
-                "type": "scheduled",
-                "schedule_id": schedule_id,
-                "schedule_message": entry.get("message"),
-                "schedule_cron_expression": entry.get("cron_expression"),
+        return cast(
+            ProgenitorState,
+            {
+                "current_time": current_time,
+                "bg_had_work": True,
+                "bg_schedule_id": schedule_id,
+                "bg_work_type": "scheduled",
+                "current_input": scheduled_input,
+                "current_input_role": "user",
+                "current_input_metadata": {
+                    "type": "scheduled",
+                    "schedule_id": schedule_id,
+                    "schedule_message": entry.get("message"),
+                    "schedule_cron_expression": entry.get("cron_expression"),
+                },
             },
-        })
+        )
 
     return schedule_dispatch_node
 
@@ -147,7 +177,11 @@ def create_schedule_finalize_node(
         )
         if not entry:
             logger.warning("schedule_finalize: entry %s not found — already removed?", schedule_id)
-            return {"bg_schedule_id": None}
+            return {
+                "bg_schedule_id": None,
+                "bg_had_work": False,
+                "bg_work_type": None,
+            }
 
         cron_expression = str(entry.get("cron_expression") or "")
         is_one_shot = scheduler.is_one_shot_expression(cron_expression)
@@ -160,14 +194,18 @@ def create_schedule_finalize_node(
                 removed,
             )
         else:
+            completed_at = utcnow().isoformat()
             await state_manager.update_schedule_entry(
                 schedule_id,
-                {"last_run": utcnow().isoformat()},
+                {
+                    "last_run": completed_at,
+                    "last_fired_at": completed_at,
+                },
             )
             logger.info("schedule_finalize: marked recurring entry %s as executed", schedule_id)
 
         # Always report the result back, even if empty or failed.
-        response_text: str = state.get("last_cycle_response") or ""
+        response_text: str = str(state.get("pending_response") or "").strip()
         result_status = "completed" if response_text.strip() else "completed_no_response"
 
         if event_pusher:

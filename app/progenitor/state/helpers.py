@@ -17,12 +17,11 @@ from .models import (
     ScheduleEntry,
     WorkItem,
     WorkItemStatus,
-    WorkItemType,
 )
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def is_work_item_actionable(item: Any) -> bool:
@@ -82,7 +81,10 @@ def normalize_work_item(item: Any) -> WorkItem | None:
         item: A WorkItem, dict, or None
 
     Returns:
-        WorkItem instance or None if item is None/invalid
+        WorkItem instance or None if item is None
+
+    Raises:
+        ValidationError: If a dict payload does not satisfy WorkItem validation
     """
     if item is None:
         return None
@@ -91,32 +93,7 @@ def normalize_work_item(item: Any) -> WorkItem | None:
         return item
 
     if isinstance(item, dict):
-        item_type_str = item.get("item_type", "direct_answer")
-        try:
-            item_type = WorkItemType(item_type_str)
-        except ValueError:
-            item_type = WorkItemType.DIRECT_ANSWER
-
-        status_str = item.get("status", "pending")
-        try:
-            status = WorkItemStatus(status_str)
-        except ValueError:
-            status = WorkItemStatus.PENDING
-
-        return WorkItem(
-            id=item.get("id", "unknown"),
-            item_type=item_type,
-            status=status,
-            description=item.get("description", ""),
-            context=item.get("context", {}),
-            target_agent=item.get("target_agent"),
-            target_tool=item.get("target_tool"),
-            worktree_path=item.get("worktree_path"),
-            retry_count=item.get("retry_count", 0),
-            max_retries=item.get("max_retries", 3),
-            error_message=item.get("error_message"),
-            result=item.get("result"),
-        )
+        return WorkItem.model_validate(item)
 
     return None
 
@@ -183,6 +160,7 @@ def normalize_schedule_entry(item: Any) -> ScheduleEntry | None:
             cron_expression=cron_expression,
             created_at=created_at,
             last_run=item.get("last_run"),
+            last_fired_at=item.get("last_fired_at"),
         )
 
     return None
@@ -308,7 +286,6 @@ def get_item_type_value(item: Any) -> str:
         return str(item_type)
 
     return "unknown"
-
 
 
 def mark_work_item_completed(

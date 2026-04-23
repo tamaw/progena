@@ -151,17 +151,24 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         with pytest.raises(asyncio.QueueFull):
             await self.loop.enqueue_input("overflow", timeout=0)
 
-    async def test_send_output_drops_on_full(self):
-        """Test that output drops messages when queue is full."""
+    async def test_send_output_waits_for_capacity(self):
+        """Test that output waits for capacity instead of dropping messages."""
         # Fill the output queue
         for i in range(5):
             self.loop._output_queue.put_nowait(f"output {i}")
 
-        # Should not raise, just log warning and drop
-        await self.loop._send_output("overflow message")
+        send_task = asyncio.create_task(self.loop._send_output("overflow message"))
+        await asyncio.sleep(0)
 
-        # Queue size should still be 5
+        assert send_task.done() is False
+
+        removed = self.loop._output_queue.get_nowait()
+        assert removed == "output 0"
+
+        await send_task
         assert self.loop._output_queue.qsize() == 5
+        remaining = [self.loop._output_queue.get_nowait() for _ in range(5)]
+        assert remaining[-1] == "overflow message"
 
     async def test_send_stream_chunk_drops_on_full(self):
         """Test that stream chunks are dropped when queue is full."""
@@ -314,6 +321,40 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert fired == 1
         self.loop.enqueue_input.assert_awaited_once()
         self.state_manager.update_schedule_entry.assert_awaited_once()
+        args = self.state_manager.update_schedule_entry.await_args.args
+        assert args[0] == "sched_recurring"
+        assert "last_run" in args[1]
+        assert "last_fired_at" in args[1]
+
+    async def test_scheduler_pauses_invalid_cron_task(self):
+        """Invalid cron entries should be paused instead of hot-looping."""
+        from app.progenitor.runtime.scheduler import SCHEDULER_ERROR_METADATA_KEY, Scheduler
+        from app.progenitor.runtime.time_utils import utcnow
+
+        self.state_manager.get_schedule = AsyncMock(
+            return_value=[
+                {
+                    "id": "sched_invalid",
+                    "message": "broken cron",
+                    "cron_expression": "definitely not cron",
+                    "created_at": utcnow().replace(microsecond=0).isoformat(),
+                    "last_run": None,
+                }
+            ]
+        )
+        self.loop.enqueue_input = AsyncMock(return_value=True)
+
+        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+
+        assert fired == 0
+        self.loop.enqueue_input.assert_not_awaited()
+        self.state_manager.update_schedule_entry.assert_awaited_once()
+        args = self.state_manager.update_schedule_entry.await_args.args
+        assert args[0] == "sched_invalid"
+        assert args[1]["paused"] is True
+        assert (
+            args[1]["metadata"][SCHEDULER_ERROR_METADATA_KEY]["code"] == "invalid_cron_expression"
+        )
 
 
 class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):

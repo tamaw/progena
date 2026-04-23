@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -32,6 +31,7 @@ from .models import (
     WorkItem,
     redact_secrets,
 )
+from .persistence import atomic_write_json, read_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,8 @@ class StateManager:
         self.lock_timeout = lock_timeout
         self._locks: dict[str, asyncio.Lock] = {}
         self._state_cache: dict[str, Any] = {}
+        self._state_cache_fingerprints: dict[str, tuple[int, int] | None] = {}
+        self._dirty_states: set[str] = set()
         self._initialized = False
 
     def _core_file_path(self, name: str) -> Path:
@@ -126,10 +128,12 @@ class StateManager:
 
         # Flush any cached state to disk
         try:
-            for name in self.CORE_FILES:
-                if name in self._state_cache:
-                    filepath = self._core_file_path(name)
-                    await self._atomic_write_json(filepath, self._state_cache[name])
+            for name in list(self._dirty_states):
+                if name not in self._state_cache:
+                    continue
+                filepath = self._core_file_path(name)
+                persisted = await self._atomic_write_json(filepath, self._state_cache[name])
+                self._set_cached_state(name, persisted)
             logger.debug("StateManager: flushed cached state on close")
         except Exception as e:
             logger.warning("StateManager: error flushing state on close: %s", e)
@@ -137,6 +141,8 @@ class StateManager:
         # Clear locks and cache
         self._locks.clear()
         self._state_cache.clear()
+        self._state_cache_fingerprints.clear()
+        self._dirty_states.clear()
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -282,8 +288,8 @@ class StateManager:
             if cached is None:
                 logger.info("State file %s was empty/invalid, initializing with defaults", filename)
                 await self._atomic_write_json(filepath, defaults[name])
-                cached = defaults[name]
-            self._state_cache[name] = cached
+                cached = await self._read_json(filepath)
+            self._set_cached_state(name, cached)
 
     def _cleanup_stale_temp_files(self) -> None:
         """Remove leftover .tmp files from failed atomic writes."""
@@ -334,73 +340,42 @@ class StateManager:
                     with suppress(OSError):
                         await asyncio.to_thread(unlock_file, lock_handle)
 
-    async def _atomic_write_json(self, filepath: Path, data: Any) -> None:
+    async def _atomic_write_json(self, filepath: Path, data: Any) -> Any:
         """Write JSON atomically: temp file → fsync → rename.
 
         This ensures that either the entire write succeeds or the original
         file remains intact. No partial writes possible.
         """
-        filepath = Path(filepath)
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory
-        fd, tmp_path = tempfile.mkstemp(
-            dir=filepath.parent, prefix=f".{filepath.name}.", suffix=".tmp"
-        )
-
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, default=str)
-                f.flush()
-                os.fsync(f.fileno())
-
-            # Atomic rename with retry for Windows file locking issues
-            # On Windows, os.replace can fail if target is held open by another process
-            max_retries = 5
-            retry_delay = 0.1
-            for attempt in range(max_retries):
-                try:
-                    os.replace(tmp_path, filepath)
-                    break
-                except PermissionError as pe:
-                    if attempt < max_retries - 1:
-                        logger.debug(
-                            "Retry %d/%d: os.replace failed for %s: %s",
-                            attempt + 1,
-                            max_retries,
-                            filepath.name,
-                            pe,
-                        )
-                        await asyncio.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-                    else:
-                        raise
-            logger.debug("Atomically wrote %s", filepath)
-
-        except Exception as e:
-            logger.error("Failed to write %s: %s", filepath, e)
-            # Clean up temp file on error
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-
-            raise
+        return await atomic_write_json(filepath, data)
 
     async def _read_json(self, filepath: Path) -> Any:
         """Read JSON file asynchronously."""
-        filepath = Path(filepath)
-        if not filepath.exists():
-            return None
+        result = await read_json_file(filepath)
+        if result.needs_persist and result.data is not None:
+            return await self._atomic_write_json(filepath, result.data)
+        return result.data
 
-        async with aiofiles.open(filepath, encoding="utf-8") as f:
-            content = await f.read()
-            # Handle empty files gracefully
-            if not content or not content.strip():
-                return None
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError as e:
-                logger.warning("Invalid JSON in %s: %s - treating as empty", filepath.name, e)
-                return None
+    def _file_fingerprint(self, filepath: Path) -> tuple[int, int] | None:
+        """Return a cheap fingerprint for cache invalidation."""
+        try:
+            stat_result = filepath.stat()
+        except FileNotFoundError:
+            return None
+        return (stat_result.st_mtime_ns, stat_result.st_size)
+
+    def _set_cached_state(self, name: str, data: Any) -> None:
+        """Store cached state with its on-disk fingerprint."""
+        self._state_cache[name] = data
+        self._state_cache_fingerprints[name] = self._file_fingerprint(self._core_file_path(name))
+        self._dirty_states.discard(name)
+
+    def _is_cache_fresh(self, name: str) -> bool:
+        """Check whether cached state still matches the on-disk file."""
+        if name not in self._state_cache:
+            return False
+        return self._state_cache_fingerprints.get(name) == self._file_fingerprint(
+            self._core_file_path(name)
+        )
 
     async def append_jsonl(self, log_name: str, entry: dict[str, Any]) -> None:
         """Append a single entry to a JSONL log file with secret redaction."""
@@ -505,8 +480,8 @@ class StateManager:
         """
         async with self._file_lock("schedule"):
             data = [item.model_dump() for item in schedule]
-            await self._atomic_write_json(self._core_file_path("schedule"), data)
-            self._state_cache["schedule"] = data
+            persisted = await self._atomic_write_json(self._core_file_path("schedule"), data)
+            self._set_cached_state("schedule", persisted)
 
     # SpecDoc management (persistent spec artifact in build_state.json)
     async def get_spec_doc(self) -> dict[str, Any] | None:
@@ -539,8 +514,8 @@ class StateManager:
     async def save_registry(self, registry: dict[str, Any]) -> None:
         """Save the registry."""
         async with self._file_lock("registry"):
-            await self._atomic_write_json(self._core_file_path("registry"), registry)
-            self._state_cache["registry"] = registry
+            persisted = await self._atomic_write_json(self._core_file_path("registry"), registry)
+            self._set_cached_state("registry", persisted)
 
     # ==========================================================================
     # Build State Management (build_state.json - Agent builds ONLY)
@@ -552,20 +527,24 @@ class StateManager:
         Returns cached in-memory state when available, only falls back
         to disk when the cache is empty (e.g. first access before init).
         """
-        if "build_state" in self._state_cache:
-            return cast(dict[str, Any], self._state_cache["build_state"])
+        if self._is_cache_fresh("build_state"):
+            return copy.deepcopy(cast(dict[str, Any], self._state_cache["build_state"]))
         async with self._file_lock("build_state"):
+            if self._is_cache_fresh("build_state"):
+                return copy.deepcopy(cast(dict[str, Any], self._state_cache["build_state"]))
             data = await self._read_json(self.state_dir / self.CORE_FILES["build_state"]) or {}
-            self._state_cache["build_state"] = data
-            return data
+            self._set_cached_state("build_state", data)
+            return copy.deepcopy(data)
 
     async def save_build_state(self, state: dict[str, Any]) -> None:
         """Save build state (agent builds only)."""
         # Ensure nested objects exist
         state = self._ensure_nested_structure(state)
         async with self._file_lock("build_state"):
-            await self._atomic_write_json(self.state_dir / self.CORE_FILES["build_state"], state)
-            self._state_cache["build_state"] = state
+            persisted = await self._atomic_write_json(
+                self.state_dir / self.CORE_FILES["build_state"], state
+            )
+            self._set_cached_state("build_state", persisted)
 
     def _ensure_nested_structure(self, state: dict[str, Any]) -> dict[str, Any]:
         """Ensure all nested objects exist in build state."""
@@ -655,33 +634,39 @@ class StateManager:
         Returns cached in-memory state when available, only falls back
         to disk when the cache is empty (e.g. first access before init).
         """
-        if "current_state" in self._state_cache:
+        if self._is_cache_fresh("current_state"):
             return copy.deepcopy(cast(dict[str, Any], self._state_cache["current_state"]))
         async with self._file_lock("current_state"):
+            if self._is_cache_fresh("current_state"):
+                return copy.deepcopy(cast(dict[str, Any], self._state_cache["current_state"]))
             data = await self._read_json(self.state_dir / self.CORE_FILES["current_state"]) or {}
-            self._state_cache["current_state"] = data
+            self._set_cached_state("current_state", data)
             return copy.deepcopy(data)
 
     async def save_current_state(self, state: dict[str, Any]) -> None:
         """Save current progenitor agent state."""
         state_copy = copy.deepcopy(state)
         async with self._file_lock("current_state"):
-            await self._atomic_write_json(
+            persisted = await self._atomic_write_json(
                 self.state_dir / self.CORE_FILES["current_state"], state_copy
             )
-            self._state_cache["current_state"] = state_copy
+            self._set_cached_state("current_state", persisted)
 
     async def update_current_state(self, updates: dict[str, Any]) -> None:
         """Partially update current state with given fields."""
         async with self._file_lock("current_state"):
-            state = copy.deepcopy(cast(dict[str, Any], self._state_cache.get("current_state", {})))
+            state: dict[str, Any] = {}
+            if self._is_cache_fresh("current_state"):
+                state = copy.deepcopy(cast(dict[str, Any], self._state_cache["current_state"]))
             if not state:
                 state = (
                     await self._read_json(self.state_dir / self.CORE_FILES["current_state"]) or {}
                 )
             state.update(updates)
-            await self._atomic_write_json(self.state_dir / self.CORE_FILES["current_state"], state)
-            self._state_cache["current_state"] = state
+            persisted = await self._atomic_write_json(
+                self.state_dir / self.CORE_FILES["current_state"], state
+            )
+            self._set_cached_state("current_state", persisted)
 
     # ==========================================================================
     # A2A Task Tracking (stored in a2a_tasks.json)
@@ -689,21 +674,26 @@ class StateManager:
 
     async def get_a2a_tasks(self) -> list[A2ATaskRecord]:
         """Return all persisted A2A task records."""
-        if "a2a_tasks" in self._state_cache:
+        if self._is_cache_fresh("a2a_tasks"):
             data = copy.deepcopy(cast(list[dict[str, Any]], self._state_cache["a2a_tasks"]))
             return [A2ATaskRecord(**item) for item in data]
         async with self._file_lock("a2a_tasks"):
+            if self._is_cache_fresh("a2a_tasks"):
+                data = copy.deepcopy(cast(list[dict[str, Any]], self._state_cache["a2a_tasks"]))
+                return [A2ATaskRecord(**item) for item in data]
             data = await self._read_json(self.state_dir / self.CORE_FILES["a2a_tasks"]) or []
             task_rows = [item for item in data if isinstance(item, dict)]
-            self._state_cache["a2a_tasks"] = task_rows
+            self._set_cached_state("a2a_tasks", task_rows)
             return [A2ATaskRecord(**item) for item in copy.deepcopy(task_rows)]
 
     async def save_a2a_tasks(self, tasks: list[A2ATaskRecord]) -> None:
         """Persist the full tracked A2A task list."""
         task_rows = [task.model_dump(mode="json", exclude_none=True) for task in tasks]
         async with self._file_lock("a2a_tasks"):
-            await self._atomic_write_json(self.state_dir / self.CORE_FILES["a2a_tasks"], task_rows)
-            self._state_cache["a2a_tasks"] = task_rows
+            persisted = await self._atomic_write_json(
+                self.state_dir / self.CORE_FILES["a2a_tasks"], task_rows
+            )
+            self._set_cached_state("a2a_tasks", persisted)
 
     async def get_a2a_task(self, task_id: str) -> A2ATaskRecord | None:
         """Return one tracked A2A task by ID, if present."""
@@ -888,7 +878,8 @@ class StateManager:
         handler already did a safe read-modify-write. The cache may not have
         all fields loaded from the in-memory loop state.
         """
-        for name, data in self._state_cache.items():
+        for name in list(self._dirty_states):
+            data = self._state_cache.get(name)
             if name not in self.CORE_FILES:
                 continue
 
@@ -902,7 +893,8 @@ class StateManager:
                 continue
 
             async with self._file_lock(name):
-                await self._atomic_write_json(self._core_file_path(name), data)
+                persisted = await self._atomic_write_json(self._core_file_path(name), data)
+                self._set_cached_state(name, persisted)
 
     async def read_conversation_log(self, limit: int = 100) -> list[dict[str, Any]]:
         """Read recent conversation log entries asynchronously."""

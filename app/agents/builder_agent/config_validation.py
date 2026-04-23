@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class ConfigValidationError(Exception):
     """Raised when configuration validation fails."""
+
     pass
 
 
@@ -46,6 +47,10 @@ class RuntimeConfigValidator(BaseModel):
 
     # Health check settings
     health_stale_seconds: int = Field(gt=0, le=600)
+    agent_port_range_start: int = Field(default=8080, gt=0, le=65535)
+    agent_port_range_end: int = Field(default=8199, gt=0, le=65535)
+    test_harness_port_range_start: int = Field(default=9550, gt=0, le=65535)
+    test_harness_port_range_end: int = Field(default=9649, gt=0, le=65535)
 
     # Inner loop settings
     max_inner_iterations: int = Field(gt=0, le=100)
@@ -62,7 +67,7 @@ class StorageConfigValidator(BaseModel):
     prompts_dir: Path
     state_lock_timeout_seconds: int = Field(gt=0, le=300)
 
-    @field_validator('state_dir', 'log_dir', 'worktree_dir', 'prompts_dir', mode='after')
+    @field_validator("state_dir", "log_dir", "worktree_dir", "prompts_dir", mode="after")
     @classmethod
     def validate_path_is_absolute_or_relative(cls, v: Path) -> Path:
         """Ensure paths are valid."""
@@ -123,6 +128,18 @@ def validate_runtime_config(config) -> list[str]:
             max_output_queue_size=config.max_output_queue_size,
             max_stream_queue_size=config.max_stream_queue_size,
             health_stale_seconds=config.health_stale_seconds,
+            agent_port_range_start=getattr(config, "agent_port_range_start", 8080),
+            agent_port_range_end=getattr(config, "agent_port_range_end", 8199),
+            test_harness_port_range_start=getattr(
+                config,
+                "test_harness_port_range_start",
+                9550,
+            ),
+            test_harness_port_range_end=getattr(
+                config,
+                "test_harness_port_range_end",
+                9649,
+            ),
             max_inner_iterations=config.max_inner_iterations,
             min_verification_score=config.min_verification_score,
             iteration_time_limit_seconds=config.iteration_time_limit_seconds,
@@ -220,6 +237,6 @@ def validate_config_or_raise(config) -> None:
 
     if not is_valid:
         raise ConfigValidationError(
-            f"Configuration validation failed with {len(issues)} error(s):\n" +
-            "\n".join(f"  - {issue}" for issue in issues)
+            f"Configuration validation failed with {len(issues)} error(s):\n"
+            + "\n".join(f"  - {issue}" for issue in issues)
         )

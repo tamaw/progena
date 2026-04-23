@@ -1,8 +1,16 @@
 """Tests for MCP client security features."""
 
+from types import SimpleNamespace
+
 import pytest
 
-from app.progenitor.tools.mcp import ALLOWED_COMMAND_PREFIXES, _validate_command
+from app.progenitor.config import MCPServerConfig
+from app.progenitor.tools.mcp import (
+    ALLOWED_COMMAND_PREFIXES,
+    _validate_command,
+    initialize_mcp_langchain_tools,
+    initialize_mcp_server,
+)
 
 
 class TestCommandValidation:
@@ -102,7 +110,7 @@ class TestCommandValidation:
 
     def test_command_with_spaces_in_quotes(self):
         """Test commands with quoted arguments containing spaces."""
-        cmd = _validate_command('python -c "print(\'hello world\')"')
+        cmd = _validate_command("python -c \"print('hello world')\"")
         assert cmd == ["python", "-c", "print('hello world')"]
 
     def test_invalid_quote_syntax(self):
@@ -117,3 +125,36 @@ class TestCommandValidation:
         assert "npx" in ALLOWED_COMMAND_PREFIXES
         assert "deno" in ALLOWED_COMMAND_PREFIXES
         assert "uvx" in ALLOWED_COMMAND_PREFIXES
+
+
+class TestHeaderValidation:
+    """Tests for HTTP header sanitization."""
+
+    @pytest.mark.asyncio
+    async def test_initialize_mcp_server_rejects_injected_headers(self):
+        server = MCPServerConfig(
+            name="evil",
+            url="https://example.com/mcp",
+            headers={"Authorization": "Bearer ok\r\nX-Evil: injected"},
+        )
+
+        runtime_server, tools = await initialize_mcp_server(server)
+
+        assert runtime_server is None
+        assert tools == []
+
+    @pytest.mark.asyncio
+    async def test_initialize_mcp_langchain_tools_skips_server_with_invalid_headers(self):
+        config = SimpleNamespace(
+            enabled_servers=[
+                SimpleNamespace(
+                    name="evil",
+                    url="https://example.com/mcp",
+                    headers={"X-Test": "bad\r\nInjected: yep"},
+                )
+            ]
+        )
+
+        tools = await initialize_mcp_langchain_tools(config, mcp_tools=[])
+
+        assert tools == []

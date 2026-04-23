@@ -75,8 +75,14 @@ class TestLangChainAdapter:
             base_url="https://example.openai.azure.com/openai/v1/responses?api-version=preview",
             api_key="test-key",
         )
-        model = create_langchain_model(config)
-        assert str(model.openai_api_base) == "https://example.openai.azure.com/openai/v1"
+        with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
+            mock_chat_openai.return_value = MagicMock()
+            create_langchain_model(config)
+
+        _, kwargs = mock_chat_openai.call_args
+        assert (
+            kwargs["base_url"] == "https://example.openai.azure.com/openai/v1?api-version=preview"
+        )
 
     def test_reasoning_uses_effort_with_summary_extra_body(self):
         """Reasoning config requests summary text via extra_body with the resolved effort."""

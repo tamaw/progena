@@ -1,5 +1,8 @@
 """Tests for state helpers."""
 
+import pytest
+from pydantic import ValidationError
+
 from app.progenitor.state.helpers import (
     find_work_item_by_id,
     get_actionable_items,
@@ -57,15 +60,14 @@ class TestNormalizeWorkItem:
         assert result.description == "From dict"
 
     def test_normalize_dict_with_invalid_type(self):
-        """Test normalizing dict with invalid item_type falls back."""
+        """Invalid item types should raise instead of silently downgrading."""
         data = {
             "id": "test-3",
             "item_type": "invalid_type",
             "description": "Invalid type",
         }
-        result = normalize_work_item(data)
-        assert result is not None
-        assert result.item_type_value == "direct_answer"
+        with pytest.raises(ValidationError):
+            normalize_work_item(data)
 
     def test_normalize_dict_with_context(self):
         """Test normalizing dict with context."""
@@ -300,9 +302,24 @@ class TestMarkActionableItemsCompleted:
     def test_mark_all_pending_completed(self):
         """Test marking all pending items as completed."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.PENDING),
-            WorkItem(id="2", item_type=WorkItemType.A2A_CALL, description="B", status=WorkItemStatus.IN_PROGRESS),
-            WorkItem(id="3", item_type=WorkItemType.MCP_CALL, description="C", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.PENDING,
+            ),
+            WorkItem(
+                id="2",
+                item_type=WorkItemType.A2A_CALL,
+                description="B",
+                status=WorkItemStatus.IN_PROGRESS,
+            ),
+            WorkItem(
+                id="3",
+                item_type=WorkItemType.MCP_CALL,
+                description="C",
+                status=WorkItemStatus.COMPLETED,
+            ),
         ]
         result = {"success": True}
 
@@ -321,7 +338,12 @@ class TestMarkActionableItemsCompleted:
     def test_mark_mixed_backlog_completed(self):
         """Test marking a mixed backlog (models and dicts) as completed."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.PENDING),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.PENDING,
+            ),
             {"id": "2", "status": "pending", "description": "B"},
             {"id": "3", "status": "completed", "description": "C"},
         ]
@@ -344,7 +366,12 @@ class TestMarkActionableItemsCompleted:
     def test_no_actionable_items(self):
         """Test backlog with no actionable items."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.COMPLETED,
+            ),
             {"id": "2", "status": "failed", "description": "B"},
         ]
         result = {"success": True}
@@ -465,9 +492,24 @@ class TestGetActionableItems:
     def test_filters_pending_items(self):
         """Test that only pending/in_progress items are returned."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.PENDING),
-            WorkItem(id="2", item_type=WorkItemType.A2A_CALL, description="B", status=WorkItemStatus.IN_PROGRESS),
-            WorkItem(id="3", item_type=WorkItemType.MCP_CALL, description="C", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.PENDING,
+            ),
+            WorkItem(
+                id="2",
+                item_type=WorkItemType.A2A_CALL,
+                description="B",
+                status=WorkItemStatus.IN_PROGRESS,
+            ),
+            WorkItem(
+                id="3",
+                item_type=WorkItemType.MCP_CALL,
+                description="C",
+                status=WorkItemStatus.COMPLETED,
+            ),
             {"id": "4", "status": "pending", "description": "D"},
             {"id": "5", "status": "failed", "description": "E"},
         ]
@@ -486,7 +528,12 @@ class TestGetActionableItems:
     def test_no_actionable_items(self):
         """Test backlog with no actionable items."""
         backlog = [
-            WorkItem(id="1", item_type=WorkItemType.BUILD_AGENT, description="A", status=WorkItemStatus.COMPLETED),
+            WorkItem(
+                id="1",
+                item_type=WorkItemType.BUILD_AGENT,
+                description="A",
+                status=WorkItemStatus.COMPLETED,
+            ),
             {"id": "2", "status": "failed", "description": "B"},
         ]
 

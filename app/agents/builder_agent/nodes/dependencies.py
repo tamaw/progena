@@ -17,6 +17,7 @@ from ..state.models import ProgenitorState
 # Protocols for dependency interfaces
 # ============================================================================
 
+
 @runtime_checkable
 class LLMClientProtocol(Protocol):
     """Protocol for LLM client implementations."""
@@ -94,6 +95,7 @@ class ToolRegistryProtocol(Protocol):
 # Dependency Container
 # ============================================================================
 
+
 @dataclass
 class NodeDependencies:
     """Container for all node dependencies.
@@ -126,8 +128,6 @@ class NodeDependencies:
         """Set defaults based on config if not provided."""
         if self.worktrees_dir is None:
             self.worktrees_dir = self.config.storage.worktree_dir
-
-
 
 
 # Type alias for node functions (partial state updates)
@@ -168,6 +168,7 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
         ),
         "execute": execute.create_node(
             deps.tool_registry,
+            deps.config,
             deps.state_manager,
         ),
         "verify": verify.create_node(deps.llm_client, deps.state_manager),
@@ -185,10 +186,7 @@ def create_all_nodes(deps: NodeDependencies) -> dict[str, NodeFunction]:
     return nodes  # type: ignore[return-value]
 
 
-def create_node_subset(
-    deps: NodeDependencies,
-    node_names: list[str]
-) -> dict[str, NodeFunction]:
+def create_node_subset(deps: NodeDependencies, node_names: list[str]) -> dict[str, NodeFunction]:
     """Create only specified nodes (useful for testing).
 
     Args:
@@ -205,6 +203,7 @@ def create_node_subset(
 # ============================================================================
 # Factory functions for common setups
 # ============================================================================
+
 
 def create_test_dependencies(
     llm_client: LLMClientProtocol | None = None,
@@ -224,10 +223,12 @@ def create_test_dependencies(
 
     if llm_client is None:
         llm_client = MagicMock(spec=LLMClientProtocol)
-        llm_client.decide = AsyncMock(return_value={
-            "action": "answer_directly",
-            "reasoning": "Test",
-        })
+        llm_client.decide = AsyncMock(
+            return_value={
+                "action": "answer_directly",
+                "reasoning": "Test",
+            }
+        )
         llm_client.plan = AsyncMock(return_value=[])
         llm_client.generate = AsyncMock(return_value="Test response")
 

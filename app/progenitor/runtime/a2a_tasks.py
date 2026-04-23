@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_A2A_HISTORY_LENGTH = 20
 DEFAULT_A2A_POLL_SECONDS = 5.0
+DEFAULT_A2A_MAX_BACKOFF_SECONDS = 60.0
+DEFAULT_A2A_BACKOFF_MULTIPLIER = 2.0
+DEFAULT_A2A_BACKOFF_JITTER_RATIO = 0.1
 
 
 def normalize_a2a_task_status(raw_state: Any) -> A2ATaskStatus:
@@ -431,15 +435,42 @@ class A2ATaskTracker:
         llm_client: Any = None,
         *,
         poll_seconds: float = DEFAULT_A2A_POLL_SECONDS,
+        max_backoff_seconds: float = DEFAULT_A2A_MAX_BACKOFF_SECONDS,
+        backoff_multiplier: float = DEFAULT_A2A_BACKOFF_MULTIPLIER,
+        jitter_ratio: float = DEFAULT_A2A_BACKOFF_JITTER_RATIO,
         completion_callback: Callable[[A2ATaskRecord], Awaitable[None]] | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.llm_client = llm_client
         self.poll_seconds = max(1.0, poll_seconds)
+        self.max_backoff_seconds = max(self.poll_seconds, max_backoff_seconds)
+        self.backoff_multiplier = max(1.1, backoff_multiplier)
+        self.jitter_ratio = max(0.0, jitter_ratio)
         self.completion_callback = completion_callback
 
-    async def poll_once(self) -> None:
-        """Refresh active tasks and notify on newly terminal ones."""
+    def _next_poll_delay_seconds(self, consecutive_failures: int) -> float:
+        """Return the next polling delay with capped exponential backoff."""
+        if consecutive_failures <= 0:
+            return self.poll_seconds
+
+        delay = min(
+            self.max_backoff_seconds,
+            self.poll_seconds * (self.backoff_multiplier**consecutive_failures),
+        )
+        jitter_cap = min(
+            delay * self.jitter_ratio,
+            max(0.0, self.max_backoff_seconds - delay),
+        )
+        if jitter_cap <= 0:
+            return delay
+        return delay + random.uniform(0.0, jitter_cap)
+
+    async def poll_once(self) -> bool:
+        """Refresh active tasks and notify on newly terminal ones.
+
+        Returns True when one or more tracked tasks failed to refresh.
+        """
+        had_failures = False
         tasks = await self.state_manager.get_a2a_tasks()
         for record in tasks:
             try:
@@ -463,10 +494,21 @@ class A2ATaskTracker:
                             {"notification_sent_at": utcnow(), "updated_at": utcnow()},
                         )
             except Exception as exc:
+                had_failures = True
                 logger.warning("A2A task refresh failed for %s: %s", record.task_id, exc)
+        return had_failures
 
     async def run(self) -> None:
         """Continuously refresh tracked A2A tasks until cancelled."""
+        consecutive_failures = 0
         while True:
-            await self.poll_once()
-            await asyncio.sleep(self.poll_seconds)
+            try:
+                had_failures = await self.poll_once()
+                consecutive_failures = consecutive_failures + 1 if had_failures else 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                consecutive_failures += 1
+                logger.warning("A2A task polling loop failed: %s", exc)
+
+            await asyncio.sleep(self._next_poll_delay_seconds(consecutive_failures))

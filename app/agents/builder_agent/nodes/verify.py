@@ -17,7 +17,7 @@ from typing import Any
 
 from ..runtime.time_utils import utcnow_isoformat
 from ..state.clarification import ClarificationDetector, create_clarification_history_entry
-from ..state.execution_schemas import VerificationReportV2
+from ..state.execution_schemas import VerificationReportV2, VerificationStatus
 from ..state.helpers import get_ideal_state
 from ..state.models import ProgenitorState
 from ..state.verifier import Verifier
@@ -124,7 +124,9 @@ def create_node(
 
                         # Update clarification history
                         clar_history: list[Any] = list(state.get("clarification_history") or [])  # type: ignore[call-overload]
-                        clar_history.append(create_clarification_history_entry(clarification_result))
+                        clar_history.append(
+                            create_clarification_history_entry(clarification_result)
+                        )
 
                         clarification_updates = {
                             "clarification": {
@@ -138,20 +140,28 @@ def create_node(
 
                         # Log clarification detection
                         if state_manager:
-                            await state_manager.log_decision({
-                                "event": "clarification_detected",
-                                "iteration": iteration,
-                                "category": clarification_result.category,
-                                "confidence": clarification_result.confidence,
-                                "question_preview": formatted_question[:200] if formatted_question else None,
-                                "timestamp": utcnow_isoformat(),
-                            })
+                            await state_manager.log_decision(
+                                {
+                                    "event": "clarification_detected",
+                                    "iteration": iteration,
+                                    "category": clarification_result.category,
+                                    "confidence": clarification_result.confidence,
+                                    "question_preview": formatted_question[:200]
+                                    if formatted_question
+                                    else None,
+                                    "timestamp": utcnow_isoformat(),
+                                }
+                            )
 
             # BL-006: Prefer structured data verification when available
             # Check both top-level and phases.execute.result for execution data
-            execution_result = state.get("execution_result") or state.get("phases", {}).get("execute", {}).get("result")
+            execution_result = state.get("execution_result") or state.get("phases", {}).get(
+                "execute", {}
+            ).get("result")
             # BL-006 FIX: validate node stores as validation_result_v2, not validation_result
-            validation_result: Any = state.get("validation_result_v2") or state.get("validation_result")
+            validation_result: Any = state.get("validation_result_v2") or state.get(
+                "validation_result"
+            )
 
             if execution_result or validation_result:
                 # Use new structured verification method
@@ -165,12 +175,13 @@ def create_node(
                 verification_report_dict = verification_report.model_dump()
 
             if not verification_report:
-                # Fallback if no verification was performed
-                logger.warning("No verification report generated, using default")
+                # Missing execution/validation is not a middling failure; verify never ran.
+                logger.warning("No verification inputs available; marking verification as not_run")
                 verification_report = VerificationReportV2(
                     iteration=iteration,
-                    overall_score=0.5,
+                    overall_score=0.0,
                     passed=False,
+                    status=VerificationStatus.NOT_RUN,
                     gaps=["No verification performed"],
                     next_actions=["Gather execution/validation data"],
                     summary="No verification was performed due to missing execution or validation data.",
@@ -183,14 +194,21 @@ def create_node(
             current_artefact: dict[str, Any] = {
                 "iteration": iteration,
                 "output": str(output)[:1000] if output else None,  # Truncate for storage
+                "status": str(verification_report.status),
                 "score": verification_report.overall_score,
                 "passed": verification_report.passed,
                 "timestamp": utcnow_isoformat(),
             }
 
             # BL-006: Add evidence citations to artefact if using V2 report
-            if verification_report_dict and isinstance(verification_report_dict, dict) and "evidence_citations" in verification_report_dict:
-                current_artefact["evidence_citations"] = verification_report_dict["evidence_citations"][:5]
+            if (
+                verification_report_dict
+                and isinstance(verification_report_dict, dict)
+                and "evidence_citations" in verification_report_dict
+            ):
+                current_artefact["evidence_citations"] = verification_report_dict[
+                    "evidence_citations"
+                ][:5]
 
             artefacts.append(current_artefact)
 
@@ -205,13 +223,19 @@ def create_node(
                 logger.info(f"New best artefact at iteration {iteration}: score={best_score:.2f}")
 
             # Track all verification reports (loop.spec.md Task State)
-            verification_reports: list[dict[str, Any]] = list(build_history.get("verification_reports", []))
+            verification_reports: list[dict[str, Any]] = list(
+                build_history.get("verification_reports", [])
+            )
             if verification_report_dict:
                 # Use the V2 dict we already prepared
                 if isinstance(verification_report_dict, dict):
                     report_dict = verification_report_dict
                 else:
-                    report_dict = verification_report_dict.model_dump() if hasattr(verification_report_dict, "model_dump") else {}
+                    report_dict = (
+                        verification_report_dict.model_dump()
+                        if hasattr(verification_report_dict, "model_dump")
+                        else {}
+                    )
             elif hasattr(verification_report, "model_dump"):
                 report_dict = verification_report.model_dump()
             else:
@@ -220,23 +244,31 @@ def create_node(
 
             # Log verification
             if state_manager:
-                await state_manager.log_decision({
-                    "event": "verification",
-                    "iteration": iteration,
-                    "score": verification_report.overall_score,
-                    "passed": verification_report.passed,
-                    "gaps_count": len(verification_report.gaps) if hasattr(verification_report, "gaps") else 0,
-                    "is_best": best_score == verification_report.overall_score,
-                    "timestamp": utcnow_isoformat(),
-                })
+                await state_manager.log_decision(
+                    {
+                        "event": "verification",
+                        "iteration": iteration,
+                        "status": str(verification_report.status),
+                        "score": verification_report.overall_score,
+                        "passed": verification_report.passed,
+                        "gaps_count": len(verification_report.gaps)
+                        if hasattr(verification_report, "gaps")
+                        else 0,
+                        "is_best": best_score == verification_report.overall_score,
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             logger.info(
-                f"Verification complete: score={verification_report.overall_score:.2f}, "
-                f"passed={verification_report.passed}"
+                "Verification complete: status=%s, score=%.2f, passed=%s",
+                verification_report.status,
+                verification_report.overall_score,
+                verification_report.passed,
             )
 
             # Build nested structure updates
             phases_verify = {
+                "status": str(verification_report.status),
                 "passed": verification_report.passed,
                 "score": verification_report.overall_score,
                 "target_score": state.get("target_score", 0.8),
@@ -270,11 +302,14 @@ def create_node(
                 "build_phase": "verify",
                 # New nested structure for verification state
                 "verification": {
+                    "current_status": str(verification_report.status),
                     "current_score": verification_report.overall_score,
                     "current_passed": verification_report.passed,
                     "current_report": verification_report,
                     "target_score": state.get("target_score", 0.8),
-                    "gaps": verification_report.gaps if hasattr(verification_report, "gaps") else [],
+                    "gaps": verification_report.gaps
+                    if hasattr(verification_report, "gaps")
+                    else [],
                 },
                 "iteration": {
                     "current": current_iter,
@@ -284,14 +319,27 @@ def create_node(
 
         except Exception as e:
             logger.error(f"VERIFY phase error: {e}", exc_info=True)
-            # Fallback - assume partial success
+            # Verification did not complete; surface that explicitly instead of fabricating a score.
+            raw_target_score = state.get("target_score", 0.8)
+            target_score = (
+                float(raw_target_score) if isinstance(raw_target_score, int | float) else 0.8
+            )
             return {
                 "phases": {
                     "verify": {
-                        "score": 0.5,
+                        "status": "not_run",
+                        "score": 0.0,
                         "passed": False,
-                        "gaps": ["Verification failed"],
+                        "gaps": ["Verification did not complete"],
                     },
+                },
+                "verification": {
+                    "current_status": "not_run",
+                    "current_score": 0.0,
+                    "current_passed": False,
+                    "current_report": None,
+                    "target_score": target_score,
+                    "gaps": ["Verification did not complete"],
                 },
                 "clarification": {
                     "needed": False,

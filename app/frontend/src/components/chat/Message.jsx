@@ -25,12 +25,12 @@ function Message({ message, streamEventFilter }) {
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
-    return formatMessage(content);
+    return sanitizeHtmlFragment(formatMessage(content));
   }, [content]);
 
   const formattedReasoningText = useMemo(() => {
     if (!reasoningText) return '';
-    return formatMessage(reasoningText);
+    return sanitizeHtmlFragment(formatMessage(reasoningText));
   }, [reasoningText]);
 
   const formattedTime = useMemo(() => {
@@ -106,11 +106,14 @@ function Message({ message, streamEventFilter }) {
   );
 }
 
-function StreamEvents({ events }) {
+export function StreamEvents({ events, describeEvent = describeStreamEvent }) {
   return (
     <div className="message-stream-events">
       {events.map((event) => {
-        const description = describeStreamEvent(event);
+        const description = describeEvent(event);
+        const safeBodyHtml = description.bodyHtml
+          ? sanitizeHtmlFragment(description.bodyHtml)
+          : '';
         return (
           <div
             key={event.id}
@@ -123,7 +126,7 @@ function StreamEvents({ events }) {
             {description.bodyHtml && (
               <div
                 className="message-stream-event-body"
-                dangerouslySetInnerHTML={{ __html: description.bodyHtml }}
+                dangerouslySetInnerHTML={{ __html: safeBodyHtml }}
               />
             )}
             {description.detail && (
@@ -474,6 +477,31 @@ function normalizeListMarkup(html) {
   }
 
   return container.innerHTML;
+}
+
+function sanitizeHtmlFragment(html) {
+  if (!html) return '';
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+
+  for (const node of template.content.querySelectorAll('*')) {
+    for (const attribute of Array.from(node.attributes)) {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+
+      if (name.startsWith('on')) {
+        node.removeAttribute(attribute.name);
+        continue;
+      }
+
+      if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^javascript:/i.test(value)) {
+        node.removeAttribute(attribute.name);
+      }
+    }
+  }
+
+  return template.innerHTML;
 }
 
 function escapeHtml(text) {

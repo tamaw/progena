@@ -51,6 +51,18 @@ def _request_tool_name(tool: Any) -> str:
     return ""
 
 
+def _assert_tool_call_request(request: Any) -> ToolCallRequest:
+    """Fail loudly if DeepAgent changes the tool-call request shape."""
+    if not isinstance(request, ToolCallRequest):
+        raise TypeError(
+            "DynamicMCPToolMiddleware expected ToolCallRequest; pin deepagents/langchain "
+            "to a compatible version before upgrading request types"
+        )
+    if not isinstance(request.tool_call, dict):
+        raise TypeError("DynamicMCPToolMiddleware expected ToolCallRequest.tool_call to be a dict")
+    return request
+
+
 class DynamicMCPToolMiddleware(AgentMiddleware):
     """Inject and bind the current live external MCP tools for each agent turn."""
 
@@ -94,6 +106,7 @@ class DynamicMCPToolMiddleware(AgentMiddleware):
         return request.override(tools=merged_tools)
 
     def _bind_tool_request(self, request: ToolCallRequest) -> ToolCallRequest:
+        request = _assert_tool_call_request(request)
         if request.tool is not None:
             return request
 

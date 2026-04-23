@@ -13,7 +13,9 @@ Features:
 
 import asyncio
 import contextlib
+import inspect
 import logging
+import time
 import traceback
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 class StopNowException(Exception):
     """Exception to signal immediate stop of generation."""
+
     pass
 
 
@@ -48,7 +51,7 @@ def is_stop_requested() -> bool:
     return _stop_everything.is_set()
 
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class Iteratorize(Generic[T]):
@@ -108,11 +111,7 @@ class Iteratorize(Generic[T]):
         def _gen_task() -> None:
             """Background thread task that runs the generator function."""
             try:
-                self._result = self.func(
-                    *self.args,
-                    callback=_callback,
-                    **self.kwargs
-                )
+                self._result = self.func(*self.args, callback=_callback, **self.kwargs)
             except StopNowException:
                 logger.debug("Generation stopped by StopNowException")
             except Exception as e:
@@ -166,6 +165,7 @@ class Iteratorize(Generic[T]):
 @dataclass
 class StreamChunk:
     """A chunk of streamed content with metadata."""
+
     content: str
     index: int
     is_final: bool = False
@@ -198,6 +198,8 @@ class AsyncIteratorize(Generic[T]):
 
     async def start(self) -> None:
         """Start the background task."""
+        loop = asyncio.get_running_loop()
+
         async def _callback(val: T) -> None:
             if self.stop_now or is_stop_requested():
                 raise StopNowException()
@@ -206,26 +208,21 @@ class AsyncIteratorize(Generic[T]):
         async def _gen_task() -> None:
             try:
                 # Handle both sync and async functions
-                if asyncio.iscoroutinefunction(self.func):
-                    self._result = await self.func(
-                        *self.args,
-                        callback=_callback,
-                        **self.kwargs
-                    )
+                if inspect.iscoroutinefunction(self.func):
+                    self._result = await self.func(*self.args, callback=_callback, **self.kwargs)
                 else:
                     # Run sync function in executor
                     def sync_wrapper():
                         def sync_callback(val):
-                            asyncio.run_coroutine_threadsafe(
-                                self.queue.put(val),
-                                asyncio.get_event_loop()
-                            )
-                        return self.func(
-                            *self.args,
-                            callback=sync_callback,
-                            **self.kwargs
-                        )
-                    loop = asyncio.get_event_loop()
+                            if self.stop_now or is_stop_requested():
+                                raise StopNowException()
+                            if loop.is_closed() or not loop.is_running():
+                                raise RuntimeError("AsyncIteratorize event loop is not running")
+                            future = asyncio.run_coroutine_threadsafe(self.queue.put(val), loop)
+                            future.result()
+
+                        return self.func(*self.args, callback=sync_callback, **self.kwargs)
+
                     self._result = await loop.run_in_executor(None, sync_wrapper)
             except StopNowException:
                 logger.debug("Async generation stopped")
@@ -279,11 +276,7 @@ class StreamingBuffer:
         self._total_length = 0
         self.flush_threshold = flush_threshold
         self.flush_timeout = flush_timeout
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        self._last_flush = loop.time() if loop else 0
+        self._last_flush = time.monotonic()
 
     def add(self, chunk: str) -> str | None:
         """
@@ -304,12 +297,15 @@ class StreamingBuffer:
         content = "".join(self._buffer)
         self._buffer.clear()
         self._total_length = 0
+        self._last_flush = time.monotonic()
         return content
 
-    def should_flush(self, current_time: float) -> bool:
+    def should_flush(self, current_time: float | None = None) -> bool:
         """Check if buffer should be flushed based on timeout."""
         if not self._buffer:
             return False
+        if current_time is None:
+            current_time = time.monotonic()
         return (current_time - self._last_flush) >= self.flush_timeout
 
     @property

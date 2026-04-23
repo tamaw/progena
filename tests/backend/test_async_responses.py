@@ -17,6 +17,7 @@ Covers:
 import asyncio
 import concurrent.futures
 import time
+from unittest.mock import call, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -210,6 +211,54 @@ class TestAsyncResponseHandling:
         assert response.status_code == 200
         assert captured["metadata"] == {"thread_id": "thread_sess_thread_xyz"}
 
+    def test_non_streaming_responses_use_tokenizer_usage_counts(self, client):
+        """Usage should come from tokenizer counting, not whitespace splitting."""
+        import app.backend.main as backend_main
+
+        original_client = backend_main.client
+
+        class _MockClient:
+            async def send_message(
+                self,
+                message: str,
+                request_id: str | None = None,
+                metadata: dict[str, object] | None = None,
+            ) -> str:
+                return "reply text"
+
+        backend_main.client = _MockClient()
+
+        try:
+            with patch(
+                "app.backend.main.count_tokens", side_effect=[11, 13, 7]
+            ) as mock_count_tokens:
+                response = client.post(
+                    "/v1/responses",
+                    json={
+                        "model": "progenitor-v1",
+                        "input": [
+                            {"role": "system", "content": "first input"},
+                            {"role": "user", "content": "second input"},
+                        ],
+                        "stream": False,
+                    },
+                )
+        finally:
+            backend_main.client = original_client
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["usage"] == {
+            "prompt_tokens": 24,
+            "completion_tokens": 7,
+            "total_tokens": 31,
+        }
+        assert mock_count_tokens.call_args_list == [
+            call("first input", "progenitor-v1"),
+            call("second input", "progenitor-v1"),
+            call("reply text", "progenitor-v1"),
+        ]
+
 
 class TestConcurrentRequestHandling:
     """Tests for concurrent request handling."""
@@ -364,10 +413,9 @@ class TestTimeoutBehavior:
 
         # Simulate time passing
         time.sleep(0.15)
-        current_time = time.time()
 
         # Should flush due to timeout
-        assert buffer.should_flush(current_time) or buffer.has_content
+        assert buffer.should_flush() or buffer.has_content
 
 
 class TestBackpressureManagement:
@@ -472,6 +520,23 @@ class TestAsyncIteratorize:
             results.append(value)
 
         assert results == ["test-0", "test-1", "test-2"]
+
+    @pytest.mark.asyncio
+    async def test_sync_callback_iteration_from_executor_thread(self):
+        """Sync generators should publish callbacks onto the active event loop."""
+
+        def sync_generate(callback):
+            for i in range(3):
+                callback(i)
+            return "done"
+
+        iterator = AsyncIteratorize(sync_generate)
+        results = []
+
+        async for value in iterator:
+            results.append(value)
+
+        assert results == [0, 1, 2]
 
 
 class TestStreamWithCallback:

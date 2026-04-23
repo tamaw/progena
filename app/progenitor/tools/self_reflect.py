@@ -452,6 +452,14 @@ class SelfReflection:
         """
         topic_lower = topic.lower()
         topic_words = set(topic_lower.split())
+        expanded_topic_words = set(topic_words)
+        for word in topic_words:
+            if word.endswith("ing") and len(word) > 4:
+                expanded_topic_words.add(word[:-3])
+                expanded_topic_words.add(f"{word[:-3]}e")
+            if word.endswith("s") and len(word) > 3:
+                expanded_topic_words.add(word[:-1])
+        topic_words = expanded_topic_words
 
         scored_files: list[tuple[float, DirectoryEntry]] = []
 

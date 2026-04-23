@@ -14,18 +14,23 @@ Features:
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import io
+import ipaddress
 import logging
 import mimetypes
+import socket
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiofiles
+import aiohttp
+from aiohttp.abc import AbstractResolver, ResolveResult
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -33,18 +38,72 @@ logger = logging.getLogger(__name__)
 # Maximum file sizes
 MAX_FILE_SIZE_MB = 10
 MAX_CONTENT_TOKENS = 8192
+ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+MAX_URL_REDIRECTS = 5
+REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+
+
+class _PinnedResolver(AbstractResolver):
+    """Resolve hostnames to a prevalidated set of IPs for a single request chain."""
+
+    def __init__(self, hosts: dict[str, list[str]]) -> None:
+        self._hosts = {host: list(addresses) for host, addresses in hosts.items()}
+
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_UNSPEC,
+    ) -> list[ResolveResult]:
+        del family
+        addresses = self._hosts.get(host)
+        if not addresses:
+            raise OSError(f"Host {host!r} was not prevalidated for attachment download")
+
+        results: list[ResolveResult] = []
+        for address in addresses:
+            ip = ipaddress.ip_address(address)
+            results.append(
+                {
+                    "hostname": host,
+                    "host": address,
+                    "port": port,
+                    "family": socket.AF_INET6 if ip.version == 6 else socket.AF_INET,
+                    "proto": 0,
+                    "flags": socket.AI_NUMERICHOST,
+                }
+            )
+        return results
+
+    async def close(self) -> None:
+        return None
 
 
 class AttachmentConfig(BaseModel):
     """Configuration for attachment handling."""
+
     max_file_size_mb: float = MAX_FILE_SIZE_MB
     max_content_tokens: int = MAX_CONTENT_TOKENS
-    allowed_extensions: list[str] = Field(default_factory=lambda: [
-        ".txt", ".md", ".json", ".yaml", ".yml", ".xml",
-        ".py", ".js", ".ts", ".html", ".css",
-        ".pdf", ".docx", ".doc",
-        ".csv", ".log",
-    ])
+    allowed_extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".txt",
+            ".md",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".xml",
+            ".py",
+            ".js",
+            ".ts",
+            ".html",
+            ".css",
+            ".pdf",
+            ".docx",
+            ".doc",
+            ".csv",
+            ".log",
+        ]
+    )
     cache_dir: Path | None = None
     extract_text_from_pdf: bool = True
     extract_text_from_docx: bool = True
@@ -52,6 +111,7 @@ class AttachmentConfig(BaseModel):
 
 class AttachmentResult(BaseModel):
     """Result of processing an attachment."""
+
     id: str = Field(default_factory=lambda: f"att_{uuid.uuid4().hex[:8]}")
     name: str
     original_filename: str
@@ -64,7 +124,7 @@ class AttachmentResult(BaseModel):
     checksum: str  # SHA256 of original file
     source_type: str = "upload"  # upload, url, paste
     source_url: str | None = None
-    processed_at: datetime = Field(default_factory=datetime.utcnow)
+    processed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
 
@@ -98,12 +158,18 @@ class AttachmentManager:
         # Check extension
         ext = Path(filename).suffix.lower()
         if ext not in self.config.allowed_extensions:
-            return False, f"File type '{ext}' not allowed. Allowed: {', '.join(self.config.allowed_extensions)}"
+            return (
+                False,
+                f"File type '{ext}' not allowed. Allowed: {', '.join(self.config.allowed_extensions)}",
+            )
 
         # Check size
         max_bytes = self.config.max_file_size_mb * 1024 * 1024
         if size_bytes > max_bytes:
-            return False, f"File too large ({size_bytes / 1024 / 1024:.1f}MB). Max: {self.config.max_file_size_mb}MB"
+            return (
+                False,
+                f"File too large ({size_bytes / 1024 / 1024:.1f}MB). Max: {self.config.max_file_size_mb}MB",
+            )
 
         return True, None
 
@@ -111,10 +177,67 @@ class AttachmentManager:
         """Calculate SHA256 checksum of content."""
         return hashlib.sha256(content).hexdigest()
 
+    def _is_blocked_address(self, address: str) -> bool:
+        """Return True for loopback/private/link-local and other non-public targets."""
+        ip = ipaddress.ip_address(address)
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        )
+
+    async def _resolve_url_addresses(self, parsed_url) -> list[str]:
+        """Resolve a URL hostname to concrete IP addresses."""
+        hostname = parsed_url.hostname
+        if not hostname:
+            raise ValueError("URL must include a hostname")
+
+        with contextlib.suppress(ValueError):
+            return [ipaddress.ip_address(hostname).compressed]
+
+        port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
+        try:
+            addrinfo = await asyncio.to_thread(
+                socket.getaddrinfo,
+                hostname,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror as exc:
+            raise ValueError(f"Could not resolve URL hostname {hostname!r}") from exc
+
+        addresses: list[str] = []
+        for *_, sockaddr in addrinfo:
+            host = str(sockaddr[0])
+            if host not in addresses:
+                addresses.append(host)
+        if not addresses:
+            raise ValueError(f"Could not resolve URL hostname {hostname!r}")
+        return addresses
+
+    async def _resolve_public_url(self, url: str) -> tuple[Any, list[str]]:
+        """Resolve a URL and return only prevalidated public addresses."""
+        parsed = urlparse(url)
+        scheme = str(parsed.scheme or "").lower()
+        if scheme not in ALLOWED_URL_SCHEMES:
+            raise ValueError("Only http:// and https:// attachment URLs are allowed")
+        if not parsed.hostname:
+            raise ValueError("URL must include a hostname")
+
+        addresses = await self._resolve_url_addresses(parsed)
+        blocked = [address for address in addresses if self._is_blocked_address(address)]
+        if blocked:
+            raise ValueError(f"URL resolves to a blocked address: {blocked[0]}")
+        return parsed, addresses
+
     def _extract_text_from_pdf(self, content: bytes) -> str:
         """Extract text from PDF bytes."""
         try:
             import pypdf  # pyright: ignore[reportMissingImports]
+
             reader = pypdf.PdfReader(io.BytesIO(content))
             text_parts = []
             for page in reader.pages:
@@ -133,6 +256,7 @@ class AttachmentManager:
         """Extract text from DOCX bytes."""
         try:
             import docx  # pyright: ignore[reportMissingImports]
+
             doc = docx.Document(io.BytesIO(content))
             paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
             return "\n\n".join(paragraphs)
@@ -159,7 +283,11 @@ class AttachmentManager:
             return "[PDF content]"
 
         # DOCX extraction
-        if ext in (".docx",) or mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        if (
+            ext in (".docx",)
+            or mime_type
+            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ):
             if self.config.extract_text_from_docx:
                 return self._extract_text_from_docx(content)
             return "[DOCX content]"
@@ -203,7 +331,7 @@ class AttachmentManager:
         for sep in ["\n\n", "\n", ". ", " "]:
             last_sep = truncated.rfind(sep)
             if last_sep > max_chars * 0.8:  # Keep at least 80%
-                truncated = truncated[:last_sep + len(sep)]
+                truncated = truncated[: last_sep + len(sep)]
                 break
 
         truncated += "\n\n[... content truncated ...]"
@@ -295,7 +423,10 @@ class AttachmentManager:
 
         logger.info(
             "Processed attachment: %s (%s, %d bytes, truncated=%s)",
-            filename, mime_type, len(content), was_truncated
+            filename,
+            mime_type,
+            len(content),
+            was_truncated,
         )
 
         return result
@@ -322,22 +453,58 @@ class AttachmentManager:
     ) -> AttachmentResult:
         """Download and process a file from URL."""
         try:
-            import httpx
+            current_url = url
+            max_bytes = int(self.config.max_file_size_mb * 1024 * 1024)
+            for _ in range(MAX_URL_REDIRECTS + 1):
+                parsed, addresses = await self._resolve_public_url(current_url)
+                resolver = _PinnedResolver({str(parsed.hostname): addresses})
+                connector = aiohttp.TCPConnector(resolver=resolver, use_dns_cache=False)
+                timeout = aiohttp.ClientTimeout(total=30.0)
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                content = response.content
+                async with (
+                    aiohttp.ClientSession(timeout=timeout, connector=connector) as session,
+                    session.get(current_url, allow_redirects=False) as response,
+                ):
+                    if response.status in REDIRECT_STATUS_CODES:
+                        redirect_target = response.headers.get("location")
+                        if not redirect_target:
+                            raise ValueError("Redirect response missing Location header")
+                        current_url = urljoin(current_url, redirect_target)
+                        continue
+
+                    response.raise_for_status()
+                    content_length_header = response.headers.get("content-length")
+                    if content_length_header:
+                        content_length: int | None
+                        try:
+                            content_length = int(content_length_header)
+                        except ValueError:
+                            content_length = None
+                        if content_length is not None and content_length > max_bytes:
+                            raise ValueError(
+                                f"Remote file too large ({content_length / 1024 / 1024:.1f}MB). "
+                                f"Max: {self.config.max_file_size_mb}MB"
+                            )
+
+                    content = await response.read()
+                    if len(content) > max_bytes:
+                        raise ValueError(
+                            f"Remote file too large ({len(content) / 1024 / 1024:.1f}MB). "
+                            f"Max: {self.config.max_file_size_mb}MB"
+                        )
+                    break
+            else:
+                raise ValueError("Too many redirects while fetching attachment URL")
 
             # Extract filename from URL
-            parsed = urlparse(url)
+            parsed = urlparse(current_url)
             filename = Path(parsed.path).name or "downloaded_file"
 
             return await self.process_file(
                 filename=filename,
                 content=content,
                 source_type="url",
-                source_url=url,
+                source_url=current_url,
                 metadata=metadata,
             )
 
@@ -411,10 +578,7 @@ class AttachmentManager:
         files: list[tuple[str, bytes]],
     ) -> list[AttachmentResult]:
         """Process multiple files in parallel."""
-        tasks = [
-            self.process_file(filename, content)
-            for filename, content in files
-        ]
+        tasks = [self.process_file(filename, content) for filename, content in files]
         return await asyncio.gather(*tasks)
 
     def get_cached(self, checksum: str) -> AttachmentResult | None:
@@ -435,6 +599,7 @@ class AttachmentManager:
 
 
 # FastAPI integration helpers
+
 
 def format_attachments_for_context(
     attachments: list[AttachmentResult],
@@ -461,7 +626,7 @@ def format_attachments_for_context(
             header += f" (from: {att.source_url})"
         header += f"\n*Type: {att.mime_type}, Size: {att.size_bytes:,} bytes*\n\n"
 
-        content_tokens = (att.truncated_tokens or 0)
+        content_tokens = att.truncated_tokens or 0
         if total_tokens + content_tokens > max_total_tokens:
             parts.append(f"{header}[Content omitted - token limit reached]\n\n")
             continue

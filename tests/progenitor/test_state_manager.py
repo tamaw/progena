@@ -2,10 +2,12 @@
 
 import asyncio
 import json
+import os
 import tempfile
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import (
@@ -16,6 +18,7 @@ from app.progenitor.state.models import (
     WorkItemStatus,
     WorkItemType,
 )
+from app.progenitor.state.persistence import PERSISTED_STATE_SCHEMA_VERSION, StatePersistence
 
 
 class TestStateManager:
@@ -83,6 +86,27 @@ class TestStateManager:
 
         backlog = await manager.get_backlog()
         assert len(backlog) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_backlog_rejects_unknown_item_type(self, temp_dirs):
+        """Persisted backlog parsing should fail on unknown work item types."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        build_state = await manager.get_build_state()
+        build_state["backlog"] = [
+            {
+                "id": "bad-item",
+                "item_type": "hallucinated_action",
+                "description": "Bad persisted item",
+            }
+        ]
+        await manager.save_build_state(build_state)
+        manager._state_cache.pop("build_state", None)
+
+        with pytest.raises(ValidationError):
+            await manager.get_backlog()
 
     @pytest.mark.asyncio
     async def test_update_work_item(self, temp_dirs):
@@ -257,6 +281,9 @@ class TestStateManager:
         backlog = await manager.get_backlog()
         assert len(backlog) == 10
 
+        persisted = json.loads((state_dir / "build_state.json").read_text(encoding="utf-8"))
+        assert persisted["schema_version"] == PERSISTED_STATE_SCHEMA_VERSION
+
     @pytest.mark.asyncio
     async def test_atomic_write_recreates_missing_parent_dir(self, temp_dirs):
         """Atomic writes recreate missing parent directories before writing."""
@@ -274,6 +301,33 @@ class TestStateManager:
 
         assert state_dir.exists()
         assert (state_dir / "current_state.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_atomic_write_preserves_original_on_fsync_failure(self, temp_dirs, monkeypatch):
+        """A failed fsync leaves the original state file untouched and cleans temp files."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+        await manager.save_current_state({"thread_id": "thread-original", "cycle_count": 1})
+
+        original = (state_dir / "current_state.json").read_text(encoding="utf-8")
+        real_fsync = os.fsync
+        call_count = 0
+
+        def fail_on_write(fd: int) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise OSError("No space left on device")
+            real_fsync(fd)
+
+        monkeypatch.setattr("app.progenitor.state.persistence.os.fsync", fail_on_write)
+
+        with pytest.raises(OSError, match="No space left on device"):
+            await manager.save_current_state({"thread_id": "thread-new", "cycle_count": 2})
+
+        assert (state_dir / "current_state.json").read_text(encoding="utf-8") == original
+        assert list(state_dir.glob(".current_state.json.*.tmp")) == []
 
     @pytest.mark.asyncio
     async def test_commit_state(self, temp_dirs):
@@ -295,6 +349,61 @@ class TestStateManager:
         # Verify state persisted
         state = await manager.get_build_state()
         assert state.get("cycle_count") == 5
+
+    @pytest.mark.asyncio
+    async def test_get_build_state_refreshes_after_external_edit(self, temp_dirs):
+        """Build-state reads should invalidate stale cache after external edits."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        initial = await manager.get_build_state()
+        initial["task_id"] = "original"
+        await manager.save_build_state(initial)
+
+        build_path = state_dir / "build_state.json"
+        external = json.loads(build_path.read_text(encoding="utf-8"))
+        external["task_id"] = "external"
+        build_path.write_text(json.dumps(external), encoding="utf-8")
+
+        refreshed = await manager.get_build_state()
+
+        assert refreshed["task_id"] == "external"
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_overwrite_external_edits_with_clean_cache(self, temp_dirs):
+        """Closing should not flush stale cache back over externally edited files."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        current_path = state_dir / "current_state.json"
+        external = json.loads(current_path.read_text(encoding="utf-8"))
+        external["thread_id"] = "external-thread"
+        current_path.write_text(json.dumps(external), encoding="utf-8")
+
+        await manager.close()
+
+        persisted = json.loads(current_path.read_text(encoding="utf-8"))
+        assert persisted["thread_id"] == "external-thread"
+
+    @pytest.mark.asyncio
+    async def test_update_current_state_merges_on_fresh_disk_state(self, temp_dirs):
+        """Partial current-state updates should not overwrite external file edits."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        current_path = state_dir / "current_state.json"
+        external = json.loads(current_path.read_text(encoding="utf-8"))
+        external["thread_id"] = "external-thread"
+        current_path.write_text(json.dumps(external), encoding="utf-8")
+
+        await manager.update_current_state({"cycle_count": 9})
+
+        persisted = json.loads(current_path.read_text(encoding="utf-8"))
+        assert persisted["thread_id"] == "external-thread"
+        assert persisted["cycle_count"] == 9
 
     @pytest.mark.asyncio
     async def test_file_lock_blocks_across_manager_instances(self, temp_dirs):
@@ -319,9 +428,62 @@ class TestStateManager:
         await asyncio.wait_for(waiter, timeout=1.0)
         assert entered_second_lock.is_set()
 
+    @pytest.mark.asyncio
+    async def test_stale_lockfile_does_not_block_acquisition(self, temp_dirs):
+        """A leftover lockfile path without an active OS lock should not block startup."""
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        lock_path = state_dir / "current_state.json.lock"
+        lock_path.write_text("stale", encoding="utf-8")
+
+        async with manager._file_lock("current_state"):
+            assert lock_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_initialize_rotates_broken_current_state_file(self, temp_dirs):
+        """Malformed current_state.json is quarantined and rebuilt from defaults."""
+        state_dir, logs_dir = temp_dirs
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "current_state.json").write_text('{"thread_id": "broken"', encoding="utf-8")
+
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        broken_files = sorted(state_dir.glob("current_state.json.broken-*"))
+        assert len(broken_files) == 1
+        assert broken_files[0].read_text(encoding="utf-8") == '{"thread_id": "broken"'
+
+        current_state = await manager.get_current_state()
+        assert current_state["schema_version"] == PERSISTED_STATE_SCHEMA_VERSION
+        assert "thread_id" in current_state
+
+    @pytest.mark.asyncio
+    async def test_initialize_migrates_legacy_current_state_schema(self, temp_dirs):
+        """Legacy unversioned current_state.json is migrated in place on startup."""
+        state_dir, logs_dir = temp_dirs
+        state_dir.mkdir(parents=True, exist_ok=True)
+        legacy_state = {"thread_id": "legacy-thread", "cycle_count": 4}
+        (state_dir / "current_state.json").write_text(
+            json.dumps(legacy_state),
+            encoding="utf-8",
+        )
+
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        current_state = await manager.get_current_state()
+        assert current_state["thread_id"] == "legacy-thread"
+        assert current_state["cycle_count"] == 4
+        assert current_state["schema_version"] == PERSISTED_STATE_SCHEMA_VERSION
+
+        persisted = json.loads((state_dir / "current_state.json").read_text(encoding="utf-8"))
+        assert persisted["schema_version"] == PERSISTED_STATE_SCHEMA_VERSION
+
 
 class TestStateManagerCacheReads:
-    """Tests that get_build_state/get_current_state return from cache."""
+    """Tests that state reads refresh when on-disk content changes."""
 
     @pytest.fixture
     def temp_dirs(self):
@@ -329,8 +491,8 @@ class TestStateManagerCacheReads:
             yield Path(state_dir), Path(logs_dir)
 
     @pytest.mark.asyncio
-    async def test_get_build_state_returns_from_cache(self, temp_dirs):
-        """After init, get_build_state returns cached data without hitting disk."""
+    async def test_get_build_state_refreshes_when_disk_changes(self, temp_dirs):
+        """get_build_state should invalidate stale cache after an external edit."""
         state_dir, logs_dir = temp_dirs
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
@@ -338,17 +500,17 @@ class TestStateManagerCacheReads:
         # Save state to populate cache
         await manager.save_build_state({"build_in_progress": True, "custom_key": 42})
 
-        # Corrupt the file on disk - cache should still return correct data
+        # Edit the file on disk - the next read should refresh from disk.
         with open(state_dir / "build_state.json", "w") as f:
             f.write('{"build_in_progress": false, "custom_key": 0}')
 
         state = await manager.get_build_state()
-        assert state["custom_key"] == 42
-        assert state["build_in_progress"] is True
+        assert state["custom_key"] == 0
+        assert state["build_in_progress"] is False
 
     @pytest.mark.asyncio
-    async def test_get_current_state_returns_from_cache(self, temp_dirs):
-        """After init, get_current_state returns cached data without hitting disk."""
+    async def test_get_current_state_refreshes_when_disk_changes(self, temp_dirs):
+        """get_current_state should invalidate stale cache after an external edit."""
         state_dir, logs_dir = temp_dirs
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
@@ -356,13 +518,13 @@ class TestStateManagerCacheReads:
         # Save state to populate cache
         await manager.save_current_state({"thread_id": "thread-cached", "cycle_count": 7})
 
-        # Corrupt the file on disk - cache should still return correct data
+        # Edit the file on disk - the next read should refresh from disk.
         with open(state_dir / "current_state.json", "w") as f:
             f.write('{"thread_id": "thread-disk", "cycle_count": 0}')
 
         state = await manager.get_current_state()
-        assert state["thread_id"] == "thread-cached"
-        assert state["cycle_count"] == 7
+        assert state["thread_id"] == "thread-disk"
+        assert state["cycle_count"] == 0
 
     @pytest.mark.asyncio
     async def test_get_build_state_falls_back_to_disk_when_no_cache(self, temp_dirs):
@@ -394,3 +556,48 @@ class TestStateManagerCacheReads:
         await manager.save_build_state({"build_in_progress": False, "task_id": "t2"})
         state = await manager.get_build_state()
         assert state["task_id"] == "t2"
+
+
+class TestStatePersistence:
+    """Tests for the low-level StatePersistence helper."""
+
+    @pytest.fixture
+    def temp_dirs(self):
+        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as logs_dir:
+            yield Path(state_dir), Path(logs_dir)
+
+    @pytest.mark.asyncio
+    async def test_read_quarantines_broken_json(self, temp_dirs):
+        """Malformed JSON is rotated aside instead of crashing reads."""
+        state_dir, logs_dir = temp_dirs
+        persistence = StatePersistence(state_dir, logs_dir)
+        await persistence.initialize()
+
+        broken_path = state_dir / "current_state.json"
+        broken_path.write_text('{"thread_id": "broken"', encoding="utf-8")
+
+        loaded = await persistence.read("current_state.json")
+
+        assert loaded is None
+        broken_files = sorted(state_dir.glob("current_state.json.broken-*"))
+        assert len(broken_files) == 1
+        assert broken_files[0].read_text(encoding="utf-8") == '{"thread_id": "broken"'
+
+    @pytest.mark.asyncio
+    async def test_read_migrates_legacy_schema_version(self, temp_dirs):
+        """Legacy runtime-state payloads are migrated and rewritten on read."""
+        state_dir, logs_dir = temp_dirs
+        persistence = StatePersistence(state_dir, logs_dir)
+        await persistence.initialize()
+
+        current_state_path = state_dir / "current_state.json"
+        current_state_path.write_text(
+            json.dumps({"thread_id": "legacy-thread", "cycle_count": 1}),
+            encoding="utf-8",
+        )
+
+        loaded = await persistence.read("current_state.json")
+
+        assert loaded["schema_version"] == PERSISTED_STATE_SCHEMA_VERSION
+        persisted = json.loads(current_state_path.read_text(encoding="utf-8"))
+        assert persisted["schema_version"] == PERSISTED_STATE_SCHEMA_VERSION

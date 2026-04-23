@@ -19,15 +19,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_node(config: "ProgenitorConfig", state_manager=None) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
+def create_node(
+    config: "ProgenitorConfig", state_manager=None
+) -> Callable[[ProgenitorState], Coroutine[Any, Any, ProgenitorState]]:
     """Create the idle node function.
 
     Args:
         config: ProgenitorConfig with runtime settings.
         state_manager: Optional state manager.
     """
-    # Default prompt interval: prompt every 10 cycles
-    prompt_interval = 10
+    runtime_config = getattr(config, "runtime", config)
+    prompt_interval = int(getattr(runtime_config, "idle_prompt_interval_cycles", 10))
 
     async def idle_node(state: ProgenitorState) -> ProgenitorState:
         """Handle idle state - prompt user periodically.
@@ -52,6 +54,8 @@ def create_node(config: "ProgenitorConfig", state_manager=None) -> Callable[[Pro
         return {
             "pending_response": response_text,
             "actions_this_cycle": 0,  # Reset for next cycle
+            "pending_messages_in_queue": 0,
+            "input_wait_seconds": 0.0,
         }
 
     return idle_node

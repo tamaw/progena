@@ -15,7 +15,6 @@ Controls:
 """
 
 import asyncio
-import contextlib
 import copy
 import inspect
 import json
@@ -41,7 +40,7 @@ from ..streaming_utils import (
     make_json_safe,
 )
 from .a2a_tasks import A2ATaskTracker, build_completion_message
-from .scheduler import Scheduler
+from .scheduler import SCHEDULER_ERROR_METADATA_KEY, Scheduler
 from .time_utils import utcnow, utcnow_isoformat
 
 if TYPE_CHECKING:
@@ -52,6 +51,7 @@ logger = logging.getLogger(__name__)
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
+OUTPUT_QUEUE_PUT_TIMEOUT_SECONDS = 5.0
 
 
 class QueuedInput(NamedTuple):
@@ -113,8 +113,8 @@ class ProgenitorLoop:
             ""  # Accumulated streamed text for saving to messages
         )
 
-        # Captures the most recent pending_response emitted by the graph during a cycle.
-        # Used for background job cycles where we don't stream to the client.
+        # Captures the most recent response emitted by the graph during a cycle.
+        # This is loop-internal bookkeeping for scheduled/error paths, not shared graph state.
         self._last_cycle_response: str | None = None
         self._last_reasoning_trace: str | None = None
 
@@ -129,6 +129,18 @@ class ProgenitorLoop:
         self._state: dict[str, Any] = {}
         self._a2a_task_tracker: A2ATaskTracker | None = None
         self._a2a_task_poller: asyncio.Task[None] | None = None
+
+    async def _cancel_task_and_log(self, task: asyncio.Task | None, *, label: str) -> None:
+        """Cancel a background task and surface teardown errors in logs."""
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.warning("Error while awaiting %s shutdown: %s", label, exc)
 
     async def run_forever(self) -> None:
         """Run the perpetual loop.
@@ -206,9 +218,7 @@ class ProgenitorLoop:
                     return_when=asyncio.FIRST_EXCEPTION,
                 )
                 for task in pending:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
+                    await self._cancel_task_and_log(task, label="background task")
                 for task in done:
                     exc = task.exception()
                     if exc:
@@ -220,22 +230,14 @@ class ProgenitorLoop:
                 )
         except asyncio.CancelledError:
             logger.info("Loop cancelled by signal")
-            input_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await input_task
+            await self._cancel_task_and_log(input_task, label="input task")
             if scheduler_task:
-                scheduler_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await scheduler_task
+                await self._cancel_task_and_log(scheduler_task, label="scheduler task")
             if poller_task:
-                poller_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await poller_task
+                await self._cancel_task_and_log(poller_task, label="A2A poller task")
         finally:
             if poller_task and not poller_task.done():
-                poller_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await poller_task
+                await self._cancel_task_and_log(poller_task, label="A2A poller task")
 
         # Final checkpoint
         await self._checkpoint_state(self._state)
@@ -334,16 +336,13 @@ class ProgenitorLoop:
                             self._stream_final_sent = True
 
                         self._last_cycle_response = f"Error: {safe_error}"
-                        self._state["last_cycle_response"] = self._last_cycle_response
                         await self._checkpoint_state(self._state)
                         await self._update_health_file(
                             self._state, status="error", error=safe_error
                         )
                     finally:
                         if is_scheduled_input:
-                            response_text = str(
-                                self._state.get("last_cycle_response") or ""
-                            ).strip()
+                            response_text = str(self._last_cycle_response or "").strip()
                             result_status = (
                                 "completed" if response_text else "completed_no_response"
                             )
@@ -461,6 +460,22 @@ class ProgenitorLoop:
             for entry in schedule_entries
         ]
         due_items = scheduler.get_due_items(schedule_dicts, current_time=utcnow())
+        for schedule_id, updates in scheduler.drain_pending_updates(schedule_dicts):
+            await self.state_manager.update_schedule_entry(schedule_id, updates)
+            scheduler_error = (
+                updates.get("metadata", {}).get(SCHEDULER_ERROR_METADATA_KEY)
+                if isinstance(updates.get("metadata"), dict)
+                else None
+            )
+            await self._push_event(
+                "scheduled_task_paused",
+                f"Paused scheduled task {schedule_id} due to an invalid cron expression.",
+                {
+                    "schedule_id": schedule_id,
+                    "reason": "invalid_cron_expression",
+                    "error": scheduler_error,
+                },
+            )
         if not due_items:
             return 0
 
@@ -494,7 +509,10 @@ class ProgenitorLoop:
             else:
                 await self.state_manager.update_schedule_entry(
                     schedule_id,
-                    {"last_run": now.isoformat()},
+                    {
+                        "last_run": now.isoformat(),
+                        "last_fired_at": now.isoformat(),
+                    },
                 )
 
             await self._push_event(
@@ -617,7 +635,6 @@ class ProgenitorLoop:
                 if pending:
                     pending_text = str(pending)
                     self._last_cycle_response = pending_text
-                    self._state["last_cycle_response"] = pending_text
                     if self._streaming_enabled:
                         await self._ensure_response_streamed(pending_text)
                         pending_stream_final = True
@@ -626,7 +643,6 @@ class ProgenitorLoop:
                     streamed_text = self._streamed_response_content
                     if streamed_text:
                         self._last_cycle_response = streamed_text
-                        self._state["last_cycle_response"] = streamed_text
                     if self._streaming_enabled:
                         pending_stream_final = True
                     self._state["pending_response"] = None
@@ -645,7 +661,6 @@ class ProgenitorLoop:
                         await self._ensure_response_streamed(response_text)
                         pending_stream_final = True
                     self._last_cycle_response = response_text
-                    self._state["last_cycle_response"] = response_text
                 elif self._streaming_enabled:
                     pending_stream_final = True
 
@@ -773,18 +788,24 @@ class ProgenitorLoop:
     async def _send_output(self, message: str) -> None:
         """Send output to the user.
 
-        Uses non-blocking put to avoid deadlock. If queue is full,
-        logs a warning and drops the message.
+        Waits briefly for queue capacity so assistant responses are not silently
+        dropped under backpressure.
         """
         try:
-            self._output_queue.put_nowait(message)
+            await asyncio.wait_for(
+                self._output_queue.put(message),
+                timeout=OUTPUT_QUEUE_PUT_TIMEOUT_SECONDS,
+            )
             logger.info("Queued output message for client")
-        except asyncio.QueueFull:
-            logger.warning(
-                "Output queue full (%d/%d), dropping message",
+        except TimeoutError as exc:
+            logger.error(
+                "Timed out waiting to enqueue output message (%d/%d)",
                 self._output_queue.qsize(),
                 self._output_queue.maxsize,
             )
+            raise RuntimeError(
+                "Output queue remained full while sending assistant response"
+            ) from exc
 
     async def _signal_cycle_complete(self) -> None:
         """Signal that a graph cycle has completed.

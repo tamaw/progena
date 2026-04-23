@@ -1,5 +1,6 @@
 """Tests for tracked A2A task lifecycle helpers."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -281,3 +282,78 @@ async def test_task_tracker_records_completion_callback_before_notifying(
 
     completion_callback.assert_awaited_once_with(refreshed)
     notify_mock.assert_awaited_once_with(state_manager, llm_client, refreshed)
+
+
+@pytest.mark.asyncio
+async def test_task_tracker_poll_once_reports_refresh_failures(monkeypatch, state_manager) -> None:
+    await state_manager.upsert_a2a_task(
+        A2ATaskRecord(
+            task_id="observe-5",
+            agent_name="observe_agent",
+            agent_url="http://localhost:8108",
+            context_id="ctx-5",
+            source="call_agent",
+            request_text="Inspect retries",
+            status="working",
+        )
+    )
+    refresh_mock = AsyncMock(side_effect=RuntimeError("agent unavailable"))
+    monkeypatch.setattr("app.progenitor.runtime.a2a_tasks.refresh_tracked_a2a_task", refresh_mock)
+
+    tracker = A2ATaskTracker(state_manager)
+
+    had_failures = await tracker.poll_once()
+
+    assert had_failures is True
+
+
+@pytest.mark.asyncio
+async def test_task_tracker_run_uses_backoff_after_failures(state_manager) -> None:
+    tracker = A2ATaskTracker(state_manager, poll_seconds=5.0, jitter_ratio=0.0)
+    poll_results = [True, True, False]
+
+    async def fake_poll_once() -> bool:
+        return poll_results.pop(0) if poll_results else False
+
+    sleep_delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+        if len(sleep_delays) >= 3:
+            raise asyncio.CancelledError
+
+    tracker.poll_once = fake_poll_once  # type: ignore[method-assign]
+
+    with (
+        pytest.raises(asyncio.CancelledError),
+        pytest.MonkeyPatch.context() as mp,
+    ):
+        mp.setattr("app.progenitor.runtime.a2a_tasks.asyncio.sleep", fake_sleep)
+        await tracker.run()
+
+    assert sleep_delays == [10.0, 20.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_task_tracker_run_backs_off_when_poll_once_raises(state_manager) -> None:
+    tracker = A2ATaskTracker(state_manager, poll_seconds=5.0, jitter_ratio=0.0)
+
+    async def failing_poll_once() -> bool:
+        raise RuntimeError("agent down")
+
+    sleep_delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+        raise asyncio.CancelledError
+
+    tracker.poll_once = failing_poll_once  # type: ignore[method-assign]
+
+    with (
+        pytest.raises(asyncio.CancelledError),
+        pytest.MonkeyPatch.context() as mp,
+    ):
+        mp.setattr("app.progenitor.runtime.a2a_tasks.asyncio.sleep", fake_sleep)
+        await tracker.run()
+
+    assert sleep_delays == [10.0]

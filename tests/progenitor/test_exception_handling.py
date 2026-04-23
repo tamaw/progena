@@ -31,7 +31,7 @@ class TestMCPExceptionHandling:
 
         client = MCPClient()
 
-        with patch.object(client, 'call_tool', side_effect=TimeoutError()):
+        with patch.object(client, "call_tool", side_effect=TimeoutError()):
             result = await client.healthcheck({"command": "test"})
 
         assert result is False
@@ -73,5 +73,5 @@ class TestPickNextExceptionHandling:
             content = f.read()
 
         # Should have specific exception types
-        assert "(KeyError, TypeError, ValueError)" in content
-        assert "logger.debug" in content
+        assert "ValidationError" in content
+        assert "logger.error" in content

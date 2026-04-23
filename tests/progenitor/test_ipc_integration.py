@@ -6,9 +6,11 @@ Tests end-to-end communication between the IPC client and server.
 
 import asyncio
 import contextlib
+import time
 
 import pytest
 
+from app.progenitor.ipc import client as ipc_client_module
 from app.progenitor.ipc.client import IPCClient
 from app.progenitor.ipc.server import IPCServer
 
@@ -27,6 +29,7 @@ class MockLoopRunner:
         self._cycle_complete_event.set()
         # Flag to enable automatic streaming (tests can disable to control manually)
         self._auto_stream = True
+        self.last_cycle_complete_timeout: float | None = None
 
     async def enqueue_input(self, content: str) -> None:
         """Enqueue input message."""
@@ -72,6 +75,7 @@ class MockLoopRunner:
 
     async def wait_cycle_complete(self, timeout: float | None = None) -> bool:
         """Wait for cycle to complete (mock always returns True immediately)."""
+        self.last_cycle_complete_timeout = timeout
         return True
 
     def set_response(self, response: str) -> None:
@@ -189,6 +193,10 @@ class TestIPCServerBasic:
         assert status["host"] == "127.0.0.1"
         assert status["client_count"] >= 0
         assert status["max_clients"] > 0
+        assert status["request_serialization"] == "global_single_flight"
+        assert status["client_read_timeout_seconds"] == 60.0
+        assert status["request_timeout_seconds"] == 60.0
+        assert status["cycle_complete_timeout_seconds"] == 5.0
 
 
 class TestIPCClientBasic:
@@ -293,6 +301,69 @@ class TestIPCCommunication:
         response = await ipc_client.send_message("Hello after timeout", request_id="fresh_req")
 
         assert response == "fresh response"
+
+    @pytest.mark.asyncio
+    async def test_request_uses_configured_cycle_complete_timeout(self, mock_loop_runner):
+        """Responses should use the configured post-response cycle wait."""
+        server = IPCServer(
+            loop_runner=mock_loop_runner,
+            host="127.0.0.1",
+            port=0,
+            cycle_complete_timeout_seconds=7.0,
+        )
+        await server.start()
+        assert server._server is not None
+        server.port = server._server.sockets[0].getsockname()[1]
+
+        client = IPCClient(
+            host="127.0.0.1",
+            port=server.port,
+            timeout=5.0,
+            auto_reconnect=False,
+        )
+
+        try:
+            await client.connect()
+            response = await client.send_message("Hello, Progenitor!")
+            assert response == "Mock response"
+            assert mock_loop_runner.last_cycle_complete_timeout == 7.0
+        finally:
+            await client.disconnect()
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_request_returns_timeout_error_with_configured_timeout(self):
+        """A stalled request should fail on the server's configured timeout."""
+
+        class NoResponseLoopRunner(MockLoopRunner):
+            async def enqueue_input(self, content: str) -> None:
+                await self._input_queue.put(content)
+
+        loop_runner = NoResponseLoopRunner()
+        server = IPCServer(
+            loop_runner=loop_runner,
+            host="127.0.0.1",
+            port=0,
+            request_timeout_seconds=1.0,
+        )
+        await server.start()
+        assert server._server is not None
+        server.port = server._server.sockets[0].getsockname()[1]
+
+        client = IPCClient(
+            host="127.0.0.1",
+            port=server.port,
+            timeout=3.0,
+            auto_reconnect=False,
+        )
+
+        try:
+            await client.connect()
+            with pytest.raises(RuntimeError, match="Request timed out"):
+                await client.send_message("slow request")
+        finally:
+            await client.disconnect()
+            await server.stop()
 
 
 class TestIPCStreaming:
@@ -442,6 +513,46 @@ class TestIPCErrorHandling:
         assert client.is_connected
 
         await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_missed_heartbeat_threshold_marks_client_disconnected(self, monkeypatch):
+        """Crossing the heartbeat miss threshold should force reconnect on the next request."""
+        client = IPCClient(
+            host="127.0.0.1",
+            port=9500,
+            timeout=5.0,
+            auto_reconnect=True,
+        )
+        client._connected = True
+        client._reader = object()  # type: ignore[assignment]
+        client._writer = object()  # type: ignore[assignment]
+        client._last_activity = time.time() - (ipc_client_module.HEARTBEAT_INTERVAL * 3)
+        client._missed_heartbeats = ipc_client_module.HEARTBEAT_MISS_THRESHOLD - 1
+
+        original_sleep = asyncio.sleep
+        read_calls = 0
+
+        async def fake_sleep(_delay: float) -> None:
+            await original_sleep(0)
+
+        async def fake_write_message(_writer, _message) -> None:
+            return None
+
+        async def fake_read_message(_reader, timeout: float | None = None):
+            nonlocal read_calls
+            read_calls += 1
+            if read_calls == 1:
+                raise TimeoutError
+            return None
+
+        monkeypatch.setattr(ipc_client_module.asyncio, "sleep", fake_sleep)
+        monkeypatch.setattr(ipc_client_module, "write_message", fake_write_message)
+        monkeypatch.setattr(ipc_client_module, "read_message", fake_read_message)
+
+        await client._heartbeat_loop()
+
+        assert client.is_connected is False
+        assert client._missed_heartbeats == ipc_client_module.HEARTBEAT_MISS_THRESHOLD
 
 
 class TestIPCConcurrency:

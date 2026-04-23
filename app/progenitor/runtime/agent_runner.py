@@ -12,20 +12,25 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .time_utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
+STDIO_READ_CHUNK_SIZE = 64 * 1024
+PROCESS_TERMINATE_TIMEOUT_SECONDS = 5.0
+PROCESS_KILL_WAIT_TIMEOUT_SECONDS = 1.0
 
 
 @dataclass
 class AgentProcess:
     """Represents a running agent process."""
+
     name: str
     process: asyncio.subprocess.Process | None
     entrypoint: str
@@ -50,6 +55,7 @@ class AgentProcess:
 @dataclass
 class AgentInteractionResult:
     """Result of interacting with a running agent."""
+
     success: bool
     response: dict[str, Any] | None = None
     error: str | None = None
@@ -129,7 +135,8 @@ class AgentRunner:
             if background:
                 # For HTTP/long-running agents
                 process = await asyncio.create_subprocess_exec(
-                    sys.executable, str(entrypoint_path),
+                    sys.executable,
+                    str(entrypoint_path),
                     cwd=self.project_root,
                     env=agent_env,
                     stdout=asyncio.subprocess.PIPE,
@@ -153,13 +160,15 @@ class AgentRunner:
                 self._running_agents[agent_name] = agent_process
 
             if self.log_callback:
-                await self.log_callback({
-                    "event": "agent_started",
-                    "agent_name": agent_name,
-                    "entrypoint": str(entrypoint_path),
-                    "pid": agent_process.pid,
-                    "timestamp": utcnow_isoformat(),
-                })
+                await self.log_callback(
+                    {
+                        "event": "agent_started",
+                        "agent_name": agent_name,
+                        "entrypoint": str(entrypoint_path),
+                        "pid": agent_process.pid,
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             logger.info("Agent '%s' started (PID: %s)", agent_name, agent_process.pid)
             return agent_process
@@ -218,7 +227,8 @@ class AgentRunner:
             logger.info("Invoking agent '%s'", agent_name)
 
             process = await asyncio.create_subprocess_exec(
-                sys.executable, str(entrypoint_path),
+                sys.executable,
+                str(entrypoint_path),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -227,10 +237,38 @@ class AgentRunner:
             )
 
             input_bytes = json.dumps(payload).encode() + b"\n"
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(input=input_bytes),
-                timeout=timeout,
-            )
+            stdin_task = asyncio.create_task(self._write_process_input(process.stdin, input_bytes))
+            stdout_task = asyncio.create_task(self._read_process_stream(process.stdout))
+            stderr_task = asyncio.create_task(self._read_process_stream(process.stderr))
+            wait_task = asyncio.create_task(process.wait())
+
+            try:
+                _, stdout, stderr, _ = await asyncio.wait_for(
+                    asyncio.gather(stdin_task, stdout_task, stderr_task, wait_task),
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                await self._terminate_process(
+                    process,
+                    agent_name,
+                    reason=f"timed out after {timeout}s",
+                )
+                await self._cancel_tasks(stdin_task, stdout_task, stderr_task, wait_task)
+                duration_ms = (datetime.now() - start_time).total_seconds() * 1000
+                logger.error("Agent '%s' invocation timed out after %ss", agent_name, timeout)
+                return AgentInteractionResult(
+                    success=False,
+                    error=f"Timeout after {timeout}s",
+                    duration_ms=duration_ms,
+                )
+            except Exception:
+                await self._terminate_process(
+                    process,
+                    agent_name,
+                    reason="invoke pipeline failed",
+                )
+                await self._cancel_tasks(stdin_task, stdout_task, stderr_task, wait_task)
+                raise
 
             duration_ms = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -252,13 +290,15 @@ class AgentRunner:
             logger.info("Agent '%s' responded in %.1fms", agent_name, duration_ms)
 
             if self.log_callback:
-                await self.log_callback({
-                    "event": "agent_invoked",
-                    "agent_name": agent_name,
-                    "success": True,
-                    "duration_ms": duration_ms,
-                    "timestamp": utcnow_isoformat(),
-                })
+                await self.log_callback(
+                    {
+                        "event": "agent_invoked",
+                        "agent_name": agent_name,
+                        "success": True,
+                        "duration_ms": duration_ms,
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             return AgentInteractionResult(
                 success=True,
@@ -266,14 +306,6 @@ class AgentRunner:
                 duration_ms=duration_ms,
             )
 
-        except TimeoutError:
-            duration_ms = (datetime.now() - start_time).total_seconds() * 1000
-            logger.error(f"Agent '{agent_name}' invocation timed out after {timeout}s")
-            return AgentInteractionResult(
-                success=False,
-                error=f"Timeout after {timeout}s",
-                duration_ms=duration_ms,
-            )
         except Exception as e:
             duration_ms = (datetime.now() - start_time).total_seconds() * 1000
             logger.exception(f"Error invoking agent '{agent_name}'")
@@ -338,25 +370,23 @@ class AgentRunner:
         if agent_process.process and agent_process.process.returncode is None:
             logger.info(f"Stopping agent '{agent_name}' (PID: {agent_process.pid})")
 
-            try:
-                agent_process.process.terminate()
-                await asyncio.wait_for(
-                    agent_process.process.wait(),
-                    timeout=5.0,
-                )
-            except TimeoutError:
-                logger.warning(f"Agent '{agent_name}' did not terminate gracefully, killing")
-                agent_process.process.kill()
+            await self._terminate_process(
+                agent_process.process,
+                agent_name,
+                reason="stop requested",
+            )
 
         agent_process.status = "stopped"
         del self._running_agents[agent_name]
 
         if self.log_callback:
-            await self.log_callback({
-                "event": "agent_stopped",
-                "agent_name": agent_name,
-                "timestamp": utcnow_isoformat(),
-            })
+            await self.log_callback(
+                {
+                    "event": "agent_stopped",
+                    "agent_name": agent_name,
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
         return True
 
@@ -368,10 +398,7 @@ class AgentRunner:
 
     def get_running_agents(self) -> dict[str, dict[str, Any]]:
         """Get info about all running agents."""
-        return {
-            name: agent.to_dict()
-            for name, agent in self._running_agents.items()
-        }
+        return {name: agent.to_dict() for name, agent in self._running_agents.items()}
 
     def is_running(self, agent_name: str) -> bool:
         """Check if an agent is currently running."""
@@ -413,3 +440,86 @@ class AgentRunner:
         for agent_name in list(self._running_agents.keys()):
             results[agent_name] = await self.health_check(agent_name)
         return results
+
+    async def _write_process_input(
+        self,
+        stdin: asyncio.StreamWriter | None,
+        input_bytes: bytes,
+    ) -> None:
+        """Write request bytes to agent stdin and close the pipe."""
+        if stdin is None:
+            return
+
+        try:
+            stdin.write(input_bytes)
+            await stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            logger.debug("Agent stdin closed before request write completed")
+        finally:
+            stdin.close()
+            wait_closed = getattr(stdin, "wait_closed", None)
+            if callable(wait_closed):
+                wait_closed_fn = wait_closed
+                with suppress(BrokenPipeError, ConnectionResetError):
+                    await cast(Callable[[], Awaitable[Any]], wait_closed_fn)()
+
+    async def _read_process_stream(
+        self,
+        stream: asyncio.StreamReader | None,
+    ) -> bytes:
+        """Drain a subprocess stream incrementally to avoid pipe stalls."""
+        if stream is None:
+            return b""
+
+        chunks = bytearray()
+        while True:
+            chunk = await stream.read(STDIO_READ_CHUNK_SIZE)
+            if not chunk:
+                return bytes(chunks)
+            chunks.extend(chunk)
+
+    async def _cancel_tasks(self, *tasks: asyncio.Task[Any]) -> None:
+        """Cancel and await background tasks."""
+        for task in tasks:
+            if task.done():
+                continue
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def _terminate_process(
+        self,
+        process: asyncio.subprocess.Process,
+        agent_name: str,
+        *,
+        reason: str,
+    ) -> None:
+        """Terminate a subprocess and reap it even if it ignores SIGTERM."""
+        if process.returncode is not None:
+            return
+
+        logger.warning("Terminating agent '%s': %s", agent_name, reason)
+        try:
+            process.terminate()
+            await asyncio.wait_for(
+                process.wait(),
+                timeout=PROCESS_TERMINATE_TIMEOUT_SECONDS,
+            )
+            return
+        except ProcessLookupError:
+            return
+        except TimeoutError:
+            logger.warning("Agent '%s' did not terminate gracefully, killing", agent_name)
+
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+
+        try:
+            await asyncio.wait_for(
+                process.wait(),
+                timeout=PROCESS_KILL_WAIT_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.error("Agent '%s' did not exit after SIGKILL", agent_name)

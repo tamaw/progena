@@ -64,14 +64,6 @@ class TestMockLLMClient:
         )
 
     @pytest.mark.asyncio
-    async def test_chat_returns_string(self, client):
-        """chat should return a string response."""
-        messages = [{"role": "user", "content": "Hello"}]
-        response = await client.chat(messages)
-        assert isinstance(response, str)
-        assert len(response) > 0
-
-    @pytest.mark.asyncio
     async def test_chat_with_greeting(self, client):
         """chat should recognize greetings."""
         messages = [{"role": "user", "content": "Hello!"}]
@@ -98,44 +90,48 @@ class TestMockLLMClient:
         assert isinstance(response, str)
 
     @pytest.mark.asyncio
-    async def test_complete_returns_string(self, client):
-        """complete should return a string."""
-        response = await client.complete("Tell me a joke")
-        assert isinstance(response, str)
-        assert len(response) > 0
+    async def test_complete_routes_prompt_through_contextual_responder(self, client):
+        """complete should preserve the same contextual behavior as chat()."""
+        response = await client.complete("What can you do?")
+        assert "progenitor" in response.lower()
 
     @pytest.mark.asyncio
-    async def test_decide_returns_dict(self, client):
-        """decide should return a decision dict."""
+    @pytest.mark.parametrize(
+        ("user_input", "expected_action", "requires_tools"),
+        [
+            ("Create a new Python file", "execute", True),
+            ("What is Python?", "respond", False),
+            ("Plan a deployment", "plan", False),
+        ],
+    )
+    async def test_decide_routes_by_user_intent(
+        self,
+        client,
+        user_input,
+        expected_action,
+        requires_tools,
+    ):
         result = await client.decide(
-            user_input="Create a new file",
-            conversation_history=[],
-            tool_context="### System Tools\n- list_tools: List all available tools",
-        )
-        assert isinstance(result, dict)
-        assert "action" in result
-        assert "reasoning" in result
-        assert result["action"] in ["respond", "execute", "plan"]
-
-    @pytest.mark.asyncio
-    async def test_decide_execute_for_create(self, client):
-        """decide should return execute for creation requests."""
-        result = await client.decide(
-            user_input="Create a new Python file",
-            conversation_history=[],
-            tool_context="",
-        )
-        assert result["action"] == "execute"
-
-    @pytest.mark.asyncio
-    async def test_decide_respond_for_questions(self, client):
-        """decide should return respond for questions."""
-        result = await client.decide(
-            user_input="What is Python?",
+            user_input=user_input,
             conversation_history=[],
             tool_context="",
         )
+        assert result["action"] == expected_action
+        assert result["requires_tools"] is requires_tools
+        assert result["reasoning"]
+
+    @pytest.mark.asyncio
+    async def test_decide_unknown_input_uses_defined_fallback(self, client):
+        """Unknown intents should still route to the documented fallback action."""
+        result = await client.decide(
+            user_input="Blorpy zibble wobble",
+            conversation_history=[],
+            tool_context="",
+        )
+
         assert result["action"] == "respond"
+        assert result["requires_tools"] is False
+        assert result["reasoning"] == "General query - providing helpful response."
 
     @pytest.mark.asyncio
     async def test_plan_returns_list(self, client):
@@ -198,12 +194,6 @@ class TestMockLLMClient:
         result = await client.summarize(short_text, max_length=100)
         assert result == short_text
 
-    def test_get_stats(self, client):
-        """get_stats should return stats dict."""
-        stats = client.get_stats()
-        assert stats["mode"] == "mock"
-        assert stats["call_count"] == 0
-
     @pytest.mark.asyncio
     async def test_call_count_increments(self, client):
         """Call count should increment with each call."""
@@ -249,25 +239,17 @@ class TestMockResponseContextuality:
         return MockLLMClient(latency_range=(0.001, 0.002))
 
     @pytest.mark.asyncio
-    async def test_code_request_includes_code(self, client):
-        """Code requests should include code blocks."""
-        messages = [{"role": "user", "content": "Write me a function"}]
-        response = await client.chat(messages)
-        assert "```" in response or "def " in response
-
-    @pytest.mark.asyncio
-    async def test_create_request_includes_steps(self, client):
-        """Create requests should include steps."""
-        messages = [{"role": "user", "content": "Create a new project"}]
-        response = await client.chat(messages)
-        assert "1." in response or "✓" in response
-
-    @pytest.mark.asyncio
-    async def test_default_response_mentions_demo(self, client):
-        """Default responses should mention demo mode."""
-        messages = [{"role": "user", "content": "xyzabc123randomquery"}]
-        response = await client.chat(messages)
-        assert "demo" in response.lower() or "mode" in response.lower()
+    @pytest.mark.parametrize(
+        ("prompt", "expected_fragment"),
+        [
+            ("Write me a function", "def "),
+            ("Create a new project", "1."),
+            ("xyzabc123randomquery", "demo"),
+        ],
+    )
+    async def test_chat_adapts_response_to_prompt_context(self, client, prompt, expected_fragment):
+        response = await client.chat([{"role": "user", "content": prompt}])
+        assert expected_fragment.lower() in response.lower()
 
 
 class TestMockClientLatency:
@@ -294,6 +276,7 @@ class TestMockClientLatency:
 
         # Should complete very quickly
         import time
+
         start = time.perf_counter()
         await client.chat([{"role": "user", "content": "Hi"}])
         elapsed = time.perf_counter() - start

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from ..runtime.scheduler import Scheduler
+from ..runtime.scheduler import SCHEDULER_ERROR_METADATA_KEY, Scheduler
 from ..runtime.time_utils import utcnow
 from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec
 
@@ -22,6 +22,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _SCHEDULE_ID_PATTERN = re.compile(r"\b(sched_[A-Za-z0-9]+)\b")
+
+
+def _clear_scheduler_error_metadata(metadata: Any) -> dict[str, Any] | None:
+    """Remove the persisted scheduler parse error from metadata, preserving other keys."""
+    if not isinstance(metadata, dict):
+        return None
+    cleaned = {key: value for key, value in metadata.items() if key != SCHEDULER_ERROR_METADATA_KEY}
+    return cleaned or None
+
+
+def _default_scheduler_timezone() -> str:
+    """Load the configured runtime timezone, falling back to UTC."""
+    try:
+        from ..config import get_config
+
+        return str(get_config().runtime.timezone or "UTC")
+    except Exception:
+        return "UTC"
 
 
 class ScheduleRequest(BaseModel):
@@ -97,6 +115,7 @@ async def add_scheduled_task(
     time_expression: str,
     instruction: str,
     description: str | None = None,
+    timezone: str | None = None,
 ) -> tuple[ScheduleResult, dict | None]:
     """
     Add a scheduled task that will execute an instruction at the specified time.
@@ -105,7 +124,7 @@ async def add_scheduled_task(
     ISO8601 timestamp (scheduled_at). One-off timestamps are stored as
     'scheduled_at' on the entry to avoid imprecise cron fallbacks.
     """
-    scheduler = Scheduler()
+    scheduler = Scheduler(timezone=timezone or _default_scheduler_timezone())
 
     # Parse the time expression
     parsed = scheduler.parse_time_expression(time_expression)
@@ -132,6 +151,7 @@ async def add_scheduled_task(
         "user_request": user_request,
         "last_run": None,
         "created_at": created_at,
+        "timezone": scheduler.timezone,
     }
 
     if parsed.get("scheduled_at"):
@@ -150,6 +170,7 @@ async def add_scheduled_task(
                 "cron_expression": parsed["cron_expression"],
                 "last_run": None,
                 "created_at": created_at,
+                "timezone": scheduler.timezone,
             }
         )
         logger.info(
@@ -256,6 +277,28 @@ async def update_scheduled_task(
         )
 
     if state_manager is not None:
+        timing_fields = {"cron_expression", "scheduled_at"}
+        if timing_fields & set(updates.keys()):
+            schedule = await state_manager.get_schedule()
+            current_entry = next((entry for entry in schedule if entry.id == schedule_id), None)
+            if current_entry is None:
+                return ScheduleResult(
+                    success=False,
+                    schedule_id=schedule_id,
+                    message=f"Task {schedule_id} not found",
+                )
+
+            current_dict = (
+                current_entry.model_dump()
+                if hasattr(current_entry, "model_dump")
+                else current_entry
+            )
+            updates = dict(updates)
+            updates["paused"] = False
+            metadata = _clear_scheduler_error_metadata(current_dict.get("metadata"))
+            if isinstance(current_dict.get("metadata"), dict):
+                updates["metadata"] = metadata
+
         updated = await state_manager.update_schedule_entry(schedule_id, updates)
         if not updated:
             return ScheduleResult(
@@ -366,7 +409,10 @@ async def remove_scheduled_task(schedule_id: str) -> ScheduleResult:
     )
 
 
-async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def list_scheduled_tasks(
+    schedule: list[dict[str, Any]],
+    timezone: str | None = None,
+) -> list[dict[str, Any]]:
     """
     List all scheduled tasks with their status.
 
@@ -377,14 +423,28 @@ async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str,
         List of schedule entries with status info
     """
     result = []
-    scheduler = Scheduler()
+    scheduler = Scheduler(timezone=timezone or _default_scheduler_timezone())
 
     for entry in schedule:
         entry_dict = entry if isinstance(entry, dict) else entry.model_dump()
 
-        status = "scheduled"
+        metadata = (
+            entry_dict.get("metadata") if isinstance(entry_dict.get("metadata"), dict) else None
+        )
+        scheduler_error = metadata.get(SCHEDULER_ERROR_METADATA_KEY) if metadata else None
+        status = (
+            "paused_invalid"
+            if entry_dict.get("paused") and scheduler_error
+            else ("paused" if entry_dict.get("paused") else "scheduled")
+        )
         next_run_dt = scheduler.next_run_for_entry(entry_dict)
-        next_run = next_run_dt.isoformat() if next_run_dt else "Unknown"
+        next_run = (
+            "Paused"
+            if entry_dict.get("paused")
+            else next_run_dt.isoformat()
+            if next_run_dt
+            else "Unknown"
+        )
         cron_expression = entry_dict.get("cron_expression")
 
         result.append(
@@ -396,6 +456,8 @@ async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str,
                 "cron_expression": cron_expression,
                 "last_run": entry_dict.get("last_run"),
                 "created_at": entry_dict.get("created_at"),
+                "metadata": metadata,
+                "timezone": entry_dict.get("timezone") or scheduler.timezone,
             }
         )
 

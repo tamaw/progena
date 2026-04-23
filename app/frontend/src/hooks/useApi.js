@@ -62,15 +62,34 @@ export function useApi() {
   const { isHealthy } = useHealth();
   const [connectionState, setConnectionState] = useState('disconnected');
   const abortControllerRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  const setConnectionStateIfMounted = useCallback((value) => {
+    if (mountedRef.current) {
+      setConnectionState(value);
+    }
+  }, []);
+
+  const canInvokeCallback = useCallback((signal) => (
+    mountedRef.current && !(signal?.aborted)
+  ), []);
 
   useEffect(() => {
-    setConnectionState((current) => {
+    setConnectionStateIfMounted((current) => {
       if (isHealthy) {
         return current === 'connecting' ? current : 'connected';
       }
       return current === 'connecting' ? current : 'disconnected';
     });
-  }, [isHealthy]);
+  }, [isHealthy, setConnectionStateIfMounted]);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, []);
 
   const fetchWithRetry = useCallback(async (endpoint, options = {}) => {
     const url = getApiUrl(endpoint);
@@ -83,11 +102,11 @@ export function useApi() {
       ...defaultOptions,
       ...options,
       headers: { ...defaultOptions.headers, ...options.headers }
-    };
+      };
 
     for (let attempt = 0; attempt < config.api.retryAttempts; attempt++) {
       try {
-        setConnectionState((current) => (isHealthy ? current : 'connecting'));
+        setConnectionStateIfMounted((current) => (isHealthy ? current : 'connecting'));
         const response = await fetch(url, mergedOptions);
 
         if (!response.ok) {
@@ -99,12 +118,12 @@ export function useApi() {
           throw new Error(typeof message === 'string' ? message : JSON.stringify(message));
         }
 
-        setConnectionState('connected');
+        setConnectionStateIfMounted('connected');
         return response;
       } catch (error) {
         if (error.name === 'AbortError') throw error;
 
-        setConnectionState('error');
+        setConnectionStateIfMounted('error');
         if (attempt < config.api.retryAttempts - 1) {
           await new Promise(r => setTimeout(r, config.api.retryDelay * Math.pow(2, attempt)));
         } else {
@@ -112,7 +131,7 @@ export function useApi() {
         }
       }
     }
-  }, [config, getApiUrl, isHealthy]);
+  }, [config, getApiUrl, isHealthy, setConnectionStateIfMounted]);
 
   const getHealth = useCallback(async () => {
     const response = await fetchWithRetry('health');
@@ -313,7 +332,7 @@ export function useApi() {
       const url = getApiUrl('responses');
 
       try {
-        setConnectionState((current) => (isHealthy ? current : 'connecting'));
+        setConnectionStateIfMounted((current) => (isHealthy ? current : 'connecting'));
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -331,7 +350,7 @@ export function useApi() {
           throw new Error(error.error?.message || `HTTP ${response.status}`);
         }
 
-        setConnectionState('connected');
+        setConnectionStateIfMounted('connected');
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -355,21 +374,27 @@ export function useApi() {
               const parsed = JSON.parse(parsedEvent.data);
               if (parsedEvent.eventType === 'error' || parsed.error) {
                 const errorMessage = parsed.error?.message || parsed.error || 'Streaming error';
-                onError?.(new Error(errorMessage));
+                if (canInvokeCallback(controller.signal)) {
+                  onError?.(new Error(errorMessage));
+                }
                 return;
               }
 
               if (parsed.object === 'response.stream_event') {
-                onStreamEvent?.(parsed);
+                if (canInvokeCallback(controller.signal)) {
+                  onStreamEvent?.(parsed);
+                }
                 continue;
               }
 
               const text = parsed.delta?.text || parsed.output?.[0]?.content?.[0]?.text;
-              if (text) {
+              if (text && canInvokeCallback(controller.signal)) {
                 onChunk?.(text);
               }
               if (parsed.object === 'response.completed') {
-                onComplete?.();
+                if (canInvokeCallback(controller.signal)) {
+                  onComplete?.();
+                }
                 return;
               }
             } catch {
@@ -377,13 +402,19 @@ export function useApi() {
             }
           }
         }
-        onComplete?.();
+        if (canInvokeCallback(controller.signal)) {
+          onComplete?.();
+        }
       } catch (error) {
         if (error.name === 'AbortError') {
-          onComplete?.('cancelled');
+          if (mountedRef.current) {
+            onComplete?.('cancelled');
+          }
         } else {
-          setConnectionState('error');
-          onError?.(error);
+          setConnectionStateIfMounted('error');
+          if (canInvokeCallback(controller.signal)) {
+            onError?.(error);
+          }
         }
       } finally {
         if (abortControllerRef.current === controller) {
@@ -391,7 +422,7 @@ export function useApi() {
         }
       }
     },
-    [config, getApiUrl, isHealthy]
+    [canInvokeCallback, config, getApiUrl, isHealthy, setConnectionStateIfMounted]
   );
 
   const cancelStream = useCallback(() => {

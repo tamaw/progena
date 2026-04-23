@@ -215,6 +215,7 @@ class RuntimeConfig:
 
     timezone: str = "Australia/Melbourne"
     idle_backoff_seconds: int = 30
+    idle_prompt_interval_cycles: int = 10
     max_actions_per_cycle: int = 10
     log_level: str = "info"
     log_format: str = "text"  # "text" | "json" for structured logging
@@ -236,6 +237,22 @@ class RuntimeConfig:
     ipc_host: str = "127.0.0.1"  # IPC server bind host
     ipc_port: int = 9500  # IPC server bind port
     ipc_max_clients: int = 10  # Maximum concurrent IPC clients
+    ipc_client_read_timeout_seconds: int = 60  # Idle client socket read timeout
+    ipc_request_timeout_seconds: int = 60  # Caps global single-flight request blocking
+    ipc_cycle_complete_timeout_seconds: int = 5  # Extra wait before next request starts
+    ipc_client_connect_timeout_seconds: float = 10.0
+    ipc_client_event_poll_interval_seconds: float = 0.5
+    ipc_client_heartbeat_interval_seconds: float = 5.0
+    ipc_client_heartbeat_ack_timeout_seconds: float = 10.0
+    ipc_client_heartbeat_miss_threshold: int = 3
+    ipc_client_reconnect_delay_initial_seconds: float = 1.0
+    ipc_client_reconnect_delay_max_seconds: float = 30.0
+
+    # Port ranges
+    agent_port_range_start: int = 8080
+    agent_port_range_end: int = 8199
+    test_harness_port_range_start: int = 9550
+    test_harness_port_range_end: int = 9649
 
     # Inner loop (dual loop architecture) settings
     max_inner_iterations: int = 5  # Failsafe max iterations for inner loop
@@ -256,6 +273,10 @@ class RuntimeConfig:
             timezone=os.getenv("PROGENITOR_TIMEZONE", fc.get("timezone", "Australia/Melbourne")),
             idle_backoff_seconds=env_int(
                 "PROGENITOR_IDLE_BACKOFF_SECONDS", fc.get("idle_backoff_seconds", 30)
+            ),
+            idle_prompt_interval_cycles=env_int(
+                "PROGENITOR_IDLE_PROMPT_INTERVAL_CYCLES",
+                fc.get("idle_prompt_interval_cycles", 10),
             ),
             max_actions_per_cycle=env_int(
                 "PROGENITOR_MAX_ACTIONS_PER_CYCLE", fc.get("max_actions_per_cycle", 10)
@@ -293,6 +314,62 @@ class RuntimeConfig:
             ipc_host=os.getenv("PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")),
             ipc_port=env_int("PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)),
             ipc_max_clients=env_int("PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)),
+            ipc_client_read_timeout_seconds=env_int(
+                "PROGENITOR_IPC_CLIENT_READ_TIMEOUT_SECONDS",
+                fc.get("ipc_client_read_timeout_seconds", 60),
+            ),
+            ipc_request_timeout_seconds=env_int(
+                "PROGENITOR_IPC_REQUEST_TIMEOUT_SECONDS",
+                fc.get("ipc_request_timeout_seconds", 60),
+            ),
+            ipc_cycle_complete_timeout_seconds=env_int(
+                "PROGENITOR_IPC_CYCLE_COMPLETE_TIMEOUT_SECONDS",
+                fc.get("ipc_cycle_complete_timeout_seconds", 5),
+            ),
+            ipc_client_connect_timeout_seconds=env_float(
+                "PROGENITOR_IPC_CLIENT_CONNECT_TIMEOUT_SECONDS",
+                fc.get("ipc_client_connect_timeout_seconds", 10.0),
+            ),
+            ipc_client_event_poll_interval_seconds=env_float(
+                "PROGENITOR_IPC_CLIENT_EVENT_POLL_INTERVAL_SECONDS",
+                fc.get("ipc_client_event_poll_interval_seconds", 0.5),
+            ),
+            ipc_client_heartbeat_interval_seconds=env_float(
+                "PROGENITOR_IPC_CLIENT_HEARTBEAT_INTERVAL_SECONDS",
+                fc.get("ipc_client_heartbeat_interval_seconds", 5.0),
+            ),
+            ipc_client_heartbeat_ack_timeout_seconds=env_float(
+                "PROGENITOR_IPC_CLIENT_HEARTBEAT_ACK_TIMEOUT_SECONDS",
+                fc.get("ipc_client_heartbeat_ack_timeout_seconds", 10.0),
+            ),
+            ipc_client_heartbeat_miss_threshold=env_int(
+                "PROGENITOR_IPC_CLIENT_HEARTBEAT_MISS_THRESHOLD",
+                fc.get("ipc_client_heartbeat_miss_threshold", 3),
+            ),
+            ipc_client_reconnect_delay_initial_seconds=env_float(
+                "PROGENITOR_IPC_CLIENT_RECONNECT_DELAY_INITIAL_SECONDS",
+                fc.get("ipc_client_reconnect_delay_initial_seconds", 1.0),
+            ),
+            ipc_client_reconnect_delay_max_seconds=env_float(
+                "PROGENITOR_IPC_CLIENT_RECONNECT_DELAY_MAX_SECONDS",
+                fc.get("ipc_client_reconnect_delay_max_seconds", 30.0),
+            ),
+            agent_port_range_start=env_int(
+                "PROGENITOR_AGENT_PORT_RANGE_START",
+                fc.get("agent_port_range_start", 8080),
+            ),
+            agent_port_range_end=env_int(
+                "PROGENITOR_AGENT_PORT_RANGE_END",
+                fc.get("agent_port_range_end", 8199),
+            ),
+            test_harness_port_range_start=env_int(
+                "PROGENITOR_TEST_HARNESS_PORT_RANGE_START",
+                fc.get("test_harness_port_range_start", 9550),
+            ),
+            test_harness_port_range_end=env_int(
+                "PROGENITOR_TEST_HARNESS_PORT_RANGE_END",
+                fc.get("test_harness_port_range_end", 9649),
+            ),
             # Inner loop settings
             max_inner_iterations=env_int(
                 "PROGENITOR_MAX_INNER_ITERATIONS", fc.get("max_inner_iterations", 5)
@@ -646,6 +723,7 @@ class ProgenitorConfig:
             "runtime": {
                 "timezone": self.runtime.timezone,
                 "idle_backoff_seconds": self.runtime.idle_backoff_seconds,
+                "idle_prompt_interval_cycles": self.runtime.idle_prompt_interval_cycles,
                 "max_actions_per_cycle": self.runtime.max_actions_per_cycle,
                 "log_level": self.runtime.log_level,
                 "backoff_multiplier": self.runtime.backoff_multiplier,
@@ -656,6 +734,36 @@ class ProgenitorConfig:
                 "ipc_host": self.runtime.ipc_host,
                 "ipc_port": self.runtime.ipc_port,
                 "ipc_max_clients": self.runtime.ipc_max_clients,
+                "ipc_client_read_timeout_seconds": self.runtime.ipc_client_read_timeout_seconds,
+                "ipc_request_timeout_seconds": self.runtime.ipc_request_timeout_seconds,
+                "ipc_cycle_complete_timeout_seconds": (
+                    self.runtime.ipc_cycle_complete_timeout_seconds
+                ),
+                "ipc_client_connect_timeout_seconds": (
+                    self.runtime.ipc_client_connect_timeout_seconds
+                ),
+                "ipc_client_event_poll_interval_seconds": (
+                    self.runtime.ipc_client_event_poll_interval_seconds
+                ),
+                "ipc_client_heartbeat_interval_seconds": (
+                    self.runtime.ipc_client_heartbeat_interval_seconds
+                ),
+                "ipc_client_heartbeat_ack_timeout_seconds": (
+                    self.runtime.ipc_client_heartbeat_ack_timeout_seconds
+                ),
+                "ipc_client_heartbeat_miss_threshold": (
+                    self.runtime.ipc_client_heartbeat_miss_threshold
+                ),
+                "ipc_client_reconnect_delay_initial_seconds": (
+                    self.runtime.ipc_client_reconnect_delay_initial_seconds
+                ),
+                "ipc_client_reconnect_delay_max_seconds": (
+                    self.runtime.ipc_client_reconnect_delay_max_seconds
+                ),
+                "agent_port_range_start": self.runtime.agent_port_range_start,
+                "agent_port_range_end": self.runtime.agent_port_range_end,
+                "test_harness_port_range_start": self.runtime.test_harness_port_range_start,
+                "test_harness_port_range_end": self.runtime.test_harness_port_range_end,
             },
             "storage": {
                 "state_dir": str(self.storage.state_dir),
@@ -724,7 +832,7 @@ def get_config(
             is_valid, issues = validate_config(_config)
             if not is_valid:
                 logger.warning(
-                    "Configuration has %d validation issue(s): %s", len(issues), "; ".join(issues)
+                    f"Configuration has {len(issues)} validation issue(s): {'; '.join(issues)}"
                 )
     return _config
 
@@ -747,7 +855,7 @@ def reload_config(
         is_valid, issues = validate_config(_config)
         if not is_valid:
             logger.warning(
-                "Configuration has %d validation issue(s): %s", len(issues), "; ".join(issues)
+                f"Configuration has {len(issues)} validation issue(s): {'; '.join(issues)}"
             )
     return _config
 

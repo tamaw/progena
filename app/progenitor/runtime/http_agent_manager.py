@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, cast
 import aiohttp
 
 from ..state.models import AgentStatus
-from .port_utils import find_available_port, is_port_available
 from .time_utils import utcnow, utcnow_isoformat
 
 if TYPE_CHECKING:
@@ -36,12 +35,14 @@ logger = logging.getLogger(__name__)
 
 # Status line pattern: STATUS:<status>:<message>
 # e.g., STATUS:running:Server started on port 8100
-STATUS_LINE_PATTERN = re.compile(r'^STATUS:(\w+):(.*)$')
+STATUS_LINE_PATTERN = re.compile(r"^STATUS:(\w+):(.*)$")
+STATUS_PORT_PATTERN = re.compile(r"\bport\s+(\d{1,5})\b", re.IGNORECASE)
 
 
 @dataclass
 class ManagedAgent:
     """A managed HTTP agent process."""
+
     name: str
     entrypoint: str
     port: int
@@ -97,6 +98,19 @@ class HTTPAgentManager:
         self._agents: dict[str, ManagedAgent] = {}
         self._lock = asyncio.Lock()
         self._shutdown = False
+        self._http_session: aiohttp.ClientSession | None = None
+
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        """Return a reusable client session for health checks and invocations."""
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
+
+    async def _close_http_session(self) -> None:
+        """Close the reusable HTTP session if it exists."""
+        if self._http_session is not None and not self._http_session.closed:
+            await self._http_session.close()
+        self._http_session = None
 
     async def start_agent(
         self,
@@ -135,23 +149,10 @@ class HTTPAgentManager:
             if not entrypoint_path.exists():
                 raise FileNotFoundError(f"Agent entrypoint not found: {entrypoint_path}")
 
-            # Allocate port (registry.allocate_port now checks OS-level availability)
+            # Ask the child to bind with port 0 so the OS picks an available port atomically.
             port = self.registry.allocate_port()
 
-            # Double-check port is available (in case of race conditions)
-            if not is_port_available(port):
-                logger.warning(
-                    "Allocated port %d is not available, finding alternative...", port
-                )
-                port = find_available_port(
-                    start_port=port + 1,
-                    end_port=port + 100,  # Try 100 ports above
-                )
-
-            logger.info(
-                "Starting agent '%s' from %s on port %d",
-                agent_name, entrypoint_path, port
-            )
+            logger.info("Starting agent '%s' from %s on port %d", agent_name, entrypoint_path, port)
 
             # Prepare environment
             agent_env = os.environ.copy()
@@ -191,16 +192,11 @@ class HTTPAgentManager:
             await self.registry.mark_agent_starting(
                 agent_name,
                 pid=process.pid,
-                port=port,
             )
 
             # Start output monitoring tasks
-            managed_agent.stdout_task = asyncio.create_task(
-                self._monitor_stdout(managed_agent)
-            )
-            managed_agent.stderr_task = asyncio.create_task(
-                self._monitor_stderr(managed_agent)
-            )
+            managed_agent.stdout_task = asyncio.create_task(self._monitor_stdout(managed_agent))
+            managed_agent.stderr_task = asyncio.create_task(self._monitor_stderr(managed_agent))
 
             # Wait for agent to become ready
             try:
@@ -210,7 +206,9 @@ class HTTPAgentManager:
                 )
                 logger.info(
                     "Agent '%s' is running on port %d (PID: %d)",
-                    agent_name, port, process.pid
+                    agent_name,
+                    managed_agent.port,
+                    process.pid,
                 )
             except TimeoutError:
                 error_msg = f"Agent failed to start within {startup_timeout}s"
@@ -219,14 +217,16 @@ class HTTPAgentManager:
                 raise RuntimeError(error_msg)
 
             if self.log_callback:
-                await self.log_callback({
-                    "event": "agent_started",
-                    "agent_name": agent_name,
-                    "entrypoint": str(entrypoint_path),
-                    "port": port,
-                    "pid": process.pid,
-                    "timestamp": utcnow_isoformat(),
-                })
+                await self.log_callback(
+                    {
+                        "event": "agent_started",
+                        "agent_name": agent_name,
+                        "entrypoint": str(entrypoint_path),
+                        "port": managed_agent.port,
+                        "pid": process.pid,
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             return managed_agent
 
@@ -284,7 +284,11 @@ class HTTPAgentManager:
 
         # If process exited with errors, mark as failed
         if agent.process.returncode and agent.process.returncode != 0:
-            error_msg = "\n".join(error_lines[-5:]) if error_lines else f"Exit code {agent.process.returncode}"
+            error_msg = (
+                "\n".join(error_lines[-5:])
+                if error_lines
+                else f"Exit code {agent.process.returncode}"
+            )
             await self._mark_failed(agent, error_msg)
 
     async def _handle_status_update(
@@ -297,26 +301,25 @@ class HTTPAgentManager:
         try:
             status = AgentStatus(status_str.lower())
         except ValueError:
-            logger.warning(
-                "Unknown status '%s' from agent '%s'",
-                status_str, agent.name
-            )
+            logger.warning("Unknown status '%s' from agent '%s'", status_str, agent.name)
             return
 
         agent.status = status
         agent.status_message = message
 
+        port = self._extract_runtime_port(message)
+        if port is not None:
+            agent.port = port
+
         await self.registry.update_agent_status(
             agent.name,
             status,
             status_message=message,
+            port=port,
             update_heartbeat=(status == AgentStatus.RUNNING),
         )
 
-        logger.info(
-            "Agent '%s' status: %s - %s",
-            agent.name, status.value, message
-        )
+        logger.info("Agent '%s' status: %s - %s", agent.name, status.value, message)
 
     async def _wait_for_ready(self, agent: ManagedAgent) -> None:
         """Wait for agent to report running status or respond to health check."""
@@ -336,8 +339,11 @@ class HTTPAgentManager:
 
     async def _health_check_agent(self, agent: ManagedAgent) -> bool:
         """Check if agent is responding to HTTP requests."""
+        if agent.port <= 0:
+            return False
         try:
-            async with aiohttp.ClientSession() as session, session.get(
+            session = await self._get_http_session()
+            async with session.get(
                 agent.agent_card_url,
                 timeout=aiohttp.ClientTimeout(total=2),
             ) as response:
@@ -346,6 +352,14 @@ class HTTPAgentManager:
         except (TimeoutError, aiohttp.ClientError):
             pass
         return False
+
+    def _extract_runtime_port(self, message: str) -> int | None:
+        """Extract the actual bound port from an agent status line."""
+        match = STATUS_PORT_PATTERN.search(message)
+        if not match:
+            return None
+        port = int(match.group(1))
+        return port if port > 0 else None
 
     async def _mark_failed(self, agent: ManagedAgent, error: str) -> None:
         """Mark an agent as failed."""
@@ -390,11 +404,12 @@ class HTTPAgentManager:
                     timeout=5.0,
                 )
             except TimeoutError:
-                logger.warning(
-                    "Agent '%s' did not terminate gracefully, killing",
-                    agent_name
-                )
+                logger.warning("Agent '%s' did not terminate gracefully, killing", agent_name)
                 agent.process.kill()
+                try:
+                    await asyncio.wait_for(agent.process.wait(), timeout=1.0)
+                except TimeoutError:
+                    logger.error("Agent '%s' did not exit after SIGKILL", agent_name)
 
         # Update registry
         await self.registry.mark_agent_stopped(agent_name)
@@ -402,11 +417,13 @@ class HTTPAgentManager:
         del self._agents[agent_name]
 
         if self.log_callback:
-            await self.log_callback({
-                "event": "agent_stopped",
-                "agent_name": agent_name,
-                "timestamp": utcnow_isoformat(),
-            })
+            await self.log_callback(
+                {
+                    "event": "agent_stopped",
+                    "agent_name": agent_name,
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
         return True
 
@@ -416,6 +433,7 @@ class HTTPAgentManager:
         async with self._lock:
             for agent_name in list(self._agents.keys()):
                 await self._stop_agent_internal(agent_name)
+        await self._close_http_session()
 
     async def invoke_agent(
         self,
@@ -457,7 +475,8 @@ class HTTPAgentManager:
                 payload["context"] = context
 
         try:
-            async with aiohttp.ClientSession() as session, session.post(
+            session = await self._get_http_session()
+            async with session.post(
                 endpoint,
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=timeout),

@@ -171,6 +171,12 @@ class RuntimeConfig:
     ipc_port: int = 9500  # IPC server bind port
     ipc_max_clients: int = 10  # Maximum concurrent IPC clients
 
+    # Port ranges
+    agent_port_range_start: int = 8080
+    agent_port_range_end: int = 8199
+    test_harness_port_range_start: int = 9550
+    test_harness_port_range_end: int = 9649
+
     # Inner loop (dual loop architecture) settings
     max_inner_iterations: int = 5  # Failsafe max iterations for inner loop
     min_verification_score: float = 0.8  # Default minimum score to pass verification
@@ -230,6 +236,22 @@ class RuntimeConfig:
             ipc_host=os.getenv("PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")),
             ipc_port=env_int("PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)),
             ipc_max_clients=env_int("PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)),
+            agent_port_range_start=env_int(
+                "PROGENITOR_AGENT_PORT_RANGE_START",
+                fc.get("agent_port_range_start", 8080),
+            ),
+            agent_port_range_end=env_int(
+                "PROGENITOR_AGENT_PORT_RANGE_END",
+                fc.get("agent_port_range_end", 8199),
+            ),
+            test_harness_port_range_start=env_int(
+                "PROGENITOR_TEST_HARNESS_PORT_RANGE_START",
+                fc.get("test_harness_port_range_start", 9550),
+            ),
+            test_harness_port_range_end=env_int(
+                "PROGENITOR_TEST_HARNESS_PORT_RANGE_END",
+                fc.get("test_harness_port_range_end", 9649),
+            ),
             # Inner loop settings
             max_inner_iterations=env_int(
                 "PROGENITOR_MAX_INNER_ITERATIONS", fc.get("max_inner_iterations", 5)
@@ -498,6 +520,10 @@ class ProgenitorConfig:
                 "ipc_host": self.runtime.ipc_host,
                 "ipc_port": self.runtime.ipc_port,
                 "ipc_max_clients": self.runtime.ipc_max_clients,
+                "agent_port_range_start": self.runtime.agent_port_range_start,
+                "agent_port_range_end": self.runtime.agent_port_range_end,
+                "test_harness_port_range_start": self.runtime.test_harness_port_range_start,
+                "test_harness_port_range_end": self.runtime.test_harness_port_range_end,
             },
             "storage": {
                 "state_dir": str(self.storage.state_dir),

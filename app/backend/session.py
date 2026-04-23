@@ -17,7 +17,7 @@ import contextlib
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -77,8 +77,8 @@ class SessionState(BaseModel):
     # Identity
     session_id: str = Field(default_factory=lambda: f"sess_{uuid.uuid4().hex[:16]}")
     user_id: str | None = None  # For authenticated users
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_activity: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_activity: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     # Preferences
     preferences: UserPreferences = Field(default_factory=UserPreferences)
@@ -100,12 +100,12 @@ class SessionState(BaseModel):
 
     def touch(self) -> None:
         """Update last activity timestamp."""
-        self.last_activity = datetime.utcnow()
+        self.last_activity = datetime.now(UTC)
 
     def is_expired(self, timeout_minutes: int) -> bool:
         """Check if session has expired."""
         expiry = self.last_activity + timedelta(minutes=timeout_minutes)
-        return datetime.utcnow() > expiry
+        return datetime.now(UTC) > expiry
 
 
 class SessionManager:

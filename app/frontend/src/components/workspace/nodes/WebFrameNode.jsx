@@ -48,8 +48,10 @@ function WebFrameNode({ id, data, selected }) {
 
   const sandboxAttrs = useMemo(() => {
     const attrs = [];
-    if (data.sandbox?.allowScripts) attrs.push('allow-scripts');
-    if (data.sandbox?.allowSameOrigin) attrs.push('allow-same-origin');
+    const allowScripts = Boolean(data.sandbox?.allowScripts);
+    const allowSameOrigin = Boolean(data.sandbox?.allowSameOrigin) && !allowScripts;
+    if (allowScripts) attrs.push('allow-scripts');
+    if (allowSameOrigin) attrs.push('allow-same-origin');
     if (data.sandbox?.allowForms) attrs.push('allow-forms');
     if (data.sandbox?.allowPopups) attrs.push('allow-popups');
     return attrs.join(' ');

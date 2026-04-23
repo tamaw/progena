@@ -167,7 +167,7 @@ def create_inner_loop_graph(
         ),
         "merge": _wrap_node("merge", merge.create_node(llm_client, git_manager, state_manager)),
         "execute": _wrap_node(
-            "execute", execute.create_node(tool_registry, state_manager, project_root)
+            "execute", execute.create_node(tool_registry, config, state_manager, project_root)
         ),
         "verify": _wrap_node("verify", verify.create_node(llm_client, state_manager)),
         "publish": _wrap_node("publish", publish.create_node(state_manager, worktrees_dir)),

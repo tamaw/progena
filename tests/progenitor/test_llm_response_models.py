@@ -1,5 +1,7 @@
 """Tests for LLM response validation models."""
 
+import logging
+
 import pytest
 from pydantic import ValidationError
 
@@ -72,7 +74,7 @@ class TestDecisionResponse:
             "reasoning": "Simple question about time",
             "requires_planning": False,
             "target_capabilities": [],
-            "direct_response": "It is 3pm."
+            "direct_response": "It is 3pm.",
         }
         result = validate_decision_response(data)
         assert result.action == "answer_directly"
@@ -160,7 +162,7 @@ class TestPlannerResponse:
                     "priority": 1,
                 }
             ],
-            "summary": "Building a test agent"
+            "summary": "Building a test agent",
         }
         result = validate_planner_response(data)
         assert len(result.work_items) == 1
@@ -180,13 +182,7 @@ class TestPlannerResponse:
 
     def test_single_item_dict(self):
         """Test that single dict becomes list."""
-        data = {
-            "work_items": {
-                "id": "item_1",
-                "type": "a2a_call",
-                "description": "Call agent"
-            }
-        }
+        data = {"work_items": {"id": "item_1", "type": "a2a_call", "description": "Call agent"}}
         result = validate_planner_response(data)
         assert len(result.work_items) == 1
 
@@ -217,7 +213,7 @@ class TestBuildSpec:
             "capabilities": ["search", "code_generation"],
             "entrypoint": "agent.py",
             "dependencies": ["openai", "langchain"],
-            "config": {"model": "gpt-4"}
+            "config": {"model": "gpt-4"},
         }
         result = validate_build_spec(data)
         assert result.name == "my-agent"
@@ -271,7 +267,7 @@ class TestVerificationResult:
             "criteria_scores": {"test_coverage": 0.9, "code_quality": 0.8},
             "gaps": [],
             "next_actions": [],
-            "evidence": "All tests pass"
+            "evidence": "All tests pass",
         }
         result = validate_verification_result(data)
         assert result.passed is True
@@ -314,11 +310,7 @@ class TestWorkItemSpec:
 
     def test_type_alias(self):
         """Test that 'type' alias works for 'item_type'."""
-        data = {
-            "id": "item_1",
-            "type": "build_agent",
-            "description": "Build test agent"
-        }
+        data = {"id": "item_1", "type": "build_agent", "description": "Build test agent"}
         result = WorkItemSpec.model_validate(data)
         assert result.item_type == "build_agent"
 
@@ -333,6 +325,15 @@ class TestWorkItemSpec:
         data = {}
         result = WorkItemSpec.model_validate(data)
         assert result.context == {}
+
+    def test_unknown_type_defaults_at_llm_boundary(self, caplog):
+        """Unknown LLM work item types should be logged and downgraded only here."""
+        caplog.set_level(logging.WARNING)
+
+        result = WorkItemSpec.model_validate({"type": "totally_new_type"})
+
+        assert result.item_type == "direct_answer"
+        assert "totally_new_type" in caplog.text
 
 
 class TestEdgeCases:

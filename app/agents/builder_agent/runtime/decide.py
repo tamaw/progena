@@ -38,9 +38,36 @@ logger = logging.getLogger(__name__)
 _prompts = PromptTemplates()
 
 
+def _parse_json_object_response(response: str, *, label: str) -> dict[str, Any]:
+    """Parse an object-shaped JSON response with one salvage attempt."""
+    text = response.strip()
+    if not text:
+        raise ValueError(f"Empty {label} response from LLM")
+
+    try:
+        payload = json.loads(response)
+    except json.JSONDecodeError as exc:
+        preview = text.replace("\n", " ")[:500]
+        logger.warning("Non-JSON %s response; preview=%s", label, preview)
+        start = response.find("{")
+        end = response.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                payload = json.loads(response[start : end + 1])
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid {label} JSON from LLM: {preview}") from exc
+        else:
+            raise ValueError(f"Invalid {label} JSON from LLM: {preview}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} response must decode to an object, got {type(payload).__name__}")
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Build name / type extraction helpers
 # ---------------------------------------------------------------------------
+
 
 class BuildNameExtraction(BaseModel):
     """Structured output for extracting build/agent name from user request."""
@@ -86,22 +113,31 @@ def _clean_project_name(name: str) -> str:
     if not name:
         return ""
 
-    cleaned = re.sub(r'[^a-z0-9_]', '_', name.lower()).strip('_')
+    cleaned = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_")
 
     filler_patterns = [
-        r'^for_me_', r'^please_', r'^a_', r'^an_', r'^the_', r'^new_',
-        r'^build_', r'^create_', r'_for_me$', r'_please$',
+        r"^for_me_",
+        r"^please_",
+        r"^a_",
+        r"^an_",
+        r"^the_",
+        r"^new_",
+        r"^build_",
+        r"^create_",
+        r"_for_me$",
+        r"_please$",
     ]
     for pattern in filler_patterns:
-        cleaned = re.sub(pattern, '', cleaned)
+        cleaned = re.sub(pattern, "", cleaned)
 
-    cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     return cleaned
 
 
 # ---------------------------------------------------------------------------
 # LLM decision request
 # ---------------------------------------------------------------------------
+
 
 async def _request_decision_data(
     llm_client,
@@ -159,14 +195,16 @@ async def _request_decision_data(
             )
             return decision
 
-        response_format = llm_client._get_json_response_format(DecisionResponse, "decision_response")
+        response_format = llm_client._get_json_response_format(
+            DecisionResponse, "decision_response"
+        )
         response = await llm_client.chat(
             messages=messages,
             system_prompt=system_prompt,
             temperature=0.3,
             response_format=response_format,
         )
-        parsed = json.loads(response)
+        parsed = _parse_json_object_response(response, label="decision")
         validated = validate_decision_response(parsed)
         decision = validated.model_dump()
         logger.info(
@@ -178,13 +216,13 @@ async def _request_decision_data(
         return decision
     except Exception as exc:
         logger.warning("Failed to get structured decide response: %s", exc)
-        validated = validate_decision_response({})
-        return validated.model_dump()
+        raise ValueError("Failed to get structured decision response") from exc
 
 
 # ---------------------------------------------------------------------------
 # Build settings extraction
 # ---------------------------------------------------------------------------
+
 
 async def _generate_build_settings(
     user_input: str,
@@ -261,8 +299,7 @@ async def _generate_build_settings(
                 actual_prompt = prompt
                 if response_format.get("type") == "json_object":
                     actual_prompt = (
-                        prompt
-                        + "\n\nRespond with valid JSON matching this schema: "
+                        prompt + "\n\nRespond with valid JSON matching this schema: "
                         "{project_name: string, build_type: 'agent'|'mcp', reasoning: string}"
                     )
 
@@ -272,7 +309,7 @@ async def _generate_build_settings(
                     temperature=0.1,
                     response_format=response_format,
                 )
-                parsed = json.loads(response.strip())
+                parsed = _parse_json_object_response(response, label="build_name_extraction")
                 extracted_name = _clean_project_name(parsed.get("project_name", ""))
                 extracted_type = parsed.get("build_type", "agent").strip().lower()
 
@@ -290,9 +327,9 @@ async def _generate_build_settings(
     if not project_name and build_type != BuildType.PROGENITOR:
         text = user_input.lower()
         name_patterns = [
-            r'\b(?:build|create|scaffold|generate|make|implement)\s+(?:for\s+me\s+)?(?:me\s+)?(?:please\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:simple\s+|basic\s+)?([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*)?)\s+(?:a2a\s+)?(?:agent|mcp|progenitor)',
-            r'\bagent\s+(?:named?|called?)\s+([a-z0-9_\-]+)',
-            r'\b(?:named?|called?)\s+([a-z0-9_\-]+)',
+            r"\b(?:build|create|scaffold|generate|make|implement)\s+(?:for\s+me\s+)?(?:me\s+)?(?:please\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:simple\s+|basic\s+)?([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*)?)\s+(?:a2a\s+)?(?:agent|mcp|progenitor)",
+            r"\bagent\s+(?:named?|called?)\s+([a-z0-9_\-]+)",
+            r"\b(?:named?|called?)\s+([a-z0-9_\-]+)",
         ]
 
         for pattern in name_patterns:
@@ -301,13 +338,15 @@ async def _generate_build_settings(
                 raw_name = match.group(1).strip()
                 skip_words = {"a", "an", "the", "new", "simple", "basic", "for", "me", "please"}
                 if raw_name and raw_name not in skip_words:
-                    project_name = re.sub(r'\s+', '_', raw_name)
+                    project_name = re.sub(r"\s+", "_", raw_name)
                     logger.info("Regex extracted project name: %s", project_name)
                     break
 
     # Determine build type from text if not already set
     text = user_input.lower()
-    if build_type == BuildType.AGENT and ("mcp" in text or "mcp server" in text or "mcp tool" in text):
+    if build_type == BuildType.AGENT and (
+        "mcp" in text or "mcp server" in text or "mcp tool" in text
+    ):
         build_type = BuildType.MCP
     if "progenitor" in text or "app/progenitor" in text:
         build_type = BuildType.PROGENITOR
@@ -316,16 +355,43 @@ async def _generate_build_settings(
     # Final fallback: extract meaningful words
     if not project_name:
         exclude_words = {
-            'build', 'create', 'make', 'scaffold', 'generate', 'implement',
-            'an', 'a', 'the', 'me', 'for', 'please', 'new', 'simple', 'basic',
-            'agent', 'mcp', 'server', 'tool', 'want', 'need', 'would', 'like',
-            'can', 'you', 'i', 'that', 'which', 'to', 'with'
+            "build",
+            "create",
+            "make",
+            "scaffold",
+            "generate",
+            "implement",
+            "an",
+            "a",
+            "the",
+            "me",
+            "for",
+            "please",
+            "new",
+            "simple",
+            "basic",
+            "agent",
+            "mcp",
+            "server",
+            "tool",
+            "want",
+            "need",
+            "would",
+            "like",
+            "can",
+            "you",
+            "i",
+            "that",
+            "which",
+            "to",
+            "with",
         }
-        words = [w for w in re.findall(r'[a-z]+', text) if w not in exclude_words and len(w) > 2]
+        words = [w for w in re.findall(r"[a-z]+", text) if w not in exclude_words and len(w) > 2]
         if words:
-            project_name = '_'.join(words[:2])
+            project_name = "_".join(words[:2])
         else:
             import uuid as _uuid
+
             project_name = f"project_{_uuid.uuid4().hex[:6]}"
 
     description = build_description or f"Build {build_type.value}: {project_name}"
@@ -342,6 +408,7 @@ async def _generate_build_settings(
 # ---------------------------------------------------------------------------
 # Conversation history extractor (shared utility)
 # ---------------------------------------------------------------------------
+
 
 def _extract_history(
     messages: list,
@@ -383,6 +450,7 @@ def _extract_history(
 # Build action handler
 # ---------------------------------------------------------------------------
 
+
 async def _handle_build_action(
     user_input: str,
     state: "ProgenitorState",
@@ -399,13 +467,16 @@ async def _handle_build_action(
 
     logger.info(
         "Build action requested: action=%s, confidence=%.2f, threshold=%.2f",
-        llm_action, confidence, build_confidence_threshold,
+        llm_action,
+        confidence,
+        build_confidence_threshold,
     )
 
     if confidence < build_confidence_threshold:
         logger.info(
             "Build action rejected due to low confidence (%.2f < %.2f)",
-            confidence, build_confidence_threshold,
+            confidence,
+            build_confidence_threshold,
         )
         decision = Decision(
             action=DecisionAction.ANSWER_DIRECTLY,
@@ -415,20 +486,22 @@ async def _handle_build_action(
                 f"I'm not certain you want me to build an agent. "
                 f"(Confidence: {confidence:.0%})\n\n"
                 f"If you'd like me to build a new agent, please say something like:\n"
-                f"- \"Build me a hello world agent\"\n"
-                f"- \"Create a new agent that [does X]\"\n\n"
+                f'- "Build me a hello world agent"\n'
+                f'- "Create a new agent that [does X]"\n\n'
                 f"Otherwise, let me know what you'd like me to do and I'll help!"
             ),
         )
 
         if state_manager:
-            await state_manager.log_decision({
-                "event": "build_rejected_low_confidence",
-                "confidence": confidence,
-                "threshold": build_confidence_threshold,
-                "llm_action": llm_action,
-                "timestamp": utcnow_isoformat(),
-            })
+            await state_manager.log_decision(
+                {
+                    "event": "build_rejected_low_confidence",
+                    "confidence": confidence,
+                    "threshold": build_confidence_threshold,
+                    "llm_action": llm_action,
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
         return cast(ProgenitorState, {"current_decision": decision})
 
@@ -449,12 +522,14 @@ async def _handle_build_action(
         )
 
         if state_manager:
-            await state_manager.log_decision({
-                "event": "build_rejected",
-                "reason": "build_in_progress",
-                "current_task": current_task,
-                "timestamp": utcnow_isoformat(),
-            })
+            await state_manager.log_decision(
+                {
+                    "event": "build_rejected",
+                    "reason": "build_in_progress",
+                    "current_task": current_task,
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
         return cast(ProgenitorState, {"current_decision": decision})
 
@@ -490,7 +565,9 @@ async def _handle_build_action(
 
             logger.info(
                 "Started async build %s for: %s (confidence=%.2f)",
-                build_id, task_description, confidence,
+                build_id,
+                task_description,
+                confidence,
             )
 
             decision = Decision(
@@ -501,27 +578,32 @@ async def _handle_build_action(
             )
 
             if state_manager:
-                await state_manager.log_decision({
-                    "event": "async_build_started",
-                    "build_id": build_id,
-                    "task_description": task_description,
-                    "build_settings": build_settings.model_dump(),
-                    "confidence": confidence,
-                    "timestamp": utcnow_isoformat(),
-                })
+                await state_manager.log_decision(
+                    {
+                        "event": "async_build_started",
+                        "build_id": build_id,
+                        "task_description": task_description,
+                        "build_settings": build_settings.model_dump(),
+                        "confidence": confidence,
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             build_settings.mark_in_progress()
 
-            return cast(ProgenitorState, {
-                "current_decision": decision,
-                "build_in_progress": True,
-                "task": {
-                    "description": task_description,
-                    "target_capabilities": target_capabilities,
+            return cast(
+                ProgenitorState,
+                {
+                    "current_decision": decision,
+                    "build_in_progress": True,
+                    "task": {
+                        "description": task_description,
+                        "target_capabilities": target_capabilities,
+                    },
+                    "build_started_at": utcnow_isoformat(),
+                    "build_settings": build_settings.model_dump(),
                 },
-                "build_started_at": utcnow_isoformat(),
-                "build_settings": build_settings.model_dump(),
-            })
+            )
 
         except RuntimeError as e:
             logger.warning("Failed to start async build: %s", e)
@@ -553,6 +635,7 @@ async def _handle_build_action(
 # ---------------------------------------------------------------------------
 # Node factory
 # ---------------------------------------------------------------------------
+
 
 def create_node(
     llm_client,
@@ -605,15 +688,24 @@ def create_node(
 
             action_str = decision_data.get("action", "answer_directly")
             confidence = decision_data.get("confidence", 0.5)
-            user_response = decision_data.get("user_response") or decision_data.get("direct_response")
+            user_response = decision_data.get("user_response") or decision_data.get(
+                "direct_response"
+            )
 
             llm_action = str(action_str).lower().strip()
             is_build_action = llm_action in ("build_agent", "build_mcp", "build_progenitor")
 
             if is_build_action:
                 return await _handle_build_action(
-                    user_input, state, llm_client, tool_registry, state_manager,
-                    decision_data, llm_action, confidence, build_confidence_threshold,
+                    user_input,
+                    state,
+                    llm_client,
+                    tool_registry,
+                    state_manager,
+                    decision_data,
+                    llm_action,
+                    confidence,
+                    build_confidence_threshold,
                     user_response,
                 )
 
@@ -633,14 +725,16 @@ def create_node(
             )
 
             if state_manager:
-                await state_manager.log_decision({
-                    "event": "routing_decision",
-                    "action": action.value,
-                    "confidence": confidence,
-                    "reasoning": decision_data.get("reasoning", ""),
-                    "target_capabilities": decision_data.get("target_capabilities", []),
-                    "timestamp": utcnow_isoformat(),
-                })
+                await state_manager.log_decision(
+                    {
+                        "event": "routing_decision",
+                        "action": action.value,
+                        "confidence": confidence,
+                        "reasoning": decision_data.get("reasoning", ""),
+                        "target_capabilities": decision_data.get("target_capabilities", []),
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             return cast(ProgenitorState, {"current_decision": decision})
 
@@ -659,13 +753,15 @@ def create_node(
             )
 
             if state_manager:
-                await state_manager.log_decision({
-                    "event": "routing_decision_error",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                    "recoverable": True,
-                    "timestamp": utcnow_isoformat(),
-                })
+                await state_manager.log_decision(
+                    {
+                        "event": "routing_decision_error",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "recoverable": True,
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             return cast(ProgenitorState, {"current_decision": decision})
 
@@ -685,13 +781,15 @@ def create_node(
             )
 
             if state_manager:
-                await state_manager.log_decision({
-                    "event": "routing_decision_error",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                    "recoverable": False,
-                    "timestamp": utcnow_isoformat(),
-                })
+                await state_manager.log_decision(
+                    {
+                        "event": "routing_decision_error",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "recoverable": False,
+                        "timestamp": utcnow_isoformat(),
+                    }
+                )
 
             return cast(ProgenitorState, {"current_decision": decision})
 

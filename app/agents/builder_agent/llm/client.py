@@ -57,6 +57,34 @@ MODEL_CONTEXT_WINDOWS = {
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
 
 
+def _parse_decision_response_json(response: str) -> dict[str, Any]:
+    """Parse a decision JSON response and fail loudly on invalid payloads."""
+    text = response.strip()
+    if not text:
+        raise ValueError("Empty decide response from LLM")
+
+    try:
+        payload = json.loads(response)
+    except json.JSONDecodeError as exc:
+        preview = text.replace("\n", " ")[:500]
+        logger.warning("Non-JSON decide response; preview=%s", preview)
+        start = response.find("{")
+        end = response.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                payload = json.loads(response[start : end + 1])
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid decision JSON from LLM: {preview}") from exc
+        else:
+            raise ValueError(f"Invalid decision JSON from LLM: {preview}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Decision response must decode to an object, got {type(payload).__name__}"
+        )
+    return payload
+
+
 def _build_responses_endpoint(base_url: str) -> str:
     """Build a valid /responses endpoint from either base URL or full endpoint URL."""
     raw = (base_url or "").strip()
@@ -1037,28 +1065,9 @@ class LLMClient:
             f"{schema_hint}"
         )
         response = await self.chat(messages, f"{system_prompt}\n\n{instruction}", temperature=0.3)
-        if not response.strip():
-            logger.warning("Empty decide response; returning default decision")
-            validated = validate_decision_response({})
-            return validated.model_dump()
-        try:
-            raw_data = json.loads(response)
-            validated = validate_decision_response(raw_data)
-            return validated.model_dump()
-        except json.JSONDecodeError:
-            preview = response.strip().replace("\n", " ")[:500]
-            logger.warning("Non-JSON decide response; preview=%s", preview)
-            start = response.find("{")
-            end = response.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                try:
-                    raw_data = json.loads(response[start : end + 1])
-                    validated = validate_decision_response(raw_data)
-                    return validated.model_dump()
-                except json.JSONDecodeError:
-                    pass
-            validated = validate_decision_response({})
-            return validated.model_dump()
+        raw_data = _parse_decision_response_json(response)
+        validated = validate_decision_response(raw_data)
+        return validated.model_dump()
 
     async def plan(
         self,

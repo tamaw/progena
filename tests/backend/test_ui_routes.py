@@ -229,6 +229,23 @@ class TestUIRoutes:
         assert response.json()["content"] == "after"
         assert prompt_path.read_text(encoding="utf-8") == "after"
 
+    def test_prompts_endpoint_rejects_path_traversal_on_update(self, client, tmp_path, monkeypatch):
+        prompts_dir = tmp_path / "data" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        outside_path = tmp_path / "outside.md"
+        outside_path.write_text("before", encoding="utf-8")
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
+
+        response = client.put(
+            "/api/ui/prompts/content",
+            json={"path": "../outside.md", "content": "after"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Prompt path must stay within prompts directory"
+        assert outside_path.read_text(encoding="utf-8") == "before"
+
     def test_kanban_endpoint_returns_default_board(self, client, kanban_state_reader):
         response = client.get("/api/ui/kanban")
 

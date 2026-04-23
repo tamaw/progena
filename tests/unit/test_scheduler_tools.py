@@ -28,9 +28,26 @@ from app.progenitor.tools.schedule import (
 # ---------------------------------------------------------------------------
 
 
-def _mock_sm(*, remove_return: bool = True, update_return: bool = True) -> AsyncMock:
+class _ScheduleEntry:
+    """Minimal schedule entry double with model_dump support."""
+
+    def __init__(self, **data):
+        self.id = data["id"]
+        self._data = data
+
+    def model_dump(self) -> dict:
+        return dict(self._data)
+
+
+def _mock_sm(
+    *,
+    remove_return: bool = True,
+    update_return: bool = True,
+    schedule: list[_ScheduleEntry] | None = None,
+) -> AsyncMock:
     """Build a minimal AsyncMock that mimics the StateManager schedule API."""
     sm = AsyncMock()
+    sm.get_schedule = AsyncMock(return_value=schedule or [])
     sm.remove_schedule_entry = AsyncMock(return_value=remove_return)
     sm.update_schedule_entry = AsyncMock(return_value=update_return)
     return sm
@@ -131,10 +148,20 @@ class TestUpdateScheduledTask:
 
     @pytest.mark.asyncio
     async def test_update_calls_state_manager_update(self):
-        sm = _mock_sm(update_return=True)
+        sm = _mock_sm(
+            update_return=True,
+            schedule=[_ScheduleEntry(id="sched_abc123", metadata=None)],
+        )
         updates = {"message": "new text", "cron_expression": "0 10 * * *"}
         result = await update_scheduled_task("sched_abc123", updates, state_manager=sm)
-        sm.update_schedule_entry.assert_awaited_once_with("sched_abc123", updates)
+        sm.update_schedule_entry.assert_awaited_once_with(
+            "sched_abc123",
+            {
+                "message": "new text",
+                "cron_expression": "0 10 * * *",
+                "paused": False,
+            },
+        )
         assert result.success is True
 
     @pytest.mark.asyncio
@@ -147,7 +174,10 @@ class TestUpdateScheduledTask:
     @pytest.mark.asyncio
     async def test_update_allows_scheduled_at(self):
         """scheduled_at is a valid updatable field."""
-        sm = _mock_sm(update_return=True)
+        sm = _mock_sm(
+            update_return=True,
+            schedule=[_ScheduleEntry(id="sched_abc123", metadata=None)],
+        )
         updates = {"scheduled_at": "2026-06-01T09:00:00+00:00"}
         result = await update_scheduled_task("sched_abc123", updates, state_manager=sm)
         assert result.success is True
@@ -273,7 +303,7 @@ class TestToolSpecShapes:
 
     def test_all_handlers_importable_via_package(self):
         """Verify that all four handler functions are re-exported from app.progenitor.tools."""
-        import asyncio
+        import inspect
 
         from app.progenitor.tools import (
             delete_scheduled_task,
@@ -282,7 +312,7 @@ class TestToolSpecShapes:
             update_scheduled_task,
         )
 
-        assert asyncio.iscoroutinefunction(delete_scheduled_task)
-        assert asyncio.iscoroutinefunction(update_scheduled_task)
-        assert asyncio.iscoroutinefunction(pause_scheduled_task)
-        assert asyncio.iscoroutinefunction(resume_scheduled_task)
+        assert inspect.iscoroutinefunction(delete_scheduled_task)
+        assert inspect.iscoroutinefunction(update_scheduled_task)
+        assert inspect.iscoroutinefunction(pause_scheduled_task)
+        assert inspect.iscoroutinefunction(resume_scheduled_task)

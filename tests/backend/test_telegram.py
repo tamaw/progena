@@ -8,6 +8,7 @@ polling, command handling, and integration with the backend event system.
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from app.backend.config import ChatServerConfig
@@ -245,6 +246,33 @@ class TestTelegramClient:
         result = await client._api_call("sendMessage", {"chat_id": "123", "text": "Hello"})
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_api_call_redacts_token_from_logged_errors(self, client, caplog):
+        """HTTP exception logs should not leak the bot token in URLs."""
+        client._started = True
+
+        token = client.config.bot_token
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(
+            side_effect=aiohttp.ClientError(
+                f"POST https://api.telegram.org/bot{token}/sendMessage failed"
+            )
+        )
+        client._session = mock_session
+
+        with caplog.at_level("DEBUG"):
+            result, error_type = await client._api_call_with_error_type(
+                "sendMessage",
+                {"chat_id": "123", "text": "Hello"},
+                retry=False,
+            )
+
+        assert result is None
+        assert error_type == "error"
+        logged_text = " ".join(record.getMessage() for record in caplog.records)
+        assert token not in logged_text
+        assert "<redacted>" in logged_text
 
     @pytest.mark.asyncio
     async def test_stream_agent_response_to_chat_uses_drafts_then_commits(self, client):

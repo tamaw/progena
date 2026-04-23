@@ -13,6 +13,7 @@ Features:
 """
 
 import asyncio
+import inspect
 import logging
 import signal
 import time
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 class ShutdownPhase(StrEnum):
     """Phases of graceful shutdown."""
+
     RUNNING = "running"
     DRAINING = "draining"  # Stopping new requests, waiting for active ones
     STOPPING_SERVICES = "stopping_services"
@@ -38,6 +40,7 @@ class ShutdownPhase(StrEnum):
 @dataclass
 class ShutdownCallback:
     """A registered shutdown callback."""
+
     name: str
     callback: Callable[[], Awaitable[None]]
     priority: int = 100  # Lower = earlier execution
@@ -47,6 +50,7 @@ class ShutdownCallback:
 @dataclass
 class ShutdownStats:
     """Statistics about shutdown process."""
+
     initiated_at: datetime | None = None
     completed_at: datetime | None = None
     drain_started_at: datetime | None = None
@@ -140,12 +144,14 @@ class GracefulShutdownManager:
             priority: Execution order (lower = earlier)
             timeout: Max seconds to wait for this callback
         """
-        self._callbacks.append(ShutdownCallback(
-            name=name,
-            callback=callback,
-            priority=priority,
-            timeout=timeout,
-        ))
+        self._callbacks.append(
+            ShutdownCallback(
+                name=name,
+                callback=callback,
+                priority=priority,
+                timeout=timeout,
+            )
+        )
         self._callbacks.sort(key=lambda c: c.priority)
         logger.debug("Registered shutdown callback: %s (priority=%d)", name, priority)
 
@@ -171,12 +177,14 @@ class GracefulShutdownManager:
             priority: Execution order (lower = earlier)
             timeout: Max seconds to wait for this callback
         """
-        self._drain_callbacks.append(ShutdownCallback(
-            name=name,
-            callback=callback,
-            priority=priority,
-            timeout=timeout,
-        ))
+        self._drain_callbacks.append(
+            ShutdownCallback(
+                name=name,
+                callback=callback,
+                priority=priority,
+                timeout=timeout,
+            )
+        )
         self._drain_callbacks.sort(key=lambda c: c.priority)
         logger.debug("Registered drain callback: %s (priority=%d)", name, priority)
 
@@ -369,8 +377,12 @@ class GracefulShutdownManager:
             "total_timeout_seconds": self.total_timeout,
             "registered_callbacks": len(self._callbacks),
             "stats": {
-                "initiated_at": self._stats.initiated_at.isoformat() if self._stats.initiated_at else None,
-                "completed_at": self._stats.completed_at.isoformat() if self._stats.completed_at else None,
+                "initiated_at": self._stats.initiated_at.isoformat()
+                if self._stats.initiated_at
+                else None,
+                "completed_at": self._stats.completed_at.isoformat()
+                if self._stats.completed_at
+                else None,
                 "requests_drained": self._stats.requests_drained,
                 "requests_timed_out": self._stats.requests_timed_out,
                 "callbacks_executed": self._stats.callbacks_executed,
@@ -407,6 +419,7 @@ async def managed_shutdown(
 
 # Convenience functions for common cleanup tasks
 
+
 async def stop_client_safely(
     client,
     timeout: float = 10.0,
@@ -416,21 +429,21 @@ async def stop_client_safely(
     if not client:
         return True
 
-    logger.debug("Stopping %s...", name)
+    logger.debug(f"Stopping {name}...")
     try:
         stop_method = getattr(client, "stop", None) or getattr(client, "close", None)
         if stop_method:
-            if asyncio.iscoroutinefunction(stop_method):
+            if inspect.iscoroutinefunction(stop_method):
                 await asyncio.wait_for(stop_method(), timeout=timeout)
             else:
                 stop_method()
-        logger.debug("%s stopped", name)
+        logger.debug(f"{name} stopped")
         return True
     except TimeoutError:
-        logger.warning("%s stop timed out", name)
+        logger.warning(f"{name} stop timed out")
         return False
     except Exception as e:
-        logger.error("Error stopping %s: %s", name, e)
+        logger.error(f"Error stopping {name}: {e}")
         return False
 
 

@@ -212,6 +212,7 @@ class StateManager:
                         "result": None,
                     },
                     "verify": {
+                        "status": "not_run",
                         "passed": False,
                         "score": 0.0,
                         "target_score": 0.8,

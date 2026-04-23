@@ -79,7 +79,10 @@ def create_node(
         state_updates = {}
         if iteration == 0 and not state.get("task_id"):
             import uuid
-            task_description = str(state.get("current_input") or state.get("task_description", "Build task"))
+
+            task_description = str(
+                state.get("current_input") or state.get("task_description", "Build task")
+            )
             task_id = f"task_{uuid.uuid4().hex[:8]}"
             now_time = time.time()
             now_iso = utcnow_isoformat()
@@ -91,7 +94,6 @@ def create_node(
                 "build_phase": "observe",
                 "task_id": task_id,
                 "should_iterate": True,
-
                 # Nested task info (description + capabilities)
                 "task": {
                     "description": task_description[:200],
@@ -106,6 +108,7 @@ def create_node(
                 },
                 # Initialize verification state
                 "verification": {
+                    "current_status": "not_run",
                     "current_score": 0.0,
                     "current_passed": False,
                     "target_score": default_target_score,
@@ -135,14 +138,21 @@ def create_node(
                     "history": [],
                 },
             }
-            logger.info("Initialized inner loop state for task %s (build_in_progress=True)", task_id)
+            logger.info(
+                "Initialized inner loop state for task %s (build_in_progress=True)", task_id
+            )
         else:
             # Increment iteration at the start of a new cycle when verification did not meet target
-            if not state.get("clarification", {}).get("needed", False) and not awaiting_clarification:
+            if (
+                not state.get("clarification", {}).get("needed", False)
+                and not awaiting_clarification
+            ):
                 verification = state.get("verification", {})
                 verification_score: float = verification.get("current_score") or 0.0
                 target_score: float = verification.get("target_score") or default_target_score
-                if verification_score < target_score and not verification.get("current_passed", False):
+                if verification_score < target_score and not verification.get(
+                    "current_passed", False
+                ):
                     next_iteration = (iteration or 0) + 1
                     # Preserve max from state (LangGraph shallow-merges, so we need to include it)
                     iter_info = state.get("iteration", {})
@@ -156,8 +166,13 @@ def create_node(
                         },
                     }
                     iteration = next_iteration
-                    logger.info("Incrementing iteration from %d to %d (score=%.2f < target=%.2f)",
-                               next_iteration - 1, next_iteration, verification_score, target_score)
+                    logger.info(
+                        "Incrementing iteration from %d to %d (score=%.2f < target=%.2f)",
+                        next_iteration - 1,
+                        next_iteration,
+                        verification_score,
+                        target_score,
+                    )
 
         try:
             # Handle clarification response - incorporate user's additional context
@@ -191,12 +206,16 @@ def create_node(
                 }
 
                 if state_manager:
-                    await state_manager.log_decision({
-                        "event": "clarification_incorporated",
-                        "iteration": iteration,
-                        "response_preview": clarification_response[:200] if clarification_response else None,
-                        "timestamp": utcnow_isoformat(),
-                    })
+                    await state_manager.log_decision(
+                        {
+                            "event": "clarification_incorporated",
+                            "iteration": iteration,
+                            "response_preview": clarification_response[:200]
+                            if clarification_response
+                            else None,
+                            "timestamp": utcnow_isoformat(),
+                        }
+                    )
 
             elif iteration == 0 or ideal_state is None:
                 # First iteration - build initial ideal state
@@ -206,9 +225,19 @@ def create_node(
                 # This provides the LLM-refined description from the decide step
                 build_settings = state.get("build_settings")
                 if build_settings:
-                    bs_description = build_settings.get("description") if isinstance(build_settings, dict) else getattr(build_settings, "description", None)
-                    bs_project_name = build_settings.get("project_name") if isinstance(build_settings, dict) else getattr(build_settings, "project_name", None)
-                    build_settings.get("user_request") if isinstance(build_settings, dict) else getattr(build_settings, "user_request", None)
+                    bs_description = (
+                        build_settings.get("description")
+                        if isinstance(build_settings, dict)
+                        else getattr(build_settings, "description", None)
+                    )
+                    bs_project_name = (
+                        build_settings.get("project_name")
+                        if isinstance(build_settings, dict)
+                        else getattr(build_settings, "project_name", None)
+                    )
+                    build_settings.get("user_request") if isinstance(
+                        build_settings, dict
+                    ) else getattr(build_settings, "user_request", None)
 
                     # If we have a refined description, use it to enhance the task
                     if bs_description and bs_description != task:
@@ -229,13 +258,15 @@ def create_node(
                 ideal_state = await ideal_state_builder.build_from_task(task, context)
 
                 if state_manager:
-                    await state_manager.log_decision({
-                        "event": "ideal_state_created",
-                        "version": ideal_state.version,
-                        "criteria_count": len(ideal_state.success_criteria),
-                        "anti_criteria_count": len(ideal_state.anti_criteria),
-                        "timestamp": utcnow_isoformat(),
-                    })
+                    await state_manager.log_decision(
+                        {
+                            "event": "ideal_state_created",
+                            "version": ideal_state.version,
+                            "criteria_count": len(ideal_state.success_criteria),
+                            "anti_criteria_count": len(ideal_state.anti_criteria),
+                            "timestamp": utcnow_isoformat(),
+                        }
+                    )
 
             else:
                 # Subsequent iterations - refine based on results
@@ -266,12 +297,14 @@ def create_node(
                     )
 
                     if state_manager:
-                        await state_manager.log_decision({
-                            "event": "ideal_state_refined",
-                            "version": ideal_state.version,
-                            "iteration": iteration,
-                            "timestamp": utcnow_isoformat(),
-                        })
+                        await state_manager.log_decision(
+                            {
+                                "event": "ideal_state_refined",
+                                "version": ideal_state.version,
+                                "iteration": iteration,
+                                "timestamp": utcnow_isoformat(),
+                            }
+                        )
 
             # Merge state updates with ideal_state and clarification updates
             # Always update build_phase to show current phase

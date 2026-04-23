@@ -169,15 +169,12 @@ class AgentDiscovery:
                             content = file_item.read_text(encoding="utf-8")
                             folder_info.file_contents[file_item.name] = content
                         except Exception as e:
-                            logger.warning(
-                                "Failed to read %s: %s", file_item, e
-                            )
+                            logger.warning("Failed to read %s: %s", file_item, e)
 
             # Only include folders with Python files
             if folder_info.file_contents:
                 folders.append(folder_info)
-                logger.debug("Found agent folder: %s with files: %s",
-                           item.name, folder_info.files)
+                logger.debug("Found agent folder: %s with files: %s", item.name, folder_info.files)
 
         return folders
 
@@ -231,6 +228,7 @@ class AgentDiscovery:
 
             # Parse the response
             import json
+
             result_data = json.loads(response)
             return AgentDiscoveryResult(**result_data)
 
@@ -277,6 +275,7 @@ class AgentDiscovery:
             if content:
                 # Try to extract first docstring
                 import re
+
                 match = re.search(r'"""(.*?)"""', content, re.DOTALL)
                 if match:
                     doc = match.group(1).strip().split("\n")[0]
@@ -335,8 +334,9 @@ class AgentDiscovery:
                 registry_summary["agent_card_refresh"] = {"error": str(e)}
             if hasattr(self.registry, "refresh_agent_health"):
                 try:
-                    registry_summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
-                    )
+                    registry_summary[
+                        "agent_health_refresh"
+                    ] = await self.registry.refresh_agent_health()
                 except Exception as e:
                     registry_summary["agent_health_refresh"] = {"error": str(e)}
             return registry_summary
@@ -415,8 +415,7 @@ class AgentDiscovery:
             summary["agent_card_refresh"] = card_refresh
         if hasattr(self.registry, "refresh_agent_health"):
             try:
-                summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
-                )
+                summary["agent_health_refresh"] = await self.registry.refresh_agent_health()
             except Exception as e:
                 summary["agent_health_refresh"] = {"error": str(e)}
 
@@ -429,15 +428,10 @@ class AgentDiscovery:
         # Build full entrypoint path
         entrypoint = f"app/agents/{spec.name}/{spec.entrypoint}"
 
-        # Allocate port for HTTP agents
+        # Discovered agents are registered as stopped until runtime starts them.
         port = None
         url = None
         agent_card_url = None
-
-        if spec.transport == "http":
-            port = self.registry.allocate_port()
-            url = f"http://{self.host}:{port}"
-            agent_card_url = f"{url}/.well-known/agent-card.json"
 
         entry = AgentRegistryEntry(
             name=spec.name,

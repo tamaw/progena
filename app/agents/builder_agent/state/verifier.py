@@ -27,6 +27,7 @@ from .execution_schemas import (
     ExecutionResult,
     ValidationResultV2,
     VerificationReportV2,
+    VerificationStatus,
 )
 from .ideal_state import AntiCriterion, IdealState, SuccessCriterion
 
@@ -211,16 +212,16 @@ class Verifier:
         # Check anti-criteria violations
         violations = []
         for anti_criterion in ideal_state.anti_criteria:
-            violation = self._check_anti_criterion_with_data(
-                anti_criterion, exec_data, valid_data
-            )
+            violation = self._check_anti_criterion_with_data(anti_criterion, exec_data, valid_data)
             if violation:
                 violations.append(violation)
 
         # Calculate overall score
         if criterion_evidences:
-            weighted_sum = sum(e.score * ideal_state.success_criteria[i].weight
-                              for i, e in enumerate(criterion_evidences))
+            weighted_sum = sum(
+                e.score * ideal_state.success_criteria[i].weight
+                for i, e in enumerate(criterion_evidences)
+            )
             total_weight = sum(c.weight for c in ideal_state.success_criteria)
             overall_score = weighted_sum / total_weight if total_weight > 0 else 0.0
         else:
@@ -240,7 +241,9 @@ class Verifier:
         for i, e in enumerate(criterion_evidences):
             if not e.passed:
                 criterion = ideal_state.success_criteria[i]
-                gap_detail = f"{criterion.id}: Target: {criterion.target_score:.2f}, Achieved: {e.score:.2f}"
+                gap_detail = (
+                    f"{criterion.id}: Target: {criterion.target_score:.2f}, Achieved: {e.score:.2f}"
+                )
 
                 # Include execution evidence details if available
                 if e.execution_evidence:
@@ -285,19 +288,25 @@ class Verifier:
                         # Include up to last 100 lines of stderr for debugging
                         stderr_lines = [str(line) for line in agent_stderr[-100:]]
                         stderr_snippet = "\n".join(stderr_lines)
-                        build_parts.append(f"Stderr ({len(agent_stderr)} lines, last {min(len(agent_stderr), 100)}):\n{stderr_snippet}")
+                        build_parts.append(
+                            f"Stderr ({len(agent_stderr)} lines, last {min(len(agent_stderr), 100)}):\n{stderr_snippet}"
+                        )
                     agent_stdout = build_output.get("agent_stdout", [])
                     if agent_stdout:
                         # Include up to last 50 lines of stdout
                         stdout_lines = [str(line) for line in agent_stdout[-50:]]
                         stdout_snippet = "\n".join(stdout_lines)
-                        build_parts.append(f"Stdout ({len(agent_stdout)} lines, last {min(len(agent_stdout), 50)}):\n{stdout_snippet}")
+                        build_parts.append(
+                            f"Stdout ({len(agent_stdout)} lines, last {min(len(agent_stdout), 50)}):\n{stdout_snippet}"
+                        )
                 elif build_output.get("test_stderr"):
                     # Include test stderr if present (up to 100 lines)
                     test_stderr = build_output.get("test_stderr", "")
                     if test_stderr.strip():
                         stderr_lines = test_stderr.strip().split("\n")[-100:]
-                        build_parts.append(f"Test stderr ({len(stderr_lines)} lines):\n{chr(10).join(stderr_lines)}")
+                        build_parts.append(
+                            f"Test stderr ({len(stderr_lines)} lines):\n{chr(10).join(stderr_lines)}"
+                        )
 
                 if build_parts:
                     gaps.append(f"[Build Output] {' | '.join(build_parts)}")
@@ -324,6 +333,7 @@ class Verifier:
             anti_criterion_violations=violations,
             overall_score=overall_score,
             passed=passed,
+            status=VerificationStatus.PASSED if passed else VerificationStatus.FAILED,
             mechanical_score_count=mechanical_count,
             llm_score_count=llm_count,
             gaps=gaps,
@@ -352,11 +362,17 @@ class Verifier:
         )
 
         # Try mechanical scoring first based on criterion type
-        criterion_type = criterion.criterion_type.value if hasattr(criterion.criterion_type, "value") else str(criterion.criterion_type)
+        criterion_type = (
+            criterion.criterion_type.value
+            if hasattr(criterion.criterion_type, "value")
+            else str(criterion.criterion_type)
+        )
 
         if criterion_type == "functional":
             # Functional criteria can often be scored mechanically
-            score, exec_ev, valid_ev = self._mechanical_functional_score(exec_data, valid_data, criterion)
+            score, exec_ev, valid_ev = self._mechanical_functional_score(
+                exec_data, valid_data, criterion
+            )
             evidence.score = score
             evidence.execution_evidence = exec_ev
             evidence.validation_evidence = valid_ev
@@ -457,7 +473,9 @@ class Verifier:
         # If we have test script results, use those for more accurate scoring
         if tests_total is not None and tests_total > 0:
             test_pass_rate = tests_passed / tests_total if tests_passed else 0
-            exec_evidence += f"Test script: {tests_passed}/{tests_total} tests passed ({test_pass_rate:.0%}). "
+            exec_evidence += (
+                f"Test script: {tests_passed}/{tests_total} tests passed ({test_pass_rate:.0%}). "
+            )
 
             # Score based on test results - this is primary evidence
             score += 0.7 * test_pass_rate  # Up to 0.7 from tests
@@ -504,7 +522,9 @@ class Verifier:
                 pass_rate = passed_prompts / total_prompts
                 partial_score = 0.35 * pass_rate
                 score += partial_score
-                exec_evidence += f"Prompts: {passed_prompts}/{total_prompts} passed ({pass_rate:.0%}). "
+                exec_evidence += (
+                    f"Prompts: {passed_prompts}/{total_prompts} passed ({pass_rate:.0%}). "
+                )
 
         # Execution status bonus
         if status == "success":
@@ -582,7 +602,9 @@ class Verifier:
         # Check average response time from runs
         runs = exec_data.get("runs", [])
         if runs:
-            avg_times = [r.get("avg_response_time_ms") for r in runs if r.get("avg_response_time_ms")]
+            avg_times = [
+                r.get("avg_response_time_ms") for r in runs if r.get("avg_response_time_ms")
+            ]
             if avg_times:
                 avg_response = sum(avg_times) / len(avg_times)
                 evidence += f"Avg response time: {avg_response:.0f}ms. "
@@ -663,43 +685,49 @@ class Verifier:
 
         if exec_data:
             context_parts.append(f"Execution status: {exec_data.get('status', 'unknown')}")
-            context_parts.append(f"Smoke test passed: {exec_data.get('smoke_test_passed', 'unknown')}")
-            errors = exec_data.get('all_errors', [])
+            context_parts.append(
+                f"Smoke test passed: {exec_data.get('smoke_test_passed', 'unknown')}"
+            )
+            errors = exec_data.get("all_errors", [])
             if errors:
                 context_parts.append(f"Errors: {'; '.join(str(e)[:200] for e in errors[:5])}")
 
             # CRITICAL: Check for build/startup failures first - these mean the agent never ran
-            build_output = exec_data.get('build_output', {})
+            build_output = exec_data.get("build_output", {})
             if build_output:
-                startup_failed = build_output.get('startup_failed', False)
+                startup_failed = build_output.get("startup_failed", False)
                 if startup_failed:
                     context_parts.append("\n⚠️ CRITICAL BUILD FAILURE - Agent did not start!")
-                    context_parts.append(f"Startup Error: {build_output.get('error', 'Unknown error')}")
+                    context_parts.append(
+                        f"Startup Error: {build_output.get('error', 'Unknown error')}"
+                    )
                     # Include stderr for debugging context
-                    agent_stderr = build_output.get('agent_stderr', [])
+                    agent_stderr = build_output.get("agent_stderr", [])
                     if agent_stderr:
-                        stderr_text = '\n'.join(agent_stderr[-10:])  # Last 10 lines
+                        stderr_text = "\n".join(agent_stderr[-10:])  # Last 10 lines
                         context_parts.append(f"Agent stderr (last 10 lines):\n{stderr_text}")
-                    agent_stdout = build_output.get('agent_stdout', [])
+                    agent_stdout = build_output.get("agent_stdout", [])
                     if agent_stdout:
-                        stdout_text = '\n'.join(agent_stdout[-5:])
+                        stdout_text = "\n".join(agent_stdout[-5:])
                         context_parts.append(f"Agent stdout (last 5 lines):\n{stdout_text}")
                 else:
                     # Agent started - check for test output
-                    test_stdout = build_output.get('test_stdout', '')
+                    test_stdout = build_output.get("test_stdout", "")
                     if test_stdout:
                         # Include relevant portion of test output
                         context_parts.append(f"Test Output:\n{test_stdout[:1500]}")
 
-                    tests_passed = build_output.get('tests_passed')
-                    tests_total = build_output.get('tests_total')
+                    tests_passed = build_output.get("tests_passed")
+                    tests_total = build_output.get("tests_total")
                     if tests_passed is not None and tests_total is not None:
-                        context_parts.append(f"Test Results: {tests_passed}/{tests_total} tests passed")
+                        context_parts.append(
+                            f"Test Results: {tests_passed}/{tests_total} tests passed"
+                        )
 
         if valid_data:
-            findings = valid_data.get('findings', [])
+            findings = valid_data.get("findings", [])
             if findings:
-                finding_msgs = [f.get('message', '') for f in findings[:3]]
+                finding_msgs = [f.get("message", "") for f in findings[:3]]
                 context_parts.append(f"Validation findings: {'; '.join(finding_msgs)}")
 
         prompt = _prompts.get(
@@ -712,12 +740,16 @@ class Verifier:
             if hasattr(self.llm_client, "generate_with_reasoning"):
                 response, reasoning_trace = await self.llm_client.generate_with_reasoning(
                     prompt=prompt,
-                    system_prompt=_prompts.get("builder_agent/verifier_criterion_scoring_system.md"),
+                    system_prompt=_prompts.get(
+                        "builder_agent/verifier_criterion_scoring_system.md"
+                    ),
                 )
             else:
                 response = await self.llm_client.generate(
                     prompt=prompt,
-                    system_prompt=_prompts.get("builder_agent/verifier_criterion_scoring_system.md"),
+                    system_prompt=_prompts.get(
+                        "builder_agent/verifier_criterion_scoring_system.md"
+                    ),
                 )
 
             # Parse response
@@ -729,7 +761,9 @@ class Verifier:
                     score = max(0.0, min(1.0, score))
                 except ValueError:
                     score = 0.5
-                explanation = parts[1].replace("EXPLANATION:", "").strip() if len(parts) > 1 else response
+                explanation = (
+                    parts[1].replace("EXPLANATION:", "").strip() if len(parts) > 1 else response
+                )
             else:
                 score = 0.5
                 explanation = response[:200]
@@ -751,7 +785,11 @@ class Verifier:
         description_lower = anti_criterion.description.lower()
 
         # Check for common anti-criteria patterns
-        if ("error" in description_lower or "fail" in description_lower) and exec_data and exec_data.get("all_errors"):
+        if (
+            ("error" in description_lower or "fail" in description_lower)
+            and exec_data
+            and exec_data.get("all_errors")
+        ):
             return {
                 "anti_criterion_id": anti_criterion.id,
                 "severity": anti_criterion.severity,
@@ -799,7 +837,9 @@ class Verifier:
                 elif evidence.scoring_method == "llm_judge":
                     actions.append(f"Review subjective criterion {evidence.criterion_id}")
                 else:
-                    actions.append(f"Improve criterion {evidence.criterion_id} (score: {evidence.score:.2f})")
+                    actions.append(
+                        f"Improve criterion {evidence.criterion_id} (score: {evidence.score:.2f})"
+                    )
 
         return actions[:5]
 
@@ -834,23 +874,17 @@ class Verifier:
         try:
             # Score each success criterion
             for criterion in ideal_state.success_criteria:
-                score_result = await self._score_criterion(
-                    criterion, output, context
-                )
+                score_result = await self._score_criterion(criterion, output, context)
                 criterion_scores.append(score_result)
 
             # Check anti-criteria
             for anti_criterion in ideal_state.anti_criteria:
-                violation = await self._check_anti_criterion(
-                    anti_criterion, output, context
-                )
+                violation = await self._check_anti_criterion(anti_criterion, output, context)
                 if violation:
                     violations.append(violation)
 
             # Calculate overall score
-            overall_score = self._calculate_overall_score(
-                criterion_scores, violations, ideal_state
-            )
+            overall_score = self._calculate_overall_score(criterion_scores, violations, ideal_state)
 
             # Determine if passed
             min_score = self._get_minimum_score(ideal_state)
@@ -892,22 +926,14 @@ class Verifier:
 
         # Use appropriate verification method
         if criterion.measurement.lower().startswith("test"):
-            score, evidence = await self._test_based_verification(
-                criterion, output, context
-            )
+            score, evidence = await self._test_based_verification(criterion, output, context)
         elif criterion.measurement.lower().startswith("heuristic"):
-            score, evidence = self._heuristic_verification(
-                criterion, output, context
-            )
+            score, evidence = self._heuristic_verification(criterion, output, context)
         elif self.uses_llm:
-            score, evidence = await self._llm_based_verification(
-                criterion, output, context
-            )
+            score, evidence = await self._llm_based_verification(criterion, output, context)
         else:
             # Fallback to basic heuristic when no LLM
-            score, evidence = self._heuristic_verification(
-                criterion, output, context
-            )
+            score, evidence = self._heuristic_verification(criterion, output, context)
 
         passed = score >= criterion.target_score
 
@@ -1049,7 +1075,8 @@ class Verifier:
 
         # Weighted average of criterion scores
         total_weight = sum(
-            c.weight for c in ideal_state.success_criteria
+            c.weight
+            for c in ideal_state.success_criteria
             if any(cs.criterion_id == c.id for cs in criterion_scores)
         )
 
@@ -1059,8 +1086,7 @@ class Verifier:
         weighted_sum = 0.0
         for score in criterion_scores:
             criterion = next(
-                (c for c in ideal_state.success_criteria if c.id == score.criterion_id),
-                None
+                (c for c in ideal_state.success_criteria if c.id == score.criterion_id), None
             )
             weight = criterion.weight if criterion else 1.0
             weighted_sum += score.score * weight
@@ -1106,9 +1132,7 @@ class Verifier:
         actions = []
         for score in criterion_scores:
             if not score.passed:
-                actions.append(
-                    f"Improve {score.criterion_id}: {score.evidence}"
-                )
+                actions.append(f"Improve {score.criterion_id}: {score.evidence}")
 
         return actions[:3]  # Top 3 actions
 
@@ -1132,13 +1156,9 @@ class Verifier:
         ]
 
         if violations:
-            summary_parts.append(
-                f"Anti-criteria violations: {len(violations)}"
-            )
+            summary_parts.append(f"Anti-criteria violations: {len(violations)}")
 
         if gaps:
-            summary_parts.append(
-                f"Key gaps: {', '.join(gaps[:2])}"
-            )
+            summary_parts.append(f"Key gaps: {', '.join(gaps[:2])}")
 
         return " | ".join(summary_parts)

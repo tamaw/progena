@@ -178,6 +178,9 @@ async def read_message(
         # Parse length
         (length,) = struct.unpack(">I", header)
 
+        if length == 0:
+            raise ValueError("Invalid IPC message length 0")
+
         if length > MAX_MESSAGE_SIZE:
             raise ValueError(f"Message size {length} exceeds maximum {MAX_MESSAGE_SIZE}")
 

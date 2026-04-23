@@ -36,7 +36,7 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     path = (parsed.path or "").rstrip("/")
     if path.endswith("/responses"):
         path = path[: -len("/responses")]
-    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 
 def _resolve_reasoning_effort(model_name: str, budget_tokens: int | None) -> str:

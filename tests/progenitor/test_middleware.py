@@ -146,6 +146,16 @@ class TestDynamicMCPToolMiddleware:
         assert result == "ok"
         assert handler.call_args.args[0] is request
 
+    async def test_rejects_unexpected_tool_request_shape(self):
+        llm_client = MagicMock()
+        llm_client.mcp_langchain_tools = [self._base_tool("read_url")]
+
+        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+        handler = AsyncMock(return_value="ok")
+
+        with pytest.raises(TypeError, match="ToolCallRequest"):
+            await mw.awrap_tool_call(object(), handler)
+
 
 class TestAuditLoggingMiddleware:
     """Tests for the audit logging middleware."""

@@ -134,23 +134,47 @@ class TestRuntimeConfig:
         config = RuntimeConfig()
         assert config.timezone == "Australia/Melbourne"
         assert config.idle_backoff_seconds == 30
+        assert config.idle_prompt_interval_cycles == 10
         assert config.max_actions_per_cycle == 10
         assert config.log_level == "info"
+        assert config.ipc_client_connect_timeout_seconds == 10.0
+        assert config.ipc_client_heartbeat_interval_seconds == 5.0
+        assert config.agent_port_range_start == 8080
+        assert config.test_harness_port_range_start == 9550
+        assert config.ipc_client_read_timeout_seconds == 60
+        assert config.ipc_request_timeout_seconds == 60
+        assert config.ipc_cycle_complete_timeout_seconds == 5
 
     def test_from_env_overrides_defaults(self):
         """Test environment variables override defaults."""
         env = {
             "PROGENITOR_TIMEZONE": "UTC",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "60",
+            "PROGENITOR_IDLE_PROMPT_INTERVAL_CYCLES": "12",
             "PROGENITOR_MAX_ACTIONS_PER_CYCLE": "20",
             "PROGENITOR_LOG_LEVEL": "debug",
+            "PROGENITOR_IPC_CLIENT_CONNECT_TIMEOUT_SECONDS": "8",
+            "PROGENITOR_IPC_CLIENT_HEARTBEAT_INTERVAL_SECONDS": "7",
+            "PROGENITOR_AGENT_PORT_RANGE_START": "8200",
+            "PROGENITOR_TEST_HARNESS_PORT_RANGE_START": "9650",
+            "PROGENITOR_IPC_CLIENT_READ_TIMEOUT_SECONDS": "45",
+            "PROGENITOR_IPC_REQUEST_TIMEOUT_SECONDS": "75",
+            "PROGENITOR_IPC_CYCLE_COMPLETE_TIMEOUT_SECONDS": "9",
         }
         with patch.dict(os.environ, env, clear=False):
             config = RuntimeConfig.from_env()
             assert config.timezone == "UTC"
             assert config.idle_backoff_seconds == 60
+            assert config.idle_prompt_interval_cycles == 12
             assert config.max_actions_per_cycle == 20
             assert config.log_level == "debug"
+            assert config.ipc_client_connect_timeout_seconds == 8
+            assert config.ipc_client_heartbeat_interval_seconds == 7
+            assert config.agent_port_range_start == 8200
+            assert config.test_harness_port_range_start == 9650
+            assert config.ipc_client_read_timeout_seconds == 45
+            assert config.ipc_request_timeout_seconds == 75
+            assert config.ipc_cycle_complete_timeout_seconds == 9
 
     def test_from_env_with_file_fallback(self):
         """Test file config is used as fallback."""

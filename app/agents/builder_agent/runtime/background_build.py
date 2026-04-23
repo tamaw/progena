@@ -567,6 +567,7 @@ class BackgroundBuildRunner:
                 },
                 # Verification tracking (nested structure)
                 "verification": {
+                    "current_status": "not_run",
                     "current_score": 0.0,
                     "current_passed": False,
                     "current_report": None,
@@ -578,7 +579,7 @@ class BackgroundBuildRunner:
                     "think": {},
                     "plan": {},
                     "execute": {},
-                    "verify": {"target_score": 0.8},
+                    "verify": {"status": "not_run", "target_score": 0.8},
                 },
                 "history": {
                     "artefacts": [],

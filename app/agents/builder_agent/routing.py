@@ -26,6 +26,7 @@ import time
 from typing import Any, Literal
 
 from .config import DEFAULT_MAX_INNER_ITERATIONS, DEFAULT_VERIFICATION_TARGET_SCORE
+from .state.execution_schemas import VerificationStatus
 from .state.helpers import get_actionable_items, get_ideal_state
 from .state.ideal_state import IdealState
 from .state.models import BuildPhase, ProgenitorState
@@ -40,6 +41,67 @@ logger = logging.getLogger(__name__)
 # Keep these defaults aligned with RuntimeConfig.from_env() keys.
 _DEFAULT_MAX_INNER_ITERATIONS = DEFAULT_MAX_INNER_ITERATIONS
 _DEFAULT_TARGET_SCORE = DEFAULT_VERIFICATION_TARGET_SCORE
+
+
+def _state_section(state: ProgenitorState, key: str) -> dict[str, Any]:
+    """Return a dict-like section from state or an empty mapping."""
+    value = state.get(key, {})
+    if isinstance(value, dict):
+        return value
+    if value is not None:
+        logger.warning("Expected state[%s] to be a dict, got %s", key, type(value).__name__)
+    return {}
+
+
+def _coerce_int(value: Any, default: int, *, label: str) -> int:
+    """Parse an integer while preserving explicit zero values."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s %r; using default %d", label, value, default)
+        return default
+
+
+def _coerce_float(value: Any, default: float, *, label: str) -> float:
+    """Parse a float while preserving explicit zero values."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s %r; using default %.2f", label, value, default)
+        return default
+
+
+def _verification_status(state: ProgenitorState) -> str | None:
+    """Return the explicit verification status when available."""
+    verification = _state_section(state, "verification")
+    status = verification.get("current_status")
+    if isinstance(status, str) and status in {status.value for status in VerificationStatus}:
+        return status
+
+    report = verification.get("current_report")
+    if isinstance(report, dict):
+        report_status = report.get("status")
+        if isinstance(report_status, str) and report_status in {
+            status.value for status in VerificationStatus
+        }:
+            return report_status
+    elif report is not None:
+        report_status = getattr(report, "status", None)
+        if isinstance(report_status, str) and report_status in {
+            status.value for status in VerificationStatus
+        }:
+            return report_status
+        if isinstance(report_status, VerificationStatus):
+            return report_status.value
+
+    if verification.get("current_passed", False):
+        return VerificationStatus.PASSED.value
+    return None
+
 
 def ensure_ideal_state(ideal_state: Any) -> IdealState | None:
     """Convert ideal_state dict to IdealState object if needed."""
@@ -59,8 +121,7 @@ def ensure_ideal_state(ideal_state: Any) -> IdealState | None:
 
 
 def should_iterate(
-    state: ProgenitorState,
-    max_iterations: int = _DEFAULT_MAX_INNER_ITERATIONS
+    state: ProgenitorState, max_iterations: int = _DEFAULT_MAX_INNER_ITERATIONS
 ) -> Literal["observe", "respond"]:
     """Determine if inner loop should continue iterating.
 
@@ -73,9 +134,9 @@ def should_iterate(
     - Max iterations hit
     - Tool/time budget exhausted
     """
-    iter_info = state.get("iteration", {})
-    iteration = iter_info.get("current", 0)
-    verification = state.get("verification", {})
+    iter_info = _state_section(state, "iteration")
+    iteration = _coerce_int(iter_info.get("current"), 0, label="iteration.current")
+    verification = _state_section(state, "verification")
     ideal_state = ensure_ideal_state(get_ideal_state(state))
 
     # First iteration - always continue
@@ -83,19 +144,27 @@ def should_iterate(
         return "observe"
 
     # Check if clarification is needed
-    clarification = state.get("clarification", {})
+    clarification = _state_section(state, "clarification")
     if clarification.get("needed", False):
         logger.info("Clarification needed - interrupting inner loop")
         return "respond"
 
     # Check if verification passed
-    if verification.get("current_passed", False):
+    status = _verification_status(state)
+    if status == VerificationStatus.NOT_RUN.value:
+        logger.warning("Verification did not run - interrupting inner loop")
+        return "respond"
+    if status == VerificationStatus.PASSED.value or verification.get("current_passed", False):
         logger.info("Verification passed at iteration %d", iteration)
         return "respond"
 
     # Check stop conditions from ideal state
     if ideal_state and verification.get("current_report"):
-        verification_score: float = verification.get("current_score") or 0.0
+        verification_score = _coerce_float(
+            verification.get("current_score"),
+            0.0,
+            label="verification.current_score",
+        )
         actions_count = state.get("actions_this_cycle", 0)
         iteration_start = iter_info.get("start_time", time.time())
         elapsed_time = time.time() - iteration_start
@@ -108,7 +177,7 @@ def should_iterate(
         )
 
         if should_stop:
-            logger.info("Stop conditions met: %s", ', '.join(reasons))
+            logger.info("Stop conditions met: %s", ", ".join(reasons))
             return "respond"
 
     # Default: Continue iterating if under failsafe limit
@@ -135,15 +204,32 @@ def _check_build_stop(
     if state.get("build_error"):
         return True, f"build error: {state.get('build_error')}"
 
-    iter_info = state.get("iteration", {})
-    current_iteration = iter_info.get("current", 0)
-    max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
+    iter_info = _state_section(state, "iteration")
+    current_iteration = _coerce_int(iter_info.get("current"), 0, label="iteration.current")
+    max_iterations = _coerce_int(
+        iter_info.get("max"),
+        _DEFAULT_MAX_INNER_ITERATIONS,
+        label="iteration.max",
+    )
     if current_iteration >= max_iterations:
         return True, f"max iterations ({max_iterations}) reached"
 
-    verification = state.get("verification", {})
-    verification_score: float = verification.get("current_score") or 0.0
-    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
+    verification = _state_section(state, "verification")
+    verification_status = _verification_status(state)
+    verification_score = _coerce_float(
+        verification.get("current_score"),
+        0.0,
+        label="verification.current_score",
+    )
+    target_score = _coerce_float(
+        verification.get("target_score"),
+        _DEFAULT_TARGET_SCORE,
+        label="verification.target_score",
+    )
+    if verification_status == VerificationStatus.NOT_RUN.value:
+        return True, "verification not run"
+    if verification_status == VerificationStatus.PASSED.value:
+        return True, f"score {verification_score:.2f} meets target {target_score:.2f}"
     if verification_score >= target_score:
         return True, f"score {verification_score:.2f} meets target {target_score:.2f}"
 
@@ -164,17 +250,33 @@ def should_continue_inner_loop(state: ProgenitorState) -> Literal["observe", "do
         logger.info("Exiting inner loop: %s", reason)
         return "done"
 
-    iter_info = state.get("iteration", {})
-    current_iteration = iter_info.get("current", 0)
-    max_iterations = iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS)
-    verification = state.get("verification", {})
-    verification_score: float = verification.get("current_score") or 0.0
-    target_score: float = verification.get("target_score") or _DEFAULT_TARGET_SCORE
+    iter_info = _state_section(state, "iteration")
+    current_iteration = _coerce_int(iter_info.get("current"), 0, label="iteration.current")
+    max_iterations = _coerce_int(
+        iter_info.get("max"),
+        _DEFAULT_MAX_INNER_ITERATIONS,
+        label="iteration.max",
+    )
+    verification = _state_section(state, "verification")
+    verification_score = _coerce_float(
+        verification.get("current_score"),
+        0.0,
+        label="verification.current_score",
+    )
+    target_score = _coerce_float(
+        verification.get("target_score"),
+        _DEFAULT_TARGET_SCORE,
+        label="verification.target_score",
+    )
     logger.info(
         "Continuing inner loop: iteration=%d/%d, score=%.2f/%.2f",
-        current_iteration, max_iterations, verification_score, target_score,
+        current_iteration,
+        max_iterations,
+        verification_score,
+        target_score,
     )
     return "observe"
+
 
 def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "done"]:
     """Route after verify.
@@ -192,19 +294,36 @@ def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "d
         logger.info("route_after_verify → done: build error: %s", state.get("build_error"))
         return "done"
 
-    iter_info = state.get("iteration", {}) or {}
-    current_iteration = int(iter_info.get("current", 0) or 0)
-    max_iterations = int(iter_info.get("max", _DEFAULT_MAX_INNER_ITERATIONS) or _DEFAULT_MAX_INNER_ITERATIONS)
+    iter_info = _state_section(state, "iteration")
+    current_iteration = _coerce_int(iter_info.get("current"), 0, label="iteration.current")
+    max_iterations = _coerce_int(
+        iter_info.get("max"),
+        _DEFAULT_MAX_INNER_ITERATIONS,
+        label="iteration.max",
+    )
 
-    verification = state.get("verification", {}) or {}
-    verification_score: float = float(verification.get("current_score") or 0.0)
-    target_score: float = float(verification.get("target_score") or _DEFAULT_TARGET_SCORE)
+    verification = _state_section(state, "verification")
+    verification_status = _verification_status(state)
+    verification_score = _coerce_float(
+        verification.get("current_score"),
+        0.0,
+        label="verification.current_score",
+    )
+    target_score = _coerce_float(
+        verification.get("target_score"),
+        _DEFAULT_TARGET_SCORE,
+        label="verification.target_score",
+    )
+
+    if verification_status == VerificationStatus.NOT_RUN.value:
+        logger.warning("route_after_verify → done: verification did not run")
+        return "done"
 
     if current_iteration >= max_iterations:
         logger.info("route_after_verify → publish: max iterations (%d) reached", max_iterations)
         return "publish"
 
-    if verification_score >= target_score:
+    if verification_status == VerificationStatus.PASSED.value or verification_score >= target_score:
         logger.info(
             "route_after_verify → publish: score %.2f meets target %.2f",
             verification_score,
@@ -225,6 +344,7 @@ def route_after_verify(state: ProgenitorState) -> Literal["learn", "publish", "d
 # =============================================================================
 # Background Graph Routing
 # =============================================================================
+
 
 def route_after_decide(state: ProgenitorState) -> Literal["pick_next", "respond"]:
     """Route based on decision type.
@@ -297,6 +417,7 @@ def route_after_validate(state: ProgenitorState) -> Literal["commit_core", "pick
 # =============================================================================
 # Utility Functions
 # =============================================================================
+
 
 def has_pending_work(state: ProgenitorState) -> bool:
     """Check if there's actionable work in the backlog (used by background graph)."""

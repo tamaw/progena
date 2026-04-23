@@ -1,7 +1,10 @@
 """Tests for the schedule management tool (cron + message model)."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
+from app.progenitor.runtime.scheduler import SCHEDULER_ERROR_METADATA_KEY
 from app.progenitor.runtime.time_utils import utcnow
 from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.tools.schedule import (
@@ -10,6 +13,7 @@ from app.progenitor.tools.schedule import (
     add_scheduled_task,
     list_scheduled_tasks,
     remove_scheduled_task,
+    update_scheduled_task,
 )
 
 
@@ -21,6 +25,7 @@ class TestAddScheduledTask:
             time_expression="every day at 9am",
             instruction="Output the message 'Hello, World!' to the user.",
             description="Greeting task",
+            timezone="Australia/Melbourne",
         )
 
         assert result.success is True
@@ -28,6 +33,7 @@ class TestAddScheduledTask:
         assert entry_data is not None
         assert entry_data["message"].startswith("Greeting task")
         assert entry_data["cron_expression"] == "0 9 * * *"
+        assert entry_data["timezone"] == "Australia/Melbourne"
         assert "created_at" in entry_data
         assert "next_run" not in entry_data
 
@@ -56,7 +62,10 @@ class TestAddScheduledTask:
         assert result.success is True
         assert entry_data is not None
         assert "scheduled_at" in entry_data
-        assert entry_data.get("scheduled_at") == ts.replace("Z", "+00:00") or entry_data.get("scheduled_at") == ts
+        assert (
+            entry_data.get("scheduled_at") == ts.replace("Z", "+00:00")
+            or entry_data.get("scheduled_at") == ts
+        )
         assert "cron_expression" not in entry_data
         assert result.next_run is not None
 
@@ -95,7 +104,8 @@ class TestListScheduledTasks:
                 "id": "sched_1",
                 "message": "Morning greeting",
                 "cron_expression": "0 9 * * *",
-                "created_at": (utcnow()).isoformat(),
+                "created_at": "2026-01-15T10:07:00+00:00",
+                "timezone": "Australia/Melbourne",
             },
         ]
 
@@ -103,7 +113,68 @@ class TestListScheduledTasks:
         assert len(result) == 1
         assert result[0]["message"] == "Morning greeting"
         assert result[0]["cron_expression"] == "0 9 * * *"
-        assert "next_run" in result[0]
+        assert result[0]["next_run"] == "2026-01-15T22:00:00+00:00"
+        assert result[0]["timezone"] == "Australia/Melbourne"
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_surfaces_paused_invalid_entry(self):
+        entries = [
+            {
+                "id": "sched_bad",
+                "message": "Broken cron",
+                "cron_expression": "bad cron",
+                "created_at": utcnow().isoformat(),
+                "paused": True,
+                "metadata": {
+                    SCHEDULER_ERROR_METADATA_KEY: {
+                        "code": "invalid_cron_expression",
+                        "message": "bad cron syntax",
+                    }
+                },
+            }
+        ]
+
+        result = await list_scheduled_tasks(entries)
+
+        assert result[0]["status"] == "paused_invalid"
+        assert result[0]["next_run"] == "Paused"
+        assert result[0]["metadata"][SCHEDULER_ERROR_METADATA_KEY]["message"] == "bad cron syntax"
+
+    @pytest.mark.asyncio
+    async def test_update_task_clears_scheduler_error_and_unpauses(self):
+        state_manager = MagicMock()
+        state_manager.get_schedule = AsyncMock(
+            return_value=[
+                ScheduleEntry(
+                    id="sched_bad",
+                    message="Broken cron",
+                    cron_expression="bad cron",
+                    created_at=utcnow(),
+                    paused=True,
+                    metadata={
+                        SCHEDULER_ERROR_METADATA_KEY: {
+                            "code": "invalid_cron_expression",
+                            "message": "bad cron syntax",
+                        },
+                        "source": "scheduler",
+                    },
+                )
+            ]
+        )
+        state_manager.update_schedule_entry = AsyncMock(return_value=True)
+
+        result = await update_scheduled_task(
+            "sched_bad",
+            {"cron_expression": "0 9 * * *"},
+            state_manager=state_manager,
+        )
+
+        assert result.success is True
+        state_manager.update_schedule_entry.assert_awaited_once()
+        args = state_manager.update_schedule_entry.await_args.args
+        assert args[0] == "sched_bad"
+        assert args[1]["paused"] is False
+        assert args[1]["metadata"] == {"source": "scheduler"}
 
 
 class TestScheduleToolSpec:
@@ -139,6 +210,6 @@ class TestScheduleEntryIntegration:
         assert data["message"] == "Run this message"
         assert "cron_expression" in data
         assert "created_at" in data
+        assert "timezone" in data
         assert "next_run" not in data
         assert "instruction" not in data
-

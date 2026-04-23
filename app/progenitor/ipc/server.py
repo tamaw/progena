@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
+import time
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
@@ -43,6 +44,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9500
 MAX_CLIENTS = 10
+DEFAULT_CLIENT_READ_TIMEOUT_SECONDS = 60.0
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
+DEFAULT_CYCLE_COMPLETE_TIMEOUT_SECONDS = 5.0
+STREAM_POLL_INTERVAL_SECONDS = 0.1
 
 
 class IPCServer:
@@ -61,6 +66,9 @@ class IPCServer:
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         max_clients: int = MAX_CLIENTS,
+        client_read_timeout_seconds: float = DEFAULT_CLIENT_READ_TIMEOUT_SECONDS,
+        request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        cycle_complete_timeout_seconds: float = DEFAULT_CYCLE_COMPLETE_TIMEOUT_SECONDS,
     ):
         """Initialize the IPC server.
 
@@ -69,20 +77,27 @@ class IPCServer:
             host: Host to bind to.
             port: Port to bind to.
             max_clients: Maximum concurrent clients.
+            client_read_timeout_seconds: Idle timeout while reading client messages.
+            request_timeout_seconds: Max time a single-flight request may block the server.
+            cycle_complete_timeout_seconds: Extra wait before allowing the next request.
         """
         self.loop_runner = loop_runner
         self.host = host
         self.port = port
         self.max_clients = max_clients
+        self.client_read_timeout_seconds = client_read_timeout_seconds
+        self.request_timeout_seconds = request_timeout_seconds
+        self.cycle_complete_timeout_seconds = cycle_complete_timeout_seconds
 
         self._server: asyncio.Server | None = None
         self._running = False
         self._client_count = 0
         self._clients: dict[str, asyncio.StreamWriter] = {}
         self._shutdown_event = asyncio.Event()
-        # Serialize requests to prevent output queue race conditions
-        # Only one request can be processed at a time since the loop
-        # doesn't track request IDs through the output queue
+        # The runtime loop exposes one shared output/stream channel and one shared
+        # mutable state machine, so chat requests are intentionally single-flight.
+        # Keep the waits bounded so one slow request does not stall every client
+        # for multiple minutes.
         self._request_lock = asyncio.Lock()
         # Background task for broadcasting events
         self._event_broadcast_task: asyncio.Task | None = None
@@ -187,7 +202,10 @@ class IPCServer:
             # Process messages
             while self._running:
                 try:
-                    msg = await read_message(reader, timeout=300)  # 5 min timeout
+                    msg = await read_message(
+                        reader,
+                        timeout=self.client_read_timeout_seconds,
+                    )
                 except TimeoutError:
                     logger.debug("Client %s timed out", client_id)
                     break
@@ -283,9 +301,8 @@ class IPCServer:
         """
         await self._notify_queued_request(request_id, streaming=False)
 
-        # Serialize requests to prevent output queue race conditions.
-        # The loop doesn't track request IDs, so we must ensure only
-        # one request is processed at a time.
+        # Requests are serialized globally because the loop runner does not expose
+        # per-request output routing yet.
         async with self._request_lock:
             logger.info("Processing request %s: %s", request_id, content[:50])
 
@@ -296,16 +313,16 @@ class IPCServer:
 
             # Wait for the response (with timeout)
             try:
-                response = await asyncio.wait_for(
-                    self._wait_for_response(request_id),
-                    timeout=300,  # 5 minute timeout
+                response = await self._wait_for_response(
+                    request_id,
+                    timeout=self.request_timeout_seconds,
                 )
                 logger.info("Got response for %s: %d chars", request_id, len(response))
                 await write_message(writer, assistant_message(response, request_id))
 
-                # CRITICAL: Wait for the graph cycle to fully complete
-                # before releasing the lock.
-                cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                cycle_done = await self.loop_runner.wait_cycle_complete(
+                    timeout=self.cycle_complete_timeout_seconds
+                )
                 if not cycle_done:
                     logger.warning("Cycle complete timeout for %s", request_id)
 
@@ -331,19 +348,27 @@ class IPCServer:
             return
         await enqueue_input(content)
 
-    async def _wait_for_response(self, request_id: str) -> str:
+    async def _wait_for_response(self, request_id: str, timeout: float | None = None) -> str:
         """Wait for a response from the loop runner.
 
         Collects stream chunks from the stream queue until is_final=True.
         """
         full_response = ""
         poll_count = 0
-        max_polls = 3000  # 5 min at 0.1s
-        while poll_count < max_polls:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                poll_timeout = min(STREAM_POLL_INTERVAL_SECONDS, remaining)
+            else:
+                poll_timeout = STREAM_POLL_INTERVAL_SECONDS
+
             poll_count += 1
             if poll_count % 50 == 0:
                 logger.debug("Still waiting for %s (poll %d)", request_id, poll_count)
-            chunk_data = await self._get_stream_item(timeout=0.1)
+            chunk_data = await self._get_stream_item(timeout=poll_timeout)
             if not chunk_data:
                 continue
             item_type = str(chunk_data.get("type", "stream_chunk"))
@@ -354,7 +379,6 @@ class IPCServer:
             full_response += str(chunk_data.get("content", ""))
             if chunk_data.get("is_final"):
                 return full_response
-        return full_response
 
     async def _handle_streaming_request(
         self,
@@ -372,9 +396,8 @@ class IPCServer:
         """
         await self._notify_queued_request(request_id, streaming=True)
 
-        # Serialize requests to prevent output queue race conditions.
-        # The loop doesn't track request IDs, so we must ensure only
-        # one request is processed at a time.
+        # Requests are serialized globally because the loop runner does not expose
+        # per-request output routing yet.
         async with self._request_lock:
             logger.info("Processing streaming request %s: %s", request_id, content[:50])
 
@@ -385,14 +408,18 @@ class IPCServer:
 
             # Stream chunks from the loop runner's stream queue
             try:
+                deadline = time.monotonic() + self.request_timeout_seconds
                 poll_count = 0
-                max_polls = 3000  # 5 minutes with 0.1s sleep
-
-                while poll_count < max_polls:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
                     poll_count += 1
 
                     # Get stream chunk from the stream queue
-                    chunk_data = await self._get_stream_item(timeout=0.1)
+                    chunk_data = await self._get_stream_item(
+                        timeout=min(STREAM_POLL_INTERVAL_SECONDS, remaining)
+                    )
 
                     if chunk_data:
                         item_type = str(chunk_data.get("type", "stream_chunk"))
@@ -411,7 +438,9 @@ class IPCServer:
                         if item_type == "stream_end":
                             await write_message(writer, stream_end(request_id))
                             logger.info("Stream complete for %s", request_id)
-                            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                            cycle_done = await self.loop_runner.wait_cycle_complete(
+                                timeout=self.cycle_complete_timeout_seconds
+                            )
                             if not cycle_done:
                                 logger.warning("Cycle complete timeout for %s", request_id)
                             return
@@ -429,10 +458,9 @@ class IPCServer:
                         if is_final:
                             logger.info("Stream complete for %s", request_id)
 
-                            # CRITICAL: Wait for the graph cycle to fully complete
-                            # before releasing the lock. This prevents the next request
-                            # from being enqueued before the progenitor is ready.
-                            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                            cycle_done = await self.loop_runner.wait_cycle_complete(
+                                timeout=self.cycle_complete_timeout_seconds
+                            )
                             if not cycle_done:
                                 logger.warning("Cycle complete timeout for %s", request_id)
 
@@ -446,7 +474,9 @@ class IPCServer:
 
                 # If we exited the loop without finding output, we timed out
                 logger.error(
-                    "Streaming request %s timed out after %d polls", request_id, poll_count
+                    "Streaming request %s timed out after %.1fs",
+                    request_id,
+                    self.request_timeout_seconds,
                 )
                 await self._drain_response_queues(request_id)
                 await write_message(
@@ -508,6 +538,10 @@ class IPCServer:
             "port": self.port,
             "client_count": self._client_count,
             "max_clients": self.max_clients,
+            "request_serialization": "global_single_flight",
+            "client_read_timeout_seconds": self.client_read_timeout_seconds,
+            "request_timeout_seconds": self.request_timeout_seconds,
+            "cycle_complete_timeout_seconds": self.cycle_complete_timeout_seconds,
         }
 
     async def _drain_response_queues(self, request_id: str) -> None:

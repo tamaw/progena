@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, TypedDict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..runtime.time_utils import utcnow
 
@@ -147,7 +147,7 @@ class WorkItem(BaseModel):
     status states from pending to completed/failed/blocked.
     """
 
-    model_config = {"use_enum_values": True}
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
 
     id: str
     item_type: WorkItemType = WorkItemType.DIRECT_ANSWER
@@ -166,37 +166,23 @@ class WorkItem(BaseModel):
 
     @field_validator("item_type", mode="before")
     @classmethod
-    def validate_item_type(cls, v):
-        """Convert string to enum if needed."""
+    def validate_item_type(cls, v: Any) -> WorkItemType:
+        """Strictly validate work item type for persisted state parsing."""
         if isinstance(v, WorkItemType):
             return v
         if isinstance(v, str):
-            try:
-                return WorkItemType(v)
-            except ValueError:
-                logger.warning("Unknown WorkItemType %r, defaulting to DIRECT_ANSWER", v)
-                return WorkItemType.DIRECT_ANSWER
-        logger.warning(
-            "Unexpected WorkItem item_type type %s, defaulting to DIRECT_ANSWER", type(v).__name__
-        )
-        return WorkItemType.DIRECT_ANSWER
+            return WorkItemType(v)
+        raise TypeError(f"Invalid WorkItemType value: {v!r}")
 
     @field_validator("status", mode="before")
     @classmethod
-    def validate_status(cls, v):
-        """Convert string to enum if needed."""
+    def validate_status(cls, v: Any) -> WorkItemStatus:
+        """Strictly validate work item status for persisted state parsing."""
         if isinstance(v, WorkItemStatus):
             return v
         if isinstance(v, str):
-            try:
-                return WorkItemStatus(v)
-            except ValueError:
-                logger.warning("Unknown WorkItemStatus %r, defaulting to PENDING", v)
-                return WorkItemStatus.PENDING
-        logger.warning(
-            "Unexpected WorkItem status type %s, defaulting to PENDING", type(v).__name__
-        )
-        return WorkItemStatus.PENDING
+            return WorkItemStatus(v)
+        raise TypeError(f"Invalid WorkItemStatus value: {v!r}")
 
     @property
     def status_value(self) -> str:
@@ -262,7 +248,7 @@ class Decision(BaseModel):
     including whether to answer directly, delegate, or build.
     """
 
-    model_config = {"use_enum_values": True}
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
 
     action: DecisionAction
     reasoning: str
@@ -279,16 +265,19 @@ class ScheduleEntry(BaseModel):
     Use ``paused=True`` to suspend execution without deleting the entry.
     """
 
-    model_config = {"use_enum_values": True}
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
 
     id: str
     message: str
     cron_expression: str | None = None  # Recurring tasks; None for one-off (scheduled_at)
     scheduled_at: str | None = None  # ISO8601 timestamp for one-off tasks
     last_run: datetime | None = None  # When it last executed
+    last_fired_at: datetime | None = None  # When it was last dispatched for execution
     created_at: datetime = Field(default_factory=utcnow)
     user_request: str | None = None  # The original user request that created this entry
     paused: bool = False  # When True, the scheduler skips this entry without deleting it
+    metadata: dict[str, Any] | None = None  # Optional scheduler/tool annotations
+    timezone: str | None = None  # IANA timezone used to interpret cron wall-clock times
 
 
 class AgentStatus(StrEnum):
@@ -309,6 +298,8 @@ class AgentRegistryEntry(BaseModel):
     Agents are HTTP-based and expose an agent card endpoint per A2A standard.
     The registry tracks runtime status derived from stdout/stderr streams.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     kind: str = "a2a_agent"  # a2a_agent | mcp_server
@@ -367,7 +358,7 @@ TERMINAL_A2A_TASK_STATUSES = frozenset(
 class A2ATaskRecord(BaseModel):
     """Persisted metadata for an A2A task tracked by Progenitor."""
 
-    model_config = {"use_enum_values": True}
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
 
     task_id: str
     agent_name: str
@@ -421,6 +412,8 @@ class A2ATaskRecord(BaseModel):
 class ConversationMessage(BaseModel):
     """A message in the conversation history."""
 
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     role: str  # user | assistant | system | tool
     content: str
@@ -430,6 +423,8 @@ class ConversationMessage(BaseModel):
 
 class ValidationResult(BaseModel):
     """Result of a validation run."""
+
+    model_config = ConfigDict(extra="forbid")
 
     success: bool
     work_item_id: str
@@ -489,7 +484,6 @@ class BackgroundJobState(TypedDict, total=False):
     bg_had_work: bool
     bg_schedule_id: str | None
     bg_work_type: str | None  # "scheduled" | "backlog" | None
-    last_cycle_response: str | None
 
 
 class LoopControlState(TypedDict, total=False):

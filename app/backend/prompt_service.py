@@ -104,8 +104,12 @@ class PromptService:
         return None
 
     def _sanitize_relative_path(self, relative_path: str) -> Path:
-        candidate = (self.prompts_dir / relative_path).resolve()
-        candidate.relative_to(self.prompts_dir.resolve())
+        prompts_root = self.prompts_dir.resolve()
+        candidate = (prompts_root / relative_path).resolve()
+        try:
+            candidate.relative_to(prompts_root)
+        except ValueError as exc:
+            raise ValueError("Prompt path must stay within prompts directory") from exc
         if candidate.suffix.lower() != ".md":
             raise ValueError("Only markdown prompt files can be accessed")
         if not candidate.is_file():

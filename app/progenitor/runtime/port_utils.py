@@ -12,7 +12,22 @@ import socket
 
 import httpx
 
+from ..config import RuntimeConfig, get_config
+
 logger = logging.getLogger(__name__)
+
+DEFAULT_AGENT_PORT_START = RuntimeConfig.agent_port_range_start
+DEFAULT_AGENT_PORT_END = RuntimeConfig.agent_port_range_end
+TEST_HARNESS_PORT_START = RuntimeConfig.test_harness_port_range_start
+TEST_HARNESS_PORT_END = RuntimeConfig.test_harness_port_range_end
+
+
+def _get_runtime_config() -> RuntimeConfig:
+    """Return runtime config for port defaults without failing on partial config."""
+    try:
+        return get_config(validate=False).runtime
+    except Exception:
+        return RuntimeConfig()
 
 
 def is_port_available(port: int, host: str = "localhost") -> bool:
@@ -75,8 +90,8 @@ async def is_service_running_on_port(
 
 
 def find_available_port(
-    start_port: int = 8080,
-    end_port: int = 8199,
+    start_port: int | None = None,
+    end_port: int | None = None,
     host: str = "localhost",
     exclude_ports: set[int] | None = None,
 ) -> int:
@@ -99,6 +114,9 @@ def find_available_port(
     Raises:
         RuntimeError: If no ports are available in the range.
     """
+    runtime_config = _get_runtime_config()
+    start_port = runtime_config.agent_port_range_start if start_port is None else start_port
+    end_port = runtime_config.agent_port_range_end if end_port is None else end_port
     exclude = exclude_ports or set()
 
     for port in range(start_port, end_port + 1):
@@ -112,14 +130,12 @@ def find_available_port(
         else:
             logger.debug(f"Port {port} is not available")
 
-    raise RuntimeError(
-        f"No available ports in range {start_port}-{end_port}"
-    )
+    raise RuntimeError(f"No available ports in range {start_port}-{end_port}")
 
 
 async def find_available_port_async(
-    start_port: int = 8080,
-    end_port: int = 8199,
+    start_port: int | None = None,
+    end_port: int | None = None,
     host: str = "localhost",
     exclude_ports: set[int] | None = None,
     check_health: bool = False,
@@ -143,6 +159,9 @@ async def find_available_port_async(
     Raises:
         RuntimeError: If no ports are available in the range.
     """
+    runtime_config = _get_runtime_config()
+    start_port = runtime_config.agent_port_range_start if start_port is None else start_port
+    end_port = runtime_config.agent_port_range_end if end_port is None else end_port
     exclude = exclude_ports or set()
 
     for port in range(start_port, end_port + 1):
@@ -161,16 +180,4 @@ async def find_available_port_async(
         logger.info(f"Found available port: {port}")
         return port
 
-    raise RuntimeError(
-        f"No available ports in range {start_port}-{end_port}"
-    )
-
-
-# Default port range for A2A agents (production/registered agents)
-DEFAULT_AGENT_PORT_START = 8080
-DEFAULT_AGENT_PORT_END = 8199
-
-# Port range for test harness agents (avoids conflicts with backend on 8000, agents on 8080+,
-# and the IPC server on 9500)
-TEST_HARNESS_PORT_START = 9550
-TEST_HARNESS_PORT_END = 9649
+    raise RuntimeError(f"No available ports in range {start_port}-{end_port}")

@@ -112,6 +112,34 @@ def _gather_full_context(state: ProgenitorState) -> dict[str, Any]:
     return context
 
 
+def _parse_learning_response(response: str) -> dict[str, Any]:
+    """Parse learning JSON with one salvage attempt before surfacing failure."""
+    text = response.strip()
+    if not text:
+        raise ValueError("Empty learning response from LLM")
+
+    try:
+        payload = json.loads(response)
+    except json.JSONDecodeError as exc:
+        preview = text.replace("\n", " ")[:500]
+        logger.warning("Could not parse learning JSON; preview=%s", preview)
+        start = response.find("{")
+        end = response.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                payload = json.loads(response[start : end + 1])
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid learning JSON from LLM: {preview}") from exc
+        else:
+            raise ValueError(f"Invalid learning JSON from LLM: {preview}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Learning response must decode to an object, got {type(payload).__name__}"
+        )
+    return payload
+
+
 def _detect_local_patterns(all_lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Detect patterns from lesson history (non-LLM fallback).
 
@@ -128,51 +156,66 @@ def _detect_local_patterns(all_lessons: list[dict[str, Any]]) -> list[dict[str, 
         for failure in lesson.get("what_failed", []):
             # Normalize to detect similar failures
             failure_key = failure[:80].lower().strip()
-            failure_counts.setdefault(failure_key, []).append(
-                lesson.get("iteration", 0)
-            )
+            failure_counts.setdefault(failure_key, []).append(lesson.get("iteration", 0))
 
     for failure, iterations in failure_counts.items():
         if len(iterations) >= 2:
-            patterns.append({
-                "pattern_type": "recurring_issue",
-                "description": f"Recurring failure: {failure}",
-                "affected_iterations": iterations,
-                "recommended_action": "Address root cause rather than symptoms",
-            })
+            patterns.append(
+                {
+                    "pattern_type": "recurring_issue",
+                    "description": f"Recurring failure: {failure}",
+                    "affected_iterations": iterations,
+                    "recommended_action": "Address root cause rather than symptoms",
+                }
+            )
 
     # Check for stagnation (same progress status across recent iterations)
     recent = all_lessons[-3:]
     if len(recent) >= 3:
-        progress_values = [lesson_item.get("ideal_state_progress", "unknown") for lesson_item in recent]
+        progress_values = [
+            lesson_item.get("ideal_state_progress", "unknown") for lesson_item in recent
+        ]
         if all(p == "stagnating" for p in progress_values):
-            patterns.append({
-                "pattern_type": "stagnation_signal",
-                "description": "Progress stagnating for 3+ iterations",
-                "affected_iterations": [lesson_item.get("iteration", 0) for lesson_item in recent],
-                "recommended_action": "Consider fundamentally different approach",
-            })
+            patterns.append(
+                {
+                    "pattern_type": "stagnation_signal",
+                    "description": "Progress stagnating for 3+ iterations",
+                    "affected_iterations": [
+                        lesson_item.get("iteration", 0) for lesson_item in recent
+                    ],
+                    "recommended_action": "Consider fundamentally different approach",
+                }
+            )
 
     # Check for regression pattern
     if len(recent) >= 2:
-        progress_values = [lesson_item.get("ideal_state_progress", "unknown") for lesson_item in recent]
+        progress_values = [
+            lesson_item.get("ideal_state_progress", "unknown") for lesson_item in recent
+        ]
         if all(p == "regressing" for p in progress_values):
-            patterns.append({
-                "pattern_type": "regression_pattern",
-                "description": "Regression detected across recent iterations",
-                "affected_iterations": [lesson_item.get("iteration", 0) for lesson_item in recent],
-                "recommended_action": "Revert to best known approach and investigate cause",
-            })
+            patterns.append(
+                {
+                    "pattern_type": "regression_pattern",
+                    "description": "Regression detected across recent iterations",
+                    "affected_iterations": [
+                        lesson_item.get("iteration", 0) for lesson_item in recent
+                    ],
+                    "recommended_action": "Revert to best known approach and investigate cause",
+                }
+            )
 
     return patterns
 
 
 def _get_response_format(llm_client) -> dict[str, Any]:
     """Get structured output response format for LearningResult."""
-    if hasattr(llm_client, '_get_json_response_format'):
-        return cast(dict[str, Any], llm_client._get_json_response_format(LearningResult, "learning_result"))
+    if hasattr(llm_client, "_get_json_response_format"):
+        return cast(
+            dict[str, Any], llm_client._get_json_response_format(LearningResult, "learning_result")
+        )
     # Fallback: import the builder from the client module
     from ..llm.client import _build_json_schema_format
+
     return _build_json_schema_format(LearningResult, "learning_result")
 
 
@@ -220,8 +263,7 @@ def create_node(
         if local_patterns:
             # Merge: add local patterns not already detected by LLM
             llm_pattern_descs = {
-                p.get("description", "").lower()
-                for p in lessons.get("patterns_detected", [])
+                p.get("description", "").lower() for p in lessons.get("patterns_detected", [])
             }
             for pattern in local_patterns:
                 if pattern["description"].lower() not in llm_pattern_descs:
@@ -231,16 +273,18 @@ def create_node(
 
         # Log learning
         if state_manager:
-            await state_manager.log_decision({
-                "event": "learning_phase",
-                "iteration": iteration,
-                "plan_achieved": lessons.get("plan_achieved", False),
-                "ideal_state_progress": lessons.get("ideal_state_progress", "unknown"),
-                "worked_count": len(lessons.get("what_worked", [])),
-                "failed_count": len(lessons.get("what_failed", [])),
-                "patterns_count": len(lessons.get("patterns_detected", [])),
-                "timestamp": utcnow_isoformat(),
-            })
+            await state_manager.log_decision(
+                {
+                    "event": "learning_phase",
+                    "iteration": iteration,
+                    "plan_achieved": lessons.get("plan_achieved", False),
+                    "ideal_state_progress": lessons.get("ideal_state_progress", "unknown"),
+                    "worked_count": len(lessons.get("what_worked", [])),
+                    "failed_count": len(lessons.get("what_failed", [])),
+                    "patterns_count": len(lessons.get("patterns_detected", [])),
+                    "timestamp": utcnow_isoformat(),
+                }
+            )
 
         logger.info(
             f"Learning complete: plan_achieved={lessons.get('plan_achieved')}, "
@@ -307,13 +351,16 @@ async def _generate_lessons_via_llm(
 
     try:
         if hasattr(llm_client, "chat_structured"):
-            return cast(LearningResult, await llm_client.chat_structured(
-                messages=[{"role": "user", "content": prompt}],
-                response_model=LearningResult,
-                schema_name="learning_result",
-                system_prompt=system_prompt,
-                temperature=0.3,
-            ))
+            return cast(
+                LearningResult,
+                await llm_client.chat_structured(
+                    messages=[{"role": "user", "content": prompt}],
+                    response_model=LearningResult,
+                    schema_name="learning_result",
+                    system_prompt=system_prompt,
+                    temperature=0.3,
+                ),
+            )
 
         # Fallback for test doubles / alternate clients
         response_format = _get_response_format(llm_client)
@@ -328,17 +375,8 @@ async def _generate_lessons_via_llm(
             response_format=response_format,
         )
 
-        raw_data = json.loads(response)
+        raw_data = _parse_learning_response(response)
         return LearningResult.model_validate(raw_data)
-
-    except json.JSONDecodeError:
-        logger.warning("Could not parse JSON from LLM response, using fallback")
-        return LearningResult(
-            plan_achieved=False,
-            plan_achievement_reasoning="Could not parse LLM analysis",
-            ideal_state_progress="unknown",
-            what_failed=["LLM analysis parsing failed"],
-        )
 
     except Exception as e:
         logger.warning(f"LLM analysis failed: {e}")

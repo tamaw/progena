@@ -167,6 +167,17 @@ class TelegramClient:
         """
         self._message_handler = handler
 
+    def _build_api_url(self, method: str) -> str:
+        """Build the Telegram Bot API URL for a method call."""
+        return self.BASE_URL.format(token=self.config.bot_token, method=method)
+
+    def _redact_sensitive_text(self, text: str) -> str:
+        """Remove the bot token from loggable text."""
+        token = self.config.bot_token
+        if not token or not text:
+            return text
+        return text.replace(token, "<redacted>")
+
     async def start(self) -> None:
         """Start the client and create HTTP session."""
         if self._started:
@@ -844,7 +855,7 @@ class TelegramClient:
         if params is None:
             params = {}
 
-        url = self.BASE_URL.format(token=self.config.bot_token, method=method)
+        url = self._build_api_url(method)
 
         last_error = None
         last_error_type: str | None = "error"
@@ -915,13 +926,15 @@ class TelegramClient:
                 if method != "getUpdates":
                     logger.debug("Telegram API timeout on %s", method)
             except aiohttp.ClientError as e:
-                last_error = f"HTTP error: {e}"
+                safe_error = self._redact_sensitive_text(str(e))
+                last_error = f"HTTP error: {safe_error}"
                 last_error_type = "error"
-                logger.debug("Telegram API HTTP error on %s: %s", method, e)
+                logger.debug("Telegram API HTTP error on %s: %s", method, safe_error)
             except Exception as e:
-                last_error = f"Unexpected error: {e}"
+                safe_error = self._redact_sensitive_text(str(e))
+                last_error = f"Unexpected error: {safe_error}"
                 last_error_type = "error"
-                logger.warning("Telegram API unexpected error on %s: %s", method, e)
+                logger.warning("Telegram API unexpected error on %s: %s", method, safe_error)
 
             # Exponential backoff before retry
             if attempt < attempts - 1:

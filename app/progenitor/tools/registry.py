@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 from typing import Any, TypedDict
 
-from ..runtime.port_utils import find_available_port
 from ..runtime.time_utils import utcnow
 from ..state.models import AgentRegistryEntry, AgentStatus
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -31,11 +30,6 @@ def normalize_tool_name(name: str) -> str:
     slug = _TOOL_NAME_INVALID_CHARS.sub("_", raw).strip("_")
     slug = re.sub(r"_+", "_", slug)
     return (slug or "tool")[:64]
-
-
-# Port range for A2A agents (8100-8199 by default)
-AGENT_PORT_RANGE_START = 8100
-AGENT_PORT_RANGE_END = 8199
 
 
 class RegistryData(TypedDict):
@@ -351,34 +345,8 @@ class ToolRegistry:
         )
 
     def allocate_port(self) -> int:
-        """Allocate an available port for a new agent.
-
-        Checks both the registry (ports claimed by agents) and the OS
-        (ports actually bound) to find a truly available port.
-
-        Returns:
-            An unused port in the agent port range.
-
-        Raises:
-            RuntimeError: If no ports are available.
-        """
-        claimed_ports: set[int] = set()
-        for agent in self._registry.get("agents", []):
-            port = agent.get("port")
-            if isinstance(port, int):
-                claimed_ports.add(port)
-
-        try:
-            return find_available_port(
-                start_port=AGENT_PORT_RANGE_START,
-                end_port=AGENT_PORT_RANGE_END,
-                host=self.host,
-                exclude_ports=claimed_ports,
-            )
-        except RuntimeError as e:
-            raise RuntimeError(
-                f"No available ports in range {AGENT_PORT_RANGE_START}-{AGENT_PORT_RANGE_END}"
-            ) from e
+        """Return port 0 so the OS picks a free port atomically at bind time."""
+        return 0
 
     async def update_agent_status(
         self,
@@ -436,7 +404,7 @@ class ToolRegistry:
         logger.warning("Agent '%s' not found for status update", name)
         return False
 
-    async def mark_agent_starting(self, name: str, pid: int, port: int) -> bool:
+    async def mark_agent_starting(self, name: str, pid: int, port: int | None = None) -> bool:
         """Mark an agent as starting up."""
         return await self.update_agent_status(
             name,

@@ -23,7 +23,6 @@ class TestRegisterNode:
     def _make_deps(self):
         """Create mock dependencies for register node."""
         tool_registry = MagicMock()
-        tool_registry.allocate_port.return_value = 8100
         tool_registry.get_agents.return_value = []
         tool_registry.register_agent = AsyncMock()
         tool_registry.register_tool = AsyncMock()
@@ -147,7 +146,7 @@ class TestRegisterNode:
         from app.progenitor.nodes import register
 
         registry, sm, config = self._make_deps()
-        registry.allocate_port.side_effect = RuntimeError("port allocation failed")
+        registry.register_agent.side_effect = RuntimeError("registry write failed")
 
         with patch.object(register, "AgentRunner") as MockRunner:
             MockRunner.return_value = AsyncMock()

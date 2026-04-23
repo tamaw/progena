@@ -8,6 +8,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import shlex
 import uuid
 from collections.abc import Awaitable, Callable
@@ -42,6 +43,8 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 from .registry import normalize_tool_name
 
 logger = logging.getLogger(__name__)
+
+_HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class MCPTool(BaseSystemTool):
@@ -113,6 +116,38 @@ ALLOWED_COMMAND_PREFIXES = (
 )
 
 
+def _sanitize_http_header_name(name: str) -> str:
+    """Validate an HTTP header name before handing it to client libraries."""
+    normalized = name.strip()
+    if not normalized:
+        raise ValueError("MCP header name cannot be empty")
+    if not _HTTP_HEADER_NAME_RE.fullmatch(normalized):
+        raise ValueError(f"Invalid MCP header name: {name!r}")
+    return normalized
+
+
+def _sanitize_http_header_value(value: str, *, name: str) -> str:
+    """Reject control characters that could smuggle extra headers."""
+    if any(char in value for char in ("\r", "\n", "\x00")):
+        raise ValueError(f"Invalid MCP header value for {name!r}")
+    if any((ord(char) < 32 and char != "\t") or ord(char) == 127 for char in value):
+        raise ValueError(f"Invalid MCP header value for {name!r}")
+    return value.strip()
+
+
+def _sanitize_http_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Return a validated copy of configured HTTP headers."""
+    sanitized: dict[str, str] = {}
+    for raw_name, raw_value in headers.items():
+        if not isinstance(raw_name, str):
+            raise ValueError("MCP header names must be strings")
+        if not isinstance(raw_value, str):
+            raise ValueError(f"MCP header {raw_name!r} value must be a string")
+        name = _sanitize_http_header_name(raw_name)
+        sanitized[name] = _sanitize_http_header_value(raw_value, name=name)
+    return sanitized
+
+
 async def initialize_mcp_server(
     server_config: MCPServerConfig,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -124,7 +159,12 @@ async def initialize_mcp_server(
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
-    headers.update(server_config.headers)
+    try:
+        sanitized_headers = _sanitize_http_headers(server_config.headers)
+    except ValueError as exc:
+        logger.warning("Skipping MCP server '%s': %s", server_config.name, exc)
+        return None, []
+    headers.update(sanitized_headers)
     mcp_client = httpx.AsyncClient(
         timeout=httpx.Timeout(30.0),
         headers=headers,
@@ -148,7 +188,17 @@ async def initialize_mcp_server(
 
         session_id = init_response.headers.get("mcp-session-id")
         if session_id:
-            mcp_client.headers["mcp-session-id"] = session_id
+            try:
+                mcp_client.headers["mcp-session-id"] = _sanitize_http_header_value(
+                    session_id,
+                    name="mcp-session-id",
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "Ignoring invalid MCP session header from server '%s': %s",
+                    server_config.name,
+                    exc,
+                )
 
         list_request = {
             "jsonrpc": "2.0",
@@ -168,7 +218,7 @@ async def initialize_mcp_server(
                 "name": server_config.name,
                 "url": server_config.url,
                 "description": server_config.description,
-                "headers": dict(server_config.headers),
+                "headers": dict(sanitized_headers),
                 "client": mcp_client,
             },
             tool_list,
@@ -257,10 +307,15 @@ async def initialize_mcp_tools(
 def _build_adapter_connections(mcp_config: MCPConfig) -> dict[str, Connection]:
     connections: dict[str, Connection] = {}
     for server in mcp_config.enabled_servers:
+        try:
+            sanitized_headers = _sanitize_http_headers(server.headers)
+        except ValueError as exc:
+            logger.warning("Skipping MCP server '%s': %s", server.name, exc)
+            continue
         connection: StreamableHttpConnection = {
             "transport": "streamable_http",
             "url": server.url,
-            "headers": dict(server.headers),
+            "headers": sanitized_headers,
         }
         connections[server.name] = connection
     return connections

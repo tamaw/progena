@@ -2,6 +2,9 @@
 
 from datetime import UTC, datetime
 
+import pytest
+from pydantic import ValidationError
+
 from app.progenitor.state.models import (
     AgentRegistryEntry,
     ConversationMessage,
@@ -44,6 +47,29 @@ class TestWorkItem:
 
         assert item.target_agent == "email_agent"
         assert item.context["recipient"] == "john@example.com"
+
+    def test_unknown_item_type_raises(self):
+        """Unknown persisted work item types must fail validation."""
+        with pytest.raises(ValidationError):
+            WorkItem.model_validate(
+                {
+                    "id": "bad-item",
+                    "item_type": "hallucinated_action",
+                    "description": "Bad item",
+                }
+            )
+
+    def test_extra_fields_are_forbidden(self):
+        """Persisted state models should reject unexpected fields."""
+        with pytest.raises(ValidationError):
+            WorkItem.model_validate(
+                {
+                    "id": "extra-item",
+                    "item_type": "build_agent",
+                    "description": "Extra field item",
+                    "unexpected": True,
+                }
+            )
 
 
 class TestDecision:
@@ -98,6 +124,18 @@ class TestScheduleEntry:
         )
 
         assert entry.last_run == run_time
+
+    def test_schedule_with_last_fired_at(self):
+        """Test schedule entry with explicit last_fired_at."""
+        fired_time = datetime(2026, 1, 20, 9, 59, 0, tzinfo=UTC)
+        entry = ScheduleEntry(
+            id="schedule-3",
+            message="Dispatch the task",
+            cron_expression="0 10 20 1 *",
+            last_fired_at=fired_time,
+        )
+
+        assert entry.last_fired_at == fired_time
 
 
 class TestAgentRegistryEntry:
@@ -210,7 +248,7 @@ class TestSecretRedaction:
         """Test redacting bearer tokens."""
         from app.progenitor.state.models import redact_secrets
 
-        text = 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
         result = redact_secrets(text)
 
         assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in result
@@ -220,7 +258,7 @@ class TestSecretRedaction:
         """Test redacting OpenAI API keys."""
         from app.progenitor.state.models import redact_secrets
 
-        text = 'using key: sk-abc123xyz789defghijklmnopqrstuvwxyz'
+        text = "using key: sk-abc123xyz789defghijklmnopqrstuvwxyz"
         result = redact_secrets(text)
 
         assert "sk-abc123xyz789defghijklmnopqrstuvwxyz" not in result
@@ -230,7 +268,7 @@ class TestSecretRedaction:
         """Test that non-secret content is preserved."""
         from app.progenitor.state.models import redact_secrets
 
-        text = 'Hello, this is a normal message with no secrets.'
+        text = "Hello, this is a normal message with no secrets."
         result = redact_secrets(text)
 
         assert result == text

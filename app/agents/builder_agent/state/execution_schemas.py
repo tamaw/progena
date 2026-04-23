@@ -891,6 +891,14 @@ class CriterionEvidence(BaseModel):
     )
 
 
+class VerificationStatus(StrEnum):
+    """Outcome of the VERIFY phase."""
+
+    NOT_RUN = "not_run"
+    FAILED = "failed"
+    PASSED = "passed"
+
+
 class VerificationReportV2(BaseModel):
     """Enhanced verification report (BL-006).
 
@@ -925,6 +933,7 @@ class VerificationReportV2(BaseModel):
     # Overall score
     overall_score: float = Field(ge=0.0, le=1.0, description="Weighted overall score")
     passed: bool = Field(description="Did it pass minimum threshold?")
+    status: VerificationStatus = Field(description="Explicit verification outcome status")
 
     # Mechanical vs LLM scoring breakdown
     mechanical_score_count: int = Field(

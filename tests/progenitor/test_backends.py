@@ -11,6 +11,8 @@ from app.progenitor.agent.backends import (
 
 
 def _file_info_path(info: object) -> str:
+    if isinstance(info, str):
+        return info
     path = info.get("path") if isinstance(info, dict) else getattr(info, "path", None)
     assert isinstance(path, str)
     return path
@@ -103,13 +105,20 @@ class TestBackendFactory:
             backend = factory(MagicMock())
 
             content = "## Testing\n- Keep tests focused.\n"
-            result = backend.write("/memories/patterns/testing.md", content)
+            uploads = backend.upload_files(
+                [("/memories/patterns/testing.md", content.encode("utf-8"))]
+            )
             persisted_path = root / "data" / "memories" / "patterns" / "testing.md"
-            read_result = backend.read("/memories/patterns/testing.md")
+            downloads = backend.download_files(["/memories/patterns/testing.md"])
 
-            assert result.error is None
+            assert len(uploads) == 1
+            assert uploads[0].error is None
             assert persisted_path.read_text(encoding="utf-8") == content
-            assert "Keep tests focused." in _read_result_text(read_result)
+            assert downloads[0].error is None
+            assert downloads[0].content.decode("utf-8") == content
 
-            listing = backend.ls_info("/memories/patterns/")
-            assert "/memories/patterns/testing.md" in {_file_info_path(info) for info in listing}
+            listing = backend.ls("/memories/patterns/")
+            assert listing.error is None
+            assert "/memories/patterns/testing.md" in {
+                _file_info_path(info) for info in listing.entries
+            }
