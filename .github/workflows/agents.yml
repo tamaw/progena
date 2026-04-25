@@ -254,7 +254,7 @@ jobs:
   deploy-agent:
     needs: [detect-changes, build-agent]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, python]
     environment: cronix
     strategy:
       fail-fast: false
