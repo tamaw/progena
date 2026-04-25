@@ -197,19 +197,35 @@ jobs:
             ghcr.io/tamaw/progenitor-mcp-${{ matrix.mcp }}:latest
 
       - name: Wait for MCP server to become healthy
+        shell: bash
         run: |
-          echo "Waiting for MCP container to start..."
-          for i in $(seq 1 30); do
-            if docker exec progenitor-mcp-${{ matrix.mcp }} \
-              python -c "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()" 2>/dev/null; then
-              echo "MCP ${{ matrix.mcp }} is healthy"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "MCP ${{ matrix.mcp }} failed health check"
-          docker logs progenitor-mcp-${{ matrix.mcp }} --tail 50
-          exit 1
+          CONTAINER_NAME="progenitor-mcp-${{ matrix.mcp }}"
+
+          wait_healthy() {
+            local name="$1"
+            local attempts="${2:-30}"
+            local i status
+            for i in $(seq 1 "$attempts"); do
+              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name" 2>/dev/null || true)"
+              if [ "$status" = "healthy" ]; then
+                echo "$name is healthy"
+                return 0
+              fi
+              if [ "$status" = "unhealthy" ]; then
+                break
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for $name to become healthy (status=$status)"
+            docker logs "$name" --tail 50 || true
+            return 1
+          }
+
+          echo "Waiting for MCP ${{ matrix.mcp }} to become healthy..."
+          if ! wait_healthy "${CONTAINER_NAME}" 30; then
+            echo "MCP ${{ matrix.mcp }} failed health check"
+            exit 1
+          fi
 
       - name: Cleanup unused managed images
         if: success()
