@@ -65,7 +65,7 @@ RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/w
 
 COPY --chown=runner:agent app/agents/builder_progenitor/lsp-config.json /home/runner/.copilot/lsp-config.json
 
-VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
+VOLUME ["/app/data/state", "/app/logs", "/app/worktrees"]
 
 COPY app/agents/builder_progenitor/docker-entrypoint.sh /usr/local/bin/builder-entrypoint.sh
 RUN chmod +x /usr/local/bin/builder-entrypoint.sh

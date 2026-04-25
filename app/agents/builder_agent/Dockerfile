@@ -67,8 +67,8 @@ COPY data/skills/ /app/data/skills/
 RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/worktrees /app/tmp && \
     chown -R runner:agent /app/data /app/logs /app/worktrees /app/tmp
 
-# Named volume mount-points — Docker Compose overrides these with named volumes.
-VOLUME ["/app/data", "/app/logs", "/app/worktrees"]
+# Persist only writable runtime paths. Prompts and skills stay in the image.
+VOLUME ["/app/data/state", "/app/logs", "/app/worktrees"]
 
 COPY app/agents/builder_agent/docker-entrypoint.sh /usr/local/bin/builder-entrypoint.sh
 RUN chmod +x /usr/local/bin/builder-entrypoint.sh
