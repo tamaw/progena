@@ -27,23 +27,8 @@ permissions:
   packages: write
 
 jobs:
-  runner-context:
-    runs-on: self-hosted
-    outputs:
-      uid: ${{ steps.ids.outputs.uid }}
-      gid: ${{ steps.ids.outputs.gid }}
-    steps:
-      - name: Capture runner uid/gid
-        id: ids
-        run: |
-          RUN_UID="$(id -u)"
-          RUN_GID="$(id -g)"
-          echo "uid=${RUN_UID}" >> "$GITHUB_OUTPUT"
-          echo "gid=${RUN_GID}" >> "$GITHUB_OUTPUT"
-
   # ------------------------------------------------------------------ discover
   discover-agents:
-    needs: runner-context
     runs-on: self-hosted
     outputs:
       agents: ${{ steps.list.outputs.agents }}
@@ -62,11 +47,10 @@ jobs:
 
   # ------------------------------------------------------------------ test
   test-agent:
-    needs: [runner-context, discover-agents]
+    needs: [discover-agents]
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
-      options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
     env:
       AGENT_NAME: ${{ matrix.agent }}
       PIP_CACHE_DIR: /tmp/pip-cache
@@ -87,10 +71,6 @@ jobs:
           if [ -f "app/agents/${{ matrix.agent }}/requirements.txt" ]; then
             pip install -r "app/agents/${{ matrix.agent }}/requirements.txt"
           fi
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
 
       - name: Lint (ruff)
         run: |
@@ -118,7 +98,6 @@ jobs:
   # ------------------------------------------------------------------ detect changes (main/dispatch only)
   detect-changes:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    needs: runner-context
     runs-on: [self-hosted, Linux]
     outputs:
       agents: ${{ steps.diff.outputs.agents }}
