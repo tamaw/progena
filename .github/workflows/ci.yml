@@ -48,6 +48,7 @@ jobs:
           pytest tests/backend
 
   progenitor:
+    # Pyright uses a system Node runtime on the self-hosted runner.
     runs-on: [self-hosted, Linux, node]
     steps:
       - uses: actions/checkout@v4

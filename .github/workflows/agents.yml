@@ -59,6 +59,12 @@ jobs:
       matrix:
         agent: ${{ fromJson(needs.discover-agents.outputs.agents) }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          mkdir -p "$GITHUB_WORKSPACE"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+
       - uses: actions/checkout@v4
 
       - name: Install Python deps
@@ -94,6 +100,12 @@ jobs:
           else
             echo "No tests found for ${{ matrix.agent }}, skipping."
           fi
+
+      - name: Restore workspace ownership
+        if: ${{ always() }}
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
 
   # ------------------------------------------------------------------ detect changes (main/dispatch only)
   detect-changes:
