@@ -87,7 +87,7 @@ jobs:
           --ignore=tests/progenitor/test_e2e_dual_loop.py
 
   frontend:
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, node]
     defaults:
       run:
         working-directory: app/frontend
