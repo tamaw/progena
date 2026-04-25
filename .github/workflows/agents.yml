@@ -374,30 +374,36 @@ jobs:
         id: health
         env:
           AGENT_NAME: ${{ matrix.agent }}
+        shell: bash
         run: |
-          PORT=${{ steps.runtime-port.outputs.result }}
           CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
-          REGISTRY_HOST="${CONTAINER_NAME}"
-          DOCKER_HOSTNAME="$(docker inspect --format '{{.Config.Hostname}}' "${CONTAINER_NAME}")"
-          if [ -z "${DOCKER_HOSTNAME}" ]; then
-            echo "Could not resolve Docker hostname for ${CONTAINER_NAME}"
+          echo "registry_host=${CONTAINER_NAME}" >> "$GITHUB_OUTPUT"
+
+          wait_healthy() {
+            local name="$1"
+            local attempts="${2:-30}"
+            local i status
+            for i in $(seq 1 "$attempts"); do
+              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name" 2>/dev/null || true)"
+              if [ "$status" = "healthy" ]; then
+                echo "$name is healthy"
+                return 0
+              fi
+              if [ "$status" = "unhealthy" ]; then
+                break
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for $name to become healthy (status=$status)"
+            docker logs "$name" --tail 50 || true
+            return 1
+          }
+
+          echo "Waiting for agent ${{ matrix.agent }} to become healthy..."
+          if ! wait_healthy "${CONTAINER_NAME}" 30; then
+            echo "Agent ${{ matrix.agent }} failed health check"
             exit 1
           fi
-          echo "docker_hostname=${DOCKER_HOSTNAME}" >> "$GITHUB_OUTPUT"
-          echo "registry_host=${REGISTRY_HOST}" >> "$GITHUB_OUTPUT"
-
-          echo "Waiting for agent ${{ matrix.agent }} on ${DOCKER_HOSTNAME}:${PORT}..."
-          for i in $(seq 1 30); do
-            if docker exec "${CONTAINER_NAME}" \
-              python -c "import httpx; r = httpx.get('http://${DOCKER_HOSTNAME}:${PORT}/health'); r.raise_for_status()" 2>/dev/null; then
-              echo "Agent ${{ matrix.agent }} is healthy"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Agent ${{ matrix.agent }} failed health check"
-          docker logs progenitor-agent-${{ matrix.agent }} --tail 50
-          exit 1
 
       - name: Register agent in progenitor registry
         if: success()

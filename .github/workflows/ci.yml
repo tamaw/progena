@@ -203,27 +203,9 @@ jobs:
           PROGENITOR_HOST_WORKTREES_DIR: /var/lib/progenitor/worktrees
           PROGENITOR_HOST_TMP_DIR: /var/lib/progenitor/tmp
         run: |
-          PROMPTS_HOST_DIR="${PROGENITOR_HOST_DATA_DIR}/prompts"
-          SKILLS_HOST_DIR="${PROGENITOR_HOST_DATA_DIR}/skills"
-          ASSET_SYNC_CONTAINER="progenitor-asset-sync"
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
-          docker rm -f progenitor progenitor-backend progenitor-frontend "${ASSET_SYNC_CONTAINER}" 2>/dev/null || true
-          # The self-hosted runner runs in Docker, so writing /var/lib/... from the job filesystem does
-          # not populate the Docker host bind mounts used by the deployed containers. Sync prompt assets
-          # through a helper container that mounts the real host data/log paths seen by the daemon.
-          docker create --name "${ASSET_SYNC_CONTAINER}" \
-            -v "${PROGENITOR_HOST_DATA_DIR}:/app/data" \
-            -v "${PROGENITOR_HOST_LOGS_DIR}:/app/logs" \
-            alpine:3.20 \
-            sh -c 'mkdir -p /app/data/prompts /app/data/skills /app/logs && tail -f /dev/null' >/dev/null
-          docker start "${ASSET_SYNC_CONTAINER}" >/dev/null
-          docker exec "${ASSET_SYNC_CONTAINER}" sh -c \
-            'find /app/data/prompts -mindepth 1 -maxdepth 1 -exec rm -rf {} + && \
-             find /app/data/skills -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
-          docker cp data/prompts/. "${ASSET_SYNC_CONTAINER}:/app/data/prompts/"
-          docker cp data/skills/. "${ASSET_SYNC_CONTAINER}:/app/data/skills/"
-          docker rm -f "${ASSET_SYNC_CONTAINER}" >/dev/null
+          docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker compose -f docker/docker-compose.progenitor.yml pull
           docker compose -f docker/docker-compose.progenitor.yml up -d
