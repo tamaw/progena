@@ -48,7 +48,7 @@ jobs:
           pytest tests/backend
 
   progenitor:
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, node]
     steps:
       - uses: actions/checkout@v4
 
