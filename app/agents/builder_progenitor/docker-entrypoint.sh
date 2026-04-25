@@ -7,6 +7,26 @@ export GH_TOKEN="${GH_TOKEN:-}"
 export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-}"
 export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-}"
 
+agent_name="${AGENT_NAME:?AGENT_NAME must be set}"
+base_dir="${PROGENITOR_WORKTREES_ROOT:-/app/worktrees}"
+repo_url="${PROGENITOR_REPO_URL:-}"
+token="${GH_TOKEN:-}"
+auth_repo_url="$repo_url"
+log_dir="${PROGENITOR_LOG_DIR:-/app/logs}"
+data_dir="${PROGENITOR_DATA_DIR:-/app/data}"
+
+ensure_runtime_dirs() {
+  mkdir -p "$data_dir" "$data_dir/state" "$data_dir/prompts" "$data_dir/skills" "$log_dir" "$log_dir/$agent_name" "$base_dir" /app/tmp /home/runner
+}
+
+if [ "$(id -u)" -eq 0 ]; then
+  ensure_runtime_dirs
+  if ! chown -R runner:agent "$data_dir" "$log_dir" "$base_dir" /app/tmp /home/runner; then
+    echo "WARN: failed to chown runtime directories; continuing with existing ownership" >&2
+  fi
+  exec runuser -u runner -- "$0" "$@"
+fi
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "ERROR: gh CLI is not installed in container" >&2
   exit 1
@@ -19,15 +39,7 @@ if [ -n "${GH_TOKEN:-}" ]; then
 fi
 
 ensure_workspace() {
-  agent_name="${AGENT_NAME:?AGENT_NAME must be set}"
-  base_dir="${PROGENITOR_WORKTREES_ROOT:-/app/worktrees}"
-  repo_url="${PROGENITOR_REPO_URL:-}"
-  token="${GH_TOKEN:-}"
-  auth_repo_url="$repo_url"
-  log_dir="${PROGENITOR_LOG_DIR:-/app/logs}"
-  data_dir="${PROGENITOR_DATA_DIR:-/app/data}"
-
-  mkdir -p "$data_dir" "$data_dir/state" "$data_dir/prompts" "$data_dir/skills" "$log_dir" "$log_dir/$agent_name" "$base_dir"
+  ensure_runtime_dirs
 
   # Containers often mount host-owned directories, which triggers Git's
   # ownership protection for non-root users. Mark our workspace as safe.
