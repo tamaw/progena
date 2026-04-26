@@ -226,10 +226,3 @@ jobs:
             echo "MCP ${{ matrix.mcp }} failed health check"
             exit 1
           fi
-
-      - name: Cleanup unused managed images
-        if: success()
-        run: |
-          docker image prune -af \
-            --filter "label=com.progenitor.managed=true" \
-            --filter "until=168h" || true

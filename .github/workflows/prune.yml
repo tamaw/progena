@@ -1,0 +1,44 @@
+name: prune
+
+on:
+  schedule:
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prune-docker:
+    runs-on: [self-hosted, Linux, docker]
+    steps:
+      - name: Show Docker disk usage (before)
+        run: docker system df || true
+
+      - name: Prune unused Docker artifacts
+        shell: bash
+        run: |
+          docker image prune -af \
+            --filter "label=com.progenitor.managed=true" \
+            --filter "until=168h" || true
+
+          docker builder prune -af \
+            --filter "until=168h" || true
+
+          if docker buildx version >/dev/null 2>&1; then
+            docker buildx prune -af \
+              --filter "until=168h" || true
+          fi
+
+          docker container prune -f \
+            --filter "until=168h" || true
+
+          docker network prune -f \
+            --filter "until=168h" || true
+
+      - name: Show Docker disk usage (after)
+        run: docker system df || true
