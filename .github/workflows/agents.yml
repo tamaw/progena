@@ -269,9 +269,9 @@ jobs:
             yq -o=json -I=0 '
               .runtime as $runtime |
               {
-                port: $runtime.port,
-                mounts: (($runtime.mounts // []) | map("\(.host_path):\(.container_path)")),
-                env_keys: ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
+                "port": $runtime.port,
+                "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
+                "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
               }
             ' "app/agents/${{ matrix.agent }}/agent.yml"
 
@@ -329,9 +329,9 @@ jobs:
             yq -o=json -I=0 '
               .runtime as $runtime |
               {
-                port: $runtime.port,
-                mounts: (($runtime.mounts // []) | map("\(.host_path):\(.container_path)")),
-                env_keys: ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
+                "port": $runtime.port,
+                "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
+                "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
               }
             ' "app/agents/${{ matrix.agent }}/agent.yml"
 
