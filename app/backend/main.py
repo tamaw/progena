@@ -1100,6 +1100,11 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
 
     Accepts Responses `input` payloads only.
     """
+    try:
+        last_user_msg, all_inputs = _extract_response_input(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     if not client:
         raise HTTPException(status_code=503, detail="Client not initialized")
 
@@ -1107,11 +1112,6 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
     request_id = getattr(request.state, "request_id", None)
     session = await get_session_from_request(request, session_manager)
     thread_id, request_metadata = _build_chat_request_metadata(session, body.metadata)
-
-    try:
-        last_user_msg, all_inputs = _extract_response_input(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     await session_manager.record_chat_activity(
         session.session_id,
@@ -1183,7 +1183,11 @@ def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
     if not inputs:
         raise ValueError("No input provided")
 
-    return inputs[-1], inputs
+    last_input = inputs[-1]
+    if not last_input.strip():
+        raise ValueError("Input cannot be empty")
+
+    return last_input, inputs
 
 
 def _default_conversation_id(session: SessionState) -> str:
