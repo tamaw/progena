@@ -7,9 +7,4 @@ runtime:
       container_path: /app/logs
     - host_path: /var/lib/progenitor/worktrees
       container_path: /app/worktrees
-  env_keys:
-    - AZURE_OPENAI_BASE_URL
-    - AZURE_OPENAI_API_KEY
-    - GH_TOKEN
-    - COPILOT_GITHUB_TOKEN
-    - PROGENITOR_MODEL_DEFAULT
+  additional_env_keys: []

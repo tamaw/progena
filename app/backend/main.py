@@ -29,6 +29,7 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .agent_routes import router as agent_router
 from .alerts import AlertInfo
 from .attachments import (
     AttachmentConfig,
@@ -795,6 +796,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(agent_router)
 app.include_router(ui_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.
