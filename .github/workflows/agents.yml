@@ -17,6 +17,8 @@ on:
     paths:
       - "app/agents/**"
       - "docker/agents/**"
+      # Keep workflow edits push-triggering so branch fixes can be validated
+      # through the same build and deploy path they modify.
       - ".github/workflows/agents.yml"
 
 concurrency:
