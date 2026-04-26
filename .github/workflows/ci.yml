@@ -2,6 +2,8 @@ name: ci
 
 on:
   workflow_dispatch:
+    # Manual runs are used as an explicit deploy signal; build-and-deploy
+    # still runs after validation even when no push-based diff is available.
   push:
     paths-ignore:
       - 'app/agents/**'
