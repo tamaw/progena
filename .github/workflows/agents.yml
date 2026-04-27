@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Deploy mode: changed (diff HEAD^..HEAD) or all agents"
+        description: "Build/deploy target: agents changed vs origin/main, or all agents (manual runs still test all agents)"
         required: false
         default: "changed"
         type: choice
@@ -16,6 +16,9 @@ on:
   push:
     paths:
       - "app/agents/**"
+      - "docker/agents/**"
+      # Keep workflow edits push-triggering so branch fixes can be validated
+      # through the same build and deploy path they modify.
       - ".github/workflows/agents.yml"
 
 concurrency:
@@ -27,46 +30,38 @@ permissions:
   packages: write
 
 jobs:
-  runner-context:
-    runs-on: self-hosted
-    outputs:
-      uid: ${{ steps.ids.outputs.uid }}
-      gid: ${{ steps.ids.outputs.gid }}
-    steps:
-      - name: Capture runner uid/gid
-        id: ids
-        run: |
-          RUN_UID="$(id -u)"
-          RUN_GID="$(id -g)"
-          echo "uid=${RUN_UID}" >> "$GITHUB_OUTPUT"
-          echo "gid=${RUN_GID}" >> "$GITHUB_OUTPUT"
-
   # ------------------------------------------------------------------ discover
   discover-agents:
-    needs: runner-context
     runs-on: self-hosted
     outputs:
-      agents: ${{ steps.list.outputs.agents }}
+      agents: ${{ steps.list.outputs.result }}
     steps:
-      - uses: actions/checkout@v4
-
       - name: Discover agents
         id: list
-        run: |
-          set -euo pipefail
-          agents=$(find app/agents -mindepth 1 -maxdepth 1 -type d \
-            ! -name '__pycache__' ! -name '.*' \
-            -exec basename {} \; | sort | jq -R . | jq -sc .)
-          echo "agents=$agents" >> "$GITHUB_OUTPUT"
-          echo "Discovered agents: $agents"
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const skip = new Set(['__pycache__', '.git', 'base', '.venv', 'node_modules']);
+            const { data } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'app/agents',
+              ref: context.sha,
+            });
+            return JSON.stringify(
+              data
+                .filter((entry) => entry.type === 'dir' && !entry.name.startsWith('.') && !skip.has(entry.name))
+                .map((entry) => entry.name)
+                .sort(),
+            );
 
   # ------------------------------------------------------------------ test
   test-agent:
-    needs: [runner-context, discover-agents]
+    needs: [discover-agents]
     runs-on: [self-hosted, Linux]
     container:
       image: python:3.12-slim
-      options: --user ${{ needs.runner-context.outputs.uid }}:${{ needs.runner-context.outputs.gid }}
     env:
       AGENT_NAME: ${{ matrix.agent }}
       PIP_CACHE_DIR: /tmp/pip-cache
@@ -75,7 +70,18 @@ jobs:
       matrix:
         agent: ${{ fromJson(needs.discover-agents.outputs.agents) }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          mkdir -p "$GITHUB_WORKSPACE"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+
       - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libatomic1
 
       - name: Install Python deps
         run: |
@@ -87,10 +93,6 @@ jobs:
           if [ -f "app/agents/${{ matrix.agent }}/requirements.txt" ]; then
             pip install -r "app/agents/${{ matrix.agent }}/requirements.txt"
           fi
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
 
       - name: Lint (ruff)
         run: |
@@ -115,24 +117,132 @@ jobs:
             echo "No tests found for ${{ matrix.agent }}, skipping."
           fi
 
+      - name: Restore workspace ownership
+        if: ${{ always() }}
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+
   # ------------------------------------------------------------------ detect changes (main/dispatch only)
   detect-changes:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    needs: runner-context
     runs-on: [self-hosted, Linux]
     outputs:
-      agents: ${{ steps.diff.outputs.agents }}
+      agents: ${{ steps.collect.outputs.result }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          mkdir -p "$GITHUB_WORKSPACE"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Detect changed agents
-        id: diff
+      - name: Fetch main for workflow dispatch diff
+        if: github.event_name == 'workflow_dispatch' && inputs.mode != 'all'
+        run: git fetch origin main:refs/remotes/origin/main --depth=1
+
+      - name: Resolve main base SHA
+        id: base-sha
+        if: github.event_name == 'workflow_dispatch' && inputs.mode != 'all'
+        run: echo "sha=$(git rev-parse refs/remotes/origin/main)" >> "$GITHUB_OUTPUT"
+
+      - name: List all agents
+        id: list-all
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'all'
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const skip = new Set(['__pycache__', '.git', 'base', '.venv', 'node_modules']);
+            const { data } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'app/agents',
+              ref: context.sha,
+            });
+            return JSON.stringify(
+              data
+                .filter((entry) => entry.type === 'dir' && !entry.name.startsWith('.') && !skip.has(entry.name))
+                .map((entry) => entry.name)
+                .sort(),
+            );
+
+      - name: Detect changed agent files (push)
+        id: changed-push
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@v3
+        with:
+          list-files: json
+          filters: |
+            agents:
+              - 'app/agents/*/**'
+              - 'docker/agents/**'
+
+      - name: Detect changed agent files (dispatch)
+        id: changed-dispatch
+        if: github.event_name == 'workflow_dispatch' && inputs.mode != 'all'
+        uses: dorny/paths-filter@v3
+        with:
+          base: ${{ steps.base-sha.outputs.sha }}
+          ref: ${{ github.sha }}
+          list-files: json
+          filters: |
+            agents:
+              - 'app/agents/*/**'
+              - 'docker/agents/**'
+
+      - name: Build changed agent matrix
+        id: changed-agents
+        if: github.event_name != 'workflow_dispatch' || inputs.mode != 'all'
+        uses: actions/github-script@v7
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          MODE: ${{ inputs.mode }}
-        run: python .github/scripts/detect_changed_components.py
+          AGENT_FILES: ${{ steps.changed-push.outputs.agents_files || steps.changed-dispatch.outputs.agents_files }}
+        with:
+          result-encoding: string
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const skip = new Set(['__pycache__', '.git', 'base', '.venv', 'node_modules']);
+            const root = path.join(process.env.GITHUB_WORKSPACE, 'app', 'agents');
+            const changedFiles = JSON.parse(process.env.AGENT_FILES || '[]');
+
+            const listAllAgents = () =>
+              fs.readdirSync(root, { withFileTypes: true })
+                .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !skip.has(entry.name))
+                .map((entry) => entry.name)
+                .sort();
+
+            if (changedFiles.some((file) => file.startsWith('docker/agents/'))) {
+              return JSON.stringify(listAllAgents());
+            }
+
+            const agents = [...new Set(
+              changedFiles
+                .map((file) => file.split('/')[2])
+                .filter(
+                  (name) =>
+                    name &&
+                    !name.startsWith('.') &&
+                    !skip.has(name) &&
+                    fs.existsSync(path.join(root, name)) &&
+                    fs.statSync(path.join(root, name)).isDirectory(),
+                ),
+            )].sort();
+            return JSON.stringify(agents);
+
+      - name: Finalize agent output
+        id: collect
+        uses: actions/github-script@v7
+        env:
+          ALL_AGENTS: ${{ steps.list-all.outputs.result }}
+          CHANGED_AGENTS: ${{ steps.changed-agents.outputs.result }}
+        with:
+          result-encoding: string
+          script: |
+            return process.env.ALL_AGENTS || process.env.CHANGED_AGENTS || '[]';
 
   # ------------------------------------------------------------------ build + push agents
   build-agent:
@@ -144,7 +254,40 @@ jobs:
       matrix:
         agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
     steps:
+      - name: Normalize workspace ownership
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          mkdir -p "$GITHUB_WORKSPACE"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+
       - uses: actions/checkout@v4
+
+      - name: Validate agent build assets exist
+        run: |
+          test -f "docker/agents/Dockerfile" \
+            || { echo "Shared Dockerfile docker/agents/Dockerfile not found"; exit 1; }
+          test -d "app/agents/${{ matrix.agent }}" \
+            || { echo "Agent directory app/agents/${{ matrix.agent }} not found"; exit 1; }
+          test -f "app/agents/${{ matrix.agent }}/requirements.txt" \
+            || { echo "Requirements file app/agents/${{ matrix.agent }}/requirements.txt not found"; exit 1; }
+          test -f "app/agents/${{ matrix.agent }}/docker-entrypoint.sh" \
+            || { echo "Entrypoint app/agents/${{ matrix.agent }}/docker-entrypoint.sh not found"; exit 1; }
+          test -f "app/agents/${{ matrix.agent }}/agent.yml" \
+            || { echo "Runtime manifest app/agents/${{ matrix.agent }}/agent.yml not found"; exit 1; }
+
+      - name: Read agent runtime spec
+        id: runtime-spec
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: >-
+            yq -o=json -I=0 '
+              .runtime as $runtime |
+              {
+                "port": $runtime.port,
+                "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
+                "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
+              }
+            ' "app/agents/${{ matrix.agent }}/agent.yml"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -158,9 +301,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: app/agents/${{ matrix.agent }}/Dockerfile
+          file: docker/agents/Dockerfile
           build-args: |
             AGENT_NAME=${{ matrix.agent }}
+            AGENT_PORT=${{ fromJson(steps.runtime-spec.outputs.result).port }}
           push: true
           labels: |
             com.progenitor.managed=true
@@ -175,43 +319,60 @@ jobs:
   deploy-agent:
     needs: [detect-changes, build-agent]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, python]
     environment: cronix
     strategy:
       fail-fast: false
       matrix:
         agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Normalize workspace ownership
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          mkdir -p "$GITHUB_WORKSPACE"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - uses: actions/checkout@v4
 
       - name: Validate agent directory exists
         run: |
           test -d "app/agents/${{ matrix.agent }}" \
             || { echo "Agent directory app/agents/${{ matrix.agent }} not found"; exit 1; }
-          test -f "app/agents/${{ matrix.agent }}/Dockerfile" \
-            || { echo "Dockerfile app/agents/${{ matrix.agent }}/Dockerfile not found"; exit 1; }
+          test -f "app/agents/${{ matrix.agent }}/agent.yml" \
+            || { echo "Runtime manifest app/agents/${{ matrix.agent }}/agent.yml not found"; exit 1; }
 
-      - name: Resolve agent runtime config
-        id: runtime
+      - name: Read agent runtime spec
+        id: runtime-spec
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: >-
+            yq -o=json -I=0 '
+              .runtime as $runtime |
+              {
+                "port": $runtime.port,
+                "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
+                "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
+              }
+            ' "app/agents/${{ matrix.agent }}/agent.yml"
+
+      - name: Ensure external network
+        run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
+
+      - name: Validate agent manifest
         env:
-          AGENT_NAME: ${{ matrix.agent }}
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          AGENT_MODEL_DEFAULT: ${{ vars.AGENT_MODEL_DEFAULT }}
-          OVERRIDE_AGENT_PLANNER_MODEL: ${{ vars.OVERRIDE_AGENT_PLANNER_MODEL }}
-          OVERRIDE_AGENT_BUILDER_MODEL: ${{ vars.OVERRIDE_AGENT_BUILDER_MODEL }}
-          DEFAULT_COPILOT_MODEL: ${{ vars.DEFAULT_COPILOT_MODEL }}
-          GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
-          GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
-          PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          PROGENITOR_DATA_DIR: /app/data
-        run: python .github/scripts/get_agent_runtime_config.py
+          RUNTIME_SPEC: ${{ steps.runtime-spec.outputs.result }}
+          PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
+          PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
+        shell: bash
+        run: |
+          PORT="$(jq -r '.port' <<< "$RUNTIME_SPEC")"
+          MOUNT_COUNT="$(jq '.mounts | length' <<< "$RUNTIME_SPEC")"
+          ENV_COUNT="$(jq '.env_keys | length' <<< "$RUNTIME_SPEC")"
+          [[ "$PORT" =~ ^[0-9]+$ ]] || { echo "Invalid manifest port: $PORT"; exit 1; }
+          [ "$MOUNT_COUNT" -gt 0 ] || { echo "No mounts declared in agent manifest"; exit 1; }
+          [ "$ENV_COUNT" -gt 0 ] || { echo "No runtime env keys resolved for agent"; exit 1; }
+          test -d "$PROGENITOR_HOST_PROMPTS_DIR" || { echo "Prompts directory not found: $PROGENITOR_HOST_PROMPTS_DIR"; exit 1; }
+          test -d "$PROGENITOR_HOST_SKILLS_DIR" || { echo "Skills directory not found: $PROGENITOR_HOST_SKILLS_DIR"; exit 1; }
 
       - name: Docker login (GHCR)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -227,158 +388,98 @@ jobs:
       - name: Run agent container
         env:
           AGENT_NAME: ${{ matrix.agent }}
+          RUNTIME_SPEC: ${{ steps.runtime-spec.outputs.result }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          AGENT_MODEL_DEFAULT: ${{ vars.AGENT_MODEL_DEFAULT }}
-          OVERRIDE_AGENT_PLANNER_MODEL: ${{ vars.OVERRIDE_AGENT_PLANNER_MODEL }}
-          OVERRIDE_AGENT_BUILDER_MODEL: ${{ vars.OVERRIDE_AGENT_BUILDER_MODEL }}
-          DEFAULT_COPILOT_MODEL: ${{ vars.DEFAULT_COPILOT_MODEL }}
-          GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
-          GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
+          AGENT_MODEL_DEFAULT: ${{ vars['AGENT_MODEL_DEFAULT'] }}
+          OVERRIDE_AGENT_PLANNER_MODEL: ${{ vars['OVERRIDE_AGENT_PLANNER_MODEL'] }}
+          OVERRIDE_AGENT_BUILDER_MODEL: ${{ vars['OVERRIDE_AGENT_BUILDER_MODEL'] }}
+          DEFAULT_COPILOT_MODEL: ${{ vars['DEFAULT_COPILOT_MODEL'] }}
+          PROGENITOR_COPILOT_ADDITIONAL_FLAGS: ${{ vars['PROGENITOR_COPILOT_ADDITIONAL_FLAGS'] }}
+          GIT_AUTHOR_NAME: ${{ vars['GIT_AUTHOR_NAME'] }}
+          GIT_AUTHOR_EMAIL: ${{ vars['GIT_AUTHOR_EMAIL'] }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          PROGENITOR_DATA_DIR: /app/data
+          PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
+          PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
+        shell: bash
         run: |
           CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
-          PORT=${{ steps.runtime.outputs.port }}
-          VOLUME_ARGS="${{ steps.runtime.outputs.volume_args }}"
-          CHOWN_PATHS="${{ steps.runtime.outputs.chown_paths }}"
-          ENV_ARGS="${{ steps.runtime.outputs.env_args }}"
-          TMPFS_ARGS="${{ steps.runtime.outputs.tmpfs_args }}"
+          PORT="$(jq -r '.port' <<< "$RUNTIME_SPEC")"
+          DOCKER_ARGS=(
+            -d
+            --name "$CONTAINER_NAME"
+            --restart unless-stopped
+            --network progenitor_network
+            --user 0:0
+            --tmpfs /app/tmp:rw,noexec,nosuid,size=512m
+            -e "AGENT_NAME=${AGENT_NAME}"
+            -e "AGENT_PORT=${PORT}"
+            -e "A2A_PUBLIC_HOST=${CONTAINER_NAME}"
+            -e "PROGENITOR_DATA_DIR=/app/data"
+            -e "PROGENITOR_STATE_DIR=/app/data/state"
+            -e "PROGENITOR_PROMPTS_DIR=/app/data/prompts"
+            -e "PROGENITOR_LOG_DIR=/app/logs"
+            -e "PROGENITOR_PROJECT_ROOT=/app/worktrees"
+            -e "PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees"
+            -e "PROGENITOR_WORKTREES_ROOT=/app/worktrees"
+            -v "${PROGENITOR_HOST_PROMPTS_DIR}:/app/data/prompts:ro"
+            -v "${PROGENITOR_HOST_SKILLS_DIR}:/app/data/skills:ro"
+          )
 
-          PROGENITOR_REPO_URL="https://github.com/tamaw/progenitor.git"
-          if [ -n "${GH_TOKEN}" ]; then
-            PROGENITOR_REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/tamaw/progenitor.git"
-          fi
+          while IFS= read -r mount_spec; do
+            [ -n "$mount_spec" ] || continue
+            DOCKER_ARGS+=( -v "$mount_spec" )
+          done < <(jq -r '.mounts[]' <<< "$RUNTIME_SPEC")
 
-          HOST_UID=$(id -u)
-          HOST_GID=$(id -g)
-          CHOWN_PATHS="$(echo "${CHOWN_PATHS}" | xargs)"
-          for HOST_PATH in ${CHOWN_PATHS}; do
-            if [ ! -e "${HOST_PATH}" ]; then
-              if command -v sudo >/dev/null 2>&1; then
-                sudo mkdir -p "${HOST_PATH}" || mkdir -p "${HOST_PATH}"
-              else
-                mkdir -p "${HOST_PATH}"
-              fi
-            fi
-          done
+          while IFS= read -r env_key; do
+            [ -n "$env_key" ] || continue
+            DOCKER_ARGS+=( -e "$env_key" )
+          done < <(jq -r '.env_keys[]' <<< "$RUNTIME_SPEC")
 
-          PROMPTS_HOST_DIR="${{ steps.runtime.outputs.prompts_host_dir }}"
-          if [ -z "${PROMPTS_HOST_DIR}" ]; then
-            PROMPTS_HOST_DIR="/var/lib/progenitor/data/prompts"
-          fi
-          SKILLS_HOST_DIR="$(dirname "${PROMPTS_HOST_DIR}")/skills"
-          if command -v sudo >/dev/null 2>&1; then
-            sudo mkdir -p "${PROMPTS_HOST_DIR}" || mkdir -p "${PROMPTS_HOST_DIR}"
-            sudo mkdir -p "${SKILLS_HOST_DIR}" || mkdir -p "${SKILLS_HOST_DIR}"
-            sudo rm -rf "${PROMPTS_HOST_DIR:?}/"*
-            sudo rm -rf "${SKILLS_HOST_DIR:?}/"*
-            sudo cp -a data/prompts/. "${PROMPTS_HOST_DIR}/"
-            sudo cp -a data/skills/. "${SKILLS_HOST_DIR}/"
-            sudo chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}" || chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}"
-            sudo chown -R "${HOST_UID}:${HOST_GID}" "${SKILLS_HOST_DIR}" || chown -R "${HOST_UID}:${HOST_GID}" "${SKILLS_HOST_DIR}"
-            sudo chmod -R u+rwX "${PROMPTS_HOST_DIR}" || chmod -R u+rwX "${PROMPTS_HOST_DIR}"
-            sudo chmod -R u+rwX "${SKILLS_HOST_DIR}" || chmod -R u+rwX "${SKILLS_HOST_DIR}"
-          else
-            mkdir -p "${PROMPTS_HOST_DIR}"
-            mkdir -p "${SKILLS_HOST_DIR}"
-            rm -rf "${PROMPTS_HOST_DIR:?}/"*
-            rm -rf "${SKILLS_HOST_DIR:?}/"*
-            cp -a data/prompts/. "${PROMPTS_HOST_DIR}/"
-            cp -a data/skills/. "${SKILLS_HOST_DIR}/"
-            chown -R "${HOST_UID}:${HOST_GID}" "${PROMPTS_HOST_DIR}"
-            chown -R "${HOST_UID}:${HOST_GID}" "${SKILLS_HOST_DIR}"
-            chmod -R u+rwX "${PROMPTS_HOST_DIR}"
-            chmod -R u+rwX "${SKILLS_HOST_DIR}"
-          fi
-
-          if [ -n "${CHOWN_PATHS}" ]; then
-            if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS} || \
-                chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS}
-              sudo chmod -R u+rwX ${CHOWN_PATHS} || chmod -R u+rwX ${CHOWN_PATHS}
-            else
-              chown -R "${HOST_UID}:${HOST_GID}" ${CHOWN_PATHS}
-              chmod -R u+rwX ${CHOWN_PATHS}
-            fi
-          fi
-
-          # Ensure canonical progenitor runtime dirs are writable even if path
-          # detection misses or prior root-owned files remain.
-          for HOST_PATH in /var/lib/progenitor/data /var/lib/progenitor/logs /var/lib/progenitor/worktrees; do
-            if command -v sudo >/dev/null 2>&1; then
-              sudo mkdir -p "${HOST_PATH}" || mkdir -p "${HOST_PATH}"
-              sudo chown -R "${HOST_UID}:${HOST_GID}" "${HOST_PATH}" || chown -R "${HOST_UID}:${HOST_GID}" "${HOST_PATH}"
-              sudo chmod -R u+rwX "${HOST_PATH}" || chmod -R u+rwX "${HOST_PATH}"
-            else
-              mkdir -p "${HOST_PATH}"
-              chown -R "${HOST_UID}:${HOST_GID}" "${HOST_PATH}"
-              chmod -R u+rwX "${HOST_PATH}"
-            fi
-          done
-
-          # Let each image use its own USER/entrypoint ownership model.
-          docker run -d \
-            --name "${CONTAINER_NAME}" \
-            --restart unless-stopped \
-            --network progenitor_network \
-            -e AGENT_NAME="${AGENT_NAME}" \
-            -e A2A_PUBLIC_HOST="${CONTAINER_NAME}" \
-            -e PROGENITOR_DATA_DIR=/app/data \
-            -e PROGENITOR_LOG_DIR=/app/logs \
-            -e PROGENITOR_PROJECT_ROOT=/app/worktrees \
-            -e PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees \
-            -e PROGENITOR_WORKTREES_ROOT=/app/worktrees \
-            -e GH_TOKEN="${GH_TOKEN}" \
-            -e COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN}" \
-            ${VOLUME_ARGS} \
-            ${TMPFS_ARGS} \
-            ${ENV_ARGS} \
-            "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
+          docker run "${DOCKER_ARGS[@]}" "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
 
       - name: Wait for agent to become healthy
         id: health
         env:
           AGENT_NAME: ${{ matrix.agent }}
+        shell: bash
         run: |
-          PORT=${{ steps.runtime.outputs.port }}
           CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
-          REGISTRY_HOST="${CONTAINER_NAME}"
-          DOCKER_HOSTNAME="$(docker inspect --format '{{.Config.Hostname}}' "${CONTAINER_NAME}")"
-          if [ -z "${DOCKER_HOSTNAME}" ]; then
-            echo "Could not resolve Docker hostname for ${CONTAINER_NAME}"
-            exit 1
-          fi
-          echo "docker_hostname=${DOCKER_HOSTNAME}" >> "$GITHUB_OUTPUT"
-          echo "registry_host=${REGISTRY_HOST}" >> "$GITHUB_OUTPUT"
+          echo "registry_host=${CONTAINER_NAME}" >> "$GITHUB_OUTPUT"
 
-          echo "Waiting for agent ${{ matrix.agent }} on ${DOCKER_HOSTNAME}:${PORT}..."
-          for i in $(seq 1 30); do
-            if docker exec "${CONTAINER_NAME}" \
-              python -c "import httpx; r = httpx.get('http://${DOCKER_HOSTNAME}:${PORT}/health'); r.raise_for_status()" 2>/dev/null; then
-              echo "Agent ${{ matrix.agent }} is healthy"
+          echo "Waiting for agent ${{ matrix.agent }} to become healthy..."
+          for _ in $(seq 1 30); do
+            STATE="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+            HEALTH="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+            if [ "$HEALTH" = "healthy" ]; then
+              echo "$CONTAINER_NAME is healthy"
               exit 0
+            fi
+            if [ "$STATE" = "exited" ] || [ "$STATE" = "dead" ] || [ "$HEALTH" = "unhealthy" ]; then
+              break
             fi
             sleep 2
           done
-          echo "Agent ${{ matrix.agent }} failed health check"
-          docker logs progenitor-agent-${{ matrix.agent }} --tail 50
+
+          docker inspect -f 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' "$CONTAINER_NAME" 2>/dev/null || true
+          docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}{{println .End "exit=" .ExitCode .Output}}{{end}}{{else}}no-healthcheck-log{{end}}' "$CONTAINER_NAME" 2>/dev/null || true
+          docker logs "$CONTAINER_NAME" --tail 50 || true
+          echo "Agent ${{ matrix.agent }} failed health check" >&2
           exit 1
 
-      - name: Register agent in progenitor registry
+      - name: Register agent via backend API
         if: success()
         env:
           AGENT_NAME: ${{ matrix.agent }}
-          PORT: ${{ steps.runtime.outputs.port }}
+          RUNTIME_SPEC: ${{ steps.runtime-spec.outputs.result }}
           DOCKER_HOSTNAME: ${{ steps.health.outputs.registry_host }}
-          PROGENITOR_CONTAINER: progenitor
-        run: python .github/scripts/register_agent.py
-
-      - name: Cleanup unused managed images
-        if: success()
+        shell: bash
         run: |
-          docker image prune -af \
-            --filter "label=com.progenitor.managed=true" \
-            --filter "until=168h" || true
+          PORT="$(jq -r '.port' <<< "$RUNTIME_SPEC")"
+          PAYLOAD=$(printf '{"name":"%s","url":"http://%s:%s"}' "$AGENT_NAME" "$DOCKER_HOSTNAME" "$PORT")
+          docker exec progenitor-backend \
+            curl -fsS -X POST http://127.0.0.1:8000/agents/register \
+              -H 'content-type: application/json' \
+              --data "$PAYLOAD"
