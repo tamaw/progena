@@ -47,10 +47,7 @@ def create_progenitor_backend(
     log_dir: str | Path | None = None,
     prompts_dir: str | Path | None = None,
 ) -> Any:
-    """Create a backend factory for the Progenitor DeepAgent.
-
-    Returns a factory callable (runtime -> BackendProtocol) suitable for
-    create_deep_agent(backend=...).
+    """Create a backend instance for the Progenitor DeepAgent.
 
     Args:
         project_root: Root directory for filesystem access. Defaults to cwd.
@@ -58,7 +55,7 @@ def create_progenitor_backend(
         log_dir: Log directory. Defaults to ``<project_root>/logs``.
         prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
     Returns:
-        Backend factory callable.
+        Composite backend instance compatible with DeepAgents 0.5.3+.
     """
     root = Path(project_root) if project_root else Path.cwd()
     resolved_data_dir = Path(data_dir) if data_dir else root / "data"
@@ -81,31 +78,29 @@ def create_progenitor_backend(
             return ReadOnlyFilesystemBackend(backend)
         return backend
 
-    def _backend_factory(runtime: Any) -> CompositeBackend:
-        routes: dict[str, Any] = {}
-        memories_backend = _route_backend(
-            resolved_data_dir / "memories",
-            read_only=False,
-            create_if_missing=True,
-        )
-        if memories_backend is not None:
-            routes["/memories/"] = memories_backend
+    routes: dict[str, Any] = {}
+    memories_backend = _route_backend(
+        resolved_data_dir / "memories",
+        read_only=False,
+        create_if_missing=True,
+    )
+    if memories_backend is not None:
+        routes["/memories/"] = memories_backend
 
-        mounts: list[tuple[str, Path, bool]] = [
-            ("/self/", root / "app", True),
-            ("/data/", resolved_data_dir, True),
-            ("/logs/", resolved_log_dir, True),
-            ("/prompts/", resolved_prompts_dir, True),
-        ]
-        for route, mount_path, ro in mounts:
-            backend = _route_backend(mount_path, read_only=ro)
-            if backend is not None:
-                routes[route] = backend
+    mounts: list[tuple[str, Path, bool]] = [
+        ("/self/", root / "app", True),
+        ("/data/", resolved_data_dir, True),
+        ("/logs/", resolved_log_dir, True),
+        ("/prompts/", resolved_prompts_dir, True),
+    ]
+    for route, mount_path, ro in mounts:
+        backend = _route_backend(mount_path, read_only=ro)
+        if backend is not None:
+            routes[route] = backend
 
-        return CompositeBackend(
-            default=StateBackend(runtime),
-            routes=routes,
-        )
-
-    logger.info("Created progenitor backend factory with scoped filesystem mounts")
-    return _backend_factory
+    state_backend_cls: Any = StateBackend
+    logger.info("Created progenitor backend with scoped filesystem mounts")
+    return CompositeBackend(
+        default=state_backend_cls(),
+        routes=routes,
+    )
