@@ -75,7 +75,7 @@ class ServiceProgenitorClient:
             request_id: Optional request ID for correlation.
 
         Returns:
-            The assistant's response.
+            The normalized agent response.
         """
         if not self._service or not self._service.is_initialized:
             await self.start()

@@ -1,6 +1,7 @@
 """Tests for the in-process Progenitor service."""
 
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -46,6 +47,11 @@ class StubStreamingGraph:
             yield item
 
 
+def _test_config(*, reasoning_enabled: bool = True) -> SimpleNamespace:
+    """Return the minimal config shape needed by ProgenitorService tests."""
+    return SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=reasoning_enabled))
+
+
 @pytest.mark.asyncio
 async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message() -> None:
     """Service mode should preserve conversation thread continuity."""
@@ -58,7 +64,7 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
     service.llm_client = None
     service.tool_registry = None
     service.project_root = None
-    service.config = None
+    service.config = _test_config()
     service._lock = None
 
     response = await service.handle_message("Hello", request_id="req-1")
@@ -108,7 +114,7 @@ async def test_handle_message_include_reasoning_returns_reasoning_details() -> N
     service.llm_client = None
     service.tool_registry = None
     service.project_root = None
-    service.config = None
+    service.config = _test_config()
     service._lock = None
 
     response = await service.handle_message(
@@ -181,7 +187,7 @@ async def test_handle_message_stream_events_emit_reasoning_message_and_node_upda
     service.llm_client = None
     service.tool_registry = None
     service.project_root = None
-    service.config = None
+    service.config = _test_config()
     service._lock = None
 
     events = [
@@ -296,7 +302,7 @@ async def test_handle_message_stream_events_forwards_custom_tool_events() -> Non
     service.llm_client = None
     service.tool_registry = None
     service.project_root = None
-    service.config = None
+    service.config = _test_config()
     service._lock = None
 
     events = [

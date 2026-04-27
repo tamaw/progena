@@ -220,7 +220,7 @@ class ProgenitorClient:
             request_id: Optional request ID for correlation
 
         Returns:
-            The response from Progenitor
+            The normalized agent response.
         """
         if not self._started:
             await self.start()
