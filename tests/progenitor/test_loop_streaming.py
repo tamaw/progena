@@ -20,7 +20,7 @@ class _FakeGraph:
             yield item
 
 
-def _make_config():
+def _make_config(*, reasoning_enabled: bool = False):
     return SimpleNamespace(
         runtime=SimpleNamespace(
             max_input_queue_size=10,
@@ -29,7 +29,7 @@ def _make_config():
             idle_backoff_seconds=1.0,
             checkpoint_interval_seconds=60.0,
         ),
-        llm=SimpleNamespace(reasoning_enabled=False),
+        llm=SimpleNamespace(reasoning_enabled=reasoning_enabled),
     )
 
 
@@ -241,6 +241,86 @@ class TestProgenitorLoopStreaming:
             },
             {"type": "stream_chunk", "content": "", "is_final": True},
         ]
+
+    @pytest.mark.asyncio
+    async def test_reasoning_preview_streams_progressively_before_answer_tokens(self):
+        preview_text = (
+            "I'll break the request into the key steps first, "
+            "then work through them in order before I answer directly."
+        )
+        graph = _FakeGraph(
+            [
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content=[
+                                {"type": "reasoning", "summary": []},
+                                {"type": "text", "text": "Hi"},
+                            ]
+                        ),
+                        {"langgraph_node": "respond"},
+                    ),
+                ),
+                (
+                    "updates",
+                    {
+                        "respond": {
+                            "pending_response": "Hi",
+                            "messages": [
+                                {
+                                    "role": "assistant",
+                                    "content": [
+                                        {
+                                            "type": "reasoning",
+                                            "summary": [
+                                                {
+                                                    "type": "summary_text",
+                                                    "text": "Checked the steps before answering.",
+                                                }
+                                            ],
+                                        },
+                                        {"type": "text", "text": "Hi"},
+                                    ],
+                                }
+                            ],
+                        }
+                    },
+                ),
+            ]
+        )
+        loop = ProgenitorLoop(
+            graph=graph,
+            state_manager=AsyncMock(),
+            config=_make_config(reasoning_enabled=True),
+        )
+        loop._state = {
+            **_make_loop_state(),
+            "current_input": "Please solve this by thinking through the steps first.",
+        }
+        loop._streaming_enabled = True
+        loop._reasoning_preview_chunk_delay_seconds = 0
+        loop._generate_reasoning_preview = AsyncMock(return_value=preview_text)  # type: ignore[method-assign]
+
+        await loop._run_graph_cycle("run-preview", source="user_input")
+        items = await _collect_stream_items(loop)
+
+        reasoning_events = [item for item in items if item.get("event_type") == "reasoning_delta"]
+        assert len(reasoning_events) >= 2
+        assert "".join(item["content"] for item in reasoning_events) == preview_text
+        assert all(
+            item["metadata"]["synthetic"] is True and item["metadata"]["preview"] is True
+            for item in reasoning_events
+        )
+
+        first_message_delta_index = next(
+            index for index, item in enumerate(items) if item.get("event_type") == "message_delta"
+        )
+        reasoning_indices = [
+            index for index, item in enumerate(items) if item.get("event_type") == "reasoning_delta"
+        ]
+        assert max(reasoning_indices) < first_message_delta_index
+        assert items[first_message_delta_index]["content"] == "Hi"
 
     @pytest.mark.asyncio
     async def test_streamed_response_is_captured_without_queue_output_when_streaming_disabled(self):

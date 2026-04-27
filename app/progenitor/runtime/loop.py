@@ -20,6 +20,7 @@ import copy
 import inspect
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -52,6 +53,11 @@ logger = logging.getLogger(__name__)
 # Health file location (relative to state directory)
 HEALTH_FILE = "health.json"
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
+REASONING_PREVIEW_MIN_INPUT_LENGTH = 20
+REASONING_PREVIEW_MIN_CHUNK_CHARS = 18
+REASONING_PREVIEW_TARGET_CHARS = 32
+REASONING_PREVIEW_MAX_CHUNKS = 6
+REASONING_PREVIEW_CHUNK_DELAY_SECONDS = 0.06
 
 
 class QueuedInput(NamedTuple):
@@ -112,6 +118,9 @@ class ProgenitorLoop:
         self._streamed_response_content: str = (
             ""  # Accumulated streamed text for saving to messages
         )
+        self._reasoning_preview_task: asyncio.Task[str | None] | None = None
+        self._reasoning_preview_sent = False
+        self._reasoning_preview_chunk_delay_seconds = REASONING_PREVIEW_CHUNK_DELAY_SECONDS
 
         # Captures the most recent pending_response emitted by the graph during a cycle.
         # Used for background job cycles where we don't stream to the client.
@@ -546,6 +555,8 @@ class ProgenitorLoop:
 
         # Reset per-cycle capture
         self._last_cycle_response = None
+        self._reasoning_preview_sent = False
+        self._cancel_reasoning_preview_task()
 
         # Build graph input: for user_input cycles, pass only the new HumanMessage.
         # The checkpointer (per stable thread_id) maintains conversation history.
@@ -564,6 +575,17 @@ class ProgenitorLoop:
             if self._graph_accepts_stream_mode():
                 astream_kwargs["stream_mode"] = ["messages", "updates", "custom"]
             pending_stream_final = False
+            normalized_input = str(current_input or "").strip()
+            if (
+                self._streaming_enabled
+                and self.config.llm.reasoning_enabled
+                and normalized_input
+                and normalized_input.lower() not in {"new conversation"}
+                and len(normalized_input) >= REASONING_PREVIEW_MIN_INPUT_LENGTH
+            ):
+                self._reasoning_preview_task = asyncio.create_task(
+                    self._generate_reasoning_preview(normalized_input)
+                )
 
             async for stream_item in self.graph.astream(
                 graph_input,
@@ -636,6 +658,7 @@ class ProgenitorLoop:
             # and capture a final text response even when this cycle has no live
             # stream consumer (for example scheduled tasks).
             last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
+            response_text: str | None = self._last_cycle_response
             if not self._stream_final_sent:
                 response_text = self._extract_message_text(last_ai_msg)
                 if response_text:
@@ -659,10 +682,19 @@ class ProgenitorLoop:
                 extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
             )
             if (
-                self._streaming_enabled
+                not reasoning_trace
                 and last_ai_msg is not None
-                and (reasoning_trace or reasoning_tokens is not None)
+                and self.config.llm.reasoning_enabled
+                and self._message_has_reasoning_marker(last_ai_msg)
             ):
+                reasoning_trace = await self._synthesize_reasoning_trace(
+                    user_input=str(self._state.get("current_input") or "").strip() or None,
+                    response_text=response_text,
+                    reasoning_tokens=reasoning_tokens,
+                )
+                self._last_reasoning_trace = reasoning_trace
+                self._state["last_reasoning_trace"] = reasoning_trace
+            if self._streaming_enabled and last_ai_msg is not None and bool(reasoning_trace):
                 summary_event = build_reasoning_summary_event(
                     reasoning_trace or "",
                     metadata={
@@ -674,6 +706,7 @@ class ProgenitorLoop:
                     content=summary_event["content"],
                     metadata=cast(dict[str, Any], summary_event["metadata"]),
                 )
+            self._cancel_reasoning_preview_task()
             if self._streaming_enabled and pending_stream_final and not self._stream_final_sent:
                 await self.stream_final()
                 self._stream_final_sent = True
@@ -872,8 +905,12 @@ class ProgenitorLoop:
             return
 
         stream_metadata = make_json_safe(metadata)
+        reasoning_deltas = extract_stream_reasoning_deltas(message_chunk)
         if self._streaming_enabled:
-            for reasoning_delta in extract_stream_reasoning_deltas(message_chunk):
+            if reasoning_deltas:
+                self._reasoning_preview_sent = True
+                self._cancel_reasoning_preview_task()
+            for reasoning_delta in reasoning_deltas:
                 reasoning_event = build_reasoning_delta_event(
                     reasoning_delta,
                     metadata={
@@ -885,6 +922,20 @@ class ProgenitorLoop:
                     reasoning_event["event_type"],
                     content=reasoning_event["content"],
                     metadata=cast(dict[str, Any], reasoning_event["metadata"]),
+                )
+            if (
+                not reasoning_deltas
+                and not self._reasoning_preview_sent
+                and self._message_has_reasoning_marker(message_chunk)
+            ):
+                await self._maybe_emit_reasoning_preview(
+                    user_input=str(self._state.get("current_input") or "").strip() or None,
+                    metadata={
+                        "synthetic": True,
+                        "preview": True,
+                        "message_chunk_type": type(message_chunk).__name__,
+                        "stream_metadata": stream_metadata,
+                    },
                 )
 
         chunk_text = self._extract_stream_chunk_text(message_chunk)
@@ -1174,6 +1225,267 @@ class ProgenitorLoop:
                     return text
 
         return None
+
+    def _message_has_reasoning_marker(self, msg: Any) -> bool:
+        """Return True when a message indicates provider-side reasoning occurred."""
+        if msg is None:
+            return False
+
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if str(part.get("type", "")).lower() in {
+                    "reasoning",
+                    "reasoning_text",
+                    "reasoning_summary",
+                    "thinking",
+                }:
+                    return True
+
+        if extract_reasoning_token_count(msg) is not None:
+            return True
+
+        containers: list[dict[str, Any]] = []
+        if isinstance(msg, dict):
+            containers.append(msg)
+            for key in ("additional_kwargs", "response_metadata", "usage_metadata"):
+                value = msg.get(key)
+                if isinstance(value, dict):
+                    containers.append(value)
+        else:
+            for attr in ("additional_kwargs", "response_metadata", "usage_metadata"):
+                value = getattr(msg, attr, None)
+                if isinstance(value, dict):
+                    containers.append(value)
+
+        for container in containers:
+            if any(key in container for key in ("reasoning", "thinking", "summary")):
+                return True
+
+        return False
+
+    def _cancel_reasoning_preview_task(self) -> None:
+        """Cancel any in-flight preview generation task."""
+        task = self._reasoning_preview_task
+        self._reasoning_preview_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _maybe_emit_reasoning_preview(
+        self,
+        *,
+        user_input: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a synthetic reasoning preview only when provider deltas are absent."""
+        if self._reasoning_preview_sent:
+            return
+
+        preview_text = await self._resolve_reasoning_preview(user_input)
+        if not preview_text:
+            return
+
+        self._reasoning_preview_sent = True
+        await self._stream_reasoning_preview(preview_text, metadata=metadata)
+
+    async def _resolve_reasoning_preview(self, user_input: str | None) -> str | None:
+        """Return a prepared preview, preferring any background task for this cycle."""
+        task = self._reasoning_preview_task
+        self._reasoning_preview_task = None
+        if task is not None:
+            try:
+                preview_text = await task
+            except asyncio.CancelledError:
+                preview_text = None
+            if preview_text:
+                return preview_text
+
+        if not user_input:
+            return None
+        return await self._generate_reasoning_preview(user_input)
+
+    async def _stream_reasoning_preview(
+        self,
+        preview_text: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Stream a synthetic preview in chunks so the UI can render progressive updates."""
+        preview_chunks = self._split_reasoning_preview(preview_text)
+        if not preview_chunks:
+            return
+
+        base_metadata = dict(metadata or {})
+        total_chunks = len(preview_chunks)
+        for index, chunk in enumerate(preview_chunks):
+            reasoning_event = build_reasoning_delta_event(
+                chunk,
+                metadata={
+                    **base_metadata,
+                    "preview_chunk_index": index + 1,
+                    "preview_chunk_total": total_chunks,
+                },
+            )
+            await self._send_stream_event(
+                reasoning_event["event_type"],
+                content=reasoning_event["content"],
+                metadata=cast(dict[str, Any], reasoning_event["metadata"]),
+            )
+            if index + 1 < total_chunks and self._reasoning_preview_chunk_delay_seconds > 0:
+                await asyncio.sleep(self._reasoning_preview_chunk_delay_seconds)
+
+    def _split_reasoning_preview(self, preview_text: str) -> list[str]:
+        """Break a synthetic preview into readable delta-sized chunks."""
+        text = preview_text.strip()
+        if not text:
+            return []
+
+        tokens = re.findall(r"\S+\s*", text)
+        if len(tokens) <= 1:
+            return [text]
+
+        chunks: list[str] = []
+        current = ""
+        for index, token in enumerate(tokens):
+            current += token
+            remaining_tokens = len(tokens) - index - 1
+            remaining_chunk_slots = REASONING_PREVIEW_MAX_CHUNKS - len(chunks) - 1
+            token_text = token.rstrip()
+            hit_target = len(current) >= REASONING_PREVIEW_TARGET_CHARS
+            clause_boundary = token_text.endswith((",", ";", ":", ".", "!", "?"))
+            if (
+                remaining_tokens > 0
+                and remaining_chunk_slots > 0
+                and (
+                    hit_target
+                    or (clause_boundary and len(current) >= REASONING_PREVIEW_MIN_CHUNK_CHARS)
+                )
+            ):
+                chunks.append(current)
+                current = ""
+
+        if current:
+            chunks.append(current)
+
+        if len(chunks) == 1 and len(text) > REASONING_PREVIEW_TARGET_CHARS:
+            midpoint = len(text) // 2
+            split_at = text.rfind(" ", 0, midpoint + 1)
+            if split_at == -1:
+                split_at = text.find(" ", midpoint)
+            if split_at != -1:
+                return [text[: split_at + 1], text[split_at + 1 :]]
+
+        return chunks
+
+    async def _synthesize_reasoning_trace(
+        self,
+        *,
+        user_input: str | None,
+        response_text: str | None,
+        reasoning_tokens: int | None,
+    ) -> str | None:
+        """Generate a visible reasoning summary when the provider omits one."""
+        if not user_input or not response_text:
+            return None
+
+        prompt = (
+            "User request:\n"
+            f"{user_input.strip()}\n\n"
+            "Assistant answer:\n"
+            f"{response_text.strip()}\n\n"
+            "Write a short, user-visible reasoning summary that explains how the answer was derived. "
+            "Do not claim to reveal hidden chain-of-thought. Keep it to 2 short sentences."
+        )
+
+        summary_client = None
+        try:
+            from ..llm.client import LLMClient
+
+            summary_client = LLMClient(self.config.llm, role="summary")
+            summary = await summary_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=(
+                    "You are generating a concise visible reasoning summary for a prior answer. "
+                    "Summarize the approach at a high level based only on the user request and final answer. "
+                    "Do not mention policies, hidden reasoning, or internal limitations."
+                ),
+                temperature=0.2,
+                max_tokens=160,
+            )
+        except Exception:
+            logger.warning("Reasoning summary fallback generation failed", exc_info=True)
+            return None
+        finally:
+            if summary_client is not None:
+                with contextlib.suppress(Exception):
+                    await summary_client.close()
+
+        summary_text = summary.strip()
+        return summary_text or None
+
+    async def _generate_reasoning_preview(self, user_input: str) -> str | None:
+        """Generate a short preview of the approach before the final answer arrives."""
+        prompt = (
+            "User request:\n"
+            f"{user_input.strip()}\n\n"
+            "Write a short visible reasoning preview in 1-2 short sentences that explains "
+            "the approach you will use. Do not provide the final answer. "
+            "Do not mention hidden reasoning or internal policies."
+        )
+
+        preview_client = None
+        try:
+            from ..llm.client import LLMClient
+
+            preview_client = LLMClient(self.config.llm, role="summary")
+            preview = await preview_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=(
+                    "You are generating a brief visible reasoning preview before a final answer. "
+                    "Describe the approach only, stay concrete, and avoid giving the final answer."
+                ),
+                temperature=0.2,
+                max_tokens=120,
+            )
+        except Exception:
+            logger.debug("Reasoning preview generation failed", exc_info=True)
+            return self._build_reasoning_preview_fallback(user_input)
+        finally:
+            if preview_client is not None:
+                with contextlib.suppress(Exception):
+                    await preview_client.close()
+
+        preview_text = preview.strip()
+        return preview_text or self._build_reasoning_preview_fallback(user_input)
+
+    def _build_reasoning_preview_fallback(self, user_input: str) -> str:
+        """Return a lightweight visible reasoning preview when synthesis is unavailable."""
+        lowered = user_input.lower()
+        has_numbers = any(ch.isdigit() for ch in lowered)
+
+        if has_numbers and any(
+            token in lowered for token in ("cost", "price", "unit price", "packs", "pack", "per ")
+        ):
+            return (
+                "I'll work out the unit price first, then scale it to the requested quantity "
+                "before giving the final total."
+            )
+
+        if has_numbers and any(
+            token in lowered
+            for token in ("sum", "difference", "multiply", "division", "divide", "percent", "ratio")
+        ):
+            return (
+                "I'll identify the calculation steps first, work through them in order, "
+                "and then give the final result."
+            )
+
+        return (
+            "I'll break the request into the key steps first, then give the final answer "
+            "once the approach is clear."
+        )
 
     def _extract_message_text(self, msg: Any) -> str | None:
         """Extract assistant-facing text from message content payloads."""
