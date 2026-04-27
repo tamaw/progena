@@ -25,7 +25,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict, overload
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -164,12 +164,34 @@ class ProgenitorService:
             self._initialized = True
             logger.info("Progenitor service initialized (session=%s)", self._session_id)
 
+    @overload
     async def handle_message(
         self,
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> str:
+        *,
+        include_reasoning: Literal[False] = False,
+    ) -> str: ...
+
+    @overload
+    async def handle_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        include_reasoning: Literal[True],
+    ) -> ResponseDetails: ...
+
+    async def handle_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        include_reasoning: bool = False,
+    ) -> str | ResponseDetails:
         """Handle a user message and return the response.
 
         Args:
@@ -202,47 +224,13 @@ class ProgenitorService:
             config = {"configurable": {"thread_id": thread_id}}
             result = await self.graph.ainvoke(graph_input, config)
             response_details = self._extract_response_details(result)
+            if include_reasoning:
+                return response_details
             return response_details["response"]
 
         except Exception as e:
             logger.error(
                 "Error processing message (request_id=%s): %s",
-                request_id,
-                e,
-                exc_info=True,
-            )
-            raise
-
-    async def handle_message_response(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> ResponseDetails:
-        """Handle a user message and return response text plus reasoning details."""
-        if not self._initialized:
-            await self.initialize()
-
-        request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
-        self._message_count += 1
-
-        logger.info(
-            "Processing rich response message (request_id=%s, count=%d)",
-            request_id,
-            self._message_count,
-        )
-
-        try:
-            if self.graph is None:
-                raise RuntimeError("Graph not initialized")
-            thread_id = await self._get_thread_id(metadata=metadata)
-            graph_input = self._build_graph_input(message)
-            config = {"configurable": {"thread_id": thread_id}}
-            result = await self.graph.ainvoke(graph_input, config)
-            return self._extract_response_details(result)
-        except Exception as e:
-            logger.error(
-                "Error processing rich response message (request_id=%s): %s",
                 request_id,
                 e,
                 exc_info=True,

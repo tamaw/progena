@@ -185,10 +185,12 @@ class TestAsyncResponseHandling:
                 message: str,
                 request_id: str | None = None,
                 metadata: dict[str, object] | None = None,
-            ) -> str:
+                include_reasoning: bool = False,
+            ) -> str | dict[str, object]:
                 captured["message"] = message
                 captured["request_id"] = request_id
                 captured["metadata"] = metadata
+                captured["include_reasoning"] = include_reasoning
                 return "Hello"
 
         backend_main.client = _MockClient()
@@ -209,6 +211,7 @@ class TestAsyncResponseHandling:
 
         assert response.status_code == 200
         assert captured["metadata"] == {"thread_id": "thread_sess_thread_xyz"}
+        assert captured["include_reasoning"] is True
 
     def test_non_streaming_responses_include_reasoning_output(self, client):
         """Non-streaming /v1/responses should include reasoning items when available."""
@@ -217,13 +220,15 @@ class TestAsyncResponseHandling:
         original_client = backend_main.client
 
         class _MockClient:
-            async def send_message_response(
+            async def send_message(
                 self,
                 message: str,
                 request_id: str | None = None,
                 metadata: dict[str, object] | None = None,
+                include_reasoning: bool = False,
             ) -> dict[str, object]:
                 del message, request_id, metadata
+                assert include_reasoning is True
                 return {
                     "response": "10.50. At $0.75 per pencil, 14 pencils cost $10.50.",
                     "reasoning": "Checked the unit price before multiplying by 14.",

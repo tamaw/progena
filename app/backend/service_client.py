@@ -13,7 +13,7 @@ spawning a subprocess, providing:
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal, overload
 
 from ..progenitor.config import ProgenitorConfig
 from ..progenitor.service import ProgenitorService, ResponseDetails, get_service
@@ -60,12 +60,34 @@ class ServiceProgenitorClient:
             await self._service.shutdown()
             self._service = None
 
+    @overload
     async def send_message(
         self,
         message: str,
         request_id: str | None = None,
-        metadata: dict | None = None,
-    ) -> str:
+        metadata: dict[str, Any] | None = None,
+        *,
+        include_reasoning: Literal[False] = False,
+    ) -> str: ...
+
+    @overload
+    async def send_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        include_reasoning: Literal[True],
+    ) -> ResponseDetails: ...
+
+    async def send_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        include_reasoning: bool = False,
+    ) -> str | ResponseDetails:
         """Send a message and get the response.
 
         Args:
@@ -81,22 +103,19 @@ class ServiceProgenitorClient:
         if service is None:
             raise RuntimeError("Progenitor service failed to start")
 
-        return await service.handle_message(message, request_id, metadata=metadata)
-
-    async def send_message_response(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict | None = None,
-    ) -> ResponseDetails:
-        """Send a message and get response text plus reasoning metadata."""
-        if not self._service or not self._service.is_initialized:
-            await self.start()
-        service = self._service
-        if service is None:
-            raise RuntimeError("Progenitor service failed to start")
-
-        return await service.handle_message_response(message, request_id, metadata=metadata)
+        if include_reasoning:
+            return await service.handle_message(
+                message,
+                request_id,
+                metadata=metadata,
+                include_reasoning=True,
+            )
+        return await service.handle_message(
+            message,
+            request_id,
+            metadata=metadata,
+            include_reasoning=False,
+        )
 
     async def send_message_stream_events(
         self,
