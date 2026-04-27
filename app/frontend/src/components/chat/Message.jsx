@@ -4,6 +4,10 @@ function isReasoningEvent(event) {
   return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
 }
 
+function hasReasoningContent(event) {
+  return typeof event?.content === 'string' && event.content.trim().length > 0;
+}
+
 function Message({ message, streamEventFilter }) {
   const {
     role,
@@ -61,7 +65,12 @@ function Message({ message, streamEventFilter }) {
 
   const metaItems = [formattedTime, formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
   const hasMessageMeta = metaItems.length > 0;
-  const shouldShowReasoningText = role === 'assistant' && reasoningText.trim().length > 0;
+  const hasVisibleReasoningEvent = visibleStreamEvents.some(
+    (event) => isReasoningEvent(event) && hasReasoningContent(event),
+  );
+  const shouldShowReasoningText = role === 'assistant'
+    && reasoningText.trim().length > 0
+    && !hasVisibleReasoningEvent;
 
   return (
     <div className={`message-wrapper ${role}`}>
@@ -251,6 +260,7 @@ function describeStreamEvent(event) {
     return {
       badge: 'Reasoning',
       title: 'Reasoning',
+      bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
       detail: detail || (eventType === 'reasoning_delta' ? 'Tracing response generation' : 'Reasoning captured'),
     };
   }

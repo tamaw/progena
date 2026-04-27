@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from ..progenitor.config import ProgenitorConfig
-from ..progenitor.service import ProgenitorService, get_service
+from ..progenitor.service import ProgenitorService, ResponseDetails, get_service
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,21 @@ class ServiceProgenitorClient:
             raise RuntimeError("Progenitor service failed to start")
 
         return await service.handle_message(message, request_id, metadata=metadata)
+
+    async def send_message_response(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> ResponseDetails:
+        """Send a message and get response text plus reasoning metadata."""
+        if not self._service or not self._service.is_initialized:
+            await self.start()
+        service = self._service
+        if service is None:
+            raise RuntimeError("Progenitor service failed to start")
+
+        return await service.handle_message_response(message, request_id, metadata=metadata)
 
     async def send_message_stream_events(
         self,

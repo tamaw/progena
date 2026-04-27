@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import IO, Any, cast
 
+from ..progenitor.service import ResponseDetails
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
@@ -270,6 +271,20 @@ class ProgenitorClient:
                 # Return raw text if not JSON
                 self._last_heartbeat = time.time()  # CR-001
                 return response_line.decode().strip() if response_line else ""
+
+    async def send_message_response(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ResponseDetails:
+        """Send a message and get response text plus best-effort reasoning metadata."""
+        response_text = await self.send_message(message, request_id=request_id, metadata=metadata)
+        return {
+            "response": response_text,
+            "reasoning": None,
+            "reasoning_tokens": None,
+        }
 
     async def send_message_stream_events(
         self,

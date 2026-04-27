@@ -48,8 +48,10 @@ from .models import (
     ModelInfo,
     ModelsResponse,
     ResponseOutputMessage,
+    ResponseOutputReasoning,
     ResponseOutputText,
     ResponsePayload,
+    ResponseReasoningSummaryText,
     ResponseRequest,
     SimpleChatRequest,
     StreamingResponseRequest,
@@ -1140,18 +1142,38 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
                 ),
             )
 
-        response_text = await client.send_message(
-            last_user_msg,
-            request_id=request_id,
-            metadata=request_metadata,
-        )
+        if hasattr(client, "send_message_response"):
+            response_details = await client.send_message_response(
+                last_user_msg,
+                request_id=request_id,
+                metadata=request_metadata,
+            )
+        else:
+            response_text = await client.send_message(
+                last_user_msg,
+                request_id=request_id,
+                metadata=request_metadata,
+            )
+            response_details = {
+                "response": response_text,
+                "reasoning": None,
+                "reasoning_tokens": None,
+            }
         _attach_session_cookie(request, session, response)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
+        response_text = str(response_details.get("response") or "")
+        reasoning_text = str(response_details.get("reasoning") or "").strip()
+        output_content: list[ResponseOutputReasoning | ResponseOutputText] = []
+        if reasoning_text:
+            output_content.append(
+                ResponseOutputReasoning(summary=[ResponseReasoningSummaryText(text=reasoning_text)])
+            )
+        output_content.append(ResponseOutputText(text=response_text))
 
         return ResponsePayload(
             id=response_id,
             model=body.model,
-            output=[ResponseOutputMessage(content=[ResponseOutputText(text=response_text)])],
+            output=[ResponseOutputMessage(content=output_content)],
             usage=Usage(
                 prompt_tokens=len(" ".join(all_inputs).split()),
                 completion_tokens=len(response_text.split()),

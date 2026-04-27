@@ -298,7 +298,9 @@ export function useApi() {
       })
     });
     const data = await response.json();
-    return data.output?.[0]?.content?.[0]?.text || '';
+    const content = Array.isArray(data.output?.[0]?.content) ? data.output[0].content : [];
+    const textItem = content.find((item) => item?.type === 'output_text' || item?.type === 'text');
+    return typeof textItem?.text === 'string' ? textItem.text : '';
   }, [config, fetchWithRetry]);
 
   const sendMessageStream = useCallback(
