@@ -1142,23 +1142,20 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
                 ),
             )
 
-        if hasattr(client, "send_message_response"):
-            response_details = await client.send_message_response(
-                last_user_msg,
-                request_id=request_id,
-                metadata=request_metadata,
-            )
-        else:
-            response_text = await client.send_message(
-                last_user_msg,
-                request_id=request_id,
-                metadata=request_metadata,
-            )
+        send_result = await client.send_message(
+            last_user_msg,
+            request_id=request_id,
+            metadata=request_metadata,
+            include_reasoning=True,
+        )
+        if isinstance(send_result, str):
             response_details = {
-                "response": response_text,
+                "response": send_result,
                 "reasoning": None,
                 "reasoning_tokens": None,
             }
+        else:
+            response_details = send_result
         _attach_session_cookie(request, session, response)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
         response_text = str(response_details.get("response") or "")

@@ -73,7 +73,7 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
 
 
 @pytest.mark.asyncio
-async def test_handle_message_response_returns_reasoning_details() -> None:
+async def test_handle_message_include_reasoning_returns_reasoning_details() -> None:
     """Service mode should expose reasoning text and token counts for non-stream calls."""
     service = object.__new__(ProgenitorService)
     service._initialized = True
@@ -110,7 +110,11 @@ async def test_handle_message_response_returns_reasoning_details() -> None:
     service.config = None
     service._lock = None
 
-    response = await service.handle_message_response("Hello", request_id="req-1")
+    response = await service.handle_message(
+        "Hello",
+        request_id="req-1",
+        include_reasoning=True,
+    )
 
     assert response == {
         "response": "assistant reply",

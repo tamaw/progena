@@ -16,9 +16,10 @@ Features:
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, Literal, overload
 
 from ..progenitor.ipc import IPCClient
+from ..progenitor.service import ResponseDetails
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
@@ -159,12 +160,34 @@ class IPCProgenitorClient:
 
             self._started = False
 
+    @overload
     async def send_message(
         self,
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> str:
+        *,
+        include_reasoning: Literal[False] = False,
+    ) -> str: ...
+
+    @overload
+    async def send_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        include_reasoning: Literal[True],
+    ) -> ResponseDetails: ...
+
+    async def send_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        include_reasoning: bool = False,
+    ) -> str | ResponseDetails:
         """Send a message and get the response.
 
         Args:
@@ -181,15 +204,42 @@ class IPCProgenitorClient:
             raise RuntimeError("IPC client not initialized")
 
         chunks: list[str] = []
+        reasoning_text: str | None = None
+        reasoning_tokens: int | None = None
         async for event in self._ipc_client.send_message_stream_events(
             message, request_id, metadata
         ):
-            if event.get("type") != "stream_chunk":
+            event_type = str(event.get("type", ""))
+            if event_type == "stream_event":
+                stream_event_type = str(event.get("event_type", ""))
+                event_content = str(event.get("content", ""))
+                if stream_event_type == "reasoning_delta" and event_content:
+                    reasoning_text = f"{reasoning_text or ''}{event_content}"
+                elif stream_event_type == "reasoning_summary" and event_content:
+                    prior_text = reasoning_text or ""
+                    reasoning_text = (
+                        event_content if len(event_content) >= len(prior_text) else prior_text
+                    )
+                event_metadata = event.get("metadata")
+                if isinstance(event_metadata, dict):
+                    raw_tokens = event_metadata.get("reasoning_tokens")
+                    if isinstance(raw_tokens, int):
+                        reasoning_tokens = raw_tokens
+                continue
+
+            if event_type != "stream_chunk":
                 continue
             chunk_text = str(event.get("content", ""))
             if chunk_text:
                 chunks.append(chunk_text)
-        return "".join(chunks)
+        response_text = "".join(chunks)
+        if include_reasoning:
+            return {
+                "response": response_text,
+                "reasoning": reasoning_text,
+                "reasoning_tokens": reasoning_tokens,
+            }
+        return response_text
 
     async def send_message_stream_events(
         self,
