@@ -18,6 +18,7 @@ from app.backend.models import (
     ResponsePayload,
     ResponseRequest,
 )
+from app.progenitor.service import AgentResponse
 
 
 class TestChatServerConfig:
@@ -183,7 +184,9 @@ class TestAlertRequestHandling:
         )
         progenitor = AsyncMock()
         progenitor.is_running = True
-        progenitor.send_message = AsyncMock(return_value="sent")
+        progenitor.send_message = AsyncMock(
+            return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
+        )
         create_alert_record = MagicMock(return_value=alert)
         broadcast_alert_record = MagicMock()
         broadcast_alert_state = MagicMock()
@@ -226,7 +229,9 @@ class TestAlertRequestHandling:
         )
         progenitor = AsyncMock()
         progenitor.is_running = False
-        progenitor.send_message = AsyncMock(return_value="sent")
+        progenitor.send_message = AsyncMock(
+            return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
+        )
 
         await _handle_alert_request(
             progenitor,
