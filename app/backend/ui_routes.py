@@ -2793,18 +2793,23 @@ async def action_run(body: ActionRunRequest):
         fail_thread(thread_id, str(exc), widget_id=body.widget_id)
         raise
 
-    complete_thread(thread_id, response, widget_id=body.widget_id)
+    complete_thread(thread_id, response.response, widget_id=body.widget_id)
     if body.broadcast_response:
         broadcast_chat_event(
             "agent_message",
             {
-                "content": response,
+                "content": response.response,
                 "metadata": {"widget_id": body.widget_id, "action": "run", "thread_id": thread_id},
                 "timestamp": time.time(),
             },
         )
     _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(ok=True, widget_id=body.widget_id, thread_id=thread_id, response=response)
+    return ActionResponse(
+        ok=True,
+        widget_id=body.widget_id,
+        thread_id=thread_id,
+        response=response.response,
+    )
 
 
 @router.post("/actions/generate", response_model=ActionResponse)
@@ -2846,17 +2851,22 @@ async def action_generate(body: ActionGenerateRequest):
         fail_thread(thread_id, str(exc), widget_id=body.widget_id)
         raise
 
-    complete_thread(thread_id, response, widget_id=body.widget_id)
+    complete_thread(thread_id, response.response, widget_id=body.widget_id)
     broadcast_chat_event(
         "agent_message",
         {
-            "content": response,
+            "content": response.response,
             "metadata": {"widget_id": body.widget_id, "action": "generate", "thread_id": thread_id},
             "timestamp": time.time(),
         },
     )
     _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(ok=True, widget_id=body.widget_id, thread_id=thread_id, response=response)
+    return ActionResponse(
+        ok=True,
+        widget_id=body.widget_id,
+        thread_id=thread_id,
+        response=response.response,
+    )
 
 
 @router.get("/threads", response_model=ThreadsResponse)

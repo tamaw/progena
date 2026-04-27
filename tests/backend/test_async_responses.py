@@ -185,13 +185,15 @@ class TestAsyncResponseHandling:
                 message: str,
                 request_id: str | None = None,
                 metadata: dict[str, object] | None = None,
-                include_reasoning: bool = False,
-            ) -> str | dict[str, object]:
+                include_reasoning: bool | None = None,
+            ):
                 captured["message"] = message
                 captured["request_id"] = request_id
                 captured["metadata"] = metadata
                 captured["include_reasoning"] = include_reasoning
-                return "Hello"
+                from app.progenitor.service import AgentResponse
+
+                return AgentResponse(response="Hello", reasoning=None, reasoning_tokens=None)
 
         backend_main.client = _MockClient()
 
@@ -211,7 +213,7 @@ class TestAsyncResponseHandling:
 
         assert response.status_code == 200
         assert captured["metadata"] == {"thread_id": "thread_sess_thread_xyz"}
-        assert captured["include_reasoning"] is True
+        assert captured["include_reasoning"] is None
 
     def test_non_streaming_responses_include_reasoning_output(self, client):
         """Non-streaming /v1/responses should include reasoning items when available."""
@@ -225,15 +227,17 @@ class TestAsyncResponseHandling:
                 message: str,
                 request_id: str | None = None,
                 metadata: dict[str, object] | None = None,
-                include_reasoning: bool = False,
-            ) -> dict[str, object]:
+                include_reasoning: bool | None = None,
+            ):
                 del message, request_id, metadata
                 assert include_reasoning is True
-                return {
-                    "response": "10.50. At $0.75 per pencil, 14 pencils cost $10.50.",
-                    "reasoning": "Checked the unit price before multiplying by 14.",
-                    "reasoning_tokens": 17,
-                }
+                from app.progenitor.service import AgentResponse
+
+                return AgentResponse(
+                    response="10.50. At $0.75 per pencil, 14 pencils cost $10.50.",
+                    reasoning="Checked the unit price before multiplying by 14.",
+                    reasoning_tokens=17,
+                )
 
         backend_main.client = _MockClient()
 
@@ -244,6 +248,7 @@ class TestAsyncResponseHandling:
                     "model": "progenitor-v1",
                     "input": "hi",
                     "stream": False,
+                    "include_reasoning": True,
                 },
             )
         finally:

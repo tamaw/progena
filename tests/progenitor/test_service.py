@@ -63,7 +63,8 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
 
     response = await service.handle_message("Hello", request_id="req-1")
 
-    assert response == "assistant reply"
+    assert response.response == "assistant reply"
+    assert response.reasoning is None
     assert service.graph.last_config == {"configurable": {"thread_id": "persisted-thread"}}
     assert isinstance(service.graph.last_input, dict)
     messages = service.graph.last_input["messages"]
@@ -116,11 +117,9 @@ async def test_handle_message_include_reasoning_returns_reasoning_details() -> N
         include_reasoning=True,
     )
 
-    assert response == {
-        "response": "assistant reply",
-        "reasoning": "Checked constraints before answering.",
-        "reasoning_tokens": 9,
-    }
+    assert response.response == "assistant reply"
+    assert response.reasoning == "Checked constraints before answering."
+    assert response.reasoning_tokens == 9
 
 
 @pytest.mark.asyncio
