@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.backend.alerts import clear_alerts
+from app.progenitor.service import AgentResponse
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +36,9 @@ def cleanup_event_loop():
 def mock_progenitor_client():
     """Mock the get_client and get_ipc_client to avoid connection issues in tests."""
     mock_client = AsyncMock()
-    mock_client.send_message.return_value = "mocked response"
+    mock_client.send_message.return_value = AgentResponse(
+        response="mocked response", reasoning=None, reasoning_tokens=None
+    )
     mock_client.list_models.return_value = {"models": []}
     mock_client.is_running = False
     mock_client.start = AsyncMock()
