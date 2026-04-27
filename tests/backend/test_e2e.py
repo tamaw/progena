@@ -24,7 +24,9 @@ from app.backend.config import ChatServerConfig
 from app.backend.main import app
 
 
-@pytest.mark.skip(reason="ProgenitorClient hardcodes module path, doesn't use progenitor_script config")
+@pytest.mark.skip(
+    reason="ProgenitorClient hardcodes module path, doesn't use progenitor_script config"
+)
 def test_backend_with_mock_progenitor():
     """Test backend with mock Progenitor subprocess."""
 
@@ -89,7 +91,7 @@ def test_backend_with_mock_progenitor():
         response = await mock_client.send_message(message)
         print(f"Response: {response}")
 
-        assert "Echo:" in response
+        assert "Echo:" in response.response
         print("✓ Response contains echo")
 
         # Send another message
@@ -99,7 +101,7 @@ def test_backend_with_mock_progenitor():
         response2 = await mock_client.send_message(message2)
         print(f"Response: {response2}")
 
-        assert "Echo:" in response2
+        assert "Echo:" in response2.response
         print("✓ Response contains echo")
 
         await mock_client.stop()

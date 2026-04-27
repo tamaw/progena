@@ -1,7 +1,9 @@
 """Tests for the in-process Progenitor service."""
 
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
@@ -45,6 +47,11 @@ class StubStreamingGraph:
             yield item
 
 
+def _test_config(*, reasoning_enabled: bool = True) -> SimpleNamespace:
+    """Return the minimal config shape needed by ProgenitorService tests."""
+    return SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=reasoning_enabled))
+
+
 @pytest.mark.asyncio
 async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message() -> None:
     """Service mode should preserve conversation thread continuity."""
@@ -57,18 +64,68 @@ async def test_handle_message_uses_persisted_thread_id_and_extracts_ai_message()
     service.llm_client = None
     service.tool_registry = None
     service.project_root = None
-    service.config = None
+    service.config = _test_config()
     service._lock = None
 
     response = await service.handle_message("Hello", request_id="req-1")
 
-    assert response == "assistant reply"
+    assert response.response == "assistant reply"
+    assert response.reasoning is None
     assert service.graph.last_config == {"configurable": {"thread_id": "persisted-thread"}}
     assert isinstance(service.graph.last_input, dict)
     messages = service.graph.last_input["messages"]
     assert len(messages) == 1
     assert isinstance(messages[0], HumanMessage)
     assert messages[0].content == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_handle_message_include_reasoning_returns_reasoning_details() -> None:
+    """Service mode should expose reasoning text and token counts for non-stream calls."""
+    service = object.__new__(ProgenitorService)
+    service._initialized = True
+    service._message_count = 0
+    service._session_id = "session-1"
+    service.state_manager = StubStateManager(thread_id="persisted-thread")
+    service.graph = StubGraph()
+    service.graph.ainvoke = AsyncMock(
+        return_value={
+            "messages": [
+                AIMessage(
+                    content=[
+                        {
+                            "type": "reasoning",
+                            "summary": [
+                                {
+                                    "type": "summary_text",
+                                    "text": "Checked constraints before answering.",
+                                }
+                            ],
+                        },
+                        {"type": "text", "text": "assistant reply"},
+                    ],
+                    response_metadata={
+                        "token_usage": {"completion_tokens_details": {"reasoning_tokens": 9}}
+                    },
+                )
+            ]
+        }
+    )
+    service.llm_client = None
+    service.tool_registry = None
+    service.project_root = None
+    service.config = _test_config()
+    service._lock = None
+
+    response = await service.handle_message(
+        "Hello",
+        request_id="req-1",
+        include_reasoning=True,
+    )
+
+    assert response.response == "assistant reply"
+    assert response.reasoning == "Checked constraints before answering."
+    assert response.reasoning_tokens == 9
 
 
 @pytest.mark.asyncio
@@ -130,7 +187,7 @@ async def test_handle_message_stream_events_emit_reasoning_message_and_node_upda
     service.llm_client = None
     service.tool_registry = None
     service.project_root = None
-    service.config = None
+    service.config = _test_config()
     service._lock = None
 
     events = [
@@ -245,7 +302,7 @@ async def test_handle_message_stream_events_forwards_custom_tool_events() -> Non
     service.llm_client = None
     service.tool_registry = None
     service.project_root = None
-    service.config = None
+    service.config = _test_config()
     service._lock = None
 
     events = [

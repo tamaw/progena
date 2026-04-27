@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from ..progenitor.ipc import IPCClient
+from ..progenitor.service import AgentResponse
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
@@ -164,15 +165,17 @@ class IPCProgenitorClient:
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> str:
-        """Send a message and get the response.
+        *,
+        include_reasoning: bool | None = None,
+    ) -> AgentResponse:
+        """Send a message and get the normalized response model.
 
         Args:
             message: The user message.
             request_id: Optional request ID for correlation.
 
         Returns:
-            The assistant's response.
+            The normalized agent response.
         """
         if not self._started:
             await self.start()
@@ -181,15 +184,43 @@ class IPCProgenitorClient:
             raise RuntimeError("IPC client not initialized")
 
         chunks: list[str] = []
+        effective_include_reasoning = (
+            self.config.reasoning_enabled if include_reasoning is None else include_reasoning
+        )
+        reasoning_text: str | None = None
+        reasoning_tokens: int | None = None
         async for event in self._ipc_client.send_message_stream_events(
             message, request_id, metadata
         ):
-            if event.get("type") != "stream_chunk":
+            event_type = str(event.get("type", ""))
+            if event_type == "stream_event":
+                stream_event_type = str(event.get("event_type", ""))
+                event_content = str(event.get("content", ""))
+                if stream_event_type == "reasoning_delta" and event_content:
+                    reasoning_text = f"{reasoning_text or ''}{event_content}"
+                elif stream_event_type == "reasoning_summary" and event_content:
+                    prior_text = reasoning_text or ""
+                    reasoning_text = (
+                        event_content if len(event_content) >= len(prior_text) else prior_text
+                    )
+                event_metadata = event.get("metadata")
+                if isinstance(event_metadata, dict):
+                    raw_tokens = event_metadata.get("reasoning_tokens")
+                    if isinstance(raw_tokens, int):
+                        reasoning_tokens = raw_tokens
+                continue
+
+            if event_type != "stream_chunk":
                 continue
             chunk_text = str(event.get("content", ""))
             if chunk_text:
                 chunks.append(chunk_text)
-        return "".join(chunks)
+        response_text = "".join(chunks)
+        return AgentResponse(
+            response=response_text,
+            reasoning=reasoning_text if effective_include_reasoning else None,
+            reasoning_tokens=reasoning_tokens if effective_include_reasoning else None,
+        )
 
     async def send_message_stream_events(
         self,

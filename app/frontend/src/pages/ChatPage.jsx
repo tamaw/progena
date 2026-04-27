@@ -80,7 +80,10 @@ function appendReasoningText(currentText, event) {
     return `${existingText}${event.content}`;
   }
 
-  return existingText.trim().length > 0 ? existingText : event.content;
+  if (existingText.trim().length === 0) {
+    return event.content;
+  }
+  return event.content.length >= existingText.length ? event.content : existingText;
 }
 
 function normalizeStoredMessage(message, index) {
@@ -151,17 +154,21 @@ function appendStreamEvent(events, nextEvent) {
     const existingReasoningIndex = currentEvents.findIndex(isReasoningEvent);
     if (existingReasoningIndex !== -1) {
       const existingReasoningEvent = currentEvents[existingReasoningIndex];
+      const existingContent = hasReasoningContent(existingReasoningEvent)
+        ? existingReasoningEvent.content
+        : '';
+      let mergedContent = existingContent;
+      if (nextEvent.eventType === 'reasoning_delta') {
+        mergedContent = `${existingContent}${nextEvent.content}`;
+      } else if (hasReasoningContent(nextEvent)) {
+        mergedContent = nextEvent.content;
+      }
       const mergedEvent = {
         ...existingReasoningEvent,
-        eventType:
-          existingReasoningEvent.eventType === 'reasoning_delta'
-          || nextEvent.eventType === 'reasoning_delta'
-            ? 'reasoning_delta'
-            : 'reasoning_summary',
-        content:
-          hasReasoningContent(existingReasoningEvent)
-            ? existingReasoningEvent.content
-            : nextEvent.content,
+        eventType: nextEvent.eventType === 'reasoning_summary'
+          ? 'reasoning_summary'
+          : existingReasoningEvent.eventType,
+        content: mergedContent,
         metadata: {
           ...existingReasoningEvent.metadata,
           ...nextEvent.metadata,

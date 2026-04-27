@@ -124,7 +124,7 @@ for line in sys.stdin:
             new=AsyncMock(return_value=mock_process),
         ):
             response = await client.send_message("hello")
-            assert response == "test response"
+            assert response.response == "test response"
 
         await client.stop()
 
