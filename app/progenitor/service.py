@@ -182,7 +182,7 @@ class ProgenitorService:
             request_id: Optional request ID for correlation.
 
         Returns:
-            The assistant's response.
+            The normalized agent response.
 
         Raises:
             RuntimeError: If service is not initialized.
@@ -492,8 +492,7 @@ class ProgenitorService:
     def _resolve_include_reasoning(self, include_reasoning: bool | None) -> bool:
         """Resolve include_reasoning against the configured default."""
         if include_reasoning is None:
-            llm_config = getattr(self.config, "llm", None)
-            return bool(getattr(llm_config, "reasoning_enabled", True))
+            return self.config.llm.reasoning_enabled
         return include_reasoning
 
     def _build_graph_input(self, message: str) -> dict[str, Any]:
