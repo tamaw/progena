@@ -1,0 +1,10 @@
+runtime:
+  port: 8080
+  mounts:
+    - host_path: /var/lib/progenitor/data/state/agents/observe_agent
+      container_path: /app/data/state
+    - host_path: /var/lib/progenitor/logs
+      container_path: /app/logs
+    - host_path: /var/lib/progenitor/worktrees
+      container_path: /app/worktrees
+  additional_env_keys: []

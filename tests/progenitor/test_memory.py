@@ -36,10 +36,12 @@ class TestRuntimeMemoryWiring:
             patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
             patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
             mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.deep_agent import create_progenitor_agent
 
@@ -59,10 +61,12 @@ class TestRuntimeMemoryWiring:
             patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
             patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
             mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.deep_agent import (
                 DEFAULT_RUNTIME_MEMORY_CONTENT,
@@ -90,10 +94,12 @@ class TestRuntimeMemoryWiring:
             patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
             patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
             mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.deep_agent import create_progenitor_agent
 

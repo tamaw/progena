@@ -15,9 +15,13 @@ class TestCreateDeepAgentForLoop:
 
     def test_returns_compiled_graph(self):
         """Factory returns a compiled graph (same type ProgenitorLoop expects)."""
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+        ):
             mock_graph = MagicMock()
             mock_create.return_value = mock_graph
+            mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
 
@@ -26,8 +30,12 @@ class TestCreateDeepAgentForLoop:
 
     def test_passes_all_parameters(self):
         """All parameters are forwarded to create_progenitor_agent."""
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_da:
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_da,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+        ):
             mock_da.return_value = MagicMock()
+            mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
 
@@ -59,7 +67,9 @@ class TestPatchLoopWithDeepAgent:
         mock_loop.llm_client = MagicMock()
         mock_loop.state_manager = MagicMock()
 
-        with patch("app.progenitor.runtime.deep_agent_adapter.create_deep_agent_for_loop") as mock_factory:
+        with patch(
+            "app.progenitor.runtime.deep_agent_adapter.create_deep_agent_for_loop"
+        ) as mock_factory:
             mock_deep_agent = MagicMock()
             mock_factory.return_value = mock_deep_agent
 
@@ -77,7 +87,9 @@ class TestPatchLoopWithDeepAgent:
         original_bg_graph = MagicMock()
         mock_loop.background_graph = original_bg_graph
 
-        with patch("app.progenitor.runtime.deep_agent_adapter.create_deep_agent_for_loop") as mock_factory:
+        with patch(
+            "app.progenitor.runtime.deep_agent_adapter.create_deep_agent_for_loop"
+        ) as mock_factory:
             mock_factory.return_value = MagicMock()
 
             patch_loop_with_deep_agent(mock_loop)
@@ -95,7 +107,9 @@ class TestPatchLoopWithDeepAgent:
         mock_loop.llm_client = mock_llm
         mock_loop.state_manager = mock_sm
 
-        with patch("app.progenitor.runtime.deep_agent_adapter.create_deep_agent_for_loop") as mock_factory:
+        with patch(
+            "app.progenitor.runtime.deep_agent_adapter.create_deep_agent_for_loop"
+        ) as mock_factory:
             mock_factory.return_value = MagicMock()
 
             patch_loop_with_deep_agent(mock_loop)
@@ -111,10 +125,14 @@ class TestDeepAgentAstreamCompatibility:
 
     def test_deep_agent_graph_has_astream(self):
         """The graph returned by create_deep_agent has .astream method."""
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+        ):
             mock_graph = MagicMock()
             mock_graph.astream = AsyncMock()
             mock_create.return_value = mock_graph
+            mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
 

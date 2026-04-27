@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DOCKERFILE = REPO_ROOT / "app" / "agents" / "builder_progenitor" / "Dockerfile"
+DOCKERFILE = REPO_ROOT / "docker" / "agents" / "Dockerfile"
 REQUIREMENTS = REPO_ROOT / "app" / "agents" / "builder_progenitor" / "requirements.txt"
 LSP_CONFIG = REPO_ROOT / "app" / "agents" / "builder_progenitor" / "lsp-config.json"
 
@@ -32,8 +32,8 @@ def test_builder_progenitor_lsp_config_targets_pyright_langserver() -> None:
     }
 
 
-def test_builder_progenitor_dockerfile_installs_copilot_lsp_config() -> None:
+def test_shared_agent_dockerfile_installs_optional_copilot_lsp_config() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
     assert "/home/runner/.copilot/lsp-config.json" in dockerfile
-    assert "COPY --chown=runner:agent app/agents/builder_progenitor/lsp-config.json" in dockerfile
+    assert 'if [ -f "/app/app/agents/${AGENT_NAME}/lsp-config.json" ]; then' in dockerfile

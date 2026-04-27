@@ -2,6 +2,8 @@ name: ci
 
 on:
   workflow_dispatch:
+    # Manual runs are used as an explicit deploy signal; build-and-deploy
+    # still runs after validation even when no push-based diff is available.
   push:
     paths-ignore:
       - 'app/agents/**'
@@ -16,11 +18,10 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   backend:
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, python]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +39,6 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Lint backend (ruff)
-        continue-on-error: true
         run: |
           . .venv/bin/activate
           ruff check app/backend tests/backend
@@ -49,7 +49,8 @@ jobs:
           pytest tests/backend
 
   progenitor:
-    runs-on: [self-hosted, Linux]
+    # Pyright uses a system Node runtime on the self-hosted runner.
+    runs-on: [self-hosted, Linux, node, python]
     steps:
       - uses: actions/checkout@v4
 
@@ -58,10 +59,6 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
 
       - name: Install Python deps
         run: |
@@ -86,12 +83,9 @@ jobs:
           pytest
           tests/progenitor
           tests/test_scheduler.py
-          --ignore=tests/progenitor/test_dual_loop_full_integration.py
-          --ignore=tests/progenitor/test_dual_loop_integration.py
-          --ignore=tests/progenitor/test_e2e_dual_loop.py
 
   frontend:
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, node]
     defaults:
       run:
         working-directory: app/frontend
@@ -108,34 +102,57 @@ jobs:
         run: npm ci --prefer-offline
 
       - name: Lint
-        continue-on-error: true
         run: npm run lint
 
       - name: Build
         run: npm run build
 
-  build-and-push:
+  build-and-deploy:
     runs-on: [self-hosted, Linux, docker]
+    environment: cronix
     needs: [backend, progenitor, frontend]
-    # Keep push-based image publishing on main, but allow explicit manual dispatches from a branch.
+    # Build deployment images and deploy them on the same self-hosted Docker runner.
     if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect deploy-affecting changes
+        id: changes
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            progenitor_image:
+              - 'app/progenitor/**'
+              - 'docker/progenitor/**'
+              - 'pyproject.toml'
+            backend_image:
+              - 'app/backend/**'
+              - 'docker/backend/**'
+              - 'pyproject.toml'
+            frontend_image:
+              - 'app/frontend/**'
+              - 'docker/frontend/**'
+            redeploy:
+              - 'app/backend/**'
+              - 'app/progenitor/**'
+              - 'app/frontend/**'
+              - 'docker/**'
+              - 'pyproject.toml'
+              - 'data/prompts/**'
+              - 'data/skills/**'
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push progenitor image
+      - name: Build and load progenitor image
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.progenitor_image == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/progenitor/Dockerfile
-          push: true
+          load: true
           labels: |
             com.progenitor.managed=true
             com.progenitor.component=progenitor
@@ -145,12 +162,13 @@ jobs:
           cache-from: type=gha,scope=progenitor-image
           cache-to: type=gha,mode=max,scope=progenitor-image
 
-      - name: Build and push backend image
+      - name: Build and load backend image
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend_image == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/backend/Dockerfile
-          push: true
+          load: true
           labels: |
             com.progenitor.managed=true
             com.progenitor.component=backend
@@ -160,12 +178,13 @@ jobs:
           cache-from: type=gha,scope=backend-image
           cache-to: type=gha,mode=max,scope=backend-image
 
-      - name: Build and push frontend image
+      - name: Build and load frontend image
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend_image == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: app/frontend
           file: docker/frontend/Dockerfile
-          push: true
+          load: true
           labels: |
             com.progenitor.managed=true
             com.progenitor.component=frontend
@@ -175,66 +194,47 @@ jobs:
           cache-from: type=gha,scope=frontend-image
           cache-to: type=gha,mode=max,scope=frontend-image
 
-  deploy:
-    # Deploy + liveness check on the cronix self-hosted runner after CI succeeds.
-    runs-on: [self-hosted, Linux, docker]
-    environment: cronix
-    needs: [build-and-push]
-    # Keep push-based deploys on main, but allow explicit manual dispatches from a branch.
-    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
-    steps:
-      - uses: actions/checkout@v4
+      - name: No deploy-affecting changes
+        if: ${{ github.event_name != 'workflow_dispatch' && steps.changes.outputs.redeploy != 'true' }}
+        run: echo "No deploy-affecting changes detected; skipping image rebuilds and compose restart."
 
       - name: Ensure external network
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
         run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
 
       - name: Deploy progenitor stack
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
         env:
+          PROGENITOR_IMAGE_TAG: latest
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_TIMEZONE: ${{ vars.PROGENITOR_TIMEZONE }}
-          GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
           PROGENITOR_REASONING_ENABLED: ${{ vars.PROGENITOR_REASONING_ENABLED }}
-          PROGENITOR_REASONING_BUDGET_TOKENS: ${{ vars.PROGENITOR_REASONING_BUDGET_TOKENS }}
           TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
           TELEGRAM_POLLING_ENABLED: ${{ vars.TELEGRAM_POLLING_ENABLED }}
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PROGENITOR_HOST_DATA_DIR: /var/lib/progenitor/data
+          PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
+          PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
-          PROGENITOR_HOST_WORKTREES_DIR: /var/lib/progenitor/worktrees
-          PROGENITOR_HOST_TMP_DIR: /var/lib/progenitor/tmp
         run: |
-          PROMPTS_HOST_DIR="${PROGENITOR_HOST_DATA_DIR}/prompts"
-          SKILLS_HOST_DIR="${PROGENITOR_HOST_DATA_DIR}/skills"
-          ASSET_SYNC_CONTAINER="progenitor-asset-sync"
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
-          docker rm -f progenitor progenitor-backend progenitor-frontend "${ASSET_SYNC_CONTAINER}" 2>/dev/null || true
-          # The self-hosted runner runs in Docker, so writing /var/lib/... from the job filesystem does
-          # not populate the Docker host bind mounts used by the deployed containers. Sync prompt assets
-          # through a helper container that mounts the real host data/log paths seen by the daemon.
-          docker create --name "${ASSET_SYNC_CONTAINER}" \
-            -v "${PROGENITOR_HOST_DATA_DIR}:/app/data" \
-            -v "${PROGENITOR_HOST_LOGS_DIR}:/app/logs" \
-            alpine:3.20 \
-            sh -c 'mkdir -p /app/data/prompts /app/data/skills /app/logs && tail -f /dev/null' >/dev/null
-          docker start "${ASSET_SYNC_CONTAINER}" >/dev/null
-          docker exec "${ASSET_SYNC_CONTAINER}" sh -c \
-            'find /app/data/prompts -mindepth 1 -maxdepth 1 -exec rm -rf {} + && \
-             find /app/data/skills -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
-          docker cp data/prompts/. "${ASSET_SYNC_CONTAINER}:/app/data/prompts/"
-          docker cp data/skills/. "${ASSET_SYNC_CONTAINER}:/app/data/skills/"
-          docker rm -f "${ASSET_SYNC_CONTAINER}" >/dev/null
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker compose -f docker/docker-compose.progenitor.yml pull
-          docker compose -f docker/docker-compose.progenitor.yml up -d
+          docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
+          docker image inspect ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} >/dev/null
+          docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
+          docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
+          test -d "$PROGENITOR_HOST_PROMPTS_DIR"
+          test -d "$PROGENITOR_HOST_SKILLS_DIR"
+          docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 
       - name: Liveness checks
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
         run: |
           wait_healthy() {
             local name="$1"
@@ -257,10 +257,3 @@ jobs:
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
           wait_healthy progenitor-frontend 60
-
-      - name: Cleanup unused managed images
-        if: success()
-        run: |
-          docker image prune -af \
-            --filter "label=com.progenitor.managed=true" \
-            --filter "until=168h" || true
