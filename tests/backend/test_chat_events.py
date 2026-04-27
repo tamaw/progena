@@ -24,8 +24,10 @@ from app.backend.main import app
 from app.backend.models import (
     ResponseInputMessage,
     ResponseOutputMessage,
+    ResponseOutputReasoning,
     ResponseOutputText,
     ResponsePayload,
+    ResponseReasoningSummaryText,
     ResponseRequest,
     SimpleChatRequest,
     StreamingResponseRequest,
@@ -518,14 +520,24 @@ class TestResponsePayloadModel:
             model="test-model",
             output=[
                 ResponseOutputMessage(
-                    content=[ResponseOutputText(text="Hello")]
+                    content=[
+                        ResponseOutputReasoning(
+                            summary=[
+                                ResponseReasoningSummaryText(
+                                    text="Checked constraints before answering."
+                                )
+                            ]
+                        ),
+                        ResponseOutputText(text="Hello"),
+                    ]
                 )
             ],
         )
         assert payload.id == "resp-123"
         assert payload.object == "response"
         assert payload.model == "test-model"
-        assert payload.output[0].content[0].text == "Hello"
+        assert payload.output[0].content[0].type == "reasoning"
+        assert payload.output[0].content[1].text == "Hello"
 
 
 class TestTypingIndicatorEvents:

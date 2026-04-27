@@ -210,6 +210,58 @@ class TestAsyncResponseHandling:
         assert response.status_code == 200
         assert captured["metadata"] == {"thread_id": "thread_sess_thread_xyz"}
 
+    def test_non_streaming_responses_include_reasoning_output(self, client):
+        """Non-streaming /v1/responses should include reasoning items when available."""
+        import app.backend.main as backend_main
+
+        original_client = backend_main.client
+
+        class _MockClient:
+            async def send_message_response(
+                self,
+                message: str,
+                request_id: str | None = None,
+                metadata: dict[str, object] | None = None,
+            ) -> dict[str, object]:
+                del message, request_id, metadata
+                return {
+                    "response": "10.50. At $0.75 per pencil, 14 pencils cost $10.50.",
+                    "reasoning": "Checked the unit price before multiplying by 14.",
+                    "reasoning_tokens": 17,
+                }
+
+        backend_main.client = _MockClient()
+
+        try:
+            response = client.post(
+                "/v1/responses",
+                json={
+                    "model": "progenitor-v1",
+                    "input": "hi",
+                    "stream": False,
+                },
+            )
+        finally:
+            backend_main.client = original_client
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["output"][0]["content"] == [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": "Checked the unit price before multiplying by 14.",
+                    }
+                ],
+            },
+            {
+                "type": "output_text",
+                "text": "10.50. At $0.75 per pencil, 14 pencils cost $10.50.",
+            },
+        ]
+
 
 class TestConcurrentRequestHandling:
     """Tests for concurrent request handling."""

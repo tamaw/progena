@@ -25,7 +25,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -48,6 +48,14 @@ from .streaming_utils import (
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+class ResponseDetails(TypedDict):
+    """Normalized non-stream response payload returned from the in-process service."""
+
+    response: str
+    reasoning: str | None
+    reasoning_tokens: int | None
 
 
 class ProgenitorService:
@@ -193,12 +201,48 @@ class ProgenitorService:
             graph_input = self._build_graph_input(message)
             config = {"configurable": {"thread_id": thread_id}}
             result = await self.graph.ainvoke(graph_input, config)
-            response = self._extract_response(result)
-            return response or "I processed your request but have no response."
+            response_details = self._extract_response_details(result)
+            return response_details["response"]
 
         except Exception as e:
             logger.error(
                 "Error processing message (request_id=%s): %s",
+                request_id,
+                e,
+                exc_info=True,
+            )
+            raise
+
+    async def handle_message_response(
+        self,
+        message: str,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ResponseDetails:
+        """Handle a user message and return response text plus reasoning details."""
+        if not self._initialized:
+            await self.initialize()
+
+        request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
+        self._message_count += 1
+
+        logger.info(
+            "Processing rich response message (request_id=%s, count=%d)",
+            request_id,
+            self._message_count,
+        )
+
+        try:
+            if self.graph is None:
+                raise RuntimeError("Graph not initialized")
+            thread_id = await self._get_thread_id(metadata=metadata)
+            graph_input = self._build_graph_input(message)
+            config = {"configurable": {"thread_id": thread_id}}
+            result = await self.graph.ainvoke(graph_input, config)
+            return self._extract_response_details(result)
+        except Exception as e:
+            logger.error(
+                "Error processing rich response message (request_id=%s): %s",
                 request_id,
                 e,
                 exc_info=True,
@@ -488,15 +532,32 @@ class ProgenitorService:
 
     def _extract_response(self, result: Any) -> str:
         """Extract the final assistant response from a graph result/state dict."""
+        return self._extract_response_details(result)["response"]
+
+    def _extract_response_details(self, result: Any) -> ResponseDetails:
+        """Extract response text and reasoning metadata from a graph result/state dict."""
+        response_text = ""
+        reasoning_text: str | None = None
+        reasoning_tokens: int | None = None
+
         if isinstance(result, dict):
             pending_response = result.get("pending_response")
             if isinstance(pending_response, str) and pending_response.strip():
-                return pending_response
+                response_text = pending_response
+
             last_ai_message = self._get_last_ai_message(result.get("messages"))
-            extracted = self._extract_message_text(last_ai_message)
-            if extracted:
-                return extracted
-        return ""
+            if last_ai_message is not None:
+                extracted = self._extract_message_text(last_ai_message)
+                if extracted:
+                    response_text = extracted
+                reasoning_text = extract_reasoning_summary_text(last_ai_message)
+                reasoning_tokens = extract_reasoning_token_count(last_ai_message)
+
+        return {
+            "response": response_text or "I processed your request but have no response.",
+            "reasoning": reasoning_text or None,
+            "reasoning_tokens": reasoning_tokens,
+        }
 
     def _coerce_messages_list(self, messages: Any) -> list[Any]:
         """Coerce LangGraph message containers into a plain list."""
