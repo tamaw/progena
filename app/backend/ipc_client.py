@@ -16,10 +16,10 @@ Features:
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Literal, overload
+from typing import Any
 
 from ..progenitor.ipc import IPCClient
-from ..progenitor.service import ResponseDetails
+from ..progenitor.service import AgentResponse
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
@@ -160,35 +160,15 @@ class IPCProgenitorClient:
 
             self._started = False
 
-    @overload
     async def send_message(
         self,
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         *,
-        include_reasoning: Literal[False] = False,
-    ) -> str: ...
-
-    @overload
-    async def send_message(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        *,
-        include_reasoning: Literal[True],
-    ) -> ResponseDetails: ...
-
-    async def send_message(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        *,
-        include_reasoning: bool = False,
-    ) -> str | ResponseDetails:
-        """Send a message and get the response.
+        include_reasoning: bool | None = None,
+    ) -> AgentResponse:
+        """Send a message and get the normalized response model.
 
         Args:
             message: The user message.
@@ -204,6 +184,9 @@ class IPCProgenitorClient:
             raise RuntimeError("IPC client not initialized")
 
         chunks: list[str] = []
+        effective_include_reasoning = (
+            self.config.reasoning_enabled if include_reasoning is None else include_reasoning
+        )
         reasoning_text: str | None = None
         reasoning_tokens: int | None = None
         async for event in self._ipc_client.send_message_stream_events(
@@ -233,13 +216,11 @@ class IPCProgenitorClient:
             if chunk_text:
                 chunks.append(chunk_text)
         response_text = "".join(chunks)
-        if include_reasoning:
-            return {
-                "response": response_text,
-                "reasoning": reasoning_text,
-                "reasoning_tokens": reasoning_tokens,
-            }
-        return response_text
+        return AgentResponse(
+            response=response_text,
+            reasoning=reasoning_text if effective_include_reasoning else None,
+            reasoning_tokens=reasoning_tokens if effective_include_reasoning else None,
+        )
 
     async def send_message_stream_events(
         self,

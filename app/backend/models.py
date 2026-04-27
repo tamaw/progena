@@ -55,6 +55,7 @@ class ResponseRequest(BaseModel):
     model: str = "progenitor-v1"
     input: list[ResponseInputMessage] | str
     stream: bool = False
+    include_reasoning: bool | None = None
     metadata: dict[str, Any] | None = None
 
 

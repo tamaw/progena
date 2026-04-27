@@ -56,6 +56,7 @@ class ChatServerConfig:
     # Streaming settings
     stream_enabled: bool = True  # Enable real-time token streaming
     stream_chunk_delay_ms: int = 0  # Optional delay between chunks (0 = no delay)
+    reasoning_enabled: bool = True  # Include reasoning in response objects by default
 
     # Telegram integration settings
     telegram_enabled: bool = False  # Enable Telegram notifications when no web client connected
@@ -103,6 +104,7 @@ class ChatServerConfig:
             ),
             stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
             stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
+            reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             # Telegram settings
             telegram_enabled=env_bool("TELEGRAM_ENABLED", False),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),

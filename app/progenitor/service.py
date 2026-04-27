@@ -15,6 +15,7 @@ backend without subprocess communication, eliminating:
         await service.initialize()
 
         response = await service.handle_message("Hello")
+        print(response.response)
         async for event in service.handle_message_stream_events("Hello"):
             print(event)
 """
@@ -24,8 +25,9 @@ import inspect
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypedDict, overload
+from typing import Any
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -50,8 +52,9 @@ from .tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
-class ResponseDetails(TypedDict):
-    """Normalized non-stream response payload returned from the in-process service."""
+@dataclass(slots=True)
+class AgentResponse:
+    """Normalized non-stream response payload returned from Progenitor."""
 
     response: str
     reasoning: str | None
@@ -164,35 +167,15 @@ class ProgenitorService:
             self._initialized = True
             logger.info("Progenitor service initialized (session=%s)", self._session_id)
 
-    @overload
     async def handle_message(
         self,
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         *,
-        include_reasoning: Literal[False] = False,
-    ) -> str: ...
-
-    @overload
-    async def handle_message(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        *,
-        include_reasoning: Literal[True],
-    ) -> ResponseDetails: ...
-
-    async def handle_message(
-        self,
-        message: str,
-        request_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        *,
-        include_reasoning: bool = False,
-    ) -> str | ResponseDetails:
-        """Handle a user message and return the response.
+        include_reasoning: bool | None = None,
+    ) -> AgentResponse:
+        """Handle a user message and return the normalized response model.
 
         Args:
             message: The user message to process.
@@ -224,9 +207,13 @@ class ProgenitorService:
             config = {"configurable": {"thread_id": thread_id}}
             result = await self.graph.ainvoke(graph_input, config)
             response_details = self._extract_response_details(result)
-            if include_reasoning:
+            if self._resolve_include_reasoning(include_reasoning):
                 return response_details
-            return response_details["response"]
+            return AgentResponse(
+                response=response_details.response,
+                reasoning=None,
+                reasoning_tokens=None,
+            )
 
         except Exception as e:
             logger.error(
@@ -502,6 +489,13 @@ class ProgenitorService:
         self._initialized = False
         logger.info("Progenitor service shutdown complete")
 
+    def _resolve_include_reasoning(self, include_reasoning: bool | None) -> bool:
+        """Resolve include_reasoning against the configured default."""
+        if include_reasoning is None:
+            llm_config = getattr(self.config, "llm", None)
+            return bool(getattr(llm_config, "reasoning_enabled", True))
+        return include_reasoning
+
     def _build_graph_input(self, message: str) -> dict[str, Any]:
         """Build the same graph input shape used by ProgenitorLoop."""
         return {"messages": [HumanMessage(content=message)]}
@@ -520,9 +514,9 @@ class ProgenitorService:
 
     def _extract_response(self, result: Any) -> str:
         """Extract the final assistant response from a graph result/state dict."""
-        return self._extract_response_details(result)["response"]
+        return self._extract_response_details(result).response
 
-    def _extract_response_details(self, result: Any) -> ResponseDetails:
+    def _extract_response_details(self, result: Any) -> AgentResponse:
         """Extract response text and reasoning metadata from a graph result/state dict."""
         response_text = ""
         reasoning_text: str | None = None
@@ -541,11 +535,11 @@ class ProgenitorService:
                 reasoning_text = extract_reasoning_summary_text(last_ai_message)
                 reasoning_tokens = extract_reasoning_token_count(last_ai_message)
 
-        return {
-            "response": response_text or "I processed your request but have no response.",
-            "reasoning": reasoning_text or None,
-            "reasoning_tokens": reasoning_tokens,
-        }
+        return AgentResponse(
+            response=response_text or "I processed your request but have no response.",
+            reasoning=reasoning_text or None,
+            reasoning_tokens=reasoning_tokens,
+        )
 
     def _coerce_messages_list(self, messages: Any) -> list[Any]:
         """Coerce LangGraph message containers into a plain list."""
