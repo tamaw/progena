@@ -17,8 +17,9 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import IO, Any, cast
+from typing import IO, Any
 
+from ..progenitor.service import AgentResponse
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)
@@ -209,15 +210,17 @@ class ProgenitorClient:
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> str:
-        """Send a message to Progenitor and get the response.
+        *,
+        include_reasoning: bool | None = None,
+    ) -> AgentResponse:
+        """Send a message to Progenitor and get the normalized response model.
 
         Args:
             message: The user message to send
             request_id: Optional request ID for correlation
 
         Returns:
-            The response from Progenitor
+            The normalized agent response.
         """
         if not self._started:
             await self.start()
@@ -232,6 +235,9 @@ class ProgenitorClient:
             raise RuntimeError("Progenitor process not running")
 
         async with self._lock:
+            effective_include_reasoning = (
+                self.config.reasoning_enabled if include_reasoning is None else include_reasoning
+            )
             # Send message as JSON line
             payload: dict[str, Any] = {
                 "type": "user_message",
@@ -260,7 +266,23 @@ class ProgenitorClient:
                 self._last_heartbeat = time.time()
 
                 response = json.loads(response_line.decode())
-                return cast(str, response.get("content", str(response)))
+                response_text = str(response.get("content", str(response)))
+                response_metadata = response.get("metadata")
+                reasoning_text: str | None = None
+                reasoning_tokens: int | None = None
+                if effective_include_reasoning and isinstance(response_metadata, dict):
+                    raw_reasoning = response_metadata.get("reasoning")
+                    if isinstance(raw_reasoning, str) and raw_reasoning.strip():
+                        reasoning_text = raw_reasoning
+                    raw_tokens = response_metadata.get("reasoning_tokens")
+                    if isinstance(raw_tokens, int):
+                        reasoning_tokens = raw_tokens
+
+                return AgentResponse(
+                    response=response_text,
+                    reasoning=reasoning_text,
+                    reasoning_tokens=reasoning_tokens,
+                )
 
             except TimeoutError:
                 raise TimeoutError(
@@ -269,7 +291,8 @@ class ProgenitorClient:
             except json.JSONDecodeError:
                 # Return raw text if not JSON
                 self._last_heartbeat = time.time()  # CR-001
-                return response_line.decode().strip() if response_line else ""
+                response_text = response_line.decode().strip() if response_line else ""
+                return AgentResponse(response=response_text, reasoning=None, reasoning_tokens=None)
 
     async def send_message_stream_events(
         self,

@@ -48,8 +48,10 @@ from .models import (
     ModelInfo,
     ModelsResponse,
     ResponseOutputMessage,
+    ResponseOutputReasoning,
     ResponseOutputText,
     ResponsePayload,
+    ResponseReasoningSummaryText,
     ResponseRequest,
     SimpleChatRequest,
     StreamingResponseRequest,
@@ -382,7 +384,9 @@ async def _send_telegram_connected_message(
         if not progenitor.is_running:
             await progenitor.start()
 
-        response_text = (await progenitor.send_message(prompt, request_id=request_id)).strip()
+        response_text = (
+            await progenitor.send_message(prompt, request_id=request_id)
+        ).response.strip()
         if not response_text:
             raise RuntimeError("Empty greeting response from agent")
 
@@ -490,7 +494,7 @@ async def _handle_alert_request(
                 _build_alert_summary_prompt(alert),
                 request_id=f"alert-summary-{alert.id}",
             )
-        ).strip()
+        ).response.strip()
         if response_text and response_text.lower() != "sent":
             logger.debug(
                 "Alert summary helper returned non-sentinel text for %s: %s",
@@ -1140,18 +1144,27 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
                 ),
             )
 
-        response_text = await client.send_message(
+        response_details = await client.send_message(
             last_user_msg,
             request_id=request_id,
             metadata=request_metadata,
+            include_reasoning=body.include_reasoning,
         )
         _attach_session_cookie(request, session, response)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
+        response_text = response_details.response
+        reasoning_text = (response_details.reasoning or "").strip()
+        output_content: list[ResponseOutputReasoning | ResponseOutputText] = []
+        if reasoning_text:
+            output_content.append(
+                ResponseOutputReasoning(summary=[ResponseReasoningSummaryText(text=reasoning_text)])
+            )
+        output_content.append(ResponseOutputText(text=response_text))
 
         return ResponsePayload(
             id=response_id,
             model=body.model,
-            output=[ResponseOutputMessage(content=[ResponseOutputText(text=response_text)])],
+            output=[ResponseOutputMessage(content=output_content)],
             usage=Usage(
                 prompt_tokens=len(" ".join(all_inputs).split()),
                 completion_tokens=len(response_text.split()),
@@ -1307,12 +1320,12 @@ async def simple_chat(request: Request, response: Response, body: SimpleChatRequ
             session.session_id,
             message_increment=1,
         )
-        response_text = await client.send_message(
+        response_details = await client.send_message(
             body.message,
             metadata=request_metadata,
         )
         _attach_session_cookie(request, session, response)
-        return {"response": response_text}
+        return {"response": response_details.response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
