@@ -88,12 +88,13 @@ def create_langchain_model(
     extra_body: dict[str, dict[str, str]] | None = None
     if config.reasoning_enabled:
         reasoning_effort = _resolve_reasoning_effort(model_name, config.reasoning_budget_tokens)
-        extra_body = {"reasoning": {"summary": "auto"}}
+        extra_body = {"reasoning": {"summary": config.reasoning_summary}}
         logger.info(
-            "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
+            "Reasoning enabled for model %s (effort=%s, budget_tokens=%s, summary=%s)",
             model_name,
             reasoning_effort,
             config.reasoning_budget_tokens or "default",
+            config.reasoning_summary,
         )
 
     model = ChatOpenAI(

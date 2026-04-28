@@ -86,6 +86,7 @@ class TestLangChainAdapter:
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
             reasoning_budget_tokens=2048,
+            reasoning_summary="detailed",
         )
         with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
@@ -93,7 +94,7 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
 
     def test_reasoning_defaults_to_low_effort(self):
         """Reasoning defaults to low effort when no budget is set."""
@@ -125,6 +126,21 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "medium"
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
+
+    def test_reasoning_summary_defaults_to_auto(self):
+        """Reasoning summary defaults to auto when not overridden."""
+        config = LLMConfig(
+            base_url="https://example.openai.azure.com/openai/v1",
+            api_key="test-key",
+            model_default="gpt-5.2-chat",
+            reasoning_enabled=True,
+        )
+        with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
+            mock_chat_openai.return_value = MagicMock()
+            create_langchain_model(config)
+
+        _, kwargs = mock_chat_openai.call_args
         assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
 
 
