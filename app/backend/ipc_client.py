@@ -67,7 +67,6 @@ class IPCProgenitorClient:
             self._ipc_client = IPCClient(
                 host=self.config.progenitor_ipc_host,
                 port=self.config.progenitor_ipc_port,
-                timeout=self.config.progenitor_timeout,
                 auto_reconnect=True,
                 max_reconnect_attempts=5,
             )
