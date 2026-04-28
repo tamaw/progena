@@ -85,6 +85,7 @@ class TestLangChainAdapter:
             api_key="test-key",
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
+            reasoning_effort="medium",
             reasoning_summary="detailed",
         )
         with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
@@ -92,7 +93,7 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning_effort"] == "low"
+        assert kwargs["reasoning_effort"] == "medium"
         assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
 
     def test_reasoning_defaults_to_low_effort(self):
@@ -111,13 +112,14 @@ class TestLangChainAdapter:
         assert kwargs["reasoning_effort"] == "low"
         assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
 
-    def test_gpt_5_3_chat_clamps_reasoning_effort_to_medium(self):
-        """gpt-5.3-chat only supports medium reasoning effort."""
+    def test_reasoning_effort_respects_config_for_gpt_5_3_chat(self):
+        """gpt-5.3-chat uses the configured reasoning effort."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
             model_default="gpt-5.3-chat-2026-03-03",
             reasoning_enabled=True,
+            reasoning_effort="medium",
         )
         with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()

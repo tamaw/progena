@@ -39,19 +39,9 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def _resolve_reasoning_effort(model_name: str) -> str:
-    """Return the provider-supported default reasoning effort for a model."""
-    effort = "low"
-    normalized_model_name = model_name.strip().lower()
-    if normalized_model_name.startswith("gpt-5.3-chat") and effort != "medium":
-        logger.info(
-            "Model %s only supports medium reasoning effort; using medium instead of %s",
-            model_name,
-            effort,
-        )
-        return "medium"
-
-    return effort
+def _resolve_reasoning_effort(config: LLMConfig) -> str:
+    """Return the configured reasoning effort for the active model."""
+    return config.reasoning_effort
 
 
 def create_langchain_model(
@@ -81,7 +71,7 @@ def create_langchain_model(
     reasoning_effort: str | None = None
     extra_body: dict[str, dict[str, str]] | None = None
     if config.reasoning_enabled:
-        reasoning_effort = _resolve_reasoning_effort(model_name)
+        reasoning_effort = _resolve_reasoning_effort(config)
         extra_body = {"reasoning": {"summary": config.reasoning_summary}}
         logger.info(
             "Reasoning enabled for model %s (effort=%s, summary=%s)",

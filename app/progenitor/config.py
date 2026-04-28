@@ -150,11 +150,13 @@ class LLMConfig:
     model_summary: str | None = None
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = True
+    reasoning_effort: str = "low"
     reasoning_summary: str = "auto"
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
+        reasoning_effort = os.getenv("PROGENITOR_REASONING_EFFORT", "").strip()
         reasoning_summary = os.getenv("PROGENITOR_REASONING_SUMMARY", "").strip()
 
         return cls(
@@ -165,6 +167,7 @@ class LLMConfig:
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
+            reasoning_effort=reasoning_effort or cls.reasoning_effort,
             reasoning_summary=reasoning_summary or cls.reasoning_summary,
         )
 

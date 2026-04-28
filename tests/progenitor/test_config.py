@@ -106,6 +106,7 @@ class TestLLMConfig:
             assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
             assert config.reasoning_enabled is True
+            assert config.reasoning_effort == "low"
             assert config.reasoning_summary == "auto"
 
     def test_defaults(self):
@@ -114,7 +115,18 @@ class TestLLMConfig:
         assert config.base_url == ""
         assert config.model_default == "gpt-5.1-codex-max"
         assert config.reasoning_enabled is True
+        assert config.reasoning_effort == "low"
         assert config.reasoning_summary == "auto"
+
+    def test_reasoning_effort_from_env(self):
+        """Test loading reasoning effort from environment."""
+        with patch.dict(
+            os.environ,
+            {"PROGENITOR_REASONING_EFFORT": "medium"},
+            clear=False,
+        ):
+            config = LLMConfig.from_env()
+            assert config.reasoning_effort == "medium"
 
     def test_reasoning_summary_from_env(self):
         """Test loading reasoning summary mode from environment."""
