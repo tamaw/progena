@@ -9,6 +9,18 @@ RUNNER_SCOPE="${RUNNER_SCOPE:-repo}"
 RUNNER_EPHEMERAL="${RUNNER_EPHEMERAL:-false}"
 RUNNER_REPLACE="${RUNNER_REPLACE:-true}"
 
+prune_stale_venvs() {
+    find /home/runner/_probe/_work -path '*/.venv/bin/python' -type l 2>/dev/null | while read -r python_link; do
+        python_target="$(readlink "$python_link" || true)"
+        if [[ -z "$python_target" ]]; then
+            continue
+        fi
+        if [[ "$python_target" == /home/runner/_probe/_work/_tool/* ]] && [[ ! -e "$python_link" ]]; then
+            rm -rf "$(dirname "$(dirname "$python_link")")"
+        fi
+    done
+}
+
 if [[ -S /var/run/docker.sock ]]; then
     docker_gid="$(stat -c '%g' /var/run/docker.sock)"
     if getent group "${docker_gid}" >/dev/null 2>&1; then
@@ -25,6 +37,7 @@ fi
 
 mkdir -p "${RUNNER_WORKDIR}"
 chown -R runner:runner /home/runner
+prune_stale_venvs
 
 runner_name="${RUNNER_NAME:-${RUNNER_NAME_PREFIX}-$(hostname)}"
 config_args=(
