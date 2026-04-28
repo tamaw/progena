@@ -1173,46 +1173,6 @@ class ProgenitorLoop:
 
         return None
 
-    def _message_has_reasoning_marker(self, msg: Any) -> bool:
-        """Return True when a message indicates provider-side reasoning occurred."""
-        if msg is None:
-            return False
-
-        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
-        if isinstance(content, list):
-            for part in content:
-                if not isinstance(part, dict):
-                    continue
-                if str(part.get("type", "")).lower() in {
-                    "reasoning",
-                    "reasoning_text",
-                    "reasoning_summary",
-                    "thinking",
-                }:
-                    return True
-
-        if extract_reasoning_token_count(msg) is not None:
-            return True
-
-        containers: list[dict[str, Any]] = []
-        if isinstance(msg, dict):
-            containers.append(msg)
-            for key in ("additional_kwargs", "response_metadata", "usage_metadata"):
-                value = msg.get(key)
-                if isinstance(value, dict):
-                    containers.append(value)
-        else:
-            for attr in ("additional_kwargs", "response_metadata", "usage_metadata"):
-                value = getattr(msg, attr, None)
-                if isinstance(value, dict):
-                    containers.append(value)
-
-        for container in containers:
-            if any(key in container for key in ("reasoning", "thinking", "summary")):
-                return True
-
-        return False
-
     def _extract_message_text(self, msg: Any) -> str | None:
         """Extract assistant-facing text from message content payloads."""
         if msg is None:
