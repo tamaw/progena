@@ -53,7 +53,6 @@ class IPCClient:
         self,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
-        timeout: float | None = None,
         auto_reconnect: bool = True,
         max_reconnect_attempts: int = 5,
     ):
@@ -62,13 +61,11 @@ class IPCClient:
         Args:
             host: Server host.
             port: Server port.
-            timeout: Deprecated compatibility parameter. IPC requests do not time out.
             auto_reconnect: Whether to auto-reconnect on connection loss.
             max_reconnect_attempts: Maximum reconnection attempts.
         """
         self.host = host
         self.port = port
-        self.timeout = timeout
         self.auto_reconnect = auto_reconnect
         self.max_reconnect_attempts = max_reconnect_attempts
 
@@ -556,22 +553,3 @@ class IPCClient:
             self._event_queue.put_nowait(event)
         except asyncio.QueueFull:
             logger.warning("Event queue full, dropping event: %s", event.get("event_type"))
-
-
-# Convenience function for creating clients
-def create_ipc_client(
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-    timeout: float | None = None,
-) -> IPCClient:
-    """Create an IPC client with default settings.
-
-    Args:
-        host: Server host.
-        port: Server port.
-        timeout: Deprecated compatibility parameter. IPC requests do not time out.
-
-    Returns:
-        Configured IPCClient instance.
-    """
-    return IPCClient(host=host, port=port, timeout=timeout)

@@ -27,19 +27,17 @@ CONNECTION_RETRIES = 10
 async def is_progenitor_running(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    timeout: float = 5.0,
 ) -> bool:
     """Check if Progenitor IPC server is running and accepting connections.
 
     Args:
         host: IPC server host
         port: IPC server port
-        timeout: Connection timeout in seconds
 
     Returns:
         True if server is running and responsive, False otherwise
     """
-    client = IPCClient(host=host, port=port, timeout=timeout, auto_reconnect=False)
+    client = IPCClient(host=host, port=port, auto_reconnect=False)
 
     try:
         connected = await client.connect()
@@ -84,7 +82,7 @@ async def wait_for_progenitor(
             logger.error(f"Timeout waiting for Progenitor after {attempts} attempts")
             return False
 
-        if await is_progenitor_running(host, port, timeout=3.0):
+        if await is_progenitor_running(host, port):
             logger.info(f"Progenitor is ready (attempt {attempts}, {elapsed:.1f}s)")
             return True
 
@@ -131,11 +129,13 @@ def get_results_summary(results_dir: Path) -> dict:
             else:
                 summary["failed"] += 1
 
-            summary["by_test"][test_name].append({
-                "file": result_file.name,
-                "success": success,
-                "timestamp": data.get("timestamp"),
-            })
+            summary["by_test"][test_name].append(
+                {
+                    "file": result_file.name,
+                    "success": success,
+                    "timestamp": data.get("timestamp"),
+                }
+            )
 
         except Exception as e:
             logger.warning(f"Could not parse {result_file}: {e}")
@@ -181,6 +181,7 @@ def print_results_summary(results_dir: Path) -> None:
 
 if __name__ == "__main__":
     """Test the helper functions."""
+
     async def main():
         # Check if running
         running = await is_progenitor_running()

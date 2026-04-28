@@ -135,7 +135,6 @@ async def ipc_client(ipc_server):
     client = IPCClient(
         host="127.0.0.1",
         port=ipc_server.port,
-        timeout=5.0,
         auto_reconnect=False,
     )
     connected = await client.connect()
@@ -200,7 +199,6 @@ class TestIPCClientBasic:
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=5.0,
         )
 
         connected = await client.connect()
@@ -216,7 +214,6 @@ class TestIPCClientBasic:
         client = IPCClient(
             host="127.0.0.1",
             port=59999,  # Unlikely to be in use
-            timeout=1.0,
             auto_reconnect=False,
         )
 
@@ -389,11 +386,10 @@ class TestIPCErrorHandling:
 
     @pytest.mark.asyncio
     async def test_request_waits_without_ipc_timeout(self, ipc_server, mock_loop_runner):
-        """IPC requests should wait for a response even if a timeout value is provided."""
+        """IPC requests should wait for a delayed response without timing out."""
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=0.1,
             auto_reconnect=False,
         )
         await client.connect()
@@ -420,7 +416,6 @@ class TestIPCErrorHandling:
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=5.0,
             auto_reconnect=True,
             max_reconnect_attempts=3,
         )
@@ -454,7 +449,6 @@ class TestIPCConcurrency:
             client = IPCClient(
                 host="127.0.0.1",
                 port=ipc_server.port,
-                timeout=5.0,
             )
             await client.connect()
             clients.append(client)
@@ -489,7 +483,6 @@ class TestIPCConcurrency:
                 client = IPCClient(
                     host="127.0.0.1",
                     port=actual_port,
-                    timeout=5.0,
                 )
                 await client.connect()
                 clients.append(client)
@@ -502,7 +495,6 @@ class TestIPCConcurrency:
             IPCClient(
                 host="127.0.0.1",
                 port=actual_port,
-                timeout=2.0,
                 auto_reconnect=False,
             )
             # Connection will succeed but server will close it
@@ -523,7 +515,6 @@ class TestIPCConcurrency:
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=5.0,
             auto_reconnect=False,
         )
         send_task = None
