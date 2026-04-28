@@ -70,7 +70,7 @@ function Message({ message, streamEventFilter }) {
   );
   const shouldShowReasoningText = role === 'assistant'
     && reasoningText.trim().length > 0
-    && !hasVisibleReasoningEvent;
+    && (isStreaming || !hasVisibleReasoningEvent);
 
   return (
     <div className={`message-wrapper ${role}`}>
