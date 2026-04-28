@@ -24,6 +24,8 @@ jobs:
     runs-on: [self-hosted, Linux, python]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: actions/setup-python@v5
         with:
@@ -53,6 +55,8 @@ jobs:
     runs-on: [self-hosted, Linux, node, python]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: actions/setup-python@v5
         with:
@@ -91,6 +95,8 @@ jobs:
         working-directory: app/frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - uses: actions/setup-node@v4
         with:
@@ -116,6 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          clean: false
           fetch-depth: 0
 
       - name: Detect deploy-affecting changes
@@ -212,6 +219,7 @@ jobs:
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_TIMEZONE: ${{ vars.PROGENITOR_TIMEZONE }}
           PROGENITOR_REASONING_ENABLED: ${{ vars.PROGENITOR_REASONING_ENABLED }}
+          PROGENITOR_REASONING_EFFORT: ${{ vars.PROGENITOR_REASONING_EFFORT }}
           TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
           TELEGRAM_POLLING_ENABLED: ${{ vars.TELEGRAM_POLLING_ENABLED }}
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}

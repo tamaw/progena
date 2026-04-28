@@ -70,7 +70,7 @@ function Message({ message, streamEventFilter }) {
   );
   const shouldShowReasoningText = role === 'assistant'
     && reasoningText.trim().length > 0
-    && !hasVisibleReasoningEvent;
+    && (isStreaming || !hasVisibleReasoningEvent);
 
   return (
     <div className={`message-wrapper ${role}`}>
@@ -256,12 +256,11 @@ function describeStreamEvent(event) {
   }
 
   if (isReasoningEvent(event)) {
-    const detail = summarizeMetadata(metadata);
     return {
       badge: 'Reasoning',
       title: 'Reasoning',
       bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
-      detail: detail || (eventType === 'reasoning_delta' ? 'Tracing response generation' : 'Reasoning captured'),
+      detail: summarizeMetadata(metadata),
     };
   }
 
