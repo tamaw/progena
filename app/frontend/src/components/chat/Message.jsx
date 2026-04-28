@@ -256,12 +256,11 @@ function describeStreamEvent(event) {
   }
 
   if (isReasoningEvent(event)) {
-    const detail = summarizeMetadata(metadata);
     return {
       badge: 'Reasoning',
       title: 'Reasoning',
       bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
-      detail: detail || (eventType === 'reasoning_delta' ? 'Tracing response generation' : 'Reasoning captured'),
+      detail: summarizeMetadata(metadata),
     };
   }
 
