@@ -685,7 +685,9 @@ class ProgenitorLoop:
                 not reasoning_trace
                 and last_ai_msg is not None
                 and self.config.llm.reasoning_enabled
-                and self._message_has_reasoning_marker(last_ai_msg)
+                and (
+                    self._message_has_reasoning_marker(last_ai_msg) or self._reasoning_preview_sent
+                )
             ):
                 reasoning_trace = await self._synthesize_reasoning_trace(
                     user_input=str(self._state.get("current_input") or "").strip() or None,
