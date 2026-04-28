@@ -85,7 +85,6 @@ class TestLangChainAdapter:
             api_key="test-key",
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
-            reasoning_budget_tokens=2048,
             reasoning_summary="detailed",
         )
         with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
@@ -93,11 +92,11 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning_effort"] == "medium"
+        assert kwargs["reasoning_effort"] == "low"
         assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
 
     def test_reasoning_defaults_to_low_effort(self):
-        """Reasoning defaults to low effort when no budget is set."""
+        """Reasoning defaults to low effort for standard models."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
