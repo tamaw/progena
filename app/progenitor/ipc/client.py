@@ -9,7 +9,6 @@ Features:
 - Reconnection with exponential backoff
 - Streaming response support
 - Heartbeat monitoring
-- Request timeout handling
 """
 
 import asyncio
@@ -34,7 +33,6 @@ logger = logging.getLogger(__name__)
 # Client defaults
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9500
-DEFAULT_TIMEOUT = 300  # 5 minutes
 RECONNECT_DELAY_INITIAL = 1.0
 RECONNECT_DELAY_MAX = 30.0
 HEARTBEAT_INTERVAL = 5  # 5 seconds for responsive event delivery
@@ -55,7 +53,6 @@ class IPCClient:
         self,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
-        timeout: float = DEFAULT_TIMEOUT,
         auto_reconnect: bool = True,
         max_reconnect_attempts: int = 5,
     ):
@@ -64,13 +61,11 @@ class IPCClient:
         Args:
             host: Server host.
             port: Server port.
-            timeout: Request timeout in seconds.
             auto_reconnect: Whether to auto-reconnect on connection loss.
             max_reconnect_attempts: Maximum reconnection attempts.
         """
         self.host = host
         self.port = port
-        self.timeout = timeout
         self.auto_reconnect = auto_reconnect
         self.max_reconnect_attempts = max_reconnect_attempts
 
@@ -308,7 +303,6 @@ class IPCClient:
 
         Raises:
             ConnectionError: If not connected and reconnection fails.
-            TimeoutError: If request times out.
         """
         for attempt in range(2):
             await self._ensure_connected()
@@ -333,7 +327,7 @@ class IPCClient:
 
                     # Read response (may receive events while waiting)
                     while True:
-                        msg = await read_message(self._reader, timeout=self.timeout)
+                        msg = await read_message(self._reader)
 
                         if msg is None:
                             self._connected = False
@@ -356,8 +350,6 @@ class IPCClient:
                         logger.warning("Unexpected message type: %s", msg.type)
                         return msg.content or ""
 
-                except TimeoutError:
-                    raise TimeoutError(f"Request timed out after {self.timeout}s")
                 except ConnectionError:
                     self._connected = False
                     if attempt == 0 and self.auto_reconnect:
@@ -406,7 +398,7 @@ class IPCClient:
 
                     # Read stream chunks (may receive events while streaming)
                     while True:
-                        msg = await read_message(self._reader, timeout=self.timeout)
+                        msg = await read_message(self._reader)
 
                         if msg is None:
                             self._connected = False
@@ -456,8 +448,6 @@ class IPCClient:
 
                     break
 
-                except TimeoutError:
-                    raise TimeoutError(f"Streaming timed out after {self.timeout}s")
                 except ConnectionError:
                     self._connected = False
                     if attempt == 0 and self.auto_reconnect:
@@ -563,22 +553,3 @@ class IPCClient:
             self._event_queue.put_nowait(event)
         except asyncio.QueueFull:
             logger.warning("Event queue full, dropping event: %s", event.get("event_type"))
-
-
-# Convenience function for creating clients
-def create_ipc_client(
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-    timeout: float = DEFAULT_TIMEOUT,
-) -> IPCClient:
-    """Create an IPC client with default settings.
-
-    Args:
-        host: Server host.
-        port: Server port.
-        timeout: Request timeout.
-
-    Returns:
-        Configured IPCClient instance.
-    """
-    return IPCClient(host=host, port=port, timeout=timeout)

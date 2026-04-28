@@ -184,7 +184,6 @@ async def ipc_client():
     client = IPCClient(
         host=IPC_HOST,
         port=IPC_PORT,
-        timeout=TIMEOUT,
         auto_reconnect=False,
     )
 
@@ -477,7 +476,7 @@ if __name__ == "__main__":
 
     async def run_all_tests():
         """Run all integration tests."""
-        client = IPCClient(host=IPC_HOST, port=IPC_PORT, timeout=TIMEOUT)
+        client = IPCClient(host=IPC_HOST, port=IPC_PORT)
 
         try:
             connected = await client.connect()
