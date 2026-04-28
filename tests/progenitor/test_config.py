@@ -106,6 +106,7 @@ class TestLLMConfig:
             assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
             assert config.reasoning_enabled is True
+            assert config.reasoning_summary == "auto"
 
     def test_defaults(self):
         """Test default values."""
@@ -113,6 +114,17 @@ class TestLLMConfig:
         assert config.base_url == ""
         assert config.model_default == "gpt-5.1-codex-max"
         assert config.reasoning_enabled is True
+        assert config.reasoning_summary == "auto"
+
+    def test_reasoning_summary_from_env(self):
+        """Test loading reasoning summary mode from environment."""
+        with patch.dict(
+            os.environ,
+            {"PROGENITOR_REASONING_SUMMARY": "detailed"},
+            clear=False,
+        ):
+            config = LLMConfig.from_env()
+            assert config.reasoning_summary == "detailed"
 
     def test_get_model_for_role(self):
         """Test per-role model selection."""

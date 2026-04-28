@@ -151,6 +151,7 @@ class LLMConfig:
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = True
     reasoning_budget_tokens: int | None = None
+    reasoning_summary: str = "auto"
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -167,6 +168,7 @@ class LLMConfig:
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             reasoning_budget_tokens=budget_tokens,
+            reasoning_summary=os.getenv("PROGENITOR_REASONING_SUMMARY", "auto").strip() or "auto",
         )
 
     def get_model_for_role(self, role: str) -> str:
