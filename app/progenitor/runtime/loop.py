@@ -636,6 +636,7 @@ class ProgenitorLoop:
             # and capture a final text response even when this cycle has no live
             # stream consumer (for example scheduled tasks).
             last_ai_msg = self._get_last_ai_message(self._state.get("messages"))
+            response_text: str | None = self._last_cycle_response
             if not self._stream_final_sent:
                 response_text = self._extract_message_text(last_ai_msg)
                 if response_text:
@@ -658,11 +659,7 @@ class ProgenitorLoop:
             reasoning_tokens = (
                 extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
             )
-            if (
-                self._streaming_enabled
-                and last_ai_msg is not None
-                and (reasoning_trace or reasoning_tokens is not None)
-            ):
+            if self._streaming_enabled and last_ai_msg is not None and bool(reasoning_trace):
                 summary_event = build_reasoning_summary_event(
                     reasoning_trace or "",
                     metadata={
@@ -872,8 +869,9 @@ class ProgenitorLoop:
             return
 
         stream_metadata = make_json_safe(metadata)
+        reasoning_deltas = extract_stream_reasoning_deltas(message_chunk)
         if self._streaming_enabled:
-            for reasoning_delta in extract_stream_reasoning_deltas(message_chunk):
+            for reasoning_delta in reasoning_deltas:
                 reasoning_event = build_reasoning_delta_event(
                     reasoning_delta,
                     metadata={
