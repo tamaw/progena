@@ -243,11 +243,11 @@ class TestProgenitorLoopStreaming:
         ]
 
     @pytest.mark.asyncio
-    async def test_reasoning_preview_streams_progressively_before_answer_tokens(self):
-        preview_text = (
-            "I'll break the request into the key steps first, "
-            "then work through them in order before I answer directly."
-        )
+    async def test_native_reasoning_deltas_stream_without_synthetic_preview(self):
+        reasoning_fragments = [
+            "**Calculating pencil costs**\n\nI'm",
+            " figuring it out.",
+        ]
         graph = _FakeGraph(
             [
                 (
@@ -256,6 +256,44 @@ class TestProgenitorLoopStreaming:
                         AIMessageChunk(
                             content=[
                                 {"type": "reasoning", "summary": []},
+                            ]
+                        ),
+                        {"langgraph_node": "respond"},
+                    ),
+                ),
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content=[
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {
+                                            "type": "summary_text",
+                                            "text": reasoning_fragments[0],
+                                        }
+                                    ],
+                                }
+                            ]
+                        ),
+                        {"langgraph_node": "respond"},
+                    ),
+                ),
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content=[
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {
+                                            "type": "summary_text",
+                                            "text": reasoning_fragments[1],
+                                        }
+                                    ],
+                                },
                                 {"type": "text", "text": "Hi"},
                             ]
                         ),
@@ -294,33 +332,28 @@ class TestProgenitorLoopStreaming:
             state_manager=AsyncMock(),
             config=_make_config(reasoning_enabled=True),
         )
-        loop._state = {
-            **_make_loop_state(),
-            "current_input": "Please solve this by thinking through the steps first.",
-        }
+        loop._state = _make_loop_state()
         loop._streaming_enabled = True
-        loop._reasoning_preview_chunk_delay_seconds = 0
-        loop._generate_reasoning_preview = AsyncMock(return_value=preview_text)  # type: ignore[method-assign]
 
-        await loop._run_graph_cycle("run-preview", source="user_input")
+        await loop._run_graph_cycle("run-native-reasoning", source="user_input")
         items = await _collect_stream_items(loop)
 
         reasoning_events = [item for item in items if item.get("event_type") == "reasoning_delta"]
         assert len(reasoning_events) >= 2
-        assert "".join(item["content"] for item in reasoning_events) == preview_text
-        assert all(
-            item["metadata"]["synthetic"] is True and item["metadata"]["preview"] is True
-            for item in reasoning_events
-        )
+        assert "".join(item["content"] for item in reasoning_events) == "".join(reasoning_fragments)
+        assert all("synthetic" not in item["metadata"] for item in reasoning_events)
+        assert all("preview" not in item["metadata"] for item in reasoning_events)
 
-        first_message_delta_index = next(
-            index for index, item in enumerate(items) if item.get("event_type") == "message_delta"
+        first_text_message_delta_index = next(
+            index
+            for index, item in enumerate(items)
+            if item.get("event_type") == "message_delta" and item.get("content")
         )
         reasoning_indices = [
             index for index, item in enumerate(items) if item.get("event_type") == "reasoning_delta"
         ]
-        assert max(reasoning_indices) < first_message_delta_index
-        assert items[first_message_delta_index]["content"] == "Hi"
+        assert max(reasoning_indices) < first_text_message_delta_index
+        assert items[first_text_message_delta_index]["content"] == "Hi"
 
     @pytest.mark.asyncio
     async def test_streamed_response_is_captured_without_queue_output_when_streaming_disabled(self):
