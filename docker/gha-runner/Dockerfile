@@ -42,8 +42,7 @@ RUN apt-get update \
         nodejs \
         python-is-python3 \
         python3-pip \
-        python3.12 \
-        python3.12-venv \
+        python3.12-full \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -d /home/runner -s /bin/bash runner \
