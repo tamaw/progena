@@ -158,6 +158,7 @@ class LLMConfig:
         """Load LLM config from environment."""
         budget_tokens_str = os.getenv("PROGENITOR_REASONING_BUDGET_TOKENS", "").strip()
         budget_tokens = int(budget_tokens_str) if budget_tokens_str else None
+        reasoning_summary = os.getenv("PROGENITOR_REASONING_SUMMARY", "").strip()
 
         return cls(
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
@@ -168,7 +169,7 @@ class LLMConfig:
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             reasoning_budget_tokens=budget_tokens,
-            reasoning_summary=os.getenv("PROGENITOR_REASONING_SUMMARY", "auto").strip() or "auto",
+            reasoning_summary=reasoning_summary or cls.reasoning_summary,
         )
 
     def get_model_for_role(self, role: str) -> str:
