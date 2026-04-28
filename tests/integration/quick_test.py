@@ -1,4 +1,5 @@
 """Quick test of IPC client communication."""
+
 import asyncio
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from app.progenitor.ipc.client import IPCClient
 
 async def test_message():
     """Send a test message to Progenitor."""
-    client = IPCClient(host="127.0.0.1", port=9500, timeout=90)
+    client = IPCClient(host="127.0.0.1", port=9500)
 
     try:
         print("Connecting to Progenitor...")
@@ -23,10 +24,7 @@ async def test_message():
         print("✓ Connected")
 
         print("Sending message...")
-        response = await asyncio.wait_for(
-            client.send_message("Hello, what is 1+1?"),
-            timeout=90
-        )
+        response = await asyncio.wait_for(client.send_message("Hello, what is 1+1?"), timeout=90)
 
         print(f"✓ Got response: {response[:200]}...")
 
