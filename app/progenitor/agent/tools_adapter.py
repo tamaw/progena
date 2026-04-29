@@ -1,11 +1,10 @@
 """DeepAgent tool adapters.
 
-Progenitor's system tools live under `app/progenitor/tools/` as `BaseSystemTool`
-implementations. The DeepAgent needs to expose these as LangChain tools so the
-LLM can invoke them directly during a conversation (e.g. `current_time`).
-
-External MCP tools are loaded via langchain-mcp-adapters and surfaced directly
-to DeepAgent as LangChain tools.
+Wraps each `BaseSystemTool` as a LangChain `StructuredTool` so the deepagents
+package can register them alongside its built-in tools. Each tool's
+`args_model` is the single source of truth for the LLM-facing schema, and the
+LLM's structured kwargs land in `ToolContext.tool_args` for `execute()` to
+consume.
 """
 
 import contextlib
@@ -27,78 +26,73 @@ def create_dynamic_mcp_tools(llm_client: Any = None) -> list[BaseTool]:
     return [tool for tool in raw_tools if isinstance(tool, BaseTool)]
 
 
+async def _resolve_state(state_manager: Any) -> Any:
+    """Return the live ProgenitorLoop state, falling back to the state manager."""
+    loop = get_current_loop()
+    if loop is not None and isinstance(getattr(loop, "_state", None), dict):
+        return loop._state
+    if state_manager is None:
+        return None
+    get_state = getattr(state_manager, "get_current_state", None)
+    if callable(get_state) and inspect.iscoroutinefunction(get_state):
+        with contextlib.suppress(Exception):
+            return await get_state()
+    return None
+
+
+async def _maybe_reload(tool_registry: Any) -> None:
+    """Best-effort hot-reload so newly-deployed agents/tools show up."""
+    if tool_registry is None:
+        return
+    load = getattr(tool_registry, "load", None)
+    if not callable(load):
+        return
+    with contextlib.suppress(Exception):
+        maybe = load()
+        if inspect.isawaitable(maybe):
+            await cast(Any, maybe)
+
+
 def create_deepagent_tools(
     tool_registry: Any = None,
     llm_client: Any = None,
     state_manager: Any = None,
 ) -> list[StructuredTool]:
-    """Create DeepAgent-compatible system tools."""
+    """Wrap every registered system tool as a DeepAgent-compatible StructuredTool."""
 
-    def _wrap_system_tool(system_tool: Any) -> StructuredTool:
-        async def _execute_wrapped_tool(**kwargs: Any) -> dict[str, Any]:
-            # External deploy pipelines can update agents.json; reload best-effort so new
-            # agents/tools show up without requiring a restart.
-            load_registry = (
-                getattr(tool_registry, "load", None) if tool_registry is not None else None
-            )
-            if callable(load_registry):
-                with contextlib.suppress(Exception):
-                    maybe = load_registry()
-                    if inspect.isawaitable(maybe):
-                        await cast(Any, maybe)
+    def _wrap(system_tool: Any) -> StructuredTool:
+        async def _run(**kwargs: Any) -> dict[str, Any]:
+            await _maybe_reload(tool_registry)
+            state = await _resolve_state(state_manager)
 
-            # Prefer the live loop state when running under ProgenitorLoop so tools that
-            # mutate state (e.g. new_conversation) take effect immediately.
-            state = None
-            loop = get_current_loop()
-            if loop is not None and isinstance(getattr(loop, "_state", None), dict):
-                state = loop._state
-            if state_manager is not None:
-                get_state = getattr(state_manager, "get_current_state", None)
-                if callable(get_state) and inspect.iscoroutinefunction(get_state):
-                    with contextlib.suppress(Exception):
-                        state = state or await get_state()
-
-            tool_args = dict(kwargs)
-            nested_args = tool_args.get("tool_args")
-            if isinstance(nested_args, dict):
-                merged_args = dict(nested_args)
-                merged_args.update({k: v for k, v in tool_args.items() if k != "tool_args"})
-                tool_args = merged_args
-
-            request = str(tool_args.get("request") or "")
             ctx = ToolContext(
                 tool_registry=tool_registry,
                 llm_client=llm_client,
                 state=cast(Any, state),
                 state_manager=state_manager,
-                user_input=request,
-                tool_args=tool_args,
+                user_input=str(kwargs.get("request") or ""),
+                tool_args=dict(kwargs),
             )
-
             result = await system_tool.execute(ctx)
-            if result.success:
-                # Persist/propagate state updates when provided (DeepAgent doesn't
-                # automatically merge ToolResult.state_updates like our node path).
-                if result.state_updates and isinstance(state, dict):
-                    state.update(result.state_updates)
-                    update_state = (
-                        getattr(state_manager, "update_current_state", None)
-                        if state_manager
-                        else None
-                    )
-                    if callable(update_state) and inspect.iscoroutinefunction(update_state):
-                        with contextlib.suppress(Exception):
-                            await update_state(result.state_updates)
-                return result.data or {}
-            return {
-                "success": False,
-                "error": result.error or f"{system_tool.name} failed",
-                "should_retry_slow_path": bool(getattr(result, "should_retry_slow_path", False)),
-            }
+            if not result.success:
+                return {
+                    "success": False,
+                    "error": result.error or f"{system_tool.name} failed",
+                    "should_retry_slow_path": bool(
+                        getattr(result, "should_retry_slow_path", False)
+                    ),
+                }
 
-        async def _run(**kwargs: Any) -> dict[str, Any]:
-            return await _execute_wrapped_tool(**kwargs)
+            # DeepAgent doesn't merge ToolResult.state_updates automatically; do it here.
+            if result.state_updates and isinstance(state, dict):
+                state.update(result.state_updates)
+                update = (
+                    getattr(state_manager, "update_current_state", None) if state_manager else None
+                )
+                if callable(update) and inspect.iscoroutinefunction(update):
+                    with contextlib.suppress(Exception):
+                        await update(result.state_updates)
+            return result.data or {}
 
         return StructuredTool.from_function(
             coroutine=_run,
@@ -107,4 +101,4 @@ def create_deepagent_tools(
             args_schema=system_tool.args_model,
         )
 
-    return [_wrap_system_tool(system_tool) for system_tool in get_all_system_tools()]
+    return [_wrap(tool) for tool in get_all_system_tools()]

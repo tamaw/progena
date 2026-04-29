@@ -11,10 +11,11 @@ import asyncio
 import logging
 import os
 import re
-import shlex
 import shutil
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -24,13 +25,14 @@ _DEFAULT_TIMEOUT_SECONDS = 30.0
 _MAX_TIMEOUT_SECONDS = 300.0
 _MAX_OUTPUT_CHARS = 10_000
 
+
 def _detect_docker() -> bool:
     # Fast path commonly present in containers.
     try:
         if Path("/.dockerenv").exists():
             return True
     except Exception:
-        pass
+        return False
 
     # Fallback: cgroup hints (Linux-only).
     try:
@@ -39,7 +41,7 @@ def _detect_docker() -> bool:
             text = cgroup.read_text(encoding="utf-8", errors="replace")
             return any(k in text for k in ("docker", "kubepods", "containerd"))
     except Exception:
-        pass
+        return False
     return False
 
 
@@ -58,6 +60,18 @@ def _coerce_timeout(value: Any) -> float:
 
 
 _FENCE_RE = re.compile(r"```(?:bash|sh)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+
+
+class ShellExecArgs(BaseModel):
+    command: str = Field(description="Non-interactive shell command to execute.")
+    timeout_seconds: float = Field(
+        default=_DEFAULT_TIMEOUT_SECONDS,
+        description="Command timeout in seconds.",
+    )
+    cwd: str | None = Field(
+        default=None,
+        description="Optional working directory for the command.",
+    )
 
 
 def _extract_command_from_request(request: str) -> str:
@@ -136,8 +150,7 @@ class ShellExecTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Execute a non-interactive shell command inside the container "
-            "(uses bash if available)"
+            "Execute a non-interactive shell command inside the container (uses bash if available)"
         )
 
     @property
@@ -150,46 +163,36 @@ class ShellExecTool(BaseSystemTool):
         # Allow "bash:" / "sh:" / "shell:" only when it looks like an invocation.
         return [r"^\s*(?:bash|sh|shell)\s*[:>-]\s*\S+"]
 
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return ShellExecArgs
+
     async def execute(self, context: ToolContext) -> ToolResult:
         if os.name == "nt":
             return ToolResult.fail("shell_exec is only supported on POSIX (Linux) containers.")
 
-        request = str(context.user_input or "")
+        args = context.tool_args or {}
+        timeout = _coerce_timeout(
+            args.get("timeout_seconds")
+            or os.getenv("PROGENITOR_SHELL_TIMEOUT_SECONDS")
+            or _DEFAULT_TIMEOUT_SECONDS
+        )
 
-        # Optional CLI-ish flags before a required "--" delimiter:
-        #   shell_exec --timeout 60 --cwd /tmp -- ls -la
-        timeout = _coerce_timeout(os.getenv("PROGENITOR_SHELL_TIMEOUT_SECONDS") or _DEFAULT_TIMEOUT_SECONDS)
         cwd: Path | None = None
-        if " -- " in request:
-            prefix, cmd_part = request.split(" -- ", 1)
-            prefix = _extract_command_from_request(prefix)
+        cwd_arg = args.get("cwd")
+        if cwd_arg:
             try:
-                tokens = shlex.split(prefix)
-            except Exception:
-                tokens = []
+                candidate = Path(str(cwd_arg)).expanduser().resolve()
+            except Exception as e:
+                return ToolResult.fail(f"Invalid cwd: {cwd_arg} ({e})")
+            if not candidate.exists() or not candidate.is_dir():
+                return ToolResult.fail(f"cwd does not exist or is not a directory: {candidate}")
+            cwd = candidate
 
-            i = 0
-            while i < len(tokens):
-                tok = tokens[i]
-                if tok == "--timeout" and i + 1 < len(tokens):
-                    timeout = _coerce_timeout(tokens[i + 1])
-                    i += 2
-                    continue
-                if tok == "--cwd" and i + 1 < len(tokens):
-                    try:
-                        candidate = Path(tokens[i + 1]).expanduser().resolve()
-                        if not candidate.exists() or not candidate.is_dir():
-                            return ToolResult.fail(f"cwd does not exist or is not a directory: {candidate}")
-                        cwd = candidate
-                    except Exception as e:
-                        return ToolResult.fail(f"Invalid cwd: {tokens[i + 1]} ({e})")
-                    i += 2
-                    continue
-                i += 1
-
-            command = cmd_part.strip()
-        else:
-            command = _extract_command_from_request(request)
+        command = str(args.get("command") or "").strip()
+        if not command:
+            # Legacy callers (and tests) may still pass the command via user_input.
+            command = _extract_command_from_request(str(context.user_input or ""))
         if not command:
             return ToolResult.fail("No shell command provided.")
 

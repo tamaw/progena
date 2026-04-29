@@ -600,7 +600,7 @@ class A2AClient:
                 polling=polling,
                 httpx_client=httpx_client,
             )
-            client = await ClientFactory.connect(
+            client = await cast(Any, ClientFactory).connect(
                 url,
                 client_config=client_config,
                 resolver_http_kwargs={"headers": headers},
@@ -660,7 +660,7 @@ class A2AClient:
                 polling=not blocking,
             ) as client:
                 message = Message(
-                    role=Role.user,
+                    role=cast(Any, getattr(Role, "user", "user")),
                     parts=[Part(root=TextPart(text=request or ""))],
                     message_id=uuid.uuid4().hex,
                     metadata=context or {},
