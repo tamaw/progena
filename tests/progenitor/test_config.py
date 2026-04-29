@@ -138,18 +138,6 @@ class TestLLMConfig:
             config = LLMConfig.from_env()
             assert config.reasoning_summary == "detailed"
 
-    def test_get_model_for_role(self):
-        """Test per-role model selection."""
-        config = LLMConfig(
-            model_default="default-model",
-            model_planner="planner-model",
-            model_builder="builder-model",
-        )
-        assert config.get_model_for_role("planner") == "planner-model"
-        assert config.get_model_for_role("builder") == "builder-model"
-        assert config.get_model_for_role("summary") == "default-model"
-        assert config.get_model_for_role("unknown") == "default-model"
-
 
 class TestRuntimeConfig:
     """Tests for runtime configuration."""

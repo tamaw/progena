@@ -35,17 +35,3 @@ class TestMCPExceptionHandling:
             result = await client.healthcheck({"command": "test"})
 
         assert result is False
-
-
-class TestPickNextExceptionHandling:
-    """Test exception handling in pick_next.py."""
-
-    def test_uses_canonical_work_item_normalizer(self):
-        """Verify pick_next.py delegates conversion to normalize_work_item."""
-        import app.progenitor.nodes.pick_next as pick_next_module
-
-        with open(pick_next_module.__file__) as f:
-            content = f.read()
-
-        assert "normalize_work_item" in content
-        assert "logger.debug" in content

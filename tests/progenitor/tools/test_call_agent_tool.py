@@ -149,7 +149,7 @@ class TestCallAgentTool:
 
 
 def test_tool_auto_discovery():
-    from app.progenitor.nodes.node_helpers.registry import get_system_tool
+    from app.progenitor.tools.system_registry import get_system_tool
 
     tool = get_system_tool("call_agent")
     assert tool is not None

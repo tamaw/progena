@@ -1,7 +1,8 @@
 """
-Tool Registry.
+System tool registry.
 
-Central registry for all progenitor system tools with lookup, matching, and execution.
+Discovers Progenitor system tools and provides lookup/execution helpers for the
+DeepAgent tool adapter and direct LLM tool-call path.
 """
 
 import importlib
@@ -11,26 +12,18 @@ import pkgutil
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Optional
 
-from ...tools.protocol import BaseSystemTool, SystemTool, ToolContext
+from .protocol import BaseSystemTool, SystemTool, ToolContext
 
 if TYPE_CHECKING:
-    from ...state.models import ProgenitorState
+    from ..state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
 
-# Registry of all tools (singleton instances)
 _SYSTEM_TOOLS: dict[str, SystemTool] = {}
 
 
 def _iter_tool_modules() -> list[ModuleType]:
-    """Iterate importable modules under app.progenitor.tools.
-
-    This intentionally uses imports (not filesystem parsing) so any tool
-    implementation can use normal Python patterns.
-
-    Import failures are treated as non-fatal so optional dependencies can
-    exist in tools modules without breaking the core agent.
-    """
+    """Iterate importable modules under app.progenitor.tools."""
     import app.progenitor.tools as tools_pkg
 
     modules: list[ModuleType] = []
@@ -44,18 +37,12 @@ def _iter_tool_modules() -> list[ModuleType]:
         except Exception as e:
             logger.debug("Skipping tools module %s (import failed: %s)", info.name, e)
 
-    # Deterministic order
     modules.sort(key=lambda m: m.__name__)
     return modules
 
 
 def _discover_tool_instances() -> list[BaseSystemTool]:
-    """Discover and instantiate all system tools.
-
-    Rules:
-    - Tool must be a subclass of BaseSystemTool
-    - Tool must be instantiable with a no-arg constructor
-    """
+    """Discover and instantiate all no-arg BaseSystemTool implementations."""
     discovered: list[BaseSystemTool] = []
 
     for module in _iter_tool_modules():
@@ -64,14 +51,12 @@ def _discover_tool_instances() -> list[BaseSystemTool]:
                 continue
             if not issubclass(obj, BaseSystemTool):
                 continue
-            # Avoid importing/re-exporting classes from other modules.
             if getattr(obj, "__module__", None) != module.__name__:
                 continue
 
             try:
                 instance = obj()
             except Exception as e:
-                # Not a system tool (requires args) or failed optional init.
                 logger.debug(
                     "Skipping tool class %s.%s (init failed: %s)",
                     module.__name__,
@@ -81,7 +66,6 @@ def _discover_tool_instances() -> list[BaseSystemTool]:
                 continue
             discovered.append(instance)
 
-    # Deterministic tool order (helps tests and debugging)
     discovered.sort(key=lambda t: (t.name, t.__class__.__name__))
     return discovered
 
@@ -137,22 +121,9 @@ async def execute_system_tool(
     user_input: str = "",
     tool_args: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, bool]:
-    """Execute a tool by name and return (result, error, state_updates, should_retry_slow_path).
+    """Execute a tool by name.
 
-    This is the main entry point for executing tools from nodes.
-
-    Args:
-        tool_name: Name of the tool to execute.
-        tool_registry: Registry of available tools and agents.
-        llm_client: LLM client for tools that need AI capabilities.
-        state: Current graph state (in-memory).
-        state_manager: StateManager for reading persisted state files.
-        user_input: The user's original input (needed by some tools).
-
-    Returns:
-        Tuple of (result_dict, error_string, state_updates, should_retry_slow_path).
-        state_updates is a dict of state keys to merge, or None.
-        should_retry_slow_path indicates if the caller should retry via a different strategy.
+    Returns (result, error, state_updates, should_retry_slow_path).
     """
     tool = get_system_tool(tool_name)
 
@@ -173,8 +144,7 @@ async def execute_system_tool(
 
         if result.success:
             return result.data, None, result.state_updates, False
-        else:
-            return None, result.error, None, result.should_retry_slow_path
+        return None, result.error, None, result.should_retry_slow_path
     except Exception as e:
         logger.error("Error executing tool %s: %s", tool_name, e, exc_info=True)
         return None, f"Error executing {tool_name}: {str(e)}", None, False

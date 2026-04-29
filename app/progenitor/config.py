@@ -24,16 +24,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Backward-compatible default constants
-#
-# These values historically lived in app/progenitor/constants.py. They are
-# configuration defaults (not protocol constants), so they now live here.
+# Default project paths.
 # ---------------------------------------------------------------------------
 
-DEFAULT_MAX_INNER_ITERATIONS = 5
-DEFAULT_MAX_OUTER_ITERATIONS = 10
-DEFAULT_BUILD_CONFIDENCE_THRESHOLD = 0.95
-DEFAULT_VERIFICATION_TARGET_SCORE = 0.8
 DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
@@ -144,10 +137,6 @@ class LLMConfig:
     # Model selection
     model_default: str = "gpt-5.1-codex-max"
 
-    # Per-role model overrides (optional)
-    model_planner: str | None = None
-    model_builder: str | None = None
-    model_summary: str | None = None
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = True
     reasoning_effort: str = "low"
@@ -163,22 +152,10 @@ class LLMConfig:
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
-            model_planner=os.getenv("PROGENITOR_MODEL_PLANNER"),
-            model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
-            model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             reasoning_effort=reasoning_effort or cls.reasoning_effort,
             reasoning_summary=reasoning_summary or cls.reasoning_summary,
         )
-
-    def get_model_for_role(self, role: str) -> str:
-        """Get model name for a specific role."""
-        role_models = {
-            "planner": self.model_planner,
-            "builder": self.model_builder,
-            "summary": self.model_summary,
-        }
-        return role_models.get(role) or self.model_default
 
 
 @dataclass
@@ -208,17 +185,6 @@ class RuntimeConfig:
     ipc_host: str = "127.0.0.1"  # IPC server bind host
     ipc_port: int = 9500  # IPC server bind port
     ipc_max_clients: int = 10  # Maximum concurrent IPC clients
-
-    # Inner loop (dual loop architecture) settings
-    max_inner_iterations: int = 5  # Failsafe max iterations for inner loop
-    min_verification_score: float = 0.8  # Default minimum score to pass verification
-    iteration_time_limit_seconds: int = 600  # Max time per iteration
-
-    # Decision routing settings
-    build_confidence_threshold: float = 0.95  # Min confidence for build actions
-
-    # Build concurrency settings
-    max_build_concurrency: int = 3  # Max concurrent builds (adaptive to backlog size)
 
     @classmethod
     def from_env(cls, file_config: dict[str, Any] | None = None) -> "RuntimeConfig":
@@ -265,25 +231,6 @@ class RuntimeConfig:
             ipc_host=os.getenv("PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")),
             ipc_port=env_int("PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)),
             ipc_max_clients=env_int("PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)),
-            # Inner loop settings
-            max_inner_iterations=env_int(
-                "PROGENITOR_MAX_INNER_ITERATIONS", fc.get("max_inner_iterations", 5)
-            ),
-            min_verification_score=env_float(
-                "PROGENITOR_MIN_VERIFICATION_SCORE", fc.get("min_verification_score", 0.8)
-            ),
-            iteration_time_limit_seconds=env_int(
-                "PROGENITOR_ITERATION_TIME_LIMIT_SECONDS",
-                fc.get("iteration_time_limit_seconds", 600),
-            ),
-            # Decision routing settings
-            build_confidence_threshold=env_float(
-                "PROGENITOR_BUILD_CONFIDENCE_THRESHOLD", fc.get("build_confidence_threshold", 0.95)
-            ),
-            # Build concurrency settings
-            max_build_concurrency=env_int(
-                "PROGENITOR_MAX_BUILD_CONCURRENCY", fc.get("max_build_concurrency", 3)
-            ),
         )
 
 
@@ -544,18 +491,6 @@ class ProgenitorConfig:
             if not path:
                 errors.append(f"Storage {name} cannot be empty")
 
-        # Log warnings but don't fail
-        if self.runtime.max_inner_iterations < 1:
-            logger.warning(
-                "max_inner_iterations should be >= 1, got %d", self.runtime.max_inner_iterations
-            )
-
-        if self.runtime.min_verification_score < 0 or self.runtime.min_verification_score > 1:
-            logger.warning(
-                "min_verification_score should be between 0 and 1, got %f",
-                self.runtime.min_verification_score,
-            )
-
         if errors:
             raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))
 
@@ -565,8 +500,6 @@ class ProgenitorConfig:
             "llm": {
                 "base_url": self.llm.base_url,
                 "model_default": self.llm.model_default,
-                "model_planner": self.llm.model_planner,
-                "model_builder": self.llm.model_builder,
             },
             "runtime": {
                 "timezone": self.runtime.timezone,
@@ -695,21 +628,6 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
             "health_stale_seconds",
             config.runtime.health_stale_seconds,
             lambda v: isinstance(v, int) and 0 < v <= 600,
-        ),
-        (
-            "max_inner_iterations",
-            config.runtime.max_inner_iterations,
-            lambda v: isinstance(v, int) and 0 < v <= 100,
-        ),
-        (
-            "min_verification_score",
-            config.runtime.min_verification_score,
-            lambda v: isinstance(v, (int, float)) and 0.0 <= float(v) <= 1.0,
-        ),
-        (
-            "iteration_time_limit_seconds",
-            config.runtime.iteration_time_limit_seconds,
-            lambda v: isinstance(v, int) and 0 < v <= 7200,
         ),
     ]
     for field_name, value, predicate in runtime_rules:

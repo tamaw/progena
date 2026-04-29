@@ -1040,7 +1040,6 @@ class ProgenitorLoop:
             "current_input": state.get("current_input"),
             "pending_response": state.get("pending_response"),
             "last_reasoning_trace": state.get("last_reasoning_trace"),
-            "current_decision": self._serialize_decision(state.get("current_decision")),
         }
 
         await self.state_manager.save_current_state(current_checkpoint)
@@ -1079,16 +1078,6 @@ class ProgenitorLoop:
             elif isinstance(msg, dict):
                 serialized.append(msg)
         return serialized
-
-    def _serialize_decision(self, decision: Any) -> dict | None:
-        """Serialize decision object for checkpoint."""
-        if decision is None:
-            return None
-        if hasattr(decision, "model_dump"):
-            return cast(dict, decision.model_dump())
-        elif isinstance(decision, dict):
-            return decision
-        return None
 
     def _get_last_ai_message(self, messages: Any) -> Any | None:
         """Get the last assistant/AI message from a messages collection."""

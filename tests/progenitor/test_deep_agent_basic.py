@@ -26,27 +26,6 @@ class TestLangChainAdapter:
         assert model.use_responses_api is True
         assert model.output_version == "responses/v1"
 
-    def test_create_model_with_role(self):
-        """Role-specific model selection works."""
-        config = LLMConfig(
-            base_url="https://example.openai.azure.com/openai/v1",
-            api_key="test-key",
-            model_default="gpt-5.2-chat",
-            model_planner="gpt-4.1",
-        )
-        model = create_langchain_model(config, role="planner")
-        assert model.model_name == "gpt-4.1"
-
-    def test_create_model_role_fallback(self):
-        """Falls back to default model when role model not configured."""
-        config = LLMConfig(
-            base_url="https://example.openai.azure.com/openai/v1",
-            api_key="test-key",
-            model_default="gpt-5.2-chat",
-        )
-        model = create_langchain_model(config, role="builder")
-        assert model.model_name == "gpt-5.2-chat"
-
     def test_create_model_from_env(self):
         """Model created from environment when no config provided."""
         with patch.dict(

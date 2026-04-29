@@ -9,9 +9,7 @@ This module handles ONLY:
 - JSONL log appends
 - No business logic
 
-For business logic, see:
-- backlog_manager.py: Work item management
-- state_logger.py: Logging with redaction
+Business logic is handled by StateManager and the active runtime/tool layers.
 """
 
 import asyncio
