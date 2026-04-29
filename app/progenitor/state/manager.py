@@ -23,7 +23,6 @@ from .models import (
     A2ATaskRecord,
     ConversationMessage,
     ScheduleEntry,
-    WorkItem,
     redact_secrets,
 )
 from .persistence import StatePersistence
@@ -35,7 +34,6 @@ class StateManager:
     """Manages persistence of Progenitor state with file locking.
 
     Core runtime data is split across state and config files:
-    - build_state.json: Agent build process only (inner loop, LLM messages, verification)
     - current_state.json: Progenitor agent operational state (chat, tool calls)
     - schedule.json: Scheduled tasks stored in data/config
 
@@ -48,13 +46,12 @@ class StateManager:
 
     Usage:
         async with StateManager(state_dir, logs_dir) as manager:
-            backlog = await manager.get_backlog()
+            state = await manager.get_current_state()
             # ... work with state ...
         # Resources automatically cleaned up
     """
 
     CORE_FILES: dict[str, str] = {
-        "build_state": "build_state.json",  # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
         "a2a_tasks": "a2a_tasks.json",  # Tracked async A2A task state
         "registry": "agents.json",
@@ -64,9 +61,6 @@ class StateManager:
 
     LOG_FILES: dict[str, str] = {
         "conversation": "conversation.jsonl",
-        "decisions": "decisions.jsonl",
-        "copilot_calls": "copilot_calls.jsonl",
-        "validation": "validation.jsonl",
         "schedule": "schedule.jsonl",
     }
 
@@ -153,79 +147,6 @@ class StateManager:
         conversation_thread_id = utcnow_isoformat()
 
         defaults = {
-            # build_state.json - Agent builds ONLY (inner loop)
-            # Clean nested structure with phase objects
-            "build_state": {
-                # Build control (top-level for quick access)
-                "build_in_progress": False,
-                "build_started_at": None,
-                "build_phase": None,
-                "task_id": None,
-                # Nested objects for organization
-                "task": {
-                    "description": None,
-                    "target_capabilities": [],
-                },
-                "iteration": {
-                    "current": 0,
-                    "max": 20,
-                    "start_time": None,
-                },
-                "spec": {
-                    "file_path": None,
-                    "revision": 0,
-                    "created_at": None,
-                    "updated_at": None,
-                },
-                "phases": {
-                    "observe": {
-                        "ideal_state": None,
-                    },
-                    "think": {
-                        "approaches": [],
-                        "recommended_id": None,
-                        "gaps_analyzed": [],
-                    },
-                    "plan": {
-                        "experiment_plan": None,
-                    },
-                    "execute": {
-                        "completed": False,
-                        "result": None,
-                    },
-                    "verify": {
-                        "passed": False,
-                        "score": 0.0,
-                        "target_score": 0.8,
-                        "gaps": [],
-                    },
-                },
-                "history": {
-                    "artefacts": [],
-                    "verification_reports": [],
-                    "lessons_learned": [],
-                    "messages": [],
-                },
-                "best": {
-                    "iteration": None,
-                    "score": 0.0,
-                    "passed": False,
-                },
-                "clarification": {
-                    "needed": False,
-                    "question": None,
-                    "context": None,
-                    "awaiting": False,
-                    "response": None,
-                },
-                # Complex objects at top level
-                "should_iterate": True,
-                "iteration_stop_reason": None,
-                # Backlog stays at top level
-                "backlog": [],
-                # Build settings
-                "build_settings": None,
-            },
             # current_state.json - Progenitor agent operational state (user session)
             "current_state": {
                 "thread_id": conversation_thread_id,
@@ -239,8 +160,6 @@ class StateManager:
                 "tool_calls": [],  # Session tool calls
                 "current_input": None,
                 "pending_response": None,
-                "current_decision": None,
-                "current_build_request": None,  # Reference to active build (id only)
             },
             "a2a_tasks": [],
             "registry": {},
@@ -297,65 +216,13 @@ class StateManager:
 
         await self._persistence.append_jsonl_line(filepath, line)
 
-    async def _append_jsonl(self, filepath: Path, entry: dict[str, Any]) -> None:
-        """Append a single entry to an arbitrary JSONL file with secret redaction."""
-        # Add timestamp if not present
-        if "timestamp" not in entry:
-            entry["timestamp"] = utcnow_isoformat()
-
-        # Redact secrets before writing
-        line = json.dumps(entry, default=str)
-        line = redact_secrets(line) + "\n"
-
-        await self._persistence.append_jsonl_line(filepath, line)
-
     async def log_conversation(self, message: ConversationMessage) -> None:
         """Log a conversation message."""
         await self.append_jsonl("conversation", message.model_dump())
 
-    async def log_decision(self, decision: dict[str, Any]) -> None:
-        """Log a decision."""
-        await self.append_jsonl("decisions", decision)
-
-    async def log_copilot_call(self, call_data: dict[str, Any]) -> None:
-        """Log a Copilot CLI call."""
-        await self.append_jsonl("copilot_calls", call_data)
-
-    async def log_validation(self, result: dict[str, Any]) -> None:
-        """Log a validation result."""
-        await self.append_jsonl("validation", result)
-
     async def log_schedule_event(self, event: dict[str, Any]) -> None:
         """Log a schedule event."""
         await self.append_jsonl("schedule", event)
-
-    # Backlog management (embedded in build_state.json)
-    async def get_backlog(self) -> list[WorkItem]:
-        """Get the current backlog from build_state."""
-        state = await self.get_build_state()
-        backlog_data = state.get("backlog", [])
-        return [WorkItem(**item) for item in backlog_data]
-
-    async def save_backlog(self, backlog: list[WorkItem]) -> None:
-        """Save the backlog to build_state."""
-        state = await self.get_build_state()
-        state["backlog"] = [item.model_dump() for item in backlog]
-        await self.save_build_state(state)
-
-    async def add_work_item(self, item: WorkItem) -> None:
-        """Add a work item to the backlog."""
-        backlog = await self.get_backlog()
-        backlog.append(item)
-        await self.save_backlog(backlog)
-
-    async def update_work_item(self, item: WorkItem) -> None:
-        """Update a work item in the backlog."""
-        backlog = await self.get_backlog()
-        for i, existing in enumerate(backlog):
-            if existing.id == item.id:
-                backlog[i] = item
-                break
-        await self.save_backlog(backlog)
 
     # Schedule management (stored in data/config/schedule.json)
     async def get_schedule(self) -> list[ScheduleEntry]:
@@ -379,28 +246,6 @@ class StateManager:
             await self._atomic_write_json(self._core_file_path("schedule"), data)
             self._state_cache["schedule"] = data
 
-    # SpecDoc management (persistent spec artifact in build_state.json)
-    async def get_spec_doc(self) -> dict[str, Any] | None:
-        """Get the current spec_doc from build_state, if it exists."""
-        state = await self.get_build_state()
-        return cast(dict[str, Any] | None, state.get("spec_doc"))
-
-    async def save_spec_doc(self, spec_doc) -> None:
-        """Save spec_doc to build_state.json (backward compatible - only adds key)."""
-        state = await self.get_build_state()
-        if hasattr(spec_doc, "model_dump"):
-            state["spec_doc"] = spec_doc.model_dump()
-        else:
-            state["spec_doc"] = spec_doc
-        await self.save_build_state(state)
-
-    async def clear_spec_doc(self) -> None:
-        """Clear the spec_doc from build_state (for task completion/reset)."""
-        state = await self.get_build_state()
-        if "spec_doc" in state:
-            del state["spec_doc"]
-            await self.save_build_state(state)
-
     # Registry management
     async def get_registry(self) -> dict[str, Any]:
         """Get the agent/tool registry."""
@@ -412,109 +257,6 @@ class StateManager:
         async with self._file_lock("registry"):
             await self._atomic_write_json(self._core_file_path("registry"), registry)
             self._state_cache["registry"] = registry
-
-    # ==========================================================================
-    # Build State Management (build_state.json - Agent builds ONLY)
-    # ==========================================================================
-
-    async def get_build_state(self) -> dict[str, Any]:
-        """Get build state (agent builds only).
-
-        Returns cached in-memory state when available, only falls back
-        to disk when the cache is empty (e.g. first access before init).
-        """
-        if "build_state" in self._state_cache:
-            return cast(dict[str, Any], self._state_cache["build_state"])
-        async with self._file_lock("build_state"):
-            data = await self._read_json(self.state_dir / self.CORE_FILES["build_state"]) or {}
-            self._state_cache["build_state"] = data
-            return data
-
-    async def save_build_state(self, state: dict[str, Any]) -> None:
-        """Save build state (agent builds only)."""
-        # Ensure nested objects exist
-        state = self._ensure_nested_structure(state)
-        async with self._file_lock("build_state"):
-            await self._atomic_write_json(self.state_dir / self.CORE_FILES["build_state"], state)
-            self._state_cache["build_state"] = state
-
-    def _ensure_nested_structure(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Ensure all nested objects exist in build state."""
-        if "task" not in state:
-            state["task"] = {"description": None, "target_capabilities": []}
-        if "iteration" not in state:
-            state["iteration"] = {"current": 0, "max": 20, "start_time": None}
-        if "spec" not in state:
-            state["spec"] = {
-                "file_path": None,
-                "revision": 0,
-                "created_at": None,
-                "updated_at": None,
-            }
-        if "phases" not in state:
-            state["phases"] = {}
-        for phase in ["think", "plan", "execute", "verify"]:
-            if phase not in state["phases"]:
-                state["phases"][phase] = {}
-        if "history" not in state:
-            state["history"] = {
-                "artefacts": [],
-                "verification_reports": [],
-                "lessons_learned": [],
-                "messages": [],
-            }
-        if "best" not in state:
-            state["best"] = {"iteration": None, "score": 0.0, "passed": False}
-        if "clarification" not in state:
-            state["clarification"] = {
-                "needed": False,
-                "question": None,
-                "context": None,
-                "awaiting": False,
-                "response": None,
-            }
-        return state
-
-    async def update_build_state(self, updates: dict[str, Any]) -> None:
-        """Partially update build state with given fields.
-
-        Uses deep merge for nested dicts (phases, history, best, etc.)
-        to preserve existing values while updating specific keys.
-        """
-        state = await self.get_build_state()
-        self._deep_merge(state, updates)
-        await self.save_build_state(state)
-
-    def _deep_merge(self, base: dict, updates: dict) -> dict:
-        """Deep merge updates into base dictionary.
-
-        Recursively merges nested dicts instead of replacing them.
-        For non-dict values, updates override base.
-        """
-        for key, value in updates.items():
-            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-                self._deep_merge(base[key], value)
-            else:
-                base[key] = value
-        return base
-
-    async def add_build_message(self, message: dict[str, Any]) -> None:
-        """Add a message to history.messages in build_state.
-
-        Used during agent builds to track LLM communications.
-        """
-        state = await self.get_build_state()
-        if "history" not in state:
-            state["history"] = {
-                "artefacts": [],
-                "verification_reports": [],
-                "lessons_learned": [],
-                "messages": [],
-            }
-        if "messages" not in state["history"]:
-            state["history"]["messages"] = []
-        state["history"]["messages"].append(message)
-        await self.save_build_state(state)
 
     # ==========================================================================
     # Current State Management (current_state.json - Progenitor agent state)
@@ -753,23 +495,9 @@ class StateManager:
         await self.save_current_state(state)
 
     async def commit_state(self) -> None:
-        """Commit all cached state to disk.
-
-        IMPORTANT: Skip build_state if it's in suspended state, as the suspend
-        handler already did a safe read-modify-write. The cache may not have
-        all fields loaded from the in-memory loop state.
-        """
+        """Commit all cached state to disk."""
         for name, data in self._state_cache.items():
             if name not in self.CORE_FILES:
-                continue
-
-            # CRITICAL: Skip build_state if suspended - the suspend handler
-            # already saved it correctly with a full read-modify-write pattern.
-            # The cache may be stale/incomplete.
-            if name == "build_state" and data and data.get("build_phase") == "suspended":
-                logger.debug(
-                    "commit_state: Skipping build_state (already saved by suspend handler)"
-                )
                 continue
 
             async with self._file_lock(name):
@@ -788,82 +516,3 @@ class StateManager:
                     entries.append(json.loads(line))
 
         return entries[-limit:] if limit else entries
-
-    # Iteration and Verification Tracking (loop.spec.md)
-
-    async def log_iteration_start(self, iteration: int, ideal_state: Any) -> None:
-        """Log the start of an inner loop iteration."""
-        from ..runtime.time_utils import utcnow_isoformat
-
-        ideal_state_dict = (
-            ideal_state.model_dump() if hasattr(ideal_state, "model_dump") else ideal_state
-        )
-
-        entry = {
-            "event": "iteration_start",
-            "iteration": iteration,
-            "timestamp": utcnow_isoformat(),
-            "ideal_state_version": ideal_state_dict.get("version", 1)
-            if isinstance(ideal_state_dict, dict)
-            else 1,
-            "criteria_count": len(ideal_state_dict.get("success_criteria", []))
-            if isinstance(ideal_state_dict, dict)
-            else 0,
-        }
-        await self.log_decision(entry)
-
-    async def log_iteration_end(
-        self, iteration: int, verification_report: Any, stop_reason: str | None = None
-    ) -> None:
-        """Log the end of an inner loop iteration."""
-        from ..runtime.time_utils import utcnow_isoformat
-
-        report_dict = (
-            verification_report.model_dump()
-            if hasattr(verification_report, "model_dump")
-            else verification_report
-        )
-
-        entry = {
-            "event": "iteration_end",
-            "iteration": iteration,
-            "timestamp": utcnow_isoformat(),
-            "verification_score": report_dict.get("overall_score", 0.0)
-            if isinstance(report_dict, dict)
-            else 0.0,
-            "passed": report_dict.get("passed", False) if isinstance(report_dict, dict) else False,
-            "gaps_count": len(report_dict.get("gaps", [])) if isinstance(report_dict, dict) else 0,
-            "stop_reason": stop_reason,
-        }
-        await self.log_decision(entry)
-
-    async def get_iteration_history(self, limit: int = 10) -> list[dict[str, Any]]:
-        """Get recent iteration history asynchronously."""
-        decisions_path = self.logs_dir / self.LOG_FILES["decisions"]
-        if not decisions_path.exists():
-            return []
-
-        iterations = []
-        async with aiofiles.open(decisions_path) as f:
-            async for line in f:
-                if line.strip():
-                    entry = json.loads(line)
-                    if entry.get("event") in ("iteration_start", "iteration_end", "verification"):
-                        iterations.append(entry)
-
-        return iterations[-limit:] if limit else iterations
-
-    async def save_verification_report(self, iteration: int, report: Any) -> None:
-        """Save verification report for an iteration."""
-        report_dict = report.model_dump() if hasattr(report, "model_dump") else report
-
-        entry = {
-            "event": "verification_report",
-            "iteration": iteration,
-            "timestamp": utcnow_isoformat(),
-            "report": report_dict,
-        }
-
-        # Log to validation file for detailed records
-        filepath = self.logs_dir / self.LOG_FILES["validation"]
-        await self._append_jsonl(filepath, entry)

@@ -16,10 +16,6 @@ from ..config import LLMConfig, MCPConfig
 from ..mcp_tool_utils import normalize_mcp_tool_definition, parse_mcp_jsonrpc_response
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
-from .response_models import (
-    DecisionResponse,
-    validate_decision_response,
-)
 from .tokenizer import count_message_tokens
 
 logger = logging.getLogger(__name__)
@@ -49,8 +45,6 @@ MODEL_CONTEXT_WINDOWS = {
 }
 
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
-DECISION_HISTORY_LIMIT = 6
-RESPONSE_HISTORY_LIMIT = 12
 
 
 def _build_responses_endpoint(base_url: str) -> str:
@@ -118,7 +112,6 @@ class LLMClient:
         config: LLMConfig | None = None,
         mcp_config: MCPConfig | None = None,
         prompts_dir: Path | str | None = None,
-        role: str | None = None,
     ):
         """Initialize the LLM client.
 
@@ -126,13 +119,11 @@ class LLMClient:
             config: LLM configuration. If None, loads from environment.
             mcp_config: MCP configuration. If None, loads from data/config/mcp.json.
             prompts_dir: Prompt root to use for template loading.
-            role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
         self.mcp_config = mcp_config or MCPConfig.load()
         self.prompts = PromptTemplates(prompts_dir=prompts_dir)
-        self.role = role
-        self.model = self.config.get_model_for_role(role) if role else self.config.model_default
+        self.model = self.config.model_default
 
         self.endpoint_url = _build_responses_endpoint(self.config.base_url)
 
@@ -511,7 +502,7 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Execute either a system tool or an MCP tool call."""
         if system_tool_context:
-            from ..nodes.node_helpers.registry import execute_system_tool, get_system_tool
+            from ..tools.system_registry import execute_system_tool, get_system_tool
 
             tool_registry = system_tool_context.get("tool_registry")
             state_manager = system_tool_context.get("state_manager")
@@ -1099,72 +1090,6 @@ class LLMClient:
         """Stream not supported, returns full response as single chunk."""
         response = await self.chat(messages, system_prompt, temperature, max_tokens, tools=tools)
         yield response
-
-    async def decide(
-        self,
-        user_input: str,
-        conversation_history: list[dict[str, str]],
-        tool_context: str,
-    ) -> dict[str, Any]:
-        """Make a routing decision for user input."""
-        system_prompt = self.prompts.get_decide_prompt(tool_context)
-        messages = conversation_history[-DECISION_HISTORY_LIMIT:] + [
-            {"role": "user", "content": user_input}
-        ]
-        response_format = _build_json_schema_format(DecisionResponse, "decision_response")
-
-        response = await self.chat(
-            messages, system_prompt, temperature=0.3, response_format=response_format
-        )
-        if not response.strip():
-            logger.warning("Empty decide response; returning default decision")
-            validated = validate_decision_response({})
-            return validated.model_dump()
-        try:
-            raw_data = json.loads(response)
-            validated = validate_decision_response(raw_data)
-            return validated.model_dump()
-        except json.JSONDecodeError:
-            preview = response.strip().replace("\n", " ")[:500]
-            logger.warning("Non-JSON decide response; preview=%s", preview)
-            start = response.find("{")
-            end = response.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                try:
-                    raw_data = json.loads(response[start : end + 1])
-                    validated = validate_decision_response(raw_data)
-                    return validated.model_dump()
-                except json.JSONDecodeError:
-                    pass
-            validated = validate_decision_response({})
-            return validated.model_dump()
-
-    async def generate_response(
-        self,
-        user_input: str,
-        conversation_history: list[dict[str, str]],
-        action_results: list[dict[str, Any]] | None = None,
-    ) -> str:
-        """Generate a response to the user."""
-        system_prompt = self.prompts.get_genesis_prompt()
-        messages = conversation_history[-RESPONSE_HISTORY_LIMIT:]
-
-        if action_results:
-            results_summary = "\n".join(
-                [
-                    f"- {r.get('action', 'unknown')}: {r.get('result', 'completed')}"
-                    for r in action_results
-                ]
-            )
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Actions completed:\n{results_summary}\n\nRespond to the user about these results.",
-                }
-            )
-
-        messages.append({"role": "user", "content": user_input})
-        return await self.chat(messages, system_prompt, temperature=0.7)
 
     async def generate(
         self,

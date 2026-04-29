@@ -124,7 +124,6 @@ def create_progenitor_agent(
     log_dir: str | Path | None = None,
     skills_dirs: list[str] | None = None,
     memory_paths: list[str] | None = None,
-    inner_loop_graph: Any | None = None,
 ) -> CompiledStateGraph:
     """Create the Progenitor DeepAgent instance.
 
@@ -144,9 +143,6 @@ def create_progenitor_agent(
         memory_paths: Backend-visible AGENTS.md-style prompt-context files loaded
                       via Deep Agents' `memory=` middleware. If None, Progenitor
                       loads runtime memory from `/data/memories/*.md`.
-        inner_loop_graph: Compiled LangGraph for the inner build loop.
-                          If provided, enables the build subagent.
-
     Returns:
         Compiled DeepAgent graph ready for invoke/stream.
     """
@@ -223,7 +219,7 @@ def create_progenitor_agent(
 
     # Use the canonical genesis prompt so every conversation starts with it.
     system_prompt = PromptTemplates(prompts_dir=prompts_dir).get_genesis_prompt().strip()
-    subagents = create_progenitor_subagents(inner_loop_graph=inner_loop_graph)
+    subagents = create_progenitor_subagents()
 
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # durable filesystem-backed memories directory.

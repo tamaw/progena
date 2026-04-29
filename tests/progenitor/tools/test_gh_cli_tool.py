@@ -48,7 +48,7 @@ async def test_gh_cli_tool_requires_args() -> None:
 
 
 def test_gh_cli_tool_auto_discovery() -> None:
-    from app.progenitor.nodes.node_helpers.registry import get_system_tool
+    from app.progenitor.tools.system_registry import get_system_tool
 
     tool = get_system_tool("gh_cli")
     assert tool is not None

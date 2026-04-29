@@ -192,7 +192,7 @@ class ToolRegistry:
         sections: list[str] = []
 
         # System tools (always available)
-        from ..nodes.node_helpers.registry import get_all_system_tools
+        from .system_registry import get_all_system_tools
 
         system_tools = [tool.to_dict() for tool in get_all_system_tools()]
         lines = ["### System Tools"]

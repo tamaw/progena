@@ -44,24 +44,18 @@ def _resolve_reasoning_effort(config: LLMConfig) -> str:
     return config.reasoning_effort
 
 
-def create_langchain_model(
-    config: LLMConfig | None = None,
-    role: str | None = None,
-) -> ChatOpenAI:
+def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
     """Create a LangChain ChatOpenAI instance routed through Azure.
 
     Args:
         config: LLM configuration. If None, loads from environment.
-        role: Optional role for model selection (planner, builder, summary).
-              Uses role-specific model if configured, otherwise default.
-
     Returns:
         ChatOpenAI instance pointing at configured Azure endpoint.
     """
     if config is None:
         config = LLMConfig.from_env()
 
-    model_name = config.get_model_for_role(role) if role else config.model_default
+    model_name = config.model_default
 
     base_url = _normalize_langchain_base_url(config.base_url)
 
@@ -95,10 +89,9 @@ def create_langchain_model(
     )
 
     logger.info(
-        "Created LangChain model adapter: model=%s, base_url=%s, role=%s, responses_api=%s, reasoning=%s",
+        "Created LangChain model adapter: model=%s, base_url=%s, responses_api=%s, reasoning=%s",
         model_name,
         base_url,
-        role,
         True,
         config.reasoning_enabled,
     )
