@@ -31,8 +31,7 @@ app/
 │   ├── runtime/  # Loop runner, scheduler, and runtime managers
 │   ├── state/    # State models and persistence helpers
 │   ├── tools/    # Runtime tool registry and implementations
-│   ├── main.py   # Runtime entry point
-│   └── service.py
+│   └── main.py   # Runtime entry point
 ├── backend/      # FastAPI API and UI data backend
 │   ├── main.py   # HTTP entry point
 │   ├── attachments.py

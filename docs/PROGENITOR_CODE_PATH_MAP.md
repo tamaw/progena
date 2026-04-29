@@ -8,15 +8,12 @@ the main application path.
 
 `app/progenitor` is now centered on a DeepAgent graph. The old node-oriented
 outer-loop code has been removed; production startup creates a DeepAgent via
-`runtime/deep_agent_adapter.py` and runs it through either:
-
-1. The long-running IPC service path: `app.progenitor.main`.
-2. The in-process backend service path: `app.progenitor.service.ProgenitorService`.
+`runtime/deep_agent_adapter.py` and runs it through the long-running IPC
+service path in `app.progenitor.main`.
 
 The strongly used code is concentrated in:
 
 - `main.py`
-- `service.py`
 - `runtime/loop.py`
 - `runtime/deep_agent_adapter.py`
 - `agent/*.py`
@@ -30,7 +27,7 @@ The strongly used code is concentrated in:
 
 The lesser-used or conditional code is mostly scheduler, A2A tracking, request
 thread isolation, optional reasoning, optional MCP, optional skills/memory
-discovery, and older compatibility layers.
+discovery.
 
 Cleanup note: the previously identified legacy node/routing layer, build-state
 helpers, app-level mock LLM, old agent process managers, and related tests were
@@ -74,40 +71,10 @@ Evidence:
   `Progenitor.initialize()`.
 - Backend subprocess mode and docs reference `python -m app.progenitor.main`.
 
-### In-process backend service
-
-Source: `app/progenitor/service.py`.
-
-```text
-app/backend/service_client.py::ServiceProgenitorClient
-  -> app.progenitor.service.get_service()
-  -> ProgenitorService.initialize()
-      -> StateManager.initialize()
-      -> LLMClient(...)
-      -> ToolRegistry.load()
-      -> refresh_mcp_runtime()
-      -> _discover_agents()
-      -> create_deep_agent_for_loop()
-  -> ProgenitorService.handle_message()
-      -> graph.ainvoke()
-  -> ProgenitorService.handle_message_stream_events()
-      -> graph.astream(stream_mode=["messages", "updates", "custom"])
-```
-
-Strength: active backend integration path, though current backend startup
-primarily wires the IPC client.
-
-Evidence:
-
-- `app/backend/service_client.py` imports `ProgenitorService`, `AgentResponse`,
-  and `get_service`.
-- `service.py` creates the same DeepAgent graph factory as `main.py`.
-- `service.py` provides direct non-streaming and streaming graph invocation.
-
 ## Primary DeepAgent construction path
 
 ```text
-main.py or service.py
+main.py
   -> runtime/deep_agent_adapter.py::create_deep_agent_for_loop()
       -> agent/deep_agent.py::create_progenitor_agent()
           -> agent/langchain_adapter.py::create_langchain_model()
@@ -122,7 +89,7 @@ main.py or service.py
 
 | Symbol | Status | Notes |
 | --- | --- | --- |
-| `create_deep_agent_for_loop()` | Strongly used | Called by `main.py` and `service.py`; this is the production graph bridge. |
+| `create_deep_agent_for_loop()` | Strongly used | Called by `main.py`; this is the production graph bridge. |
 | ~~`patch_loop_with_deep_agent()`~~ | Removed legacy/test-only | Production creates the graph before loop construction. |
 
 ### `agent/deep_agent.py`
@@ -406,37 +373,6 @@ IPCClient.send_message_stream_events()
 
 Strength: strongly used by `app/backend/ipc_client.py`.
 
-## In-process service path
-
-Source: `app/progenitor/service.py`.
-
-This path bypasses `ProgenitorLoop` and IPC queues. It constructs the same
-DeepAgent graph but calls it directly:
-
-```text
-ProgenitorService.handle_message()
-  -> initialize if needed
-  -> _get_thread_id()
-  -> _build_graph_input()
-  -> graph.ainvoke(...)
-  -> _extract_response_details()
-
-ProgenitorService.handle_message_stream_events()
-  -> initialize if needed
-  -> _get_thread_id()
-  -> _build_graph_input()
-  -> graph.astream(...)
-  -> _build_message_stream_events()
-  -> _build_custom_stream_event()
-  -> node_update stream events
-  -> reasoning summary event
-  -> final stream_chunk
-```
-
-Strength: active code path for direct backend integration, but current
-`app/backend/main.py` wires `get_ipc_client()` at startup. Treat this as a
-supported alternate path rather than the dominant runtime path.
-
 ## State and persistence path
 
 ### Strongly used
@@ -515,25 +451,24 @@ control substates only.
 
 Source: `app/progenitor/llm/client.py`.
 
-`LLMClient` is constructed by both `main.py` and `service.py`. In the current
-DeepAgent path, direct end-user chat is performed by the LangChain model adapter,
-not by `LLMClient.chat()`. `LLMClient` is still strongly used for:
+`LLMClient` is constructed by `main.py`. In the current DeepAgent path, direct
+end-user chat is performed by the LangChain model adapter, not by
+`LLMClient.chat()`. `LLMClient` is still strongly used for:
 
 - MCP runtime context and LangChain MCP tools.
 - Event pushing from tool/MCP refresh paths.
 - Tool implementations that need AI calls.
 - Agent discovery/self-reflection style tools.
 - A2A task notification support.
-- Legacy node paths and tests.
 
 ### Direct LLM methods
 
 | Method | Current status |
 | --- | --- |
-| `chat()` | Active for tools, tests, and helper flows; not the main DeepAgent conversation model call. |
-| `chat_structured()` | Active for tools/agent discovery; conditional on callers. |
-| `chat_with_reasoning()` | Conditional helper for reasoning-aware direct calls. |
-| `generate()` / `generate_with_reasoning()` / `complete()` | Helper APIs used by tools and tests. |
+| `chat()` | Active for tools and helper flows; accepts either a prompt string or message-history list. Not the main DeepAgent conversation model call. |
+| `chat_structured()` | Active for tools/agent discovery; single-prompt wrapper that passes a response format to `chat()`. |
+| ~~`chat_with_reasoning()`~~ | Removed redundant direct helper. |
+| ~~`generate()` / `generate_with_reasoning()` / `complete()`~~ | Removed redundant prompt-only convenience APIs. Callers now use `chat()`. |
 | ~~`decide()` / `generate_response()`~~ | Removed legacy outer-loop APIs. |
 
 ### Supporting LLM modules
@@ -541,7 +476,7 @@ not by `LLMClient.chat()`. `LLMClient` is still strongly used for:
 | Module | Status | Notes |
 | --- | --- | --- |
 | `llm/prompts.py` | Strongly used | DeepAgent genesis prompt and older prompt templates. |
-| `llm/tokenizer.py` | Active support | Used for token/context accounting in `LLMClient`. |
+| ~~`llm/tokenizer.py`~~ | Removed legacy | Token counting and context-window warning logic were removed; history sizing is controlled upstream. |
 | ~~`llm/response_models.py`~~ | Removed legacy | Supported structured legacy decision/model responses and validation. |
 | ~~`llm/mock_client.py`~~ | Removed test/demo | Tests should use test-local mocks instead. |
 | ~~`llm/circuit_breaker.py`~~ | Removed unused | No active wrapper path was present in `app/progenitor`. |
@@ -553,7 +488,7 @@ Sources:
 - `app/progenitor/streaming_utils.py`
 - `app/progenitor/stream_events.py`
 
-Strongly used by both `runtime/loop.py` and `service.py`.
+Strongly used by `runtime/loop.py`.
 
 ```text
 AIMessageChunk
@@ -699,7 +634,7 @@ Status: removed redundant code.
 Evidence:
 
 - No production call site found under `app/progenitor`.
-- It is not wired into `main.py`, `service.py`, `runtime/loop.py`, or
+- It is not wired into `main.py`, `runtime/loop.py`, or
   DeepAgent construction.
 - `runtime/port_utils.py` remains because active tool registry port allocation
   still imports it.
@@ -711,7 +646,6 @@ Evidence:
 | Area | Files |
 | --- | --- |
 | Long-running startup | `main.py` |
-| In-process service | `service.py` |
 | DeepAgent bridge/factory | `runtime/deep_agent_adapter.py`, `agent/deep_agent.py` |
 | Model adapter | `agent/langchain_adapter.py` |
 | DeepAgent backend | `agent/backends.py` |
@@ -730,12 +664,11 @@ Evidence:
 | --- | --- | --- |
 | Scheduler | `runtime/scheduler.py` | Scheduler enabled and due entries exist. |
 | A2A task polling | `runtime/a2a_tasks.py` | Tracked tasks exist. |
-| Direct in-process service | `service.py` | Backend chooses service client instead of IPC. |
 | Code-review/research subagents | `agent/subagents.py` | Registered, actual use depends on model delegation. |
 | Reasoning config | `agent/langchain_adapter.py`, `streaming_utils.py`, `stream_events.py` | `config.llm.reasoning_enabled`. |
 | Skills | `agent/deep_agent.py` | `data/skills/progenitor` exists. |
 | Runtime memories | `agent/deep_agent.py` | `data/memories/*.md`; default is ensured. |
-| Legacy `LLMClient` direct chat APIs | `llm/client.py` | Tools/tests call the direct helper APIs where needed. |
+| Direct `LLMClient` helper APIs | `llm/client.py` | Tools call `chat()` / `chat_structured()` where needed. |
 | ~~Mock LLM~~ | ~~`llm/mock_client.py`~~ | Removed; tests should use test-local mocks. |
 | ~~Old build/backlog state helpers~~ | ~~`state/manager.py`, `state/models.py`~~ | Removed with old node/build-state concepts. |
 
@@ -749,6 +682,7 @@ Evidence:
 | ~~Process-based agent runner~~ | ~~`runtime/agent_runner.py`~~ | Removed. |
 | ~~HTTP agent manager~~ | ~~`runtime/http_agent_manager.py`~~ | Removed. |
 | ~~Circuit breaker~~ | ~~`llm/circuit_breaker.py`~~ | Removed. |
+| ~~Direct in-process service path~~ | ~~`service.py`, `app/backend/service_client.py`, `tests/progenitor/test_service.py`~~ | Removed; IPC is the supported backend integration path. |
 
 ## Cleanup applied
 

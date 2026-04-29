@@ -6,7 +6,6 @@ and creates a ScheduleEntry via the scheduler.
 """
 
 import logging
-from inspect import iscoroutinefunction
 
 from pydantic import BaseModel
 
@@ -77,21 +76,12 @@ class ScheduleTaskTool(BaseSystemTool):
 
         try:
             if not (time_expr and instruction):
-                messages = [{"role": "user", "content": f"Schedule request: {user_input}"}]
-                chat_structured = getattr(context.llm_client, "chat_structured", None)
-                if not (callable(chat_structured) and iscoroutinefunction(chat_structured)):
-                    return ToolResult.fail(
-                        "Structured scheduling is required, but chat_structured is unavailable. "
-                        "Please configure the Azure structured output path."
-                    )
-
-                structured = await chat_structured(
-                    messages=messages,
+                structured = await context.llm_client.chat_structured(
+                    prompt=f"Schedule request: {user_input}",
                     response_model=_ScheduleExtractionResponse,
                     schema_name="schedule_task_extraction",
                     system_prompt=system_prompt,
                     temperature=0.3,
-                    tools=[],
                 )
 
                 time_expr = (structured.time_expression or "").strip()
