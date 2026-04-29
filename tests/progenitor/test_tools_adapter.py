@@ -1,5 +1,6 @@
 """Tests for Progenitor DeepAgent tool adapters."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -240,13 +241,31 @@ async def test_call_agent_unknown_agent_returns_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_call_agent_accepts_agent_name_alias(monkeypatch) -> None:
+async def test_call_agent_without_agent_routes_via_tool_llm(monkeypatch) -> None:
     registry = MagicMock()
+    registry.get_agents.return_value = [
+        {
+            "name": "Builder Agent",
+            "transport": "http",
+            "url": "http://localhost:9200",
+            "description": "Handles builds",
+            "capabilities": ["build"],
+        }
+    ]
     registry.find_by_name.return_value = {
         "name": "Builder Agent",
         "transport": "http",
         "url": "http://localhost:9200",
     }
+
+    llm_client = MagicMock()
+    llm_client.chat_structured = AsyncMock(
+        return_value=MagicMock(
+            agent_name="Builder Agent",
+            message="hello",
+            reasoning="Builder Agent matches the task.",
+        )
+    )
 
     dispatch_mock = AsyncMock(
         return_value=(
@@ -256,12 +275,17 @@ async def test_call_agent_accepts_agent_name_alias(monkeypatch) -> None:
     )
     monkeypatch.setattr("app.progenitor.tools.call_agent.dispatch_tracked_a2a_task", dispatch_mock)
 
-    tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
+    tools = create_deepagent_tools(
+        tool_registry=registry,
+        llm_client=llm_client,
+        state_manager=MagicMock(),
+    )
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"agent_name": "Builder Agent", "request": "hello"})
+    result = await t.ainvoke({"request": "hello"})
     assert result["task_id"] == "task-123"
     dispatch_mock.assert_awaited_once()
+    llm_client.chat_structured.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -307,3 +331,68 @@ def test_dynamic_mcp_tools_skip_non_tool_entries() -> None:
     tools = create_dynamic_mcp_tools(llm_client)
 
     assert [tool.name for tool in tools] == ["read_url"]
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_receives_structured_kwargs(monkeypatch) -> None:
+    """ShellExecTool exposes its structured args_model and execute() reads
+    command/timeout/cwd directly from context.tool_args."""
+    from app.progenitor.tools.shell import ShellExecArgs
+
+    tools = create_deepagent_tools()
+    shell_tool = _tool_by_name(tools, "shell_exec")
+
+    assert shell_tool.args_schema is ShellExecArgs
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
+        from app.progenitor.tools.protocol import ToolResult
+
+        captured["user_input"] = context.user_input
+        captured["tool_args"] = context.tool_args
+        return ToolResult.ok({"ok": True})
+
+    monkeypatch.setattr(
+        "app.progenitor.tools.shell.ShellExecTool.execute", _fake_execute, raising=True
+    )
+
+    result = await shell_tool.ainvoke({"command": "ls -la", "timeout_seconds": 60.0, "cwd": "/tmp"})
+    assert result == {"ok": True}
+    assert captured["user_input"] == ""
+    assert captured["tool_args"] == {
+        "command": "ls -la",
+        "timeout_seconds": 60.0,
+        "cwd": "/tmp",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_a2a_task_kwargs_populate_tool_args(monkeypatch) -> None:
+    """The adapter passes structured kwargs through as context.tool_args."""
+    tools = create_deepagent_tools(state_manager=MagicMock())
+    tool = _tool_by_name(tools, "get_a2a_task")
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
+        from app.progenitor.tools.protocol import ToolResult
+
+        captured["user_input"] = context.user_input
+        captured["tool_args"] = context.tool_args
+        return ToolResult.ok({"status": "ok"})
+
+    monkeypatch.setattr(
+        "app.progenitor.tools.get_a2a_task.GetA2ATaskTool.execute",
+        _fake_execute,
+        raising=True,
+    )
+
+    await tool.ainvoke({"task_id": "task-xyz", "refresh": False, "history_length": 7})
+
+    assert captured["user_input"] == ""
+    assert captured["tool_args"] == {
+        "task_id": "task-xyz",
+        "history_length": 7,
+        "refresh": False,
+    }

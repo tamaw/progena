@@ -3,10 +3,19 @@
 import logging
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from ..state.models import generate_thread_id
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class NewConversationArgs(BaseModel):
+    request: str = Field(
+        default="",
+        description="Optional instruction accompanying the conversation reset.",
+    )
 
 
 class NewConversationTool(BaseSystemTool):
@@ -34,6 +43,10 @@ class NewConversationTool(BaseSystemTool):
             "new thread id",
             "start over",
         ]
+
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return NewConversationArgs
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state is None:

@@ -20,9 +20,18 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class SemanticRegistryArgs(BaseModel):
+    query: str = Field(
+        default="",
+        description="Optional semantic capability query to run against the registry.",
+    )
 
 
 def _module_available(name: str) -> bool:
@@ -106,7 +115,11 @@ class SemanticRegistry:
 
     def _load_encoder(self) -> None:
         """Lazily load the sentence transformer model."""
-        if self._encoder is not None or not _ensure_semantic_imports() or SentenceTransformer is None:
+        if (
+            self._encoder is not None
+            or not _ensure_semantic_imports()
+            or SentenceTransformer is None
+        ):
             return
 
         try:
@@ -125,8 +138,8 @@ class SemanticRegistry:
                     self._registry = json.load(f)
                 logger.info(
                     "Loaded registry with %d agents and %d tools",
-                    len(self._registry.get('agents', [])),
-                    len(self._registry.get('tools', []))
+                    len(self._registry.get("agents", [])),
+                    len(self._registry.get("tools", [])),
                 )
             except (OSError, json.JSONDecodeError) as e:
                 logger.error("Failed to load registry: %s. Starting fresh.", e)
@@ -162,7 +175,7 @@ class SemanticRegistry:
     async def save(self) -> None:
         """Save registry to disk."""
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.registry_path, 'w') as f:
+        with open(self.registry_path, "w") as f:
             json.dump(self._registry, f, indent=2, default=str)
 
     def get_all_capabilities(self) -> list[str]:
@@ -222,24 +235,28 @@ class SemanticRegistry:
         results = []
         seen = set()
 
-        for capability, similarity in matches[:limit * 2]:  # Get more to dedupe
+        for capability, similarity in matches[: limit * 2]:  # Get more to dedupe
             # Find tool or agent with this capability
             for agent in self._registry.get("agents", []):
                 if capability in agent.get("capabilities", []) and agent.get("name") not in seen:
-                    results.append({
-                        **agent,
-                        "matched_capability": capability,
-                        "similarity": similarity,
-                    })
+                    results.append(
+                        {
+                            **agent,
+                            "matched_capability": capability,
+                            "similarity": similarity,
+                        }
+                    )
                     seen.add(agent.get("name"))
 
             for tool in self._registry.get("tools", []):
                 if capability in tool.get("capabilities", []) and tool.get("name") not in seen:
-                    results.append({
-                        **tool,
-                        "matched_capability": capability,
-                        "similarity": similarity,
-                    })
+                    results.append(
+                        {
+                            **tool,
+                            "matched_capability": capability,
+                            "similarity": similarity,
+                        }
+                    )
                     seen.add(tool.get("name"))
 
             if len(results) >= limit:
@@ -289,6 +306,10 @@ class SemanticRegistryTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return []
 
+    @property
+    def args_model(self) -> type[BaseModel]:
+        return SemanticRegistryArgs
+
     async def execute(self, context: ToolContext) -> ToolResult:
         registry_path = getattr(context.tool_registry, "registry_path", None)
         if not registry_path:
@@ -297,12 +318,13 @@ class SemanticRegistryTool(BaseSystemTool):
         semantic = SemanticRegistry(Path(registry_path))
         await semantic.load()
 
-        # Optional query: allow "semantic_registry: <query>" in user_input
-        raw = (context.user_input or "").strip()
-        query = ""
-        if ":" in raw:
-            _prefix, query = raw.split(":", 1)
-            query = query.strip()
+        query = str((context.tool_args or {}).get("query") or "").strip()
+        if not query:
+            # Legacy fallback: "semantic_registry: <query>" in user_input.
+            raw = (context.user_input or "").strip()
+            if ":" in raw:
+                _prefix, tail = raw.split(":", 1)
+                query = tail.strip()
 
         payload: dict[str, Any] = {
             "semantic_available": SEMANTIC_AVAILABLE,
