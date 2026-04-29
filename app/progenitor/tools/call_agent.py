@@ -240,7 +240,7 @@ async def _route_agent(
 
     try:
         selection = await context.llm_client.chat_structured(
-            messages=[{"role": "user", "content": user_prompt}],
+            prompt=user_prompt,
             response_model=AgentSelection,
             schema_name="AgentSelection",
             system_prompt=system_prompt,

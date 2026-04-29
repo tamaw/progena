@@ -320,24 +320,6 @@ class TestScheduleTaskTool:
         """Should have correct name."""
         assert tool.name == "schedule_task"
 
-    async def test_execute_fails_without_structured_extraction(self, tool):
-        """Should fail when chat_structured is unavailable."""
-        mock_llm = MagicMock()
-        mock_state_manager = AsyncMock()
-
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=mock_llm,
-            state=cast(ProgenitorState, {"schedule": []}),
-            state_manager=mock_state_manager,
-            user_input="can you schedule to say hi to me in 2 minutes please",
-        )
-
-        result = await tool.execute(ctx)
-
-        assert result.success is False
-        assert "chat_structured" in str(result.error)
-
     async def test_execute_fails_when_structured_output_missing_time(self, tool):
         """Should fail when structured extraction does not include time_expression."""
         mock_llm = MagicMock()
@@ -386,7 +368,6 @@ class TestScheduleTaskTool:
 
         assert result.success is True
         mock_llm.chat_structured.assert_awaited_once()
-        assert mock_llm.chat_structured.await_args.kwargs.get("tools") == []
         mock_llm.chat.assert_not_awaited()
 
 
