@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import IO, Any
 
-from ..progenitor.service import AgentResponse
+from ..progenitor.responses import AgentResponse
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)

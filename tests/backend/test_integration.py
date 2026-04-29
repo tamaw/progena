@@ -18,7 +18,7 @@ def test_endpoints(client):
         ):
             del message, request_id, metadata
             del include_reasoning
-            from app.progenitor.service import AgentResponse
+            from app.progenitor.responses import AgentResponse
 
             return AgentResponse(response="mocked response", reasoning=None, reasoning_tokens=None)
 
