@@ -75,8 +75,6 @@ class NewConversationTool(BaseSystemTool):
             "tool_calls": [],
             "current_input": None,
             "pending_response": None,
-            "current_decision": None,
-            "current_build_request": None,
         }
 
         # Update in-memory state directly (will be persisted by checkpoint)

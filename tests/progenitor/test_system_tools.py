@@ -1,7 +1,7 @@
 """System tool tests.
 
 System tool implementations live in :mod:`app.progenitor.tools` and are
-registered/executed via :mod:`app.progenitor.nodes.node_helpers`.
+registered/executed via :mod:`app.progenitor.tools.system_registry`.
 """
 
 from typing import cast
@@ -10,24 +10,21 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel, Field
 
-from app.progenitor.nodes.node_helpers import (
-    BaseSystemTool,
-    CurrentTimeTool,
+from app.progenitor.state.models import ProgenitorState
+from app.progenitor.tools.current_time import CurrentTimeTool
+from app.progenitor.tools.list_agents import ListAgentsTool
+from app.progenitor.tools.list_schedule import ListScheduleTool
+from app.progenitor.tools.list_tools import ListToolsTool
+from app.progenitor.tools.protocol import BaseSystemTool, ToolContext, ToolResult
+from app.progenitor.tools.schedule import (
     DeleteScheduleTool,
-    ListAgentsTool,
-    ListScheduleTool,
-    ListToolsTool,
     PauseScheduleTool,
     ResumeScheduleTool,
-    ScheduleTaskTool,
-    SelfReflectTool,
-    ToolContext,
-    ToolResult,
     UpdateScheduleTool,
-    execute_system_tool,
-    format_tool_result,
 )
-from app.progenitor.state.models import ProgenitorState
+from app.progenitor.tools.schedule_task import ScheduleTaskTool
+from app.progenitor.tools.self_reflect_tool import SelfReflectTool
+from app.progenitor.tools.system_registry import execute_system_tool
 
 
 class TestToolContext:
@@ -432,47 +429,6 @@ class TestSelfReflectTool:
     def test_name(self, tool):
         """Should have correct name."""
         assert tool.name == "self_reflect"
-
-
-class TestFormatToolResult:
-    """Tests for format_tool_result function."""
-
-    def test_format_list_tools(self):
-        """Should format list_tools result."""
-        result = {
-            "system_tools": [{"name": "build_status", "description": "Check build status"}],
-            "mcp_tools": [],
-            "total_count": 1,
-        }
-        formatted = format_tool_result("list_tools", result)
-        assert "Available Tools" in formatted
-        assert "build_status" in formatted
-
-    def test_format_build_status(self):
-        """Should format build_status result."""
-        result = {"status": "no_build", "message": "No active build"}
-        formatted = format_tool_result("build_status", result)
-        assert isinstance(formatted, str)
-
-    def test_format_unknown_tool(self):
-        """Should handle unknown tool with JSON fallback."""
-        result = {"key": "value"}
-        formatted = format_tool_result("unknown_tool", result)
-        assert "Result" in formatted
-        assert "value" in formatted
-
-    def test_format_schedule_task(self):
-        """Should format schedule_task result without JSON fallback."""
-        result = {
-            "success": True,
-            "description": "Funny reminder to dance dance dance",
-            "next_run": "2026-02-14T06:15:53.910668+00:00",
-            "recurring": False,
-        }
-        formatted = format_tool_result("schedule_task", result)
-        assert "Scheduled" in formatted
-        assert "Funny reminder to dance dance dance" in formatted
-        assert "Result:" not in formatted
 
 
 class TestExecuteSystemTool:

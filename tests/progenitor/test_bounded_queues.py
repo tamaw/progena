@@ -59,8 +59,6 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         self.config = MockConfig()
         self.state_manager = MagicMock()
-        self.state_manager.get_build_state = AsyncMock(return_value={})
-        self.state_manager.save_build_state = AsyncMock()
         self.state_manager.get_schedule = AsyncMock(return_value=[])
         self.state_manager.remove_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.update_schedule_entry = AsyncMock(return_value=True)

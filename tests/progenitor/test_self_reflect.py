@@ -20,7 +20,7 @@ class TestSelfReflection:
         assert len(modules) > 0
         # Should find some key directories
         module_names = [m.name for m in modules]
-        assert "nodes" in module_names or any("nodes" in str(m.path) for m in modules)
+        assert "tools" in module_names
 
     def test_list_directory_root(self):
         """Test listing the root directory."""
@@ -30,16 +30,15 @@ class TestSelfReflection:
         assert listing.directory == "."
         assert listing.total_files > 0 or listing.total_dirs > 0
 
-    def test_list_directory_nodes(self):
-        """Test listing the nodes directory."""
+    def test_list_directory_tools(self):
+        """Test listing the tools directory."""
         reflection = SelfReflection()
-        listing = reflection.list_directory("nodes")
+        listing = reflection.list_directory("tools")
 
-        assert listing.directory == "nodes"
+        assert listing.directory == "tools"
         assert listing.total_files > 0
-        # Should find the live chat node implementation
         file_names = [e.name for e in listing.entries]
-        assert "chat.py" in file_names
+        assert "system_registry.py" in file_names
 
     def test_read_file(self):
         """Test reading a file."""
@@ -74,7 +73,7 @@ class TestSelfReflection:
     def test_search_code(self):
         """Test searching code."""
         reflection = SelfReflection()
-        results = reflection.search_code("async def", directory="nodes")
+        results = reflection.search_code("async def", directory="tools")
 
         assert results.query == "async def"
         assert results.files_searched > 0
@@ -83,7 +82,7 @@ class TestSelfReflection:
     def test_search_code_regex(self):
         """Test searching code with regex."""
         reflection = SelfReflection()
-        results = reflection.search_code(r"def \w+_node", directory="nodes", is_regex=True)
+        results = reflection.search_code(r"class \w+Tool", directory="tools", is_regex=True)
 
         assert results.files_searched > 0
 
@@ -122,9 +121,9 @@ class TestExecuteSelfReflect:
     @pytest.mark.asyncio
     async def test_explore_operation(self):
         """Test explore operation."""
-        result = await execute_self_reflect(operation="explore", directory="nodes")
+        result = await execute_self_reflect(operation="explore", directory="tools")
 
-        assert result["directory"] == "nodes"
+        assert result["directory"] == "tools"
         assert result["total_files"] > 0
 
     @pytest.mark.asyncio
@@ -147,7 +146,7 @@ class TestExecuteSelfReflect:
         result = await execute_self_reflect(
             operation="search",
             query="async def",
-            directory="nodes",
+            directory="tools",
         )
 
         assert result["query"] == "async def"

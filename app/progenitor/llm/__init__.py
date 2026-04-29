@@ -1,8 +1,6 @@
 """LLM module - OpenAI Responses API wrapper and utilities."""
 
-from .circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 from .client import LLMClient
-from .mock_client import MockLLMClient, create_llm_client, is_mock_mode_enabled
 from .prompts import PromptTemplates
 from .tokenizer import (
     count_message_tokens,
@@ -21,12 +19,4 @@ __all__ = [
     "truncate_to_tokens",
     "is_tiktoken_available",
     "get_token_stats",
-    # Circuit breaker
-    "CircuitBreaker",
-    "CircuitState",
-    "CircuitOpenError",
-    # Mock client
-    "MockLLMClient",
-    "create_llm_client",
-    "is_mock_mode_enabled",
 ]

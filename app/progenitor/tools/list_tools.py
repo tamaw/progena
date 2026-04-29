@@ -42,7 +42,7 @@ class ListToolsTool(BaseSystemTool):
         ]
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        from ..nodes.node_helpers.registry import get_all_system_tools
+        from .system_registry import get_all_system_tools
 
         # Best-effort refresh: agents.json, agent cards, and MCP tools can all
         # change during process uptime.

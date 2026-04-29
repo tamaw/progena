@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from app.progenitor.nodes.node_helpers import ToolContext
+from app.progenitor.tools.protocol import ToolContext
 from app.progenitor.tools.shell import ShellCheckTool, ShellExecTool
 
 
@@ -31,7 +31,9 @@ async def test_shell_exec_rejects_on_windows():
 @pytest.mark.skipif(os.name == "nt", reason="shell_exec only supports POSIX shells")
 async def test_shell_exec_runs_command():
     tool = ShellExecTool()
-    ctx = ToolContext(tool_registry=object(), llm_client=object(), user_input="echo progenitor_shell_test")
+    ctx = ToolContext(
+        tool_registry=object(), llm_client=object(), user_input="echo progenitor_shell_test"
+    )
     result = await tool.execute(ctx)
     assert result.success is True
     assert result.data is not None
