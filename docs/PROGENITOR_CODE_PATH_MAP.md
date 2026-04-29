@@ -541,7 +541,7 @@ not by `LLMClient.chat()`. `LLMClient` is still strongly used for:
 | Module | Status | Notes |
 | --- | --- | --- |
 | `llm/prompts.py` | Strongly used | DeepAgent genesis prompt and older prompt templates. |
-| `llm/tokenizer.py` | Active support | Used for token/context accounting in `LLMClient`. |
+| ~~`llm/tokenizer.py`~~ | Removed legacy | Token counts now sourced from API response `usage` field; tiktoken dependency dropped. |
 | ~~`llm/response_models.py`~~ | Removed legacy | Supported structured legacy decision/model responses and validation. |
 | ~~`llm/mock_client.py`~~ | Removed test/demo | Tests should use test-local mocks instead. |
 | ~~`llm/circuit_breaker.py`~~ | Removed unused | No active wrapper path was present in `app/progenitor`. |

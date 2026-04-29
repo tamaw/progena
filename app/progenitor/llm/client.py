@@ -16,34 +16,12 @@ from ..config import LLMConfig, MCPConfig
 from ..mcp_tool_utils import normalize_mcp_tool_definition, parse_mcp_jsonrpc_response
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
-from .tokenizer import count_message_tokens
 
 logger = logging.getLogger(__name__)
 
 TModel = TypeVar("TModel", bound=BaseModel)
 
 # Context window sizes for common models (in tokens)
-MODEL_CONTEXT_WINDOWS = {
-    # GPT-4 models
-    "gpt-4": 8192,
-    "gpt-4-32k": 32768,
-    "gpt-4-turbo": 128000,
-    "gpt-4-turbo-preview": 128000,
-    "gpt-4o": 128000,
-    "gpt-4o-mini": 128000,
-    # GPT-3.5 models
-    "gpt-3.5-turbo": 16385,
-    "gpt-3.5-turbo-16k": 16385,
-    # Claude models
-    "claude-3-opus": 200000,
-    "claude-3-sonnet": 200000,
-    "claude-3-haiku": 200000,
-    "claude-3-5-sonnet": 200000,
-    "claude-3-5-haiku": 200000,
-    # Fallback
-    "default": 8192,
-}
-
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
 
 
@@ -777,36 +755,6 @@ class LLMClient:
         message_lower = message.lower()
         return "temperature" in message_lower and "unsupported" in message_lower
 
-    def _get_context_window_size(self, model: str | None = None) -> int:
-        """Get context window size for a model."""
-        target_model = model or self.model
-        target_model_lower = target_model.lower()
-
-        # Check exact match first
-        for model_key, size in MODEL_CONTEXT_WINDOWS.items():
-            if model_key in target_model_lower:
-                return size
-
-        return MODEL_CONTEXT_WINDOWS["default"]
-
-    def _check_token_usage(self, messages: list[dict[str, Any]], model: str | None = None) -> None:
-        """Check token usage and log warning if exceeding 50% of context window."""
-        try:
-            token_count = count_message_tokens(messages, model or self.model)
-            context_window = self._get_context_window_size(model)
-            usage_percent = (token_count / context_window) * 100
-
-            if usage_percent > 50:
-                logger.warning(
-                    "Token usage at %.1f%% of context window: %d/%d tokens (model=%s)",
-                    usage_percent,
-                    token_count,
-                    context_window,
-                    model or self.model,
-                )
-        except Exception as e:
-            logger.debug("Failed to check token usage: %s", e)
-
     async def _post_response(
         self,
         input_messages: list[dict[str, Any]],
@@ -820,9 +768,6 @@ class LLMClient:
         system_tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call /responses endpoint with optional tool calling loop."""
-        # Check token usage before making the call
-        self._check_token_usage(input_messages)
-
         merged_tools = self._resolve_request_tools(tools, response_format)
 
         payload: dict[str, Any] = {
