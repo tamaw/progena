@@ -39,25 +39,9 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def _resolve_reasoning_effort(model_name: str, budget_tokens: int | None) -> str:
-    """Map config to a provider-supported reasoning effort."""
-    if budget_tokens is None or budget_tokens <= 1024:
-        effort = "low"
-    elif budget_tokens <= 4096:
-        effort = "medium"
-    else:
-        effort = "high"
-
-    normalized_model_name = model_name.strip().lower()
-    if normalized_model_name.startswith("gpt-5.3-chat") and effort != "medium":
-        logger.info(
-            "Model %s only supports medium reasoning effort; using medium instead of %s",
-            model_name,
-            effort,
-        )
-        return "medium"
-
-    return effort
+def _resolve_reasoning_effort(config: LLMConfig) -> str:
+    """Return the configured reasoning effort for the active model."""
+    return config.reasoning_effort
 
 
 def create_langchain_model(
@@ -87,13 +71,13 @@ def create_langchain_model(
     reasoning_effort: str | None = None
     extra_body: dict[str, dict[str, str]] | None = None
     if config.reasoning_enabled:
-        reasoning_effort = _resolve_reasoning_effort(model_name, config.reasoning_budget_tokens)
-        extra_body = {"reasoning": {"summary": "auto"}}
+        reasoning_effort = _resolve_reasoning_effort(config)
+        extra_body = {"reasoning": {"summary": config.reasoning_summary}}
         logger.info(
-            "Reasoning enabled for model %s (effort=%s, budget_tokens=%s)",
+            "Reasoning enabled for model %s (effort=%s, summary=%s)",
             model_name,
             reasoning_effort,
-            config.reasoning_budget_tokens or "default",
+            config.reasoning_summary,
         )
 
     model = ChatOpenAI(

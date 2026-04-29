@@ -20,7 +20,7 @@ class _FakeGraph:
             yield item
 
 
-def _make_config():
+def _make_config(*, reasoning_enabled: bool = False):
     return SimpleNamespace(
         runtime=SimpleNamespace(
             max_input_queue_size=10,
@@ -29,7 +29,7 @@ def _make_config():
             idle_backoff_seconds=1.0,
             checkpoint_interval_seconds=60.0,
         ),
-        llm=SimpleNamespace(reasoning_enabled=False),
+        llm=SimpleNamespace(reasoning_enabled=reasoning_enabled),
     )
 
 
@@ -241,6 +241,119 @@ class TestProgenitorLoopStreaming:
             },
             {"type": "stream_chunk", "content": "", "is_final": True},
         ]
+
+    @pytest.mark.asyncio
+    async def test_native_reasoning_deltas_stream_without_synthetic_preview(self):
+        reasoning_fragments = [
+            "**Calculating pencil costs**\n\nI'm",
+            " figuring it out.",
+        ]
+        graph = _FakeGraph(
+            [
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content=[
+                                {"type": "reasoning", "summary": []},
+                            ]
+                        ),
+                        {"langgraph_node": "respond"},
+                    ),
+                ),
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content=[
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {
+                                            "type": "summary_text",
+                                            "text": reasoning_fragments[0],
+                                        }
+                                    ],
+                                }
+                            ]
+                        ),
+                        {"langgraph_node": "respond"},
+                    ),
+                ),
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content=[
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {
+                                            "type": "summary_text",
+                                            "text": reasoning_fragments[1],
+                                        }
+                                    ],
+                                },
+                                {"type": "text", "text": "Hi"},
+                            ]
+                        ),
+                        {"langgraph_node": "respond"},
+                    ),
+                ),
+                (
+                    "updates",
+                    {
+                        "respond": {
+                            "pending_response": "Hi",
+                            "messages": [
+                                {
+                                    "role": "assistant",
+                                    "content": [
+                                        {
+                                            "type": "reasoning",
+                                            "summary": [
+                                                {
+                                                    "type": "summary_text",
+                                                    "text": "Checked the steps before answering.",
+                                                }
+                                            ],
+                                        },
+                                        {"type": "text", "text": "Hi"},
+                                    ],
+                                }
+                            ],
+                        }
+                    },
+                ),
+            ]
+        )
+        loop = ProgenitorLoop(
+            graph=graph,
+            state_manager=AsyncMock(),
+            config=_make_config(reasoning_enabled=True),
+        )
+        loop._state = _make_loop_state()
+        loop._streaming_enabled = True
+
+        await loop._run_graph_cycle("run-native-reasoning", source="user_input")
+        items = await _collect_stream_items(loop)
+
+        reasoning_events = [item for item in items if item.get("event_type") == "reasoning_delta"]
+        assert len(reasoning_events) >= 2
+        assert "".join(item["content"] for item in reasoning_events) == "".join(reasoning_fragments)
+        assert all("synthetic" not in item["metadata"] for item in reasoning_events)
+        assert all("preview" not in item["metadata"] for item in reasoning_events)
+
+        first_text_message_delta_index = next(
+            index
+            for index, item in enumerate(items)
+            if item.get("event_type") == "message_delta" and item.get("content")
+        )
+        reasoning_indices = [
+            index for index, item in enumerate(items) if item.get("event_type") == "reasoning_delta"
+        ]
+        assert max(reasoning_indices) < first_text_message_delta_index
+        assert items[first_text_message_delta_index]["content"] == "Hi"
 
     @pytest.mark.asyncio
     async def test_streamed_response_is_captured_without_queue_output_when_streaming_disabled(self):

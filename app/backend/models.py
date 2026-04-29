@@ -28,11 +28,25 @@ class ResponseOutputText(BaseModel):
     text: str
 
 
+class ResponseReasoningSummaryText(BaseModel):
+    """Reasoning summary text item emitted by the Responses API."""
+
+    type: Literal["summary_text"] = "summary_text"
+    text: str
+
+
+class ResponseOutputReasoning(BaseModel):
+    """Reasoning part of a Responses output message."""
+
+    type: Literal["reasoning"] = "reasoning"
+    summary: list[ResponseReasoningSummaryText]
+
+
 class ResponseOutputMessage(BaseModel):
     """Assistant message emitted by the Responses API."""
 
     role: Literal["assistant"] = "assistant"
-    content: list[ResponseOutputText]
+    content: list[ResponseOutputText | ResponseOutputReasoning]
 
 
 class ResponseRequest(BaseModel):
@@ -41,6 +55,7 @@ class ResponseRequest(BaseModel):
     model: str = "progenitor-v1"
     input: list[ResponseInputMessage] | str
     stream: bool = False
+    include_reasoning: bool | None = None
     metadata: dict[str, Any] | None = None
 
 

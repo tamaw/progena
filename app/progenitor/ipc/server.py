@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9500
 MAX_CLIENTS = 10
+STREAM_POLL_INTERVAL_SECONDS = 0.1
 
 
 class IPCServer:
@@ -294,28 +295,15 @@ class IPCServer:
             # Enqueue input and wait for output
             await self._enqueue_loop_input(content, metadata=metadata)
 
-            # Wait for the response (with timeout)
-            try:
-                response = await asyncio.wait_for(
-                    self._wait_for_response(request_id),
-                    timeout=300,  # 5 minute timeout
-                )
-                logger.info("Got response for %s: %d chars", request_id, len(response))
-                await write_message(writer, assistant_message(response, request_id))
+            response = await self._wait_for_response(request_id)
+            logger.info("Got response for %s: %d chars", request_id, len(response))
+            await write_message(writer, assistant_message(response, request_id))
 
-                # CRITICAL: Wait for the graph cycle to fully complete
-                # before releasing the lock.
-                cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
-                if not cycle_done:
-                    logger.warning("Cycle complete timeout for %s", request_id)
-
-            except TimeoutError:
-                logger.error("Request %s timed out waiting for response", request_id)
-                await self._drain_response_queues(request_id)
-                await write_message(
-                    writer,
-                    error_message("Request timed out", error_code="TIMEOUT", request_id=request_id),
-                )
+            # CRITICAL: Wait for the graph cycle to fully complete
+            # before releasing the lock.
+            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+            if not cycle_done:
+                logger.warning("Cycle complete timeout for %s", request_id)
 
     async def _enqueue_loop_input(
         self,
@@ -338,12 +326,11 @@ class IPCServer:
         """
         full_response = ""
         poll_count = 0
-        max_polls = 3000  # 5 min at 0.1s
-        while poll_count < max_polls:
+        while True:
             poll_count += 1
             if poll_count % 50 == 0:
                 logger.debug("Still waiting for %s (poll %d)", request_id, poll_count)
-            chunk_data = await self._get_stream_item(timeout=0.1)
+            chunk_data = await self._get_stream_item(timeout=STREAM_POLL_INTERVAL_SECONDS)
             if not chunk_data:
                 continue
             item_type = str(chunk_data.get("type", "stream_chunk"))
@@ -354,7 +341,6 @@ class IPCServer:
             full_response += str(chunk_data.get("content", ""))
             if chunk_data.get("is_final"):
                 return full_response
-        return full_response
 
     async def _handle_streaming_request(
         self,
@@ -386,13 +372,12 @@ class IPCServer:
             # Stream chunks from the loop runner's stream queue
             try:
                 poll_count = 0
-                max_polls = 3000  # 5 minutes with 0.1s sleep
 
-                while poll_count < max_polls:
+                while True:
                     poll_count += 1
 
                     # Get stream chunk from the stream queue
-                    chunk_data = await self._get_stream_item(timeout=0.1)
+                    chunk_data = await self._get_stream_item(timeout=STREAM_POLL_INTERVAL_SECONDS)
 
                     if chunk_data:
                         item_type = str(chunk_data.get("type", "stream_chunk"))
@@ -443,18 +428,6 @@ class IPCServer:
                         logger.debug(
                             "Still waiting for stream chunks %s (poll %d)", request_id, poll_count
                         )
-
-                # If we exited the loop without finding output, we timed out
-                logger.error(
-                    "Streaming request %s timed out after %d polls", request_id, poll_count
-                )
-                await self._drain_response_queues(request_id)
-                await write_message(
-                    writer,
-                    error_message(
-                        "Streaming timed out", error_code="TIMEOUT", request_id=request_id
-                    ),
-                )
 
             except Exception as e:
                 logger.error("Streaming error for %s: %s", request_id, e)

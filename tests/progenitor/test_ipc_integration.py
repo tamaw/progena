@@ -135,7 +135,6 @@ async def ipc_client(ipc_server):
     client = IPCClient(
         host="127.0.0.1",
         port=ipc_server.port,
-        timeout=5.0,
         auto_reconnect=False,
     )
     connected = await client.connect()
@@ -200,7 +199,6 @@ class TestIPCClientBasic:
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=5.0,
         )
 
         connected = await client.connect()
@@ -216,7 +214,6 @@ class TestIPCClientBasic:
         client = IPCClient(
             host="127.0.0.1",
             port=59999,  # Unlikely to be in use
-            timeout=1.0,
             auto_reconnect=False,
         )
 
@@ -388,32 +385,29 @@ class TestIPCErrorHandling:
     """Tests for error handling."""
 
     @pytest.mark.asyncio
-    async def test_timeout_handling(self, ipc_server, mock_loop_runner):
-        """Test request timeout is handled."""
-        # Create client with very short timeout
+    async def test_request_waits_without_ipc_timeout(self, ipc_server, mock_loop_runner):
+        """IPC requests should wait for a delayed response without timing out."""
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=0.1,  # 100ms timeout
             auto_reconnect=False,
         )
         await client.connect()
 
-        # Create a custom mock that never responds
-        # Override the queue so get_stream_chunk always times out
-        original_get_stream_chunk = mock_loop_runner.get_stream_chunk
+        mock_loop_runner._auto_stream = False
 
-        async def slow_get_stream_chunk(timeout=None):
-            await asyncio.sleep(10)  # Much longer than client timeout
-            return None
+        async def add_delayed_response():
+            await asyncio.sleep(0.2)
+            await mock_loop_runner._stream_queue.put(
+                {"content": "Delayed response", "is_final": True, "type": "stream_chunk"}
+            )
 
-        mock_loop_runner.get_stream_chunk = slow_get_stream_chunk
+        asyncio.create_task(add_delayed_response())
 
         try:
-            with pytest.raises((TimeoutError, asyncio.TimeoutError)):
-                await client.send_message("Timeout test")
+            response = await client.send_message("Wait for it")
+            assert response == "Delayed response"
         finally:
-            mock_loop_runner.get_stream_chunk = original_get_stream_chunk
             await client.disconnect()
 
     @pytest.mark.asyncio
@@ -422,7 +416,6 @@ class TestIPCErrorHandling:
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=5.0,
             auto_reconnect=True,
             max_reconnect_attempts=3,
         )
@@ -456,7 +449,6 @@ class TestIPCConcurrency:
             client = IPCClient(
                 host="127.0.0.1",
                 port=ipc_server.port,
-                timeout=5.0,
             )
             await client.connect()
             clients.append(client)
@@ -491,7 +483,6 @@ class TestIPCConcurrency:
                 client = IPCClient(
                     host="127.0.0.1",
                     port=actual_port,
-                    timeout=5.0,
                 )
                 await client.connect()
                 clients.append(client)
@@ -504,7 +495,6 @@ class TestIPCConcurrency:
             IPCClient(
                 host="127.0.0.1",
                 port=actual_port,
-                timeout=2.0,
                 auto_reconnect=False,
             )
             # Connection will succeed but server will close it
@@ -525,7 +515,6 @@ class TestIPCConcurrency:
         client = IPCClient(
             host="127.0.0.1",
             port=ipc_server.port,
-            timeout=5.0,
             auto_reconnect=False,
         )
         send_task = None

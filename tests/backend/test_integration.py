@@ -14,9 +14,13 @@ def test_endpoints(client):
             message: str,
             request_id: str | None = None,
             metadata: dict[str, object] | None = None,
-        ) -> str:
+            include_reasoning: bool | None = None,
+        ):
             del message, request_id, metadata
-            return "mocked response"
+            del include_reasoning
+            from app.progenitor.service import AgentResponse
+
+            return AgentResponse(response="mocked response", reasoning=None, reasoning_tokens=None)
 
     backend_main.client = _MockClient()
 

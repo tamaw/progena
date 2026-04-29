@@ -85,7 +85,8 @@ class TestLangChainAdapter:
             api_key="test-key",
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
-            reasoning_budget_tokens=2048,
+            reasoning_effort="medium",
+            reasoning_summary="detailed",
         )
         with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
@@ -93,10 +94,10 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
 
     def test_reasoning_defaults_to_low_effort(self):
-        """Reasoning defaults to low effort when no budget is set."""
+        """Reasoning defaults to low effort for standard models."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
@@ -111,13 +112,14 @@ class TestLangChainAdapter:
         assert kwargs["reasoning_effort"] == "low"
         assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
 
-    def test_gpt_5_3_chat_clamps_reasoning_effort_to_medium(self):
-        """gpt-5.3-chat only supports medium reasoning effort."""
+    def test_reasoning_effort_respects_config_for_gpt_5_3_chat(self):
+        """gpt-5.3-chat uses the configured reasoning effort."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
             model_default="gpt-5.3-chat-2026-03-03",
             reasoning_enabled=True,
+            reasoning_effort="medium",
         )
         with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
@@ -125,6 +127,21 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "medium"
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
+
+    def test_reasoning_summary_defaults_to_auto(self):
+        """Reasoning summary defaults to auto when not overridden."""
+        config = LLMConfig(
+            base_url="https://example.openai.azure.com/openai/v1",
+            api_key="test-key",
+            model_default="gpt-5.2-chat",
+            reasoning_enabled=True,
+        )
+        with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
+            mock_chat_openai.return_value = MagicMock()
+            create_langchain_model(config)
+
+        _, kwargs = mock_chat_openai.call_args
         assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
 
 
@@ -136,11 +153,13 @@ class TestDeepAgentFactory:
         with (
             patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_create_model,
             patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
         ):
             mock_model = MagicMock()
             mock_create_model.return_value = mock_model
             mock_graph = MagicMock()
             mock_create_deep_agent.return_value = mock_graph
+            mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.deep_agent import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
@@ -165,9 +184,11 @@ class TestDeepAgentFactory:
         with (
             patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_create_model,
             patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create_model.return_value = MagicMock()
             mock_create_deep_agent.return_value = MagicMock()
+            mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.deep_agent import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
@@ -187,10 +208,12 @@ class TestDeepAgentFactory:
             patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_create_model,
             patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create_deep_agent,
             patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompt_templates,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create_model.return_value = MagicMock()
             mock_create_deep_agent.return_value = MagicMock()
             mock_prompt_templates.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.deep_agent import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig

@@ -150,13 +150,14 @@ class LLMConfig:
     model_summary: str | None = None
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = True
-    reasoning_budget_tokens: int | None = None
+    reasoning_effort: str = "low"
+    reasoning_summary: str = "auto"
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
-        budget_tokens_str = os.getenv("PROGENITOR_REASONING_BUDGET_TOKENS", "").strip()
-        budget_tokens = int(budget_tokens_str) if budget_tokens_str else None
+        reasoning_effort = os.getenv("PROGENITOR_REASONING_EFFORT", "").strip()
+        reasoning_summary = os.getenv("PROGENITOR_REASONING_SUMMARY", "").strip()
 
         return cls(
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
@@ -166,7 +167,8 @@ class LLMConfig:
             model_builder=os.getenv("PROGENITOR_MODEL_BUILDER"),
             model_summary=os.getenv("PROGENITOR_MODEL_SUMMARY"),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
-            reasoning_budget_tokens=budget_tokens,
+            reasoning_effort=reasoning_effort or cls.reasoning_effort,
+            reasoning_summary=reasoning_summary or cls.reasoning_summary,
         )
 
     def get_model_for_role(self, role: str) -> str:
