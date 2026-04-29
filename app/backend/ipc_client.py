@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from ..progenitor.ipc import IPCClient
-from ..progenitor.service import AgentResponse
+from ..progenitor.responses import AgentResponse
 from .config import ChatServerConfig
 
 logger = logging.getLogger(__name__)

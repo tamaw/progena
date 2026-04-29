@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -16,34 +16,12 @@ from ..config import LLMConfig, MCPConfig
 from ..mcp_tool_utils import normalize_mcp_tool_definition, parse_mcp_jsonrpc_response
 from ..tools.user_communication import EventPusher
 from .prompts import PromptTemplates
-from .tokenizer import count_message_tokens
 
 logger = logging.getLogger(__name__)
 
 TModel = TypeVar("TModel", bound=BaseModel)
 
 # Context window sizes for common models (in tokens)
-MODEL_CONTEXT_WINDOWS = {
-    # GPT-4 models
-    "gpt-4": 8192,
-    "gpt-4-32k": 32768,
-    "gpt-4-turbo": 128000,
-    "gpt-4-turbo-preview": 128000,
-    "gpt-4o": 128000,
-    "gpt-4o-mini": 128000,
-    # GPT-3.5 models
-    "gpt-3.5-turbo": 16385,
-    "gpt-3.5-turbo-16k": 16385,
-    # Claude models
-    "claude-3-opus": 200000,
-    "claude-3-sonnet": 200000,
-    "claude-3-haiku": 200000,
-    "claude-3-5-sonnet": 200000,
-    "claude-3-5-haiku": 200000,
-    # Fallback
-    "default": 8192,
-}
-
 INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
 
 
@@ -777,36 +755,6 @@ class LLMClient:
         message_lower = message.lower()
         return "temperature" in message_lower and "unsupported" in message_lower
 
-    def _get_context_window_size(self, model: str | None = None) -> int:
-        """Get context window size for a model."""
-        target_model = model or self.model
-        target_model_lower = target_model.lower()
-
-        # Check exact match first
-        for model_key, size in MODEL_CONTEXT_WINDOWS.items():
-            if model_key in target_model_lower:
-                return size
-
-        return MODEL_CONTEXT_WINDOWS["default"]
-
-    def _check_token_usage(self, messages: list[dict[str, Any]], model: str | None = None) -> None:
-        """Check token usage and log warning if exceeding 50% of context window."""
-        try:
-            token_count = count_message_tokens(messages, model or self.model)
-            context_window = self._get_context_window_size(model)
-            usage_percent = (token_count / context_window) * 100
-
-            if usage_percent > 50:
-                logger.warning(
-                    "Token usage at %.1f%% of context window: %d/%d tokens (model=%s)",
-                    usage_percent,
-                    token_count,
-                    context_window,
-                    model or self.model,
-                )
-        except Exception as e:
-            logger.debug("Failed to check token usage: %s", e)
-
     async def _post_response(
         self,
         input_messages: list[dict[str, Any]],
@@ -820,9 +768,6 @@ class LLMClient:
         system_tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call /responses endpoint with optional tool calling loop."""
-        # Check token usage before making the call
-        self._check_token_usage(input_messages)
-
         merged_tools = self._resolve_request_tools(tools, response_format)
 
         payload: dict[str, Any] = {
@@ -1005,7 +950,7 @@ class LLMClient:
 
     async def chat(
         self,
-        messages: list[dict[str, str]],
+        prompt: str | list[dict[str, str]],
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
@@ -1014,7 +959,16 @@ class LLMClient:
         max_tool_rounds: int = 4,
         system_tool_context: dict[str, Any] | None = None,
     ) -> str:
-        """Call /responses endpoint and return text response."""
+        """Send a prompt or message history to /responses and return text.
+
+        ``prompt`` may be a single user prompt string or a full conversation
+        history as a list of ``{"role", "content"}`` messages.
+        """
+        if isinstance(prompt, str):
+            messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+        else:
+            messages = prompt
+
         if response_format:
             instruction = "Return only valid JSON that matches the provided schema. Do not include any extra text."
             system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
@@ -1035,90 +989,22 @@ class LLMClient:
 
     async def chat_structured(
         self,
-        messages: list[dict[str, str]],
+        prompt: str,
         response_model: type[TModel],
         schema_name: str,
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        tools: list[dict[str, Any]] | None = None,
     ) -> TModel:
-        """Call /responses endpoint and return a validated structured model."""
+        """Send a single-prompt request and return a validated structured model."""
         response_format = self._get_json_response_format(response_model, schema_name)
         response = await self.chat(
-            messages=messages,
+            prompt=prompt,
             system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
-            tools=tools,
         )
 
         raw_data = json.loads(response)
         return response_model.model_validate(raw_data)
-
-    async def chat_with_reasoning(
-        self,
-        messages: list[dict[str, str]],
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        response_format: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-    ) -> tuple[str, str]:
-        """Call /responses endpoint and return text plus reasoning trace."""
-        input_messages = self._build_input_messages(messages, system_prompt)
-
-        data = await self._post_response(
-            input_messages=input_messages,
-            response_format=response_format,
-            include_reasoning=True,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-        )
-        return self._extract_text_and_reasoning(data)
-
-    async def chat_stream(
-        self,
-        messages: list[dict[str, str]],
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        tools: list[dict[str, Any]] | None = None,
-    ) -> AsyncIterator[str]:
-        """Stream not supported, returns full response as single chunk."""
-        response = await self.chat(messages, system_prompt, temperature, max_tokens, tools=tools)
-        yield response
-
-    async def generate(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> str:
-        """Generate text response for a prompt."""
-        messages = [{"role": "user", "content": prompt}]
-        return await self.chat(messages, system_prompt, temperature, max_tokens)
-
-    async def generate_with_reasoning(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> tuple[str, str]:
-        """Generate text response and return reasoning trace when available."""
-        messages = [{"role": "user", "content": prompt}]
-        return await self.chat_with_reasoning(messages, system_prompt, temperature, max_tokens)
-
-    async def complete(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> str:
-        """Complete a prompt. Alias for generate()."""
-        return await self.generate(prompt, system_prompt, temperature, max_tokens)

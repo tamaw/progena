@@ -169,15 +169,12 @@ class AgentDiscovery:
                             content = file_item.read_text(encoding="utf-8")
                             folder_info.file_contents[file_item.name] = content
                         except Exception as e:
-                            logger.warning(
-                                "Failed to read %s: %s", file_item, e
-                            )
+                            logger.warning("Failed to read %s: %s", file_item, e)
 
             # Only include folders with Python files
             if folder_info.file_contents:
                 folders.append(folder_info)
-                logger.debug("Found agent folder: %s with files: %s",
-                           item.name, folder_info.files)
+                logger.debug("Found agent folder: %s with files: %s", item.name, folder_info.files)
 
         return folders
 
@@ -208,31 +205,13 @@ class AgentDiscovery:
         )
 
         try:
-            if hasattr(self.llm_client, "chat_structured"):
-                return await self.llm_client.chat_structured(
-                    messages=[{"role": "user", "content": user_prompt}],
-                    response_model=AgentDiscoveryResult,
-                    schema_name="agent_discovery_result",
-                    system_prompt=system_prompt,
-                    temperature=0.1,
-                )
-
-            # Fallback for clients without structured helper
-            response_format = self.llm_client._get_json_response_format(
-                AgentDiscoveryResult, "agent_discovery_result"
-            )
-
-            response = await self.llm_client.chat(
-                messages=[{"role": "user", "content": user_prompt}],
+            return await self.llm_client.chat_structured(
+                prompt=user_prompt,
+                response_model=AgentDiscoveryResult,
+                schema_name="agent_discovery_result",
                 system_prompt=system_prompt,
-                response_format=response_format,
                 temperature=0.1,
             )
-
-            # Parse the response
-            import json
-            result_data = json.loads(response)
-            return AgentDiscoveryResult(**result_data)
 
         except Exception as e:
             logger.error("LLM analysis failed: %s", e)
@@ -277,6 +256,7 @@ class AgentDiscovery:
             if content:
                 # Try to extract first docstring
                 import re
+
                 match = re.search(r'"""(.*?)"""', content, re.DOTALL)
                 if match:
                     doc = match.group(1).strip().split("\n")[0]
@@ -335,8 +315,9 @@ class AgentDiscovery:
                 registry_summary["agent_card_refresh"] = {"error": str(e)}
             if hasattr(self.registry, "refresh_agent_health"):
                 try:
-                    registry_summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
-                    )
+                    registry_summary[
+                        "agent_health_refresh"
+                    ] = await self.registry.refresh_agent_health()
                 except Exception as e:
                     registry_summary["agent_health_refresh"] = {"error": str(e)}
             return registry_summary
@@ -415,8 +396,7 @@ class AgentDiscovery:
             summary["agent_card_refresh"] = card_refresh
         if hasattr(self.registry, "refresh_agent_health"):
             try:
-                summary["agent_health_refresh"] = await self.registry.refresh_agent_health(
-                )
+                summary["agent_health_refresh"] = await self.registry.refresh_agent_health()
             except Exception as e:
                 summary["agent_health_refresh"] = {"error": str(e)}
 

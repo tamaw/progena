@@ -21,7 +21,7 @@ from app.backend.telegram_client import (
     init_telegram_client,
     stop_telegram_client,
 )
-from app.progenitor.service import AgentResponse
+from app.progenitor.responses import AgentResponse
 
 
 async def _async_iter(*chunks: str):

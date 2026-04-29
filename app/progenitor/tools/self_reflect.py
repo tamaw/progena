@@ -532,7 +532,7 @@ class SelfReflection:
         )
 
         response = await self.llm_client.chat(
-            messages=[{"role": "user", "content": prompt}],
+            prompt=prompt,
             temperature=0.3,
         )
 
