@@ -45,15 +45,8 @@ class NewConversationTool(BaseSystemTool):
         ]
 
     @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
+    def args_model(self) -> type[BaseModel]:
         return NewConversationArgs
-
-    @property
-    def deepagent_requires_state(self) -> bool:
-        return True
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        return str(kwargs.get("request") or ""), None
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state is None:

@@ -253,14 +253,6 @@ class SayToUserTool(BaseSystemTool):
     def description(self) -> str:
         return "Send a one-way message to the user via IPC (agent_message event)"
 
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return SayToUserArgs
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        message = str(kwargs.get("message") or "")
-        return message, {"message": message}
-
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         message = str(args.get("message") or context.user_input or "").strip()
@@ -293,17 +285,6 @@ class AskUserTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return "Ask the user a question via IPC (agent_question event; one-way notification)"
-
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return AskUserArgs
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        question = str(kwargs.get("question") or "")
-        tool_args: dict[str, Any] = {"question": question}
-        if kwargs.get("options") is not None:
-            tool_args["options"] = kwargs.get("options")
-        return question, tool_args
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
@@ -344,16 +325,6 @@ class NotifyUserTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return "Create a backend-managed alert and let the backend drive user-facing delivery"
-
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return NotifyUserArgs
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        title = str(kwargs.get("title") or "")
-        body = str(kwargs.get("body") or "")
-        level = str(kwargs.get("level") or "info") or "info"
-        return body, {"title": title, "body": body, "level": level}
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}

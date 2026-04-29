@@ -61,24 +61,6 @@ class ScheduleTaskTool(BaseSystemTool):
             r"\bin\s+\d+\s+(?:minute|hour|day)s?\b",
         ]
 
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        # Expose the rich ScheduleRequest schema so the LLM can populate
-        # time_expression / instruction directly and skip the inner extraction
-        # round-trip when it already has enough context.
-        from .schedule import ScheduleRequest
-
-        return ScheduleRequest
-
-    @property
-    def deepagent_requires_state(self) -> bool:
-        return True
-
-    def deepagent_prepare_args(self, **kwargs: object) -> tuple[str, dict[str, object] | None]:
-        # Pass everything through; execute() reads the structured fields when
-        # present and falls back to LLM extraction when only user_request is set.
-        return str(kwargs.get("user_request") or ""), dict(kwargs)
-
     async def execute(self, context: ToolContext) -> ToolResult:
         from .schedule import add_scheduled_task
 

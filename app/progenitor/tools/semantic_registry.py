@@ -307,12 +307,8 @@ class SemanticRegistryTool(BaseSystemTool):
         return []
 
     @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
+    def args_model(self) -> type[BaseModel]:
         return SemanticRegistryArgs
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        query = str(kwargs.get("query") or "")
-        return (f"semantic_registry: {query}" if query else ""), None
 
     async def execute(self, context: ToolContext) -> ToolResult:
         registry_path = getattr(context.tool_registry, "registry_path", None)
@@ -322,12 +318,13 @@ class SemanticRegistryTool(BaseSystemTool):
         semantic = SemanticRegistry(Path(registry_path))
         await semantic.load()
 
-        # Optional query: allow "semantic_registry: <query>" in user_input
-        raw = (context.user_input or "").strip()
-        query = ""
-        if ":" in raw:
-            _prefix, query = raw.split(":", 1)
-            query = query.strip()
+        query = str((context.tool_args or {}).get("query") or "").strip()
+        if not query:
+            # Legacy fallback: "semantic_registry: <query>" in user_input.
+            raw = (context.user_input or "").strip()
+            if ":" in raw:
+                _prefix, tail = raw.split(":", 1)
+                query = tail.strip()
 
         payload: dict[str, Any] = {
             "semantic_available": SEMANTIC_AVAILABLE,
