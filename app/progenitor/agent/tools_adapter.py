@@ -14,9 +14,9 @@ from typing import Any, cast
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from ..nodes.node_helpers.registry import get_all_system_tools
 from ..runtime.loop import get_current_loop
 from ..tools.protocol import ToolContext
+from ..tools.system_registry import get_all_system_tools
 
 
 def create_dynamic_mcp_tools(llm_client: Any = None) -> list[BaseTool]:

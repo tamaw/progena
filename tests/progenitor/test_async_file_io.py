@@ -86,9 +86,9 @@ class TestAsyncFileIO:
         await manager.initialize()
 
         entry = {"event": "test"}
-        await manager.append_jsonl("decisions", entry)
+        await manager.append_jsonl("conversation", entry)
 
-        log_path = logs_dir / "decisions.jsonl"
+        log_path = logs_dir / "conversation.jsonl"
         line = log_path.read_text().strip()
         data = json.loads(line)
 
@@ -129,30 +129,6 @@ class TestAsyncFileIO:
         assert entries == []
 
     @pytest.mark.asyncio
-    async def test_get_iteration_history_uses_aiofiles(self, temp_dir):
-        """Test that get_iteration_history uses aiofiles for async I/O."""
-        from app.progenitor.state.manager import StateManager
-
-        state_dir, logs_dir = temp_dir
-        manager = StateManager(state_dir, logs_dir)
-        await manager.initialize()
-
-        # Add some iteration events
-        await manager.append_jsonl("decisions", {"event": "iteration_start", "iteration": 1})
-        await manager.append_jsonl("decisions", {"event": "iteration_end", "iteration": 1})
-        await manager.append_jsonl("decisions", {"event": "other", "data": "ignored"})
-        await manager.append_jsonl("decisions", {"event": "verification", "score": 0.9})
-
-        # Read history
-        history = await manager.get_iteration_history()
-
-        # Should only include iteration events
-        assert len(history) == 3
-        assert history[0]["event"] == "iteration_start"
-        assert history[1]["event"] == "iteration_end"
-        assert history[2]["event"] == "verification"
-
-    @pytest.mark.asyncio
     async def test_concurrent_append_operations(self, temp_dir):
         """Test that concurrent append operations complete without errors."""
         from app.progenitor.state.manager import StateManager
@@ -164,10 +140,7 @@ class TestAsyncFileIO:
         # Append concurrently - note: some entries may be lost due to race
         # conditions with concurrent file writes. This test verifies the
         # operations complete without raising exceptions.
-        tasks = [
-            manager.append_jsonl("conversation", {"id": i})
-            for i in range(10)
-        ]
+        tasks = [manager.append_jsonl("conversation", {"id": i}) for i in range(10)]
         await asyncio.gather(*tasks)
 
         # Verify at least some entries were written (race conditions may lose some)
@@ -221,32 +194,21 @@ class TestAsyncFileIOIntegration:
     async def test_full_state_lifecycle(self, temp_dir):
         """Test a full state lifecycle with async I/O."""
         from app.progenitor.state.manager import StateManager
-        from app.progenitor.state.models import WorkItem, WorkItemStatus
 
         state_dir, logs_dir = temp_dir
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
 
-        # Create work item
-        item = WorkItem(
-            id="test-1",
-            description="Test Task",
-            status=WorkItemStatus.PENDING,
-        )
+        await manager.save_current_state({"thread_id": "test-thread", "cycle_count": 1})
 
-        # Add to backlog
-        await manager.add_work_item(item)
-
-        # Read back
-        backlog = await manager.get_backlog()
-        assert len(backlog) == 1
-        assert backlog[0].id == "test-1"
+        state = await manager.get_current_state()
+        assert state["thread_id"] == "test-thread"
+        assert state["cycle_count"] == 1
 
     @pytest.mark.asyncio
     async def test_state_persistence_across_instances(self, temp_dir):
         """Test that state persists across manager instances."""
         from app.progenitor.state.manager import StateManager
-        from app.progenitor.state.models import WorkItem, WorkItemStatus
 
         state_dir, logs_dir = temp_dir
 
@@ -254,20 +216,15 @@ class TestAsyncFileIOIntegration:
         manager1 = StateManager(state_dir, logs_dir)
         await manager1.initialize()
 
-        item = WorkItem(
-            id="persist-test",
-            description="Persistence Test",
-            status=WorkItemStatus.PENDING,
-        )
-        await manager1.add_work_item(item)
+        await manager1.save_current_state({"thread_id": "persist-test", "cycle_count": 2})
 
         # Second manager instance (simulating restart)
         manager2 = StateManager(state_dir, logs_dir)
         await manager2.initialize()
 
-        backlog = await manager2.get_backlog()
-        assert len(backlog) == 1
-        assert backlog[0].id == "persist-test"
+        state = await manager2.get_current_state()
+        assert state["thread_id"] == "persist-test"
+        assert state["cycle_count"] == 2
 
     @pytest.mark.asyncio
     async def test_log_conversation_async(self, temp_dir):
@@ -300,10 +257,10 @@ class TestAiofilesImport:
         import app.progenitor.state.manager as manager_module
 
         # Check that aiofiles is imported
-        assert hasattr(manager_module, 'aiofiles')
+        assert hasattr(manager_module, "aiofiles")
 
     def test_aiofiles_available(self):
         """Test that aiofiles package is available."""
         import aiofiles
 
-        assert hasattr(aiofiles, 'open')
+        assert hasattr(aiofiles, "open")

@@ -1,7 +1,8 @@
 """
 System Tool Protocol and Base Types.
 
-Defined under app.progenitor.tools to avoid import cycles with app.progenitor.nodes.
+Defined under app.progenitor.tools so tool contracts stay independent from
+runtime and agent wiring.
 """
 
 from abc import ABC, abstractmethod
