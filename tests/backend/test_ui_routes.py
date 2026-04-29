@@ -16,6 +16,7 @@ from app.backend.alerts import clear_alerts, create_alert
 from app.backend.main import app
 from app.backend.state_reader import StateReader, get_state_reader
 from app.backend.threads import clear_threads
+from app.progenitor.service import AgentResponse
 
 
 @pytest.fixture
@@ -1426,7 +1427,11 @@ class TestWorkspaceBridgeActions:
 
         original_client = backend_main.client
         mock_client = AsyncMock()
-        mock_client.send_message = AsyncMock(return_value="bridge-response")
+        mock_client.send_message = AsyncMock(
+            return_value=AgentResponse(
+                response="bridge-response", reasoning=None, reasoning_tokens=None
+            )
+        )
         backend_main.client = mock_client
         try:
             run_response = client.post(
@@ -1460,7 +1465,11 @@ class TestWorkspaceBridgeActions:
 
         original_client = backend_main.client
         mock_client = AsyncMock()
-        mock_client.send_message = AsyncMock(return_value="bridge-response")
+        mock_client.send_message = AsyncMock(
+            return_value=AgentResponse(
+                response="bridge-response", reasoning=None, reasoning_tokens=None
+            )
+        )
         backend_main.client = mock_client
         try:
             first = client.post(
@@ -1493,7 +1502,11 @@ class TestWorkspaceBridgeActions:
 
         original_client = backend_main.client
         mock_client = AsyncMock()
-        mock_client.send_message = AsyncMock(return_value="bridge-response")
+        mock_client.send_message = AsyncMock(
+            return_value=AgentResponse(
+                response="bridge-response", reasoning=None, reasoning_tokens=None
+            )
+        )
         backend_main.client = mock_client
         try:
             thread_id = "thread_shared_chain"

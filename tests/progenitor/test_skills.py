@@ -96,8 +96,12 @@ class TestSkillsWiring:
                 prompts_dir=Path("data/prompts"),
             ),
         )
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+        ):
             mock_create.return_value = MagicMock()
+            mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.deep_agent import create_progenitor_agent
@@ -121,8 +125,12 @@ class TestSkillsWiring:
                 prompts_dir=Path("data/prompts"),
             ),
         )
-        with patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create:
+        with (
+            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+        ):
             mock_create.return_value = MagicMock()
+            mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.deep_agent import create_progenitor_agent

@@ -124,7 +124,7 @@ for line in sys.stdin:
             new=AsyncMock(return_value=mock_process),
         ):
             response = await client.send_message("hello")
-            assert response == "test response"
+            assert response.response == "test response"
 
         await client.stop()
 
@@ -165,8 +165,7 @@ class TestChatServerAPI:
             "/v1/responses",
             json={"model": "test", "input": ""},
         )
-        # Returns 503 if client not initialized, or 400 if input empty
-        assert response.status_code in (400, 503)
+        assert response.status_code == 400
 
     def test_responses_endpoint(self, test_client):
         """Test unified responses endpoint (preferred)."""
@@ -174,7 +173,7 @@ class TestChatServerAPI:
             "/v1/responses",
             json={"model": "test", "input": ""},
         )
-        assert response.status_code in (400, 503)
+        assert response.status_code == 400
 
     def test_simple_chat_no_message(self, test_client):
         """Test simple chat with no message."""

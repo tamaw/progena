@@ -23,6 +23,7 @@ from app.backend.streaming import (
     stop_everything,
     stream_with_callback,
 )
+from app.progenitor.service import AgentResponse
 
 
 class TestIteratorize:
@@ -30,6 +31,7 @@ class TestIteratorize:
 
     def test_basic_callback_to_iterator(self):
         """Test converting a simple callback function to iterator."""
+
         def generate_numbers(callback):
             for i in range(5):
                 callback(i)
@@ -43,6 +45,7 @@ class TestIteratorize:
 
     def test_callback_with_args(self):
         """Test callback function with arguments."""
+
         def generate_with_prefix(prefix, callback):
             for i in range(3):
                 callback(f"{prefix}-{i}")
@@ -53,6 +56,7 @@ class TestIteratorize:
 
     def test_callback_with_kwargs(self):
         """Test callback function with keyword arguments."""
+
         def generate_with_options(multiplier=1, callback=None):
             assert callback is not None
             for i in range(3):
@@ -64,6 +68,7 @@ class TestIteratorize:
 
     def test_result_property(self):
         """Test that result from wrapped function is accessible."""
+
         def return_value(callback):
             callback("chunk")
             return "final_result"
@@ -76,6 +81,7 @@ class TestIteratorize:
 
     def test_stop_method(self):
         """Test that stop() method works."""
+
         def slow_generate(callback):
             for i in range(1000):
                 callback(i)
@@ -94,6 +100,7 @@ class TestIteratorize:
 
     def test_context_manager(self):
         """Test using Iteratorize as context manager."""
+
         def generate(callback):
             for i in range(5):
                 callback(i)
@@ -106,6 +113,7 @@ class TestIteratorize:
 
     def test_exception_propagation(self):
         """Test that exceptions in the callback function propagate."""
+
         def failing_function(callback):
             callback("first")
             raise ValueError("Test error")
@@ -155,11 +163,7 @@ class TestStreamChunk:
 
     def test_stream_chunk_with_metadata(self):
         """Test stream chunk with metadata."""
-        chunk = StreamChunk(
-            content="test",
-            index=5,
-            metadata={"tokens": 100, "model": "gpt-4"}
-        )
+        chunk = StreamChunk(content="test", index=5, metadata={"tokens": 100, "model": "gpt-4"})
         assert chunk.metadata is not None
         assert chunk.metadata["tokens"] == 100
 
@@ -211,6 +215,7 @@ class TestAsyncIteratorize:
     @pytest.mark.asyncio
     async def test_async_basic(self):
         """Test basic async iteration."""
+
         async def async_generate(callback):
             for i in range(3):
                 await callback(i)
@@ -227,6 +232,7 @@ class TestAsyncIteratorize:
     @pytest.mark.asyncio
     async def test_async_stop(self):
         """Test stopping async iterator."""
+
         async def long_generate(callback):
             for i in range(100):
                 await callback(i)
@@ -415,23 +421,25 @@ class TestAgentActivityFeedback:
         """Test AgentInfo includes runtime status fields."""
         from app.backend.state_reader import AgentInfo
 
-        agent = AgentInfo.from_dict({
-            "name": "test-agent",
-            "kind": "a2a_agent",
-            "version": "1.0.0",
-            "description": "Test",
-            "capabilities": [],
-            "entrypoint": "python",
-            "transport": "stdio",
-            "enabled": True,
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z",
-            # Runtime status
-            "status": "busy",
-            "status_message": "Processing request",
-            "pid": 12345,
-            "last_heartbeat": "2024-01-01T12:00:00Z",
-        })
+        agent = AgentInfo.from_dict(
+            {
+                "name": "test-agent",
+                "kind": "a2a_agent",
+                "version": "1.0.0",
+                "description": "Test",
+                "capabilities": [],
+                "entrypoint": "python",
+                "transport": "stdio",
+                "enabled": True,
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                # Runtime status
+                "status": "busy",
+                "status_message": "Processing request",
+                "pid": 12345,
+                "last_heartbeat": "2024-01-01T12:00:00Z",
+            }
+        )
 
         assert agent.status == "busy"
         assert agent.status_message == "Processing request"
@@ -481,21 +489,25 @@ class TestSubAgentDelegation:
         """Test backlog items have priority for ordering."""
         from app.backend.state_reader import BacklogItem
 
-        high_priority = BacklogItem.from_dict({
-            "id": "task-1",
-            "item_type": "bug",
-            "status": "pending",
-            "description": "Critical fix",
-            "priority": 10,
-        })
+        high_priority = BacklogItem.from_dict(
+            {
+                "id": "task-1",
+                "item_type": "bug",
+                "status": "pending",
+                "description": "Critical fix",
+                "priority": 10,
+            }
+        )
 
-        low_priority = BacklogItem.from_dict({
-            "id": "task-2",
-            "item_type": "feature",
-            "status": "pending",
-            "description": "Nice to have",
-            "priority": 1,
-        })
+        low_priority = BacklogItem.from_dict(
+            {
+                "id": "task-2",
+                "item_type": "feature",
+                "status": "pending",
+                "description": "Nice to have",
+                "priority": 1,
+            }
+        )
 
         assert high_priority.priority > low_priority.priority
 
@@ -523,12 +535,14 @@ class TestBuildStateTracking:
         """Test build verification score tracking."""
         from app.backend.state_reader import BuildInfo
 
-        build = BuildInfo.from_dict({
-            "build_in_progress": True,
-            "build_phase": "verify",
-            "verification": {"current_score": 0.85},
-            "iteration": {"current": 5},
-        })
+        build = BuildInfo.from_dict(
+            {
+                "build_in_progress": True,
+                "build_phase": "verify",
+                "verification": {"current_score": 0.85},
+                "iteration": {"current": 5},
+            }
+        )
 
         assert build.score == 0.85
         assert build.iteration == 5
@@ -539,10 +553,12 @@ class TestBuildStateTracking:
 
         messages = [{"role": "user", "content": "msg"}] * 10
 
-        build = BuildInfo.from_dict({
-            "build_in_progress": True,
-            "build_messages": messages,
-        })
+        build = BuildInfo.from_dict(
+            {
+                "build_in_progress": True,
+                "build_messages": messages,
+            }
+        )
 
         assert build.message_count == 10
 
@@ -550,7 +566,7 @@ class TestBuildStateTracking:
 class TestChatAPIStreaming:
     """Tests for chat API streaming responses."""
 
-    @patch('app.backend.main.get_ipc_client')
+    @patch("app.backend.main.get_ipc_client")
     def test_responses_endpoint_exists(self, mock_get_client):
         """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
@@ -559,7 +575,9 @@ class TestChatAPIStreaming:
 
         # Mock the client to avoid IPC connection issues
         mock_client = AsyncMock()
-        mock_client.send_message.return_value = "mocked"
+        mock_client.send_message.return_value = AgentResponse(
+            response="mocked", reasoning=None, reasoning_tokens=None
+        )
         mock_get_client.return_value = mock_client
 
         client = TestClient(app)
@@ -575,7 +593,7 @@ class TestChatAPIStreaming:
         # May return error but endpoint should be reachable
         assert response.status_code in [200, 500, 503, 504]
 
-    @patch('app.backend.main.get_ipc_client')
+    @patch("app.backend.main.get_ipc_client")
     def test_responses_api_endpoint_exists(self, mock_get_client):
         """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
@@ -584,7 +602,9 @@ class TestChatAPIStreaming:
 
         # Mock the client to avoid IPC connection issues
         mock_client = AsyncMock()
-        mock_client.send_message.return_value = "mocked"
+        mock_client.send_message.return_value = AgentResponse(
+            response="mocked", reasoning=None, reasoning_tokens=None
+        )
         mock_get_client.return_value = mock_client
 
         client = TestClient(app)

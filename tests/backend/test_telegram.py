@@ -21,6 +21,7 @@ from app.backend.telegram_client import (
     init_telegram_client,
     stop_telegram_client,
 )
+from app.progenitor.service import AgentResponse
 
 
 async def _async_iter(*chunks: str):
@@ -819,7 +820,11 @@ class TestTelegramConnectedMessage:
 
         progenitor = AsyncMock()
         progenitor.is_running = True
-        progenitor.send_message.return_value = "👋 Progenitor connected to Telegram."
+        progenitor.send_message.return_value = AgentResponse(
+            response="👋 Progenitor connected to Telegram.",
+            reasoning=None,
+            reasoning_tokens=None,
+        )
 
         await backend_main._send_telegram_connected_message(telegram, progenitor)
 
@@ -837,7 +842,11 @@ class TestTelegramConnectedMessage:
 
         progenitor = AsyncMock()
         progenitor.is_running = True
-        progenitor.send_message.return_value = "👋 Progenitor connected to Telegram."
+        progenitor.send_message.return_value = AgentResponse(
+            response="👋 Progenitor connected to Telegram.",
+            reasoning=None,
+            reasoning_tokens=None,
+        )
 
         await backend_main._send_telegram_connected_message(telegram, progenitor)
 

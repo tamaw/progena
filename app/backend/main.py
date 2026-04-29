@@ -29,6 +29,7 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .agent_routes import router as agent_router
 from .alerts import AlertInfo
 from .attachments import (
     AttachmentConfig,
@@ -47,8 +48,10 @@ from .models import (
     ModelInfo,
     ModelsResponse,
     ResponseOutputMessage,
+    ResponseOutputReasoning,
     ResponseOutputText,
     ResponsePayload,
+    ResponseReasoningSummaryText,
     ResponseRequest,
     SimpleChatRequest,
     StreamingResponseRequest,
@@ -381,7 +384,9 @@ async def _send_telegram_connected_message(
         if not progenitor.is_running:
             await progenitor.start()
 
-        response_text = (await progenitor.send_message(prompt, request_id=request_id)).strip()
+        response_text = (
+            await progenitor.send_message(prompt, request_id=request_id)
+        ).response.strip()
         if not response_text:
             raise RuntimeError("Empty greeting response from agent")
 
@@ -489,7 +494,7 @@ async def _handle_alert_request(
                 _build_alert_summary_prompt(alert),
                 request_id=f"alert-summary-{alert.id}",
             )
-        ).strip()
+        ).response.strip()
         if response_text and response_text.lower() != "sent":
             logger.debug(
                 "Alert summary helper returned non-sentinel text for %s: %s",
@@ -795,6 +800,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(agent_router)
 app.include_router(ui_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.
@@ -1098,6 +1104,11 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
 
     Accepts Responses `input` payloads only.
     """
+    try:
+        last_user_msg, all_inputs = _extract_response_input(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     if not client:
         raise HTTPException(status_code=503, detail="Client not initialized")
 
@@ -1105,11 +1116,6 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
     request_id = getattr(request.state, "request_id", None)
     session = await get_session_from_request(request, session_manager)
     thread_id, request_metadata = _build_chat_request_metadata(session, body.metadata)
-
-    try:
-        last_user_msg, all_inputs = _extract_response_input(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     await session_manager.record_chat_activity(
         session.session_id,
@@ -1138,18 +1144,27 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
                 ),
             )
 
-        response_text = await client.send_message(
+        response_details = await client.send_message(
             last_user_msg,
             request_id=request_id,
             metadata=request_metadata,
+            include_reasoning=body.include_reasoning,
         )
         _attach_session_cookie(request, session, response)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
+        response_text = response_details.response
+        reasoning_text = (response_details.reasoning or "").strip()
+        output_content: list[ResponseOutputReasoning | ResponseOutputText] = []
+        if reasoning_text:
+            output_content.append(
+                ResponseOutputReasoning(summary=[ResponseReasoningSummaryText(text=reasoning_text)])
+            )
+        output_content.append(ResponseOutputText(text=response_text))
 
         return ResponsePayload(
             id=response_id,
             model=body.model,
-            output=[ResponseOutputMessage(content=[ResponseOutputText(text=response_text)])],
+            output=[ResponseOutputMessage(content=output_content)],
             usage=Usage(
                 prompt_tokens=len(" ".join(all_inputs).split()),
                 completion_tokens=len(response_text.split()),
@@ -1181,7 +1196,11 @@ def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
     if not inputs:
         raise ValueError("No input provided")
 
-    return inputs[-1], inputs
+    last_input = inputs[-1]
+    if not last_input.strip():
+        raise ValueError("Input cannot be empty")
+
+    return last_input, inputs
 
 
 def _default_conversation_id(session: SessionState) -> str:
@@ -1301,12 +1320,12 @@ async def simple_chat(request: Request, response: Response, body: SimpleChatRequ
             session.session_id,
             message_increment=1,
         )
-        response_text = await client.send_message(
+        response_details = await client.send_message(
             body.message,
             metadata=request_metadata,
         )
         _attach_session_cookie(request, session, response)
-        return {"response": response_text}
+        return {"response": response_details.response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

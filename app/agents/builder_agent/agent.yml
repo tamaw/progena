@@ -1,0 +1,18 @@
+runtime:
+  port: 8107
+  mounts:
+    - host_path: /var/lib/progenitor/data/state/agents/builder_agent
+      container_path: /app/data/state
+    - host_path: /var/lib/progenitor/logs
+      container_path: /app/logs
+    - host_path: /var/lib/progenitor/worktrees
+      container_path: /app/worktrees
+  additional_env_keys:
+    - GH_TOKEN
+    - COPILOT_GITHUB_TOKEN
+    - GIT_AUTHOR_NAME
+    - GIT_AUTHOR_EMAIL
+    - PROGENITOR_REPO_URL
+    - OVERRIDE_AGENT_PLANNER_MODEL
+    - OVERRIDE_AGENT_BUILDER_MODEL
+    - DEFAULT_COPILOT_MODEL
