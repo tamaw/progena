@@ -30,7 +30,7 @@ The strongly used code is concentrated in:
 
 The lesser-used or conditional code is mostly scheduler, A2A tracking, request
 thread isolation, optional reasoning, optional MCP, optional skills/memory
-discovery, and older compatibility layers.
+discovery, and the alternate in-process backend service path.
 
 Cleanup note: the previously identified legacy node/routing layer, build-state
 helpers, app-level mock LLM, old agent process managers, and related tests were
@@ -524,16 +524,15 @@ not by `LLMClient.chat()`. `LLMClient` is still strongly used for:
 - Tool implementations that need AI calls.
 - Agent discovery/self-reflection style tools.
 - A2A task notification support.
-- Legacy node paths and tests.
 
 ### Direct LLM methods
 
 | Method | Current status |
 | --- | --- |
-| `chat()` | Active for tools, tests, and helper flows; not the main DeepAgent conversation model call. |
-| `chat_structured()` | Active for tools/agent discovery; conditional on callers. |
-| `chat_with_reasoning()` | Conditional helper for reasoning-aware direct calls. |
-| `generate()` / `generate_with_reasoning()` / `complete()` | Helper APIs used by tools and tests. |
+| `chat()` | Active for tools and helper flows; accepts either a prompt string or message-history list. Not the main DeepAgent conversation model call. |
+| `chat_structured()` | Active for tools/agent discovery; single-prompt wrapper that passes a response format to `chat()`. |
+| ~~`chat_with_reasoning()`~~ | Removed redundant direct helper. |
+| ~~`generate()` / `generate_with_reasoning()` / `complete()`~~ | Removed redundant prompt-only convenience APIs. Callers now use `chat()`. |
 | ~~`decide()` / `generate_response()`~~ | Removed legacy outer-loop APIs. |
 
 ### Supporting LLM modules
@@ -541,7 +540,7 @@ not by `LLMClient.chat()`. `LLMClient` is still strongly used for:
 | Module | Status | Notes |
 | --- | --- | --- |
 | `llm/prompts.py` | Strongly used | DeepAgent genesis prompt and older prompt templates. |
-| ~~`llm/tokenizer.py`~~ | Removed legacy | Token counts now sourced from API response `usage` field; tiktoken dependency dropped. |
+| ~~`llm/tokenizer.py`~~ | Removed legacy | Token counting and context-window warning logic were removed; history sizing is controlled upstream. |
 | ~~`llm/response_models.py`~~ | Removed legacy | Supported structured legacy decision/model responses and validation. |
 | ~~`llm/mock_client.py`~~ | Removed test/demo | Tests should use test-local mocks instead. |
 | ~~`llm/circuit_breaker.py`~~ | Removed unused | No active wrapper path was present in `app/progenitor`. |
@@ -730,12 +729,12 @@ Evidence:
 | --- | --- | --- |
 | Scheduler | `runtime/scheduler.py` | Scheduler enabled and due entries exist. |
 | A2A task polling | `runtime/a2a_tasks.py` | Tracked tasks exist. |
-| Direct in-process service | `service.py` | Backend chooses service client instead of IPC. |
+| Direct in-process service | `service.py`, `app/backend/service_client.py` | Alternate backend integration path; current backend startup uses IPC. |
 | Code-review/research subagents | `agent/subagents.py` | Registered, actual use depends on model delegation. |
 | Reasoning config | `agent/langchain_adapter.py`, `streaming_utils.py`, `stream_events.py` | `config.llm.reasoning_enabled`. |
 | Skills | `agent/deep_agent.py` | `data/skills/progenitor` exists. |
 | Runtime memories | `agent/deep_agent.py` | `data/memories/*.md`; default is ensured. |
-| Legacy `LLMClient` direct chat APIs | `llm/client.py` | Tools/tests call the direct helper APIs where needed. |
+| Direct `LLMClient` helper APIs | `llm/client.py` | Tools call `chat()` / `chat_structured()` where needed. |
 | ~~Mock LLM~~ | ~~`llm/mock_client.py`~~ | Removed; tests should use test-local mocks. |
 | ~~Old build/backlog state helpers~~ | ~~`state/manager.py`, `state/models.py`~~ | Removed with old node/build-state concepts. |
 
@@ -749,6 +748,7 @@ Evidence:
 | ~~Process-based agent runner~~ | ~~`runtime/agent_runner.py`~~ | Removed. |
 | ~~HTTP agent manager~~ | ~~`runtime/http_agent_manager.py`~~ | Removed. |
 | ~~Circuit breaker~~ | ~~`llm/circuit_breaker.py`~~ | Removed. |
+| Direct in-process service path | `service.py`, `app/backend/service_client.py`, `tests/progenitor/test_service.py` | Current backend startup uses IPC; if IPC is the only supported runtime, this alternate graph invocation path is the next large cleanup candidate. |
 
 ## Cleanup applied
 
