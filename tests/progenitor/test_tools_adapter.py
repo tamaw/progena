@@ -1,5 +1,6 @@
 """Tests for Progenitor DeepAgent tool adapters."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -330,3 +331,68 @@ def test_dynamic_mcp_tools_skip_non_tool_entries() -> None:
     tools = create_dynamic_mcp_tools(llm_client)
 
     assert [tool.name for tool in tools] == ["read_url"]
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_uses_deepagent_prepare_args(monkeypatch) -> None:
+    """ShellExecTool exposes a structured DeepAgent schema and translates
+    kwargs into the CLI-style request its execute() expects."""
+    from app.progenitor.tools.shell import ShellExecArgs
+
+    tools = create_deepagent_tools()
+    shell_tool = _tool_by_name(tools, "shell_exec")
+
+    # The DeepAgent-facing schema is the structured one, not the default
+    # single-"request" schema.
+    assert shell_tool.args_schema is ShellExecArgs
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
+        from app.progenitor.tools.protocol import ToolResult
+
+        captured["user_input"] = context.user_input
+        captured["tool_args"] = context.tool_args
+        return ToolResult.ok({"ok": True})
+
+    monkeypatch.setattr(
+        "app.progenitor.tools.shell.ShellExecTool.execute", _fake_execute, raising=True
+    )
+
+    result = await shell_tool.ainvoke({"command": "ls -la", "timeout_seconds": 60.0, "cwd": "/tmp"})
+    assert result == {"ok": True}
+    # prepare_args formats kwargs into the "shell_exec --timeout ... -- <cmd>" string
+    assert "ls -la" in captured["user_input"]
+    assert "--timeout 60.0" in captured["user_input"]
+    assert "--cwd /tmp" in captured["user_input"]
+
+
+@pytest.mark.asyncio
+async def test_get_a2a_task_prepare_args_populates_tool_args(monkeypatch) -> None:
+    """When prepare_args returns a tool_args dict, it overrides the raw kwargs."""
+    tools = create_deepagent_tools(state_manager=MagicMock())
+    tool = _tool_by_name(tools, "get_a2a_task")
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
+        from app.progenitor.tools.protocol import ToolResult
+
+        captured["user_input"] = context.user_input
+        captured["tool_args"] = context.tool_args
+        return ToolResult.ok({"status": "ok"})
+
+    monkeypatch.setattr(
+        "app.progenitor.tools.get_a2a_task.GetA2ATaskTool.execute",
+        _fake_execute,
+        raising=True,
+    )
+
+    await tool.ainvoke({"task_id": "task-xyz", "refresh": False, "history_length": 7})
+
+    assert captured["user_input"] == "task-xyz"
+    assert captured["tool_args"] == {
+        "task_id": "task-xyz",
+        "history_length": 7,
+        "refresh": False,
+    }

@@ -8,7 +8,7 @@ and creates a ScheduleEntry via the scheduler.
 import logging
 from inspect import iscoroutinefunction
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..llm.prompts import PromptTemplates
 from ..runtime.scheduler import Scheduler
@@ -23,12 +23,6 @@ class _ScheduleExtractionResponse(BaseModel):
     time_expression: str | None = None
     instruction: str | None = None
     description: str | None = None
-
-
-class ScheduleTaskArgs(BaseModel):
-    user_request: str = Field(
-        description="Original user request describing the reminder or schedule."
-    )
 
 
 class ScheduleTaskTool(BaseSystemTool):
@@ -69,14 +63,21 @@ class ScheduleTaskTool(BaseSystemTool):
 
     @property
     def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return ScheduleTaskArgs
+        # Expose the rich ScheduleRequest schema so the LLM can populate
+        # time_expression / instruction directly and skip the inner extraction
+        # round-trip when it already has enough context.
+        from .schedule import ScheduleRequest
+
+        return ScheduleRequest
 
     @property
     def deepagent_requires_state(self) -> bool:
         return True
 
     def deepagent_prepare_args(self, **kwargs: object) -> tuple[str, dict[str, object] | None]:
-        return str(kwargs.get("user_request") or ""), None
+        # Pass everything through; execute() reads the structured fields when
+        # present and falls back to LLM extraction when only user_request is set.
+        return str(kwargs.get("user_request") or ""), dict(kwargs)
 
     async def execute(self, context: ToolContext) -> ToolResult:
         from .schedule import add_scheduled_task
