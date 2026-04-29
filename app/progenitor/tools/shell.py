@@ -11,7 +11,6 @@ import asyncio
 import logging
 import os
 import re
-import shlex
 import shutil
 from pathlib import Path
 from typing import Any
@@ -165,62 +164,35 @@ class ShellExecTool(BaseSystemTool):
         return [r"^\s*(?:bash|sh|shell)\s*[:>-]\s*\S+"]
 
     @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
+    def args_model(self) -> type[BaseModel]:
         return ShellExecArgs
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        command = str(kwargs.get("command") or "")
-        timeout_seconds = kwargs.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)
-        cwd = kwargs.get("cwd")
-        prefixes = ["shell_exec", "--timeout", str(timeout_seconds)]
-        if cwd:
-            prefixes.extend(["--cwd", str(cwd)])
-        return " ".join(prefixes) + f" -- {command}", None
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if os.name == "nt":
             return ToolResult.fail("shell_exec is only supported on POSIX (Linux) containers.")
 
-        request = str(context.user_input or "")
-
-        # Optional CLI-ish flags before a required "--" delimiter:
-        #   shell_exec --timeout 60 --cwd /tmp -- ls -la
+        args = context.tool_args or {}
         timeout = _coerce_timeout(
-            os.getenv("PROGENITOR_SHELL_TIMEOUT_SECONDS") or _DEFAULT_TIMEOUT_SECONDS
+            args.get("timeout_seconds")
+            or os.getenv("PROGENITOR_SHELL_TIMEOUT_SECONDS")
+            or _DEFAULT_TIMEOUT_SECONDS
         )
+
         cwd: Path | None = None
-        if " -- " in request:
-            prefix, cmd_part = request.split(" -- ", 1)
-            prefix = _extract_command_from_request(prefix)
+        cwd_arg = args.get("cwd")
+        if cwd_arg:
             try:
-                tokens = shlex.split(prefix)
-            except Exception:
-                tokens = []
+                candidate = Path(str(cwd_arg)).expanduser().resolve()
+            except Exception as e:
+                return ToolResult.fail(f"Invalid cwd: {cwd_arg} ({e})")
+            if not candidate.exists() or not candidate.is_dir():
+                return ToolResult.fail(f"cwd does not exist or is not a directory: {candidate}")
+            cwd = candidate
 
-            i = 0
-            while i < len(tokens):
-                tok = tokens[i]
-                if tok == "--timeout" and i + 1 < len(tokens):
-                    timeout = _coerce_timeout(tokens[i + 1])
-                    i += 2
-                    continue
-                if tok == "--cwd" and i + 1 < len(tokens):
-                    try:
-                        candidate = Path(tokens[i + 1]).expanduser().resolve()
-                        if not candidate.exists() or not candidate.is_dir():
-                            return ToolResult.fail(
-                                f"cwd does not exist or is not a directory: {candidate}"
-                            )
-                        cwd = candidate
-                    except Exception as e:
-                        return ToolResult.fail(f"Invalid cwd: {tokens[i + 1]} ({e})")
-                    i += 2
-                    continue
-                i += 1
-
-            command = cmd_part.strip()
-        else:
-            command = _extract_command_from_request(request)
+        command = str(args.get("command") or "").strip()
+        if not command:
+            # Legacy callers (and tests) may still pass the command via user_input.
+            command = _extract_command_from_request(str(context.user_input or ""))
         if not command:
             return ToolResult.fail("No shell command provided.")
 

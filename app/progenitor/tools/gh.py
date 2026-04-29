@@ -337,19 +337,6 @@ class GhCliTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return ["gh", "gh cli", "github cli", "gh auth", "gh api"]
 
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return GhCliArgs
-
-    def deepagent_prepare_args(self, **kwargs: object) -> tuple[str, dict[str, object] | None]:
-        tool_args: dict[str, object] = {
-            "args": kwargs.get("args") or [],
-            "timeout": kwargs.get("timeout", 60.0),
-        }
-        if kwargs.get("cwd"):
-            tool_args["cwd"] = kwargs.get("cwd")
-        return "", tool_args
-
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         timeout_raw = args.get("timeout", 60)

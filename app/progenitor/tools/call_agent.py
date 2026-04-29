@@ -79,22 +79,6 @@ class CallAgentTool(BaseSystemTool):
             "a2a",
         ]
 
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return CallAgentArgs
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        request = str(kwargs.get("request") or "")
-        tool_args: dict[str, Any] = {
-            "agent": str(kwargs.get("agent") or ""),
-            "request": request,
-            "timeout_seconds": kwargs.get("timeout_seconds", 60.0),
-            "blocking": kwargs.get("blocking", False),
-        }
-        if kwargs.get("context") is not None:
-            tool_args["context"] = kwargs.get("context")
-        return request, tool_args
-
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
             return ToolResult.fail("state_manager unavailable; cannot track A2A tasks")

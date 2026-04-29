@@ -53,18 +53,6 @@ class GetA2ATaskTool(BaseSystemTool):
             "check task",
         ]
 
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return GetA2ATaskArgs
-
-    def deepagent_prepare_args(self, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
-        task_id = str(kwargs.get("task_id") or "")
-        return task_id, {
-            "task_id": task_id,
-            "history_length": kwargs.get("history_length", DEFAULT_A2A_HISTORY_LENGTH),
-            "refresh": kwargs.get("refresh", True),
-        }
-
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
             return ToolResult.fail("state_manager unavailable; cannot query tracked A2A tasks")

@@ -39,13 +39,6 @@ class MCPRefreshTool(BaseSystemTool):
     def keywords(self) -> list[str]:
         return ["mcp refresh", "refresh mcp", "reload mcp"]
 
-    @property
-    def deepagent_args_schema(self) -> type[BaseModel] | None:
-        return MCPRefreshArgs
-
-    def deepagent_prepare_args(self, **kwargs: object) -> tuple[str, dict[str, object] | None]:
-        return "", {"persist": kwargs.get("persist", True)}
-
     async def execute(self, context: ToolContext) -> ToolResult:
         llm_client = context.llm_client
         if llm_client is None:

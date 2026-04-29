@@ -48,10 +48,6 @@ class ListScheduleTool(BaseSystemTool):
             "what reminders",
         ]
 
-    @property
-    def deepagent_requires_state(self) -> bool:
-        return True
-
     async def execute(self, context: ToolContext) -> ToolResult:
         schedule = []
         if context.state_manager is not None and hasattr(context.state_manager, "get_schedule"):
