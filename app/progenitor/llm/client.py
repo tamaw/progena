@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -950,7 +950,7 @@ class LLMClient:
 
     async def chat(
         self,
-        messages: list[dict[str, str]],
+        prompt: str | list[dict[str, str]],
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
@@ -959,7 +959,16 @@ class LLMClient:
         max_tool_rounds: int = 4,
         system_tool_context: dict[str, Any] | None = None,
     ) -> str:
-        """Call /responses endpoint and return text response."""
+        """Send a prompt or message history to /responses and return text.
+
+        ``prompt`` may be a single user prompt string or a full conversation
+        history as a list of ``{"role", "content"}`` messages.
+        """
+        if isinstance(prompt, str):
+            messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+        else:
+            messages = prompt
+
         if response_format:
             instruction = "Return only valid JSON that matches the provided schema. Do not include any extra text."
             system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
@@ -980,90 +989,22 @@ class LLMClient:
 
     async def chat_structured(
         self,
-        messages: list[dict[str, str]],
+        prompt: str,
         response_model: type[TModel],
         schema_name: str,
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        tools: list[dict[str, Any]] | None = None,
     ) -> TModel:
-        """Call /responses endpoint and return a validated structured model."""
+        """Send a single-prompt request and return a validated structured model."""
         response_format = self._get_json_response_format(response_model, schema_name)
         response = await self.chat(
-            messages=messages,
+            prompt=prompt,
             system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
-            tools=tools,
         )
 
         raw_data = json.loads(response)
         return response_model.model_validate(raw_data)
-
-    async def chat_with_reasoning(
-        self,
-        messages: list[dict[str, str]],
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        response_format: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-    ) -> tuple[str, str]:
-        """Call /responses endpoint and return text plus reasoning trace."""
-        input_messages = self._build_input_messages(messages, system_prompt)
-
-        data = await self._post_response(
-            input_messages=input_messages,
-            response_format=response_format,
-            include_reasoning=True,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-        )
-        return self._extract_text_and_reasoning(data)
-
-    async def chat_stream(
-        self,
-        messages: list[dict[str, str]],
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        tools: list[dict[str, Any]] | None = None,
-    ) -> AsyncIterator[str]:
-        """Stream not supported, returns full response as single chunk."""
-        response = await self.chat(messages, system_prompt, temperature, max_tokens, tools=tools)
-        yield response
-
-    async def generate(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> str:
-        """Generate text response for a prompt."""
-        messages = [{"role": "user", "content": prompt}]
-        return await self.chat(messages, system_prompt, temperature, max_tokens)
-
-    async def generate_with_reasoning(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> tuple[str, str]:
-        """Generate text response and return reasoning trace when available."""
-        messages = [{"role": "user", "content": prompt}]
-        return await self.chat_with_reasoning(messages, system_prompt, temperature, max_tokens)
-
-    async def complete(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> str:
-        """Complete a prompt. Alias for generate()."""
-        return await self.generate(prompt, system_prompt, temperature, max_tokens)
