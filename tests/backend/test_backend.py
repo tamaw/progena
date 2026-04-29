@@ -18,7 +18,7 @@ from app.backend.models import (
     ResponsePayload,
     ResponseRequest,
 )
-from app.progenitor.service import AgentResponse
+from app.progenitor.responses import AgentResponse
 
 
 class TestChatServerConfig:

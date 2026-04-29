@@ -16,7 +16,7 @@ from app.backend.alerts import clear_alerts, create_alert
 from app.backend.main import app
 from app.backend.state_reader import StateReader, get_state_reader
 from app.backend.threads import clear_threads
-from app.progenitor.service import AgentResponse
+from app.progenitor.responses import AgentResponse
 
 
 @pytest.fixture
@@ -1042,8 +1042,6 @@ class TestWorkspaceBridgeActions:
             ),
             encoding="utf-8",
         )
-
-        monkeypatch.setattr("app.progenitor.service._service", None, raising=False)
 
         state_reader = get_state_reader()
         original_state_dir = state_reader.state_dir

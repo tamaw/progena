@@ -1691,26 +1691,6 @@ def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
     return True
 
 
-async def _refresh_live_mcp_runtime(mcp_config_path: Path) -> None:
-    """Best-effort refresh for the in-process Progenitor service after config edits."""
-    with contextlib.suppress(Exception):
-        from app.progenitor import service as progenitor_service
-        from app.progenitor.config import MCPConfig
-        from app.progenitor.tools.mcp import refresh_mcp_runtime
-
-        service = progenitor_service._service
-        if service is None or not service.is_initialized or service.llm_client is None:
-            return
-
-        refreshed_config = MCPConfig.load(config_path=mcp_config_path)
-        service.config.mcp = refreshed_config
-        await refresh_mcp_runtime(
-            service.llm_client,
-            service.tool_registry,
-            refreshed_config,
-        )
-
-
 def _broadcast_widget_refresh(state_reader) -> None:
     """Notify status listeners that backend-derived widgets changed."""
     broadcast_status_event("widgets", {"items": state_reader.get_widgets()})
@@ -2337,7 +2317,6 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
 
     _atomic_write_json(mcp_config_path, mcp_data)
     state_reader.invalidate(mcp_config_path)
-    await _refresh_live_mcp_runtime(mcp_config_path)
 
     refreshed = next(
         (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
