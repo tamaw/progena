@@ -1089,73 +1089,8 @@ class ProgenitorLoop:
         return None
 
     def _extract_reasoning_trace(self, msg: Any) -> str | None:
-        """Extract provider reasoning/thinking metadata from a message."""
-        if msg is None:
-            return None
-
-        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
-        if isinstance(content, list):
-            parts: list[str] = []
-            for part in content:
-                if not isinstance(part, dict):
-                    continue
-                part_type = str(part.get("type", "")).lower()
-                if part_type not in {
-                    "reasoning",
-                    "reasoning_text",
-                    "reasoning_summary",
-                    "thinking",
-                }:
-                    continue
-                if text := extract_reasoning_summary_text({"content": [part]}):
-                    parts.append(text)
-                    continue
-                candidate = part.get("text") or part.get("summary") or part.get("content")
-                if candidate is None:
-                    continue
-                try:
-                    text = json.dumps(candidate, default=str).strip()
-                except Exception:
-                    text = str(candidate).strip()
-                if text:
-                    parts.append(text)
-            if parts:
-                return "\n".join(parts)
-
-        def _coerce(value: Any) -> str | None:
-            if value is None:
-                return None
-            if isinstance(value, str):
-                stripped = value.strip()
-                return stripped or None
-            try:
-                text = json.dumps(value, default=str).strip()
-            except Exception:
-                text = str(value).strip()
-            return text or None
-
-        containers: list[dict[str, Any]] = []
-        if isinstance(msg, dict):
-            containers.append(msg)
-        else:
-            for attr in ("additional_kwargs", "response_metadata"):
-                value = getattr(msg, attr, None)
-                if isinstance(value, dict):
-                    containers.append(value)
-
-        for container in containers:
-            for key in ("reasoning", "thinking"):
-                if key in container and (text := _coerce(container.get(key))):
-                    return text
-            if "summary" in container or "effort" in container:
-                summary_obj = {
-                    "effort": container.get("effort"),
-                    "summary": container.get("summary"),
-                }
-                if text := _coerce(summary_obj):
-                    return text
-
-        return None
+        """Extract provider reasoning summary text from a message."""
+        return extract_reasoning_summary_text(msg)
 
     def _extract_message_text(self, msg: Any) -> str | None:
         """Extract assistant-facing text from message content payloads."""
