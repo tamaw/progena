@@ -392,40 +392,38 @@ class TestConfigQueueSettings(unittest.TestCase):
 class TestReasoningTraceExtraction(unittest.TestCase):
     """Tests for runtime reasoning extraction helpers."""
 
-    def setUp(self):
-        from app.progenitor.runtime.loop import ProgenitorLoop
-
-        config = MockConfig()
-        state_manager = MagicMock()
-        state_manager.state_dir = Path(tempfile.mkdtemp())
-        self.loop = ProgenitorLoop(
-            graph=MagicMock(),
-            state_manager=state_manager,
-            config=cast(Any, config),
-        )
-
     def test_extracts_from_response_metadata(self):
+        from app.progenitor.runtime.graph_results import extract_reasoning_trace
+
         msg = SimpleNamespace(response_metadata={"reasoning": {"summary": "done"}})
-        trace = self.loop._extract_reasoning_trace(msg)
+        trace = extract_reasoning_trace(msg)
         assert trace == "done"
 
     def test_extracts_summary_effort_schema(self):
+        from app.progenitor.runtime.graph_results import extract_reasoning_trace
+
         msg = SimpleNamespace(response_metadata={"effort": "medium", "summary": "detailed"})
-        trace = self.loop._extract_reasoning_trace(msg)
+        trace = extract_reasoning_trace(msg)
         assert trace == "detailed"
 
     def test_extracts_from_content_parts(self):
+        from app.progenitor.runtime.graph_results import extract_reasoning_trace
+
         msg = {
             "role": "assistant",
             "content": [{"type": "reasoning", "text": "step-by-step"}],
         }
-        assert self.loop._extract_reasoning_trace(msg) == "step-by-step"
+        assert extract_reasoning_trace(msg) == "step-by-step"
 
     def test_extract_message_text_from_string_content(self):
+        from app.progenitor.runtime.graph_results import extract_message_text
+
         msg = {"role": "assistant", "content": "hello there"}
-        assert self.loop._extract_message_text(msg) == "hello there"
+        assert extract_message_text(msg) == "hello there"
 
     def test_extract_message_text_from_list_blocks(self):
+        from app.progenitor.runtime.graph_results import extract_message_text
+
         msg = {
             "role": "assistant",
             "content": [
@@ -433,14 +431,16 @@ class TestReasoningTraceExtraction(unittest.TestCase):
                 {"type": "text", "text": "two"},
             ],
         }
-        assert self.loop._extract_message_text(msg) == "one\ntwo"
+        assert extract_message_text(msg) == "one\ntwo"
 
     def test_finds_last_assistant_message(self):
+        from app.progenitor.runtime.graph_results import get_last_ai_message
+
         messages = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello", "response_metadata": {"thinking": "brief"}},
         ]
-        msg = self.loop._get_last_ai_message(messages)
+        msg = get_last_ai_message(messages)
         assert isinstance(msg, dict)
         assert msg["role"] == "assistant"
 
