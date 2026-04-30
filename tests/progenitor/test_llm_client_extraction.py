@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.progenitor.llm.client import LLMClient, _build_responses_endpoint
+from app.progenitor.llm.mcp_runtime import call_mcp_tool, merge_tools, resolve_request_tools
+from app.progenitor.llm.messages import extract_text_and_reasoning
+from app.progenitor.llm.tool_calls import execute_system_or_agent_tool, extract_tool_calls
 
 
 def _extract(data: dict):
-    client = LLMClient.__new__(LLMClient)
-    return LLMClient._extract_text_and_reasoning(client, data)
+    return extract_text_and_reasoning(data)
 
 
 def test_build_responses_endpoint_from_base_url():
@@ -90,7 +92,6 @@ def test_extract_strips_inline_tool_markup_from_output_text():
 
 
 def test_extract_tool_calls_supports_function_call_items():
-    client = LLMClient.__new__(LLMClient)
     payload = {
         "output": [
             {
@@ -102,14 +103,13 @@ def test_extract_tool_calls_supports_function_call_items():
         ]
     }
 
-    tool_calls = LLMClient._extract_tool_calls(client, payload)
+    tool_calls = extract_tool_calls(payload)
     assert len(tool_calls) == 1
     assert tool_calls[0]["type"] == "function_call"
     assert tool_calls[0]["name"] == "current_time"
 
 
 def test_extract_tool_calls_supports_function_call_in_message_content():
-    client = LLMClient.__new__(LLMClient)
     payload = {
         "output": [
             {
@@ -126,14 +126,13 @@ def test_extract_tool_calls_supports_function_call_in_message_content():
         ]
     }
 
-    tool_calls = LLMClient._extract_tool_calls(client, payload)
+    tool_calls = extract_tool_calls(payload)
     assert len(tool_calls) == 1
     assert tool_calls[0]["call_id"] == "call_abc"
 
 
 def test_merge_tools_respects_explicit_empty_list():
-    client = LLMClient.__new__(LLMClient)
-    client.mcp_tools = [
+    mcp_tools = [
         {
             "name": "primer",
             "description": "Primer tool",
@@ -141,13 +140,12 @@ def test_merge_tools_respects_explicit_empty_list():
         }
     ]
 
-    merged = LLMClient._merge_tools(client, [])
+    merged = merge_tools(mcp_tools=mcp_tools, tools=[])
     assert merged == []
 
 
 def test_resolve_request_tools_includes_tools_for_structured_by_default():
-    client = LLMClient.__new__(LLMClient)
-    client.mcp_tools = [
+    mcp_tools = [
         {
             "name": "primer",
             "description": "Primer tool",
@@ -155,8 +153,8 @@ def test_resolve_request_tools_includes_tools_for_structured_by_default():
         }
     ]
 
-    resolved = LLMClient._resolve_request_tools(
-        client,
+    resolved = resolve_request_tools(
+        mcp_tools=mcp_tools,
         tools=None,
         response_format={"type": "json_schema", "json_schema": {"name": "x", "schema": {}}},
     )
@@ -165,8 +163,7 @@ def test_resolve_request_tools_includes_tools_for_structured_by_default():
 
 
 def test_resolve_request_tools_keeps_tools_for_non_structured_requests():
-    client = LLMClient.__new__(LLMClient)
-    client.mcp_tools = [
+    mcp_tools = [
         {
             "name": "primer",
             "description": "Primer tool",
@@ -174,8 +171,8 @@ def test_resolve_request_tools_keeps_tools_for_non_structured_requests():
         }
     ]
 
-    resolved = LLMClient._resolve_request_tools(
-        client,
+    resolved = resolve_request_tools(
+        mcp_tools=mcp_tools,
         tools=None,
         response_format=None,
     )
@@ -186,7 +183,6 @@ def test_resolve_request_tools_keeps_tools_for_non_structured_requests():
 @pytest.mark.asyncio
 async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     client = LLMClient.__new__(LLMClient)
-    client._call_mcp_tool = AsyncMock(return_value={"error": "should-not-call-mcp"})
     tool_registry = SimpleNamespace(
         find_by_name=lambda _name: {
             "name": "builder",
@@ -208,16 +204,14 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
             )
         ),
     ) as mock_execute:
-        result = await LLMClient._execute_tool_call(
-            client,
-            {"id": "tool_1"},
-            "builder",
-            {"request": "hello", "context": {"caller": "test"}},
-            {"tool_registry": tool_registry, "state_manager": MagicMock()},
+        result = await execute_system_or_agent_tool(
+            llm_client=client,
+            tool_name="builder",
+            tool_args={"request": "hello", "context": {"caller": "test"}},
+            system_tool_context={"tool_registry": tool_registry, "state_manager": MagicMock()},
         )
 
     assert result["result"]["task_id"] == "task-123"
-    client._call_mcp_tool.assert_not_awaited()
     mock_execute.assert_awaited_once()
     assert mock_execute.await_args.kwargs["tool_name"] == "call_agent"
     assert mock_execute.await_args.kwargs["tool_args"]["agent"] == "builder"
@@ -248,9 +242,12 @@ async def test_call_mcp_tool_parses_sse_result():
         }
     }
 
-    result = await LLMClient._call_mcp_tool(
-        client,
-        {
+    result = await call_mcp_tool(
+        mcp_config=client.mcp_config,
+        mcp_servers=client.mcp_servers,
+        mcp_tools=client.mcp_tools,
+        mcp_tool_lookup=client.mcp_tool_lookup,
+        tool_call={
             "name": "jina_read_url",
             "arguments": {"url": "https://example.com"},
             "call_id": "call-1",
@@ -286,9 +283,12 @@ async def test_call_mcp_tool_routes_to_server_by_alias():
         }
     }
 
-    result = await LLMClient._call_mcp_tool(
-        client,
-        {
+    result = await call_mcp_tool(
+        mcp_config=client.mcp_config,
+        mcp_servers=client.mcp_servers,
+        mcp_tools=client.mcp_tools,
+        mcp_tool_lookup=client.mcp_tool_lookup,
+        tool_call={
             "name": "jina_search_web",
             "arguments": {"query": "latest ai"},
             "call_id": "call-1",

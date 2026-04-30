@@ -2,8 +2,6 @@
 
 import json
 import logging
-import re
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -13,16 +11,30 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from ..config import LLMConfig, MCPConfig
-from ..mcp_tool_utils import normalize_mcp_tool_definition, parse_mcp_jsonrpc_response
 from ..tools.user_communication import EventPusher
+from .mcp_runtime import (
+    call_mcp_tool,
+    close_mcp_context,
+    configure_mcp_context,
+    get_mcp_tool_registry_entries,
+    resolve_request_tools,
+)
+from .messages import build_input_messages, extract_text_and_reasoning
 from .prompts import PromptTemplates
+from .schemas import build_json_schema_format, to_azure_text_format
+from .tool_calls import (
+    build_tool_call_signature,
+    build_tool_result_message,
+    execute_system_or_agent_tool,
+    extract_tool_calls,
+    get_tool_call_id,
+    get_tool_call_name,
+    parse_tool_arguments,
+)
 
 logger = logging.getLogger(__name__)
 
 TModel = TypeVar("TModel", bound=BaseModel)
-
-# Context window sizes for common models (in tokens)
-INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
 
 
 def _build_responses_endpoint(base_url: str) -> str:
@@ -36,50 +48,6 @@ def _build_responses_endpoint(base_url: str) -> str:
     endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
 
     return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
-
-
-def _close_object_schemas(node: Any) -> None:
-    """Recursively enforce strict object schemas Azure Responses accepts."""
-    if isinstance(node, dict):
-        if "$ref" in node:
-            ref = node["$ref"]
-            node.clear()
-            node["$ref"] = ref
-            return
-        if node.get("type") == "object":
-            node["additionalProperties"] = False
-            properties = node.get("properties")
-            if isinstance(properties, dict):
-                node["required"] = list(properties.keys())
-        for value in node.values():
-            _close_object_schemas(value)
-        return
-    if isinstance(node, list):
-        for item in node:
-            _close_object_schemas(item)
-
-
-def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str, Any]:
-    """Build response_format dict for structured output using Pydantic model.
-
-    Args:
-        response_model: Pydantic BaseModel class to generate schema from
-        schema_name: Name for the JSON schema
-
-    Returns:
-        Dictionary in format: {"type": "json_schema", "json_schema": {...}}
-    """
-    schema = response_model.model_json_schema()
-    _close_object_schemas(schema)
-
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": schema_name,
-            "schema": schema,
-            "strict": True,
-        },
-    }
 
 
 class LLMClient:
@@ -153,20 +121,7 @@ class LLMClient:
 
     async def close_mcp_context(self) -> None:
         """Close all initialized MCP clients and clear the active MCP context."""
-        seen_client_ids: set[int] = set()
-        for server in self.mcp_servers.values():
-            client = server.get("client") if isinstance(server, dict) else None
-            if not isinstance(client, httpx.AsyncClient):
-                continue
-            client_id = id(client)
-            if client_id in seen_client_ids:
-                continue
-            seen_client_ids.add(client_id)
-            await client.aclose()
-
-        if self.mcp_client is not None and id(self.mcp_client) not in seen_client_ids:
-            await self.mcp_client.aclose()
-
+        await close_mcp_context(mcp_servers=self.mcp_servers, mcp_client=self.mcp_client)
         self.mcp_servers = {}
         self.mcp_client = None
         self.mcp_tools = []
@@ -179,72 +134,6 @@ class LLMClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
-    def _build_input_messages(
-        self,
-        messages: list[dict[str, Any]],
-        system_prompt: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Build Responses API input messages from chat history."""
-        input_messages: list[dict[str, Any]] = []
-
-        allowed_roles = {"system", "user", "assistant", "tool"}
-
-        if system_prompt:
-            input_messages.append(
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                }
-            )
-
-        for msg in messages:
-            role = str(msg.get("role", "user") or "user")
-            if role not in allowed_roles:
-                # Scheduled/background messages may use custom roles like
-                # "scheduler". The OpenAI-compatible Responses API only
-                # accepts standard roles, so coerce unknown roles to "user".
-                role = "user"
-            content = msg.get("content", "")
-
-            if isinstance(content, list):
-                if (
-                    content
-                    and isinstance(content[0], dict)
-                    and content[0].get("type")
-                    in {
-                        "input_text",
-                        "output_text",
-                        "input_image",
-                        "input_file",
-                        "refusal",
-                        "summary_text",
-                        "tether_browsing_display",
-                        "computer_screenshot",
-                        "tool_call",
-                        "tool_result",
-                    }
-                ):
-                    wrapped_content: Any = content
-                else:
-                    text_parts = []
-                    for part in content:
-                        if isinstance(part, dict):
-                            text_parts.append(str(part.get("text", "")))
-                        elif isinstance(part, str):
-                            text_parts.append(part)
-                    wrapped_content = "".join(text_parts)
-            else:
-                wrapped_content = str(content)
-
-            input_messages.append(
-                {
-                    "role": role,
-                    "content": wrapped_content,
-                }
-            )
-
-        return input_messages
-
     def set_mcp_context(
         self,
         mcp_servers: dict[str, dict[str, Any]] | None,
@@ -252,489 +141,21 @@ class LLMClient:
         mcp_langchain_tools: list[BaseTool] | None = None,
     ) -> None:
         """Set MCP server runtime metadata and tool list for tool calling."""
-        self.mcp_servers = mcp_servers or {}
-        first_server = next(iter(self.mcp_servers.values()), None)
-        first_client = (
-            first_server.get("client")
-            if isinstance(first_server, dict)
-            and isinstance(first_server.get("client"), httpx.AsyncClient)
-            else None
+        (
+            self.mcp_servers,
+            self.mcp_client,
+            self.mcp_tools,
+            self.mcp_langchain_tools,
+            self.mcp_tool_lookup,
+        ) = configure_mcp_context(
+            mcp_servers=mcp_servers,
+            mcp_tools=mcp_tools,
+            mcp_langchain_tools=mcp_langchain_tools,
         )
-        self.mcp_client = cast(httpx.AsyncClient | None, first_client)
-        self.mcp_tools = mcp_tools or []
-        self.mcp_langchain_tools = mcp_langchain_tools or []
-        self.mcp_tool_lookup = {}
-        for tool in self.mcp_tools:
-            name = str(tool.get("name") or "").strip()
-            if not name:
-                continue
-            self.mcp_tool_lookup[name] = tool
 
     def get_mcp_tool_registry_entries(self) -> list[dict[str, Any]]:
         """Return MCP tools formatted for tool registry storage."""
-        entries: list[dict[str, Any]] = []
-        for tool in self.mcp_tools:
-            name = tool.get("name")
-            if not name:
-                continue
-            entry = {
-                "name": name,
-                "description": tool.get("description", "MCP tool"),
-                "type": "mcp_tool",
-                "source": tool.get("mcp_server_name") or "mcp",
-                "endpoint": tool.get("mcp_server_url"),
-                "transport": "http",
-                "capabilities": tool.get("capabilities") or [name],
-                "server_name": tool.get("mcp_server_name"),
-                "original_name": tool.get("mcp_original_name") or name,
-            }
-            entries.append(entry)
-        return entries
-
-    def _normalize_tool_definition(self, tool: dict[str, Any]) -> dict[str, Any] | None:
-        """Normalize a tool definition into OpenAI-compatible format.
-
-        Handles both OpenAI format and MCP format tools.
-        """
-        # Already in OpenAI format
-        if tool.get("type") == "function" and "function" in tool:
-            return tool
-
-        return normalize_mcp_tool_definition(tool)
-
-    def _merge_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-        """Merge caller-supplied tools with MCP tools, de-duplicated by name."""
-        if tools is not None and len(tools) == 0:
-            return []
-
-        merged: list[dict[str, Any]] = []
-        seen_names: set[str] = set()
-
-        for tool in tools or []:
-            name = (
-                tool.get("function", {}).get("name")
-                if tool.get("type") == "function"
-                else tool.get("name")
-            )
-            if name:
-                seen_names.add(name)
-            merged.append(tool)
-
-        for tool in self.mcp_tools:
-            normalized = self._normalize_tool_definition(tool)
-            if not normalized:
-                continue
-            name = normalized.get("function", {}).get("name")
-            if not name or name in seen_names:
-                continue
-            seen_names.add(name)
-            merged.append(normalized)
-
-        return merged
-
-    def _resolve_request_tools(
-        self,
-        tools: list[dict[str, Any]] | None,
-        response_format: dict[str, Any] | None,
-    ) -> list[dict[str, Any]]:
-        """Resolve effective tools for a request.
-
-        For structured-output requests, we still include the tool list in the
-        upstream payload (so the provider can see
-        the full tool registry), but the call site should typically force
-        tool_choice='none' to avoid tool calls breaking strict JSON outputs.
-        """
-        if response_format is not None and tools is None:
-            # Default tools for structured outputs: include for context/contract,
-            # but rely on tool_choice='none' during the call.
-            return self._merge_tools(None)
-        return self._merge_tools(tools)
-
-    def _extract_tool_calls(self, data: dict[str, Any]) -> list[dict[str, Any]]:
-        """Extract tool calls from a Responses API payload.
-
-        Tool calls can appear in:
-        - data["output"] as {"type": "tool_call", ...}
-        - data["output"] as {"type": "function_call", ...}
-        - data["output"] > message > content as tool_call items
-        - data["tool_calls"] as direct list
-        """
-        tool_calls: list[dict[str, Any]] = []
-        tool_call_types = {"tool_call", "function_call"}
-
-        # Check output array
-        for item in data.get("output", []):
-            if item.get("type") in tool_call_types:
-                tool_calls.append(item)
-                continue
-
-            # Check message content for tool calls
-            if item.get("type") == "message":
-                content = item.get("content")
-                if isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") in tool_call_types:
-                            tool_calls.append(part)
-
-        # Check top-level tool_calls
-        if isinstance(data.get("tool_calls"), list):
-            tool_calls.extend(data["tool_calls"])
-
-        return tool_calls
-
-    async def _call_mcp_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
-        """Execute a tool call against the correct MCP server for that tool."""
-        # Extract tool name
-        name = (
-            tool_call.get("name")
-            or tool_call.get("tool_name")
-            or tool_call.get("function", {}).get("name")
-        )
-        if not name:
-            return {"error": "Tool call missing name"}
-
-        if not self.mcp_config.enabled_servers:
-            return {"error": "MCP integration disabled"}
-
-        # Extract arguments
-        arguments = (
-            tool_call.get("arguments")
-            or tool_call.get("input")
-            or tool_call.get("params")
-            or tool_call.get("function", {}).get("arguments")
-            or {}
-        )
-
-        # Parse JSON string arguments
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = {"raw": arguments}
-
-        resolved_tool = self.mcp_tool_lookup.get(str(name))
-        if resolved_tool is None:
-            matches = [
-                tool
-                for tool in self.mcp_tools
-                if str(tool.get("mcp_original_name") or tool.get("name") or "") == str(name)
-            ]
-            if len(matches) == 1:
-                resolved_tool = matches[0]
-            elif len(matches) > 1:
-                return {"error": f"MCP tool name '{name}' is ambiguous across configured servers"}
-
-        if resolved_tool is None:
-            return {"error": f"MCP tool '{name}' is not registered"}
-
-        server_name = str(resolved_tool.get("mcp_server_name") or "").strip()
-        server_runtime = self.mcp_servers.get(server_name) if server_name else None
-        if not isinstance(server_runtime, dict):
-            return {"error": f"MCP server runtime unavailable for tool '{name}'"}
-
-        mcp_client = server_runtime.get("client")
-        endpoint = server_runtime.get("url")
-        post = getattr(mcp_client, "post", None)
-        if not callable(post) or not isinstance(endpoint, str):
-            return {"error": f"MCP server '{server_name}' is not initialized"}
-        post_typed = cast(Callable[..., Awaitable[httpx.Response]], post)
-
-        target_name = str(resolved_tool.get("mcp_original_name") or name)
-
-        logger.info("Calling MCP tool: %s", name)
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": tool_call.get("call_id")
-            or tool_call.get("id")
-            or tool_call.get("tool_call_id")
-            or 1,
-            "method": "tools/call",
-            "params": {
-                "name": target_name,
-                "arguments": arguments,
-            },
-        }
-
-        try:
-            response = await post_typed(endpoint, json=request)
-            response.raise_for_status()
-            payload = parse_mcp_jsonrpc_response(response.text)
-            if not isinstance(payload, dict):
-                raise ValueError("Invalid MCP JSON-RPC response")
-
-            if error := payload.get("error"):
-                return {"error": error}
-            return cast(dict[str, Any], payload.get("result", payload))
-
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
-            logger.warning("MCP tool call failed: %s", exc)
-            return {"error": f"MCP call failed: {exc}"}
-
-    async def _execute_tool_call(
-        self,
-        tool_call: dict[str, Any],
-        tool_name: str,
-        tool_args: dict[str, Any],
-        system_tool_context: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Execute either a system tool or an MCP tool call."""
-        if system_tool_context:
-            from ..tools.system_registry import execute_system_tool, get_system_tool
-
-            tool_registry = system_tool_context.get("tool_registry")
-            state_manager = system_tool_context.get("state_manager")
-            state = system_tool_context.get("state")
-            default_user_input = system_tool_context.get("default_user_input", "")
-            tool_user_input = str(tool_args.get("request") or default_user_input or "")
-
-            if (
-                callable(get_system_tool)
-                and callable(execute_system_tool)
-                and get_system_tool(tool_name)
-            ):
-                data_out, err, state_updates, _retry = await execute_system_tool(
-                    tool_name=tool_name,
-                    tool_registry=tool_registry,
-                    llm_client=self,
-                    state=state,
-                    state_manager=state_manager,
-                    user_input=tool_user_input,
-                    tool_args=tool_args,
-                )
-
-                if state_updates and isinstance(system_tool_context.get("state_updates"), dict):
-                    system_tool_context["state_updates"].update(state_updates)
-                if state_updates and isinstance(state, dict):
-                    state.update(state_updates)
-
-                if err:
-                    return {"error": err}
-                return {"result": data_out}
-
-            # If it isn't a system tool, allow direct A2A agent invocation by name.
-            if tool_registry is not None and hasattr(tool_registry, "find_by_name"):
-                try:
-                    agent_cfg = tool_registry.find_by_name(tool_name)
-                except Exception:
-                    agent_cfg = None
-
-                agent_url = (
-                    str(agent_cfg.get("url") or "").strip() if isinstance(agent_cfg, dict) else ""
-                )
-                agent_type = (
-                    str(agent_cfg.get("type") or "").strip() if isinstance(agent_cfg, dict) else ""
-                )
-                agent_kind = (
-                    str(agent_cfg.get("kind") or "").strip() if isinstance(agent_cfg, dict) else ""
-                )
-                agent_transport = (
-                    str(agent_cfg.get("transport") or "http").strip()
-                    if isinstance(agent_cfg, dict)
-                    else ""
-                )
-                if (
-                    isinstance(agent_cfg, dict)
-                    and agent_url
-                    and agent_transport == "http"
-                    and agent_type != "mcp_tool"
-                    and agent_kind != "mcp_tool"
-                ):
-                    forwarded_args = dict(tool_args)
-                    forwarded_args.setdefault("agent", str(agent_cfg.get("name") or tool_name))
-
-                    data_out, err, state_updates, _retry = await execute_system_tool(
-                        tool_name="call_agent",
-                        tool_registry=tool_registry,
-                        llm_client=self,
-                        state=state,
-                        state_manager=state_manager,
-                        user_input=tool_user_input,
-                        tool_args=forwarded_args,
-                    )
-                    if state_updates and isinstance(system_tool_context.get("state_updates"), dict):
-                        system_tool_context["state_updates"].update(state_updates)
-                    if state_updates and isinstance(state, dict):
-                        state.update(state_updates)
-                    if err:
-                        return {"error": err}
-                    return {"result": data_out}
-
-        # Default: call MCP tool
-        return await self._call_mcp_tool({**tool_call, "arguments": tool_args})
-
-    def _get_json_response_format(self, response_model: type, schema_name: str) -> dict[str, Any]:
-        """Return a response_format payload for structured output."""
-        return _build_json_schema_format(response_model, schema_name)
-
-    @staticmethod
-    def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
-        if response_format.get("type") != "json_schema":
-            return response_format
-
-        json_schema = response_format.get("json_schema")
-        if not isinstance(json_schema, dict):
-            return response_format
-
-        return {
-            "type": "json_schema",
-            "name": json_schema.get("name") or "structured_output",
-            "schema": json_schema.get("schema") or {},
-            "strict": bool(json_schema.get("strict", True)),
-        }
-
-    def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
-        """Extract response text and optional reasoning trace from /responses output."""
-        text_parts: list[str] = []
-        reasoning_parts: list[str] = []
-
-        def _append_text_candidate(candidate: Any) -> None:
-            if candidate is None:
-                return
-            if isinstance(candidate, str):
-                if candidate.strip():
-                    text_parts.append(candidate)
-                return
-            if isinstance(candidate, list):
-                for item in candidate:
-                    _append_text_candidate(item)
-                return
-            if isinstance(candidate, dict):
-                for key in (
-                    "text",
-                    "value",
-                    "content",
-                    "output_text",
-                    "refusal",
-                    "message",
-                    "parts",
-                ):
-                    if key in candidate:
-                        _append_text_candidate(candidate.get(key))
-
-        # Primary text response
-        if output_text := data.get("output_text"):
-            _append_text_candidate(output_text)
-
-        # Some providers return final text in top-level `text`
-        _append_text_candidate(data.get("text"))
-
-        # Structured output items
-        for item in data.get("output", []):
-            item_type = item.get("type")
-
-            if item_type == "message":
-                content = item.get("content", "")
-                if isinstance(content, (str, dict)):
-                    _append_text_candidate(content)
-                elif isinstance(content, list):
-                    for part in content:
-                        if not isinstance(part, dict):
-                            continue
-                        part_type = part.get("type")
-                        if part_type in ("output_text", "text"):
-                            _append_text_candidate(part.get("text"))
-                            _append_text_candidate(part.get("value"))
-                            _append_text_candidate(part.get("content"))
-                        elif part_type == "refusal":
-                            _append_text_candidate(part.get("refusal") or part.get("text"))
-                        elif part_type in ("reasoning", "reasoning_text", "reasoning_summary"):
-                            reasoning_parts.append(part.get("text", ""))
-
-            elif item_type in ("output_text", "text"):
-                _append_text_candidate(item.get("text"))
-                _append_text_candidate(item.get("value"))
-                _append_text_candidate(item.get("content"))
-
-            elif item_type in ("reasoning", "reasoning_text", "reasoning_summary"):
-                reasoning_parts.append(str(item.get("content") or item.get("text", "")))
-
-            elif item_type == "refusal":
-                _append_text_candidate(item.get("refusal") or item.get("text"))
-
-        # Top-level reasoning
-        if reasoning := data.get("reasoning"):
-            reasoning_parts.append(str(reasoning))
-
-        text = self._sanitize_user_visible_text("".join(text_parts).strip())
-        reasoning = "".join(reasoning_parts).strip()
-
-        if not text:
-            error_payload = data.get("error")
-            status = data.get("status")
-            incomplete_details = data.get("incomplete_details")
-            truncation = data.get("truncation")
-            top_text = data.get("text")
-            output_value = data.get("output")
-            output_items: list[Any] = output_value if isinstance(output_value, list) else []
-
-            output_summaries: list[dict[str, Any]] = []
-            for item in output_items[:5]:
-                if not isinstance(item, dict):
-                    output_summaries.append({"type": type(item).__name__})
-                    continue
-                content = item.get("content")
-                content_shape: Any
-                if isinstance(content, list):
-                    content_shape = [
-                        {
-                            "type": c.get("type") if isinstance(c, dict) else type(c).__name__,
-                            "keys": list(c.keys())[:8] if isinstance(c, dict) else None,
-                        }
-                        for c in content[:5]
-                    ]
-                elif isinstance(content, dict):
-                    content_shape = {"keys": list(content.keys())[:12]}
-                else:
-                    content_shape = type(content).__name__
-
-                output_summaries.append(
-                    {
-                        "type": item.get("type"),
-                        "role": item.get("role"),
-                        "status": item.get("status"),
-                        "keys": list(item.keys())[:12],
-                        "content_shape": content_shape,
-                    }
-                )
-
-            if error_payload:
-                logger.warning(
-                    "Empty LLM response with provider error - status=%s error=%s incomplete_details=%s truncation=%s keys=%s top_text=%r output_summaries=%s",
-                    status,
-                    error_payload,
-                    incomplete_details,
-                    truncation,
-                    list(data.keys()),
-                    top_text,
-                    output_summaries,
-                )
-            else:
-                logger.info(
-                    "Empty LLM response without provider error - status=%s incomplete_details=%s truncation=%s keys=%s top_text=%r output_summaries=%s",
-                    status,
-                    incomplete_details,
-                    truncation,
-                    list(data.keys()),
-                    top_text,
-                    output_summaries,
-                )
-
-        return text, reasoning
-
-    @staticmethod
-    def _sanitize_user_visible_text(text: str) -> str:
-        """Remove provider/tool markup artifacts from user-visible text."""
-        if not text:
-            return text
-
-        # Some providers emit inline tool-call traces (e.g.
-        # "tool_name{...json...}") as plain text. Strip these blocks so
-        # user-facing responses remain clean.
-        cleaned = INLINE_TOOL_MARKUP_PATTERN.sub("", text)
-
-        # Normalize accidental leading blank lines introduced by stripping.
-        return cleaned.lstrip()
+        return get_mcp_tool_registry_entries(self.mcp_tools)
 
     def _supports_temperature(self) -> bool:
         """Return True if temperature parameter is supported for the current model."""
@@ -768,7 +189,11 @@ class LLMClient:
         system_tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call /responses endpoint with optional tool calling loop."""
-        merged_tools = self._resolve_request_tools(tools, response_format)
+        merged_tools = resolve_request_tools(
+            mcp_tools=self.mcp_tools,
+            tools=tools,
+            response_format=response_format,
+        )
 
         payload: dict[str, Any] = {
             "model": self.model,
@@ -777,7 +202,7 @@ class LLMClient:
         }
 
         if response_format:
-            payload["text"] = {"format": self._to_azure_text_format(response_format)}
+            payload["text"] = {"format": to_azure_text_format(response_format)}
         if merged_tools:
             payload["tools"] = merged_tools
             # When requesting strict structured output, prevent tool calling while
@@ -813,7 +238,7 @@ class LLMClient:
 
         # Tool calling loop (MCP + system tools)
         tool_round = 0
-        tool_calls = self._extract_tool_calls(data)
+        tool_calls = extract_tool_calls(data)
         seen_calls: set[str] = set()
 
         while tool_calls and tool_round < max_tool_rounds:
@@ -827,38 +252,10 @@ class LLMClient:
             tool_result_messages: list[dict[str, Any]] = []
 
             for tool_call in tool_calls:
-                tool_call_id = (
-                    tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
-                )
-                tool_name = (
-                    tool_call.get("name")
-                    or tool_call.get("tool_name")
-                    or tool_call.get("function", {}).get("name")
-                    or "(unknown)"
-                )
-
-                raw_args = (
-                    tool_call.get("arguments")
-                    or tool_call.get("input")
-                    or tool_call.get("params")
-                    or tool_call.get("function", {}).get("arguments")
-                    or {}
-                )
-                if isinstance(raw_args, str):
-                    try:
-                        tool_args = json.loads(raw_args)
-                    except json.JSONDecodeError:
-                        tool_args = {"raw": raw_args}
-                elif isinstance(raw_args, dict):
-                    tool_args = raw_args
-                else:
-                    tool_args = {"raw": raw_args}
-
-                # Safety: detect repeated identical tool calls.
-                try:
-                    sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
-                except Exception:
-                    sig = f"{tool_name}:{str(tool_args)}"
+                tool_call_id = get_tool_call_id(tool_call)
+                tool_name = get_tool_call_name(tool_call)
+                tool_args = parse_tool_arguments(tool_call)
+                sig = build_tool_call_signature(tool_name, tool_args)
 
                 await self._push_event(
                     event_type="mcp_tool_call_started",
@@ -870,16 +267,27 @@ class LLMClient:
                     },
                 )
 
+                result: dict[str, Any] | None
                 if sig in seen_calls:
-                    result: dict[str, Any] = {"error": f"Repeated tool call detected: {tool_name}"}
+                    result = {"error": f"Repeated tool call detected: {tool_name}"}
                 else:
                     seen_calls.add(sig)
-                    result = await self._execute_tool_call(
-                        tool_call=tool_call,
-                        tool_name=tool_name,
-                        tool_args=tool_args,
-                        system_tool_context=system_tool_context,
-                    )
+                    result = None
+                    if system_tool_context is not None:
+                        result = await execute_system_or_agent_tool(
+                            llm_client=self,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            system_tool_context=system_tool_context,
+                        )
+                    if result is None:
+                        result = await call_mcp_tool(
+                            mcp_config=self.mcp_config,
+                            mcp_servers=self.mcp_servers,
+                            mcp_tools=self.mcp_tools,
+                            mcp_tool_lookup=self.mcp_tool_lookup,
+                            tool_call={**tool_call, "arguments": tool_args},
+                        )
 
                 success = not (isinstance(result, dict) and result.get("error"))
                 await self._push_event(
@@ -893,12 +301,12 @@ class LLMClient:
                     },
                 )
 
-                result_text = json.dumps(result, default=str)
                 tool_result_messages.append(
-                    {
-                        "role": "user",
-                        "content": f"[TOOL_RESULT tool={tool_name} id={tool_call_id}] {result_text}",
-                    }
+                    build_tool_result_message(
+                        tool_name=tool_name,
+                        tool_call_id=tool_call_id,
+                        result=result or {},
+                    )
                 )
 
             # Feed tool results back into the next round as plain-text input.
@@ -929,7 +337,7 @@ class LLMClient:
                 raise
 
             data = response.json()
-            tool_calls = self._extract_tool_calls(data)
+            tool_calls = extract_tool_calls(data)
             tool_round += 1
 
             await self._push_event(
@@ -972,7 +380,7 @@ class LLMClient:
         if response_format:
             instruction = "Return only valid JSON that matches the provided schema. Do not include any extra text."
             system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
-        input_messages = self._build_input_messages(messages, system_prompt)
+        input_messages = build_input_messages(messages, system_prompt)
 
         data = await self._post_response(
             input_messages=input_messages,
@@ -984,7 +392,7 @@ class LLMClient:
             max_tool_rounds=max_tool_rounds,
             system_tool_context=system_tool_context,
         )
-        text, _reasoning = self._extract_text_and_reasoning(data)
+        text, _reasoning = extract_text_and_reasoning(data)
         return text
 
     async def chat_structured(
@@ -997,7 +405,7 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> TModel:
         """Send a single-prompt request and return a validated structured model."""
-        response_format = self._get_json_response_format(response_model, schema_name)
+        response_format = build_json_schema_format(response_model, schema_name)
         response = await self.chat(
             prompt=prompt,
             system_prompt=system_prompt,
