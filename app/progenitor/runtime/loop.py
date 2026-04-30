@@ -22,7 +22,6 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
 
 from langchain_core.messages import AIMessageChunk
@@ -100,10 +99,6 @@ class ProgenitorLoop:
         )
         # Event to signal when a graph cycle completes (for IPC synchronization)
         self._cycle_complete_event: asyncio.Event = asyncio.Event()
-
-        # Stream callback for real-time LLM streaming
-        # Nodes can use this to stream tokens directly to the client
-        self._stream_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
         # Streaming state - controlled by the loop, accessed by nodes
         self._streaming_enabled = False
