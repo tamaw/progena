@@ -7,8 +7,8 @@ LLM's structured kwargs land in `ToolContext.tool_args` for `execute()` to
 consume.
 """
 
-import contextlib
 import inspect
+import logging
 from typing import Any, cast
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -16,6 +16,8 @@ from langchain_core.tools import BaseTool, StructuredTool
 from ..runtime.loop import get_current_loop
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
+
+logger = logging.getLogger(__name__)
 
 
 def create_dynamic_mcp_tools(llm_client: Any = None) -> list[BaseTool]:
@@ -35,8 +37,10 @@ async def _resolve_state(state_manager: Any) -> Any:
         return None
     get_state = getattr(state_manager, "get_current_state", None)
     if callable(get_state) and inspect.iscoroutinefunction(get_state):
-        with contextlib.suppress(Exception):
+        try:
             return await get_state()
+        except Exception as exc:
+            logger.warning("Failed to load current state for tool context: %s", exc)
     return None
 
 
@@ -47,10 +51,12 @@ async def _maybe_reload(tool_registry: Any) -> None:
     load = getattr(tool_registry, "load", None)
     if not callable(load):
         return
-    with contextlib.suppress(Exception):
+    try:
         maybe = load()
         if inspect.isawaitable(maybe):
             await cast(Any, maybe)
+    except Exception as exc:
+        logger.warning("Failed to reload tool registry before tool execution: %s", exc)
 
 
 def create_deepagent_tools(
@@ -90,8 +96,10 @@ def create_deepagent_tools(
                     getattr(state_manager, "update_current_state", None) if state_manager else None
                 )
                 if callable(update) and inspect.iscoroutinefunction(update):
-                    with contextlib.suppress(Exception):
+                    try:
                         await update(result.state_updates)
+                    except Exception as exc:
+                        logger.warning("Failed to persist tool state updates: %s", exc)
             return result.data or {}
 
         return StructuredTool.from_function(
