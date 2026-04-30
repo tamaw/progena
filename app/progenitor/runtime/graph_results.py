@@ -2,8 +2,6 @@
 
 from typing import Any
 
-from ..streaming_utils import extract_reasoning_summary_text, extract_stream_chunk_text
-
 
 def coerce_messages_list(messages: Any) -> list:
     """Coerce LangGraph/DeepAgent message updates into a plain list."""
@@ -50,11 +48,6 @@ def get_last_ai_message(messages: Any) -> Any | None:
     return None
 
 
-def extract_reasoning_trace(msg: Any) -> str | None:
-    """Extract provider reasoning summary text from a message."""
-    return extract_reasoning_summary_text(msg)
-
-
 def extract_message_text(msg: Any) -> str | None:
     """Extract assistant-facing text from message content payloads."""
     if msg is None:
@@ -84,11 +77,6 @@ def extract_message_text(msg: Any) -> str | None:
             return "\n".join(parts)
 
     return None
-
-
-def extract_stream_text(msg: Any) -> str:
-    """Extract token text while preserving streaming whitespace."""
-    return extract_stream_chunk_text(msg)
 
 
 def summarize_message_schema(msg: Any) -> dict[str, Any]:

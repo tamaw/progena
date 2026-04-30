@@ -11,8 +11,11 @@ from ..stream_events import (
     build_reasoning_delta_event,
     normalize_custom_event,
 )
-from ..streaming_utils import extract_stream_reasoning_deltas, make_json_safe
-from .graph_results import extract_stream_text
+from ..streaming_utils import (
+    extract_stream_chunk_text,
+    extract_stream_reasoning_deltas,
+    make_json_safe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +92,7 @@ class StreamEventRouter:
                     metadata=cast(dict[str, Any], reasoning_event["metadata"]),
                 )
 
-        chunk_text = extract_stream_text(message_chunk)
+        chunk_text = extract_stream_chunk_text(message_chunk)
         if chunk_text:
             await self.stream_token(chunk_text)
         if self.enabled:

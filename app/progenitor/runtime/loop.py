@@ -25,13 +25,12 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from ..state.models import redact_secrets
 from ..stream_events import build_reasoning_summary_event
-from ..streaming_utils import extract_reasoning_token_count
+from ..streaming_utils import extract_reasoning_summary_text, extract_reasoning_token_count
 from .a2a_completion import A2ACompletionBridge
 from .a2a_tasks import A2ATaskTracker
 from .graph_results import (
     coerce_messages_list,
     extract_message_text,
-    extract_reasoning_trace,
     get_last_ai_message,
     serialize_messages,
     summarize_message_schema,
@@ -547,7 +546,7 @@ class ProgenitorLoop:
                     pending_stream_final = True
 
             reasoning_trace = (
-                extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+                extract_reasoning_summary_text(last_ai_msg) if last_ai_msg is not None else None
             )
             self._last_reasoning_trace = reasoning_trace
             self._state["last_reasoning_trace"] = reasoning_trace

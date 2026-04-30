@@ -389,31 +389,31 @@ class TestConfigQueueSettings(unittest.TestCase):
         assert config.max_stream_queue_size == 800
 
 
-class TestReasoningTraceExtraction(unittest.TestCase):
-    """Tests for runtime reasoning extraction helpers."""
+class TestReasoningSummaryExtraction(unittest.TestCase):
+    """Tests for shared reasoning summary extraction helpers."""
 
     def test_extracts_from_response_metadata(self):
-        from app.progenitor.runtime.graph_results import extract_reasoning_trace
+        from app.progenitor.streaming_utils import extract_reasoning_summary_text
 
         msg = SimpleNamespace(response_metadata={"reasoning": {"summary": "done"}})
-        trace = extract_reasoning_trace(msg)
+        trace = extract_reasoning_summary_text(msg)
         assert trace == "done"
 
     def test_extracts_summary_effort_schema(self):
-        from app.progenitor.runtime.graph_results import extract_reasoning_trace
+        from app.progenitor.streaming_utils import extract_reasoning_summary_text
 
         msg = SimpleNamespace(response_metadata={"effort": "medium", "summary": "detailed"})
-        trace = extract_reasoning_trace(msg)
+        trace = extract_reasoning_summary_text(msg)
         assert trace == "detailed"
 
     def test_extracts_from_content_parts(self):
-        from app.progenitor.runtime.graph_results import extract_reasoning_trace
+        from app.progenitor.streaming_utils import extract_reasoning_summary_text
 
         msg = {
             "role": "assistant",
             "content": [{"type": "reasoning", "text": "step-by-step"}],
         }
-        assert extract_reasoning_trace(msg) == "step-by-step"
+        assert extract_reasoning_summary_text(msg) == "step-by-step"
 
     def test_extract_message_text_from_string_content(self):
         from app.progenitor.runtime.graph_results import extract_message_text
