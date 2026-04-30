@@ -1735,6 +1735,34 @@ def _mcp_jsonrpc_error_detail(error_payload: Any) -> str:
     return detail
 
 
+def _parse_mcp_jsonrpc_response(text: str) -> dict[str, Any] | None:
+    raw = text.strip()
+    if not raw:
+        return None
+
+    candidates: list[str] = []
+    if raw.startswith("{"):
+        candidates.append(raw)
+    else:
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("data:"):
+                continue
+            payload = stripped[len("data:") :].strip()
+            if payload and payload != "[DONE]":
+                candidates.append(payload)
+
+    parsed: dict[str, Any] | None = None
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            parsed = data
+    return parsed
+
+
 def _agent_card_url(agent: Any) -> str | None:
     direct = str(getattr(agent, "agent_card_url", "") or "").strip()
     if direct:
@@ -1818,8 +1846,6 @@ async def _call_mcp_jsonrpc(
     *,
     session_id: str | None = None,
 ) -> tuple[dict[str, Any], str | None]:
-    from app.progenitor.mcp_tool_utils import parse_mcp_jsonrpc_response
-
     request = {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -1833,7 +1859,7 @@ async def _call_mcp_jsonrpc(
     response = await client.post(endpoint, json=request, headers=headers)
     response.raise_for_status()
 
-    parsed = parse_mcp_jsonrpc_response(response.text)
+    parsed = _parse_mcp_jsonrpc_response(response.text)
     if not isinstance(parsed, dict):
         raise ValueError(f"{method} returned an invalid JSON-RPC response")
 

@@ -19,16 +19,17 @@ def _adapter_tool(name: str) -> StructuredTool:
 
 
 @pytest.mark.asyncio
-async def test_initialize_mcp_langchain_tools_applies_runtime_aliases() -> None:
-    captured_connections: dict[str, dict[str, dict[str, str]]] = {}
+async def test_initialize_mcp_langchain_tools_uses_adapter_prefixing() -> None:
+    captured: dict[str, object] = {}
 
     class FakeClient:
-        def __init__(self, connections):
-            captured_connections["value"] = connections
+        def __init__(self, connections, *, tool_name_prefix=False):
+            captured["connections"] = connections
+            captured["tool_name_prefix"] = tool_name_prefix
 
         async def get_tools(self, *, server_name=None):
             assert server_name == "jina"
-            return [_adapter_tool("search_web")]
+            return [_adapter_tool("jina_search_web")]
 
     config = SimpleNamespace(
         enabled_servers=[
@@ -40,25 +41,34 @@ async def test_initialize_mcp_langchain_tools_applies_runtime_aliases() -> None:
             )
         ]
     )
-    mcp_tools = [
-        {
-            "name": "jina_search_web",
-            "description": "Search the web [server: jina, original: search_web]",
-            "mcp_original_name": "search_web",
-            "mcp_server_name": "jina",
-        }
-    ]
-
     with patch("app.progenitor.tools.mcp.MultiServerMCPClient", FakeClient):
-        tools = await initialize_mcp_langchain_tools(config, mcp_tools)
+        tools, entries = await initialize_mcp_langchain_tools(config)
 
-    assert captured_connections["value"] == {
+    assert captured["connections"] == {
         "jina": {
             "transport": "streamable_http",
             "url": "https://mcp.jina.ai/v1",
             "headers": {"Authorization": "Bearer test"},
         }
     }
+    assert captured["tool_name_prefix"] is True
     assert [tool.name for tool in tools] == ["jina_search_web"]
-    assert tools[0].description == "Search the web [server: jina, original: search_web]"
+    assert entries == [
+        {
+            "name": "jina_search_web",
+            "description": "Tool: jina_search_web",
+            "type": "mcp_tool",
+            "source": "jina",
+            "endpoint": "https://mcp.jina.ai/v1",
+            "transport": "http",
+            "capabilities": ["jina_search_web"],
+            "server_name": "jina",
+            "original_name": "search_web",
+        }
+    ]
+    assert tools[0].metadata == {
+        "mcp_server_name": "jina",
+        "mcp_server_url": "https://mcp.jina.ai/v1",
+        "mcp_original_name": "search_web",
+    }
     assert await tools[0].ainvoke({"query": "langgraph"}) == {"query": "langgraph"}

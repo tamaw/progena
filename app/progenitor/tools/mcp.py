@@ -1,18 +1,9 @@
-"""
-MCP Client for Progenitor.
+"""MCP integration for Progenitor."""
 
-Handles communication with MCP servers via stdio or HTTP transports.
-"""
-
-import asyncio
 import inspect
-import json
 import logging
-import shlex
 import uuid
-from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -31,15 +22,8 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import Connection, StreamableHttpConnection
 
-from ..config import MCPConfig, MCPServerConfig
-from ..mcp_tool_utils import (
-    get_mcp_tool_description,
-    get_mcp_tool_name,
-    get_mcp_tool_parameters,
-    parse_mcp_jsonrpc_response,
-)
+from ..config import MCPConfig
 from .protocol import BaseSystemTool, ToolContext, ToolResult
-from .registry import normalize_tool_name
 
 logger = logging.getLogger(__name__)
 
@@ -62,20 +46,27 @@ class MCPTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         llm_client = context.llm_client
         mcp_config = getattr(llm_client, "mcp_config", None)
-        mcp_tools = getattr(llm_client, "mcp_tools", None) or []
-        runtime_servers = getattr(llm_client, "mcp_servers", None) or {}
+        mcp_tools = (
+            llm_client.get_mcp_tool_registry_entries()
+            if llm_client is not None and hasattr(llm_client, "get_mcp_tool_registry_entries")
+            else []
+        )
 
         configured_servers = []
         if isinstance(mcp_config, MCPConfig):
+            counts_by_server: dict[str, int] = {}
+            for tool in mcp_tools:
+                server_name = str(tool.get("server_name") or "").strip()
+                if server_name:
+                    counts_by_server[server_name] = counts_by_server.get(server_name, 0) + 1
+
             configured_servers = [
                 {
                     "name": server.name,
                     "url": server.url,
                     "enabled": server.enabled,
                     "transport": server.transport,
-                    "tool_count": len(runtime_servers.get(server.name, {}).get("tools", []))
-                    if isinstance(runtime_servers, dict)
-                    else 0,
+                    "tool_count": counts_by_server.get(server.name, 0),
                 }
                 for server in mcp_config.servers
             ]
@@ -85,173 +76,23 @@ class MCPTool(BaseSystemTool):
                 "enabled": bool(getattr(mcp_config, "enabled_servers", []))
                 if mcp_config
                 else False,
-                "server_count": len(runtime_servers) if isinstance(runtime_servers, dict) else 0,
+                "server_count": len(getattr(mcp_config, "enabled_servers", []))
+                if isinstance(mcp_config, MCPConfig)
+                else 0,
                 "tool_count": len(mcp_tools),
                 "servers": configured_servers,
                 "tools": [
                     {
                         "name": t.get("name"),
-                        "description": get_mcp_tool_description(t),
-                        "server": t.get("mcp_server_name"),
-                        "original_name": t.get("mcp_original_name") or t.get("name"),
+                        "description": t.get("description", ""),
+                        "server": t.get("server_name"),
+                        "original_name": t.get("original_name") or t.get("name"),
                     }
                     for t in mcp_tools
                     if isinstance(t, dict)
                 ],
             }
         )
-
-
-# Allowlist of safe command prefixes for MCP servers
-# Commands must start with one of these to be executed
-ALLOWED_COMMAND_PREFIXES = (
-    "python",
-    "node",
-    "npx",
-    "uvx",
-    "deno",
-)
-
-
-async def initialize_mcp_server(
-    server_config: MCPServerConfig,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    """Initialize one remote HTTP MCP server and return its discovered tools."""
-    if not server_config.enabled:
-        return None, []
-
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-    }
-    headers.update(server_config.headers)
-    mcp_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0),
-        headers=headers,
-    )
-
-    try:
-        logger.info("Fetching MCP tools from %s (%s)", server_config.url, server_config.name)
-
-        init_request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-03-26",
-                "capabilities": {},
-                "clientInfo": {"name": "progenitor", "version": "0.0.0"},
-            },
-        }
-        init_response = await mcp_client.post(server_config.url, json=init_request)
-        init_response.raise_for_status()
-
-        session_id = init_response.headers.get("mcp-session-id")
-        if session_id:
-            mcp_client.headers["mcp-session-id"] = session_id
-
-        list_request = {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-        }
-        response = await mcp_client.post(server_config.url, json=list_request)
-        response.raise_for_status()
-
-        parsed = parse_mcp_jsonrpc_response(response.text) or {}
-        result = parsed.get("result", parsed) if isinstance(parsed, dict) else {}
-        tools = result.get("tools", []) if isinstance(result, dict) else []
-        tool_list = cast(list[dict[str, Any]], tools if isinstance(tools, list) else [])
-
-        return (
-            {
-                "name": server_config.name,
-                "url": server_config.url,
-                "description": server_config.description,
-                "headers": dict(server_config.headers),
-                "client": mcp_client,
-            },
-            tool_list,
-        )
-    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to initialize MCP server '%s': %s", server_config.name, exc)
-        await mcp_client.aclose()
-        return None, []
-
-
-async def initialize_mcp_tools(
-    mcp_config: MCPConfig,
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    """Initialize all configured remote HTTP MCP servers and flatten their tools."""
-    discovered_servers: list[tuple[MCPServerConfig, dict[str, Any], list[dict[str, Any]]]] = []
-    for server_config in mcp_config.enabled_servers:
-        runtime_server, tools = await initialize_mcp_server(server_config)
-        if runtime_server is None:
-            continue
-        discovered_servers.append((server_config, runtime_server, tools))
-
-    name_counts: dict[str, int] = {}
-    for _server_config, _runtime_server, tools in discovered_servers:
-        for tool in tools:
-            original_name = get_mcp_tool_name(tool)
-            if original_name is None or get_mcp_tool_parameters(tool, require_object=True) is None:
-                continue
-            name_counts[original_name] = name_counts.get(original_name, 0) + 1
-
-    runtime_servers: dict[str, dict[str, Any]] = {}
-    flattened_tools: list[dict[str, Any]] = []
-    used_aliases: set[str] = set()
-
-    for server_config, runtime_server, tools in discovered_servers:
-        server_tools: list[dict[str, Any]] = []
-        for tool in tools:
-            original_name = get_mcp_tool_name(tool)
-            if original_name is None:
-                continue
-            if get_mcp_tool_parameters(tool, require_object=True) is None:
-                logger.warning(
-                    "Skipping MCP tool '%s' from server '%s' because it is missing a standard object inputSchema",
-                    original_name,
-                    server_config.name,
-                )
-                continue
-
-            alias = original_name
-            if name_counts.get(original_name, 0) > 1:
-                alias = normalize_tool_name(f"{server_config.name}_{original_name}")
-
-            suffix = 2
-            unique_alias = alias
-            while unique_alias in used_aliases:
-                unique_alias = normalize_tool_name(f"{alias}_{suffix}")
-                suffix += 1
-
-            used_aliases.add(unique_alias)
-            aliased_tool = dict(tool)
-            aliased_tool["name"] = unique_alias
-            aliased_tool["mcp_original_name"] = original_name
-            aliased_tool["mcp_server_name"] = server_config.name
-            aliased_tool["mcp_server_url"] = server_config.url
-            if unique_alias != original_name:
-                description = get_mcp_tool_description(aliased_tool)
-                if description:
-                    aliased_tool["description"] = (
-                        f"{description} [server: {server_config.name}, original: {original_name}]"
-                    )
-            server_tools.append(aliased_tool)
-            flattened_tools.append(aliased_tool)
-
-        runtime_servers[server_config.name] = {
-            **runtime_server,
-            "tools": server_tools,
-        }
-
-    logger.info(
-        "Initialized %d MCP server(s) with %d tool(s)",
-        len(runtime_servers),
-        len(flattened_tools),
-    )
-    return runtime_servers, flattened_tools
 
 
 def _build_adapter_connections(mcp_config: MCPConfig) -> dict[str, Connection]:
@@ -266,63 +107,61 @@ def _build_adapter_connections(mcp_config: MCPConfig) -> dict[str, Connection]:
     return connections
 
 
-def _build_mcp_tool_alias_lookup(
-    mcp_tools: list[dict[str, Any]],
-) -> dict[tuple[str, str], dict[str, Any]]:
-    aliases: dict[tuple[str, str], dict[str, Any]] = {}
-    for tool in mcp_tools:
-        server_name = str(tool.get("mcp_server_name") or "").strip()
-        original_name = str(tool.get("mcp_original_name") or tool.get("name") or "").strip()
-        if not server_name or not original_name:
-            continue
-        aliases[(server_name, original_name)] = tool
-    return aliases
+def _mcp_tool_entry(server_name: str, server_url: str, tool: BaseTool) -> dict[str, Any]:
+    tool_name = str(getattr(tool, "name", "") or "").strip()
+    prefix = f"{server_name}_"
+    original_name = tool_name.removeprefix(prefix) if tool_name.startswith(prefix) else tool_name
+    description = str(getattr(tool, "description", "") or "")
+
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+    tool.metadata = {
+        **metadata,
+        "mcp_server_name": server_name,
+        "mcp_server_url": server_url,
+        "mcp_original_name": original_name,
+    }
+
+    return {
+        "name": tool_name,
+        "description": description,
+        "type": "mcp_tool",
+        "source": server_name,
+        "endpoint": server_url,
+        "transport": "http",
+        "capabilities": [tool_name],
+        "server_name": server_name,
+        "original_name": original_name,
+    }
 
 
 async def initialize_mcp_langchain_tools(
     mcp_config: MCPConfig,
-    mcp_tools: list[dict[str, Any]],
-) -> list[BaseTool]:
-    """Load LangChain MCP tools using the official adapter package."""
+) -> tuple[list[BaseTool], list[dict[str, Any]]]:
+    """Load MCP tools through the official LangChain adapter package."""
     connections = _build_adapter_connections(mcp_config)
     if not connections:
-        return []
+        return [], []
 
-    client = MultiServerMCPClient(connections)
-    alias_lookup = _build_mcp_tool_alias_lookup(mcp_tools)
-
-    async def _load_server_tools(server_name: str) -> list[BaseTool]:
+    client = MultiServerMCPClient(connections, tool_name_prefix=True)
+    loaded_tools: list[BaseTool] = []
+    registry_entries: list[dict[str, Any]] = []
+    for server in mcp_config.enabled_servers:
         try:
-            loaded_tools = await client.get_tools(server_name=server_name)
+            server_tools = await client.get_tools(server_name=server.name)
         except Exception as exc:
             logger.warning(
-                "Failed to load LangChain MCP tools for server '%s': %s", server_name, exc
+                "Failed to load LangChain MCP tools for server '%s': %s", server.name, exc
             )
-            return []
-
-        aliased_tools: list[BaseTool] = []
-        for tool in loaded_tools:
-            original_name = str(getattr(tool, "name", "") or "").strip()
-            if not original_name:
+            continue
+        for tool in server_tools:
+            if not str(getattr(tool, "name", "") or "").strip():
                 continue
-
-            alias_tool = alias_lookup.get((server_name, original_name))
-            if alias_tool is not None:
-                alias_name = str(alias_tool.get("name") or original_name).strip()
-                if alias_name:
-                    tool.name = alias_name
-                alias_description = get_mcp_tool_description(alias_tool)
-                if alias_description:
-                    tool.description = alias_description
-            aliased_tools.append(tool)
-        return aliased_tools
-
-    loaded_tool_groups = await asyncio.gather(
-        *[_load_server_tools(server.name) for server in mcp_config.enabled_servers]
-    )
-    flattened_tools = [tool for tools in loaded_tool_groups for tool in tools]
-    logger.info("Loaded %d LangChain MCP tool wrapper(s)", len(flattened_tools))
-    return flattened_tools
+            loaded_tools.append(tool)
+            registry_entries.append(_mcp_tool_entry(server.name, server.url, tool))
+    logger.info("Loaded %d LangChain MCP tool wrapper(s)", len(loaded_tools))
+    return loaded_tools, registry_entries
 
 
 async def setup_mcp_for_llm_client(
@@ -333,12 +172,12 @@ async def setup_mcp_for_llm_client(
     llm_client.mcp_config = mcp_config
     close_mcp_context = getattr(llm_client, "close_mcp_context", None)
     if callable(close_mcp_context):
-        close_mcp_context_typed = cast(Callable[[], Awaitable[None]], close_mcp_context)
-        await close_mcp_context_typed()
+        maybe = close_mcp_context()
+        if inspect.isawaitable(maybe):
+            await cast(Any, maybe)
 
-    mcp_servers, mcp_tools = await initialize_mcp_tools(mcp_config)
-    mcp_langchain_tools = await initialize_mcp_langchain_tools(mcp_config, mcp_tools)
-    llm_client.set_mcp_context(mcp_servers, mcp_tools, mcp_langchain_tools)
+    mcp_langchain_tools, registry_entries = await initialize_mcp_langchain_tools(mcp_config)
+    llm_client.set_mcp_context(mcp_langchain_tools, registry_entries)
 
 
 async def refresh_mcp_runtime(
@@ -366,186 +205,6 @@ async def refresh_mcp_runtime(
     if hasattr(tool_registry, "register_tool"):
         for entry in entries:
             await tool_registry.register_tool(entry)
-
-
-def _validate_command(command: str | list[str]) -> list[str]:
-    """
-    Safely parse and validate a command for execution.
-
-    Args:
-        command: Command string or list of command parts
-
-    Returns:
-        List of command parts, safely parsed
-
-    Raises:
-        ValueError: If command is invalid or not in allowlist
-    """
-    if isinstance(command, list):
-        cmd_parts = command
-    else:
-        # Use shlex.split for proper shell escaping (prevents injection)
-        try:
-            cmd_parts = shlex.split(command)
-        except ValueError as e:
-            raise ValueError(f"Invalid command syntax: {e}") from e
-
-    if not cmd_parts:
-        raise ValueError("Empty command")
-
-    # Validate command against allowlist
-    executable = cmd_parts[0].lower()
-    # Extract just the executable name (handle paths like /usr/bin/python)
-    executable_name = Path(executable).name.lower()
-    # Remove common extensions
-    if executable_name.endswith(".exe"):
-        executable_name = executable_name[:-4]
-
-    if not any(executable_name.startswith(prefix) for prefix in ALLOWED_COMMAND_PREFIXES):
-        logger.warning(
-            "Command '%s' not in allowlist. Allowed prefixes: %s",
-            executable_name,
-            ALLOWED_COMMAND_PREFIXES,
-        )
-        raise ValueError(
-            f"Command '{executable_name}' not allowed. "
-            f"Allowed: {', '.join(ALLOWED_COMMAND_PREFIXES)}"
-        )
-
-    return cmd_parts
-
-
-class MCPClient:
-    """Client for calling MCP servers/tools."""
-
-    def __init__(self, project_root: Path | None = None):
-        self._processes: dict[str, asyncio.subprocess.Process] = {}
-        self.project_root = Path(project_root) if project_root else Path.cwd()
-
-    async def call_tool(
-        self,
-        tool_config: dict[str, Any],
-        method: str,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Call an MCP tool method."""
-        transport = tool_config.get("transport", "stdio")
-
-        if transport == "stdio":
-            return await self._call_stdio(tool_config, method, params)
-        elif transport == "http":
-            return await self._call_http(tool_config, method, params)
-        else:
-            raise ValueError(f"Unknown transport: {transport}")
-
-    async def _call_stdio(
-        self,
-        tool_config: dict[str, Any],
-        method: str,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Call an MCP server via stdio."""
-        command = tool_config.get("command")
-        if not command:
-            raise ValueError("No command specified for stdio transport")
-
-        # Build the JSON-RPC request
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": params or {},
-        }
-
-        # Safely parse and validate command (prevents command injection)
-        cmd_parts = _validate_command(command)
-
-        # Start MCP server process directly (no container isolation)
-        process = await asyncio.create_subprocess_exec(
-            *cmd_parts,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        # Send request and get response
-        request_bytes = json.dumps(request).encode() + b"\n"
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(input=request_bytes),
-            timeout=float(tool_config.get("timeout", 30)),
-        )
-
-        if process.returncode != 0:
-            return {
-                "error": f"MCP server exited with code {process.returncode}",
-                "stderr": stderr.decode() if stderr else None,
-            }
-
-        # Parse response
-        try:
-            response = json.loads(stdout.decode())
-            return cast(dict[str, Any], response.get("result", response))
-        except json.JSONDecodeError as e:
-            return {
-                "error": f"Invalid JSON response: {e}",
-                "stdout": stdout.decode() if stdout else None,
-            }
-
-    async def _call_http(
-        self,
-        tool_config: dict[str, Any],
-        method: str,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Call an MCP server via HTTP."""
-        import aiohttp
-
-        endpoint = tool_config.get("endpoint")
-        if not endpoint:
-            raise ValueError("No URL specified for HTTP transport")
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": params or {},
-        }
-
-        headers = {"Content-Type": "application/json"}
-        headers.update(tool_config.get("headers", {}))
-
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    endpoint,
-                    json=request,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response,
-            ):
-                parsed = parse_mcp_jsonrpc_response(await response.text())
-                if not isinstance(parsed, dict):
-                    raise ValueError("Invalid MCP JSON-RPC response")
-                return cast(dict[str, Any], parsed.get("result", parsed))
-        except Exception as e:
-            return {"error": str(e)}
-
-    async def list_tools(self, tool_config: dict[str, Any]) -> list[dict[str, Any]]:
-        """List available tools from an MCP server."""
-        result = await self.call_tool(tool_config, "tools/list")
-        return cast(
-            list[dict[str, Any]], result.get("tools", []) if isinstance(result, dict) else []
-        )
-
-    async def healthcheck(self, tool_config: dict[str, Any]) -> bool:
-        """Check if an MCP server is healthy."""
-        try:
-            result = await self.call_tool(tool_config, "ping")
-            return not isinstance(result, dict) or "error" not in result
-        except (TimeoutError, OSError, ValueError) as e:
-            logger.debug("MCP healthcheck failed: %s", e)
-            return False
 
 
 class A2AClient:

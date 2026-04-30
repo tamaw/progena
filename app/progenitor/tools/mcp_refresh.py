@@ -67,6 +67,6 @@ class MCPRefreshTool(BaseSystemTool):
         return ToolResult.ok(
             {
                 "success": True,
-                "tool_count": len(getattr(llm_client, "mcp_tools", None) or []),
+                "tool_count": len(llm_client.get_mcp_tool_registry_entries()),
             }
         )

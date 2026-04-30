@@ -123,19 +123,6 @@ class Progenitor:
         agent_count = len(self.tool_registry.get_agents())
         logger.info("Startup discovery: agents=%d", agent_count)
 
-        # Create a deferred event pusher that will be bound to the loop later
-        # This allows the graph to be created before the loop, but still have
-        # access to the loop's event pushing capability
-        async def deferred_push_event(event_type: str, content: str, metadata=None):
-            """Event pusher that delegates to the loop runner when available."""
-            if self.loop_runner:
-                await self.loop_runner._push_event(event_type, content, metadata)
-            else:
-                logger.warning("Event pusher called before loop_runner available: %s", event_type)
-
-        # Allow the LLM client to emit realtime progress updates through IPC.
-        self.llm_client.set_event_pusher(deferred_push_event)
-
         def get_live_state() -> dict[str, Any] | None:
             if self.loop_runner is None or not isinstance(self.loop_runner._state, dict):
                 return None

@@ -1,9 +1,8 @@
-"""Tools module - MCP client, agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
+"""Tools module - agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
 
 from typing import TYPE_CHECKING
 
 from .agent_discovery import AgentDiscovery, discover_agents
-from .mcp import MCPClient
 from .registry import ToolRegistry
 from .schedule import (
     DELETE_SCHEDULE_TOOL_SPEC,
@@ -52,6 +51,7 @@ def __getattr__(name: str):
     }
     if name in _tool_modules:
         import importlib
+
         mod = importlib.import_module(f".{_tool_modules[name]}", __package__)
         return getattr(mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -59,7 +59,6 @@ def __getattr__(name: str):
 
 __all__ = [
     "ToolRegistry",
-    "MCPClient",
     "AgentDiscovery",
     "discover_agents",
     "add_scheduled_task",
