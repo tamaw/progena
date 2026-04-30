@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import ProgenitorConfig, get_config, setup_logging
+from .graph.main import create_main_graph
 from .llm.client import LLMClient
-from .runtime.deep_agent_adapter import create_deep_agent_for_loop
 from .runtime.loop import ProgenitorLoop
 from .state.manager import StateManager
 from .tools.registry import ToolRegistry
@@ -142,7 +142,7 @@ class Progenitor:
             return self.loop_runner._state
 
         logger.info("Creating DeepAgent graph (core-only)")
-        self.graph = create_deep_agent_for_loop(
+        self.graph = create_main_graph(
             config=self.config,
             tool_registry=self.tool_registry,
             llm_client=self.llm_client,

@@ -1,17 +1,15 @@
 """
-Tests for Phase 8: Runtime loop integration with DeepAgent.
+Tests for main graph integration with DeepAgent.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.progenitor.config import ProgenitorConfig
-from app.progenitor.runtime.deep_agent_adapter import (
-    create_deep_agent_for_loop,
-)
+from app.progenitor.graph.main import create_main_graph
 
 
-class TestCreateDeepAgentForLoop:
-    """Tests for the loop adapter factory."""
+class TestCreateMainGraph:
+    """Tests for the main graph factory."""
 
     def test_returns_compiled_graph(self):
         """Factory returns a compiled graph (same type ProgenitorLoop expects)."""
@@ -25,7 +23,7 @@ class TestCreateDeepAgentForLoop:
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
 
-                result = create_deep_agent_for_loop(config=ProgenitorConfig())
+                result = create_main_graph(config=ProgenitorConfig())
                 assert result is mock_graph
 
     def test_passes_all_parameters(self):
@@ -42,7 +40,7 @@ class TestCreateDeepAgentForLoop:
                 mock_registry = MagicMock()
                 mock_llm = MagicMock()
                 mock_sm = MagicMock()
-                create_deep_agent_for_loop(
+                create_main_graph(
                     config=ProgenitorConfig(),
                     tool_registry=mock_registry,
                     llm_client=mock_llm,
@@ -71,5 +69,5 @@ class TestDeepAgentAstreamCompatibility:
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
 
-                result = create_deep_agent_for_loop(config=ProgenitorConfig())
+                result = create_main_graph(config=ProgenitorConfig())
                 assert hasattr(result, "astream")

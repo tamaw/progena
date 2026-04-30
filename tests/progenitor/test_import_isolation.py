@@ -5,8 +5,8 @@ from contextlib import contextmanager
 
 _MODULE_NAMES = [
     "app.progenitor.agent.deep_agent",
+    "app.progenitor.graph.main",
     "app.progenitor.runtime.loop",
-    "app.progenitor.runtime.deep_agent_adapter",
     "app.progenitor.stream_events",
 ]
 
