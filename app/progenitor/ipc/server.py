@@ -14,10 +14,9 @@ Features:
 
 import asyncio
 import contextlib
-import inspect
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from .protocol import (
     IPCMessage,
@@ -310,14 +309,8 @@ class IPCServer:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Enqueue input on loop implementations with or without metadata support."""
-
-        enqueue_input = self.loop_runner.enqueue_input
-        parameters = inspect.signature(enqueue_input).parameters
-        if "metadata" in parameters:
-            await enqueue_input(content, metadata=metadata)
-            return
-        await enqueue_input(content)
+        """Enqueue input on the loop runner."""
+        await self.loop_runner.enqueue_input(content, metadata=metadata)
 
     async def _wait_for_response(self, request_id: str) -> str:
         """Wait for a response from the loop runner.
@@ -330,7 +323,9 @@ class IPCServer:
             poll_count += 1
             if poll_count % 50 == 0:
                 logger.debug("Still waiting for %s (poll %d)", request_id, poll_count)
-            chunk_data = await self._get_stream_item(timeout=STREAM_POLL_INTERVAL_SECONDS)
+            chunk_data = await self.loop_runner.stream.get_stream_item(
+                timeout=STREAM_POLL_INTERVAL_SECONDS
+            )
             if not chunk_data:
                 continue
             item_type = str(chunk_data.get("type", "stream_chunk"))
@@ -377,7 +372,9 @@ class IPCServer:
                     poll_count += 1
 
                     # Get stream chunk from the stream queue
-                    chunk_data = await self._get_stream_item(timeout=STREAM_POLL_INTERVAL_SECONDS)
+                    chunk_data = await self.loop_runner.stream.get_stream_item(
+                        timeout=STREAM_POLL_INTERVAL_SECONDS
+                    )
 
                     if chunk_data:
                         item_type = str(chunk_data.get("type", "stream_chunk"))
@@ -436,16 +433,6 @@ class IPCServer:
                     writer,
                     error_message(str(e), error_code="STREAM_ERROR", request_id=request_id),
                 )
-
-    async def _get_stream_item(self, timeout: float | None = None) -> dict[str, Any] | None:
-        """Read the next stream item from loop runners old and new."""
-        get_stream_item = getattr(self.loop_runner, "get_stream_item", None)
-        if callable(get_stream_item):
-            result = get_stream_item(timeout=timeout)
-            if inspect.isawaitable(result):
-                return cast(dict[str, Any] | None, await result)
-            return cast(dict[str, Any] | None, result)
-        return await self.loop_runner.get_stream_chunk(timeout=timeout)
 
     async def _notify_queued_request(self, request_id: str, *, streaming: bool) -> None:
         """Emit a message_queued event when another request already holds the lock."""

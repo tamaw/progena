@@ -17,14 +17,13 @@ Controls:
 import asyncio
 import contextlib
 import copy
-import inspect
 import json
 import logging
 import time
 import uuid
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-from ..state.models import A2ATaskRecord, redact_secrets
+from ..state.models import redact_secrets
 from ..stream_events import build_reasoning_summary_event
 from ..streaming_utils import extract_reasoning_token_count
 from .a2a_completion import A2ACompletionBridge
@@ -39,7 +38,6 @@ from .graph_results import (
 )
 from .health import update_health_file
 from .scheduled_work import SCHEDULED_INPUT_PREFIX, ScheduledWorkRunner
-from .scheduler import Scheduler
 from .streaming import StreamEventRouter
 from .time_utils import utcnow_isoformat
 
@@ -87,7 +85,7 @@ class ProgenitorLoop:
         # Event to signal when a graph cycle completes (for IPC synchronization)
         self._cycle_complete_event: asyncio.Event = asyncio.Event()
 
-        self._stream_router = StreamEventRouter(self._stream_queue)
+        self.stream = StreamEventRouter(self._stream_queue)
 
         # Captures the most recent pending_response emitted by the graph during a cycle.
         # Used for background job cycles where we don't stream to the client.
@@ -107,50 +105,18 @@ class ProgenitorLoop:
         self._state: dict[str, Any] = {}
         self._a2a_task_tracker: A2ATaskTracker | None = None
         self._a2a_task_poller: asyncio.Task[None] | None = None
-        self._scheduler_runner = ScheduledWorkRunner(
+        self.scheduled_work = ScheduledWorkRunner(
             config=config,
             state_manager=state_manager,
             enqueue_input=lambda message, timeout: self.enqueue_input(message, timeout=timeout),
             push_event=self._push_event,
             is_running=lambda: self.running,
         )
-        self._a2a_completion_bridge = A2ACompletionBridge(
+        self.a2a_completion = A2ACompletionBridge(
             state_manager=state_manager,
             get_state=lambda: self._state,
             graph_lock=self._graph_lock,
         )
-
-    @property
-    def _streaming_enabled(self) -> bool:
-        return self._stream_router.enabled
-
-    @_streaming_enabled.setter
-    def _streaming_enabled(self, value: bool) -> None:
-        self._stream_router.enabled = value
-
-    @property
-    def _response_was_streamed(self) -> bool:
-        return self._stream_router.response_was_streamed
-
-    @_response_was_streamed.setter
-    def _response_was_streamed(self, value: bool) -> None:
-        self._stream_router.response_was_streamed = value
-
-    @property
-    def _stream_final_sent(self) -> bool:
-        return self._stream_router.final_sent
-
-    @_stream_final_sent.setter
-    def _stream_final_sent(self, value: bool) -> None:
-        self._stream_router.final_sent = value
-
-    @property
-    def _streamed_response_content(self) -> str:
-        return self._stream_router.streamed_response_content
-
-    @_streamed_response_content.setter
-    def _streamed_response_content(self, value: str) -> None:
-        self._stream_router.streamed_response_content = value
 
     async def run_forever(self) -> None:
         """Run the perpetual loop.
@@ -202,13 +168,13 @@ class ProgenitorLoop:
         input_task = asyncio.create_task(self._input_handler_loop(boot_thread_id))
         scheduler_task: asyncio.Task | None = None
         poller_task: asyncio.Task[None] | None = None
-        if self._is_scheduler_enabled():
-            scheduler_task = asyncio.create_task(self._scheduler_loop())
+        if self.scheduled_work.is_enabled():
+            scheduler_task = asyncio.create_task(self.scheduled_work.run_loop())
             logger.info("Scheduler loop started")
         self._a2a_task_tracker = A2ATaskTracker(
             self.state_manager,
             self.llm_client,
-            completion_callback=self._record_completed_a2a_task,
+            completion_callback=self.a2a_completion.record_completed_task,
         )
         self._a2a_task_poller = asyncio.create_task(self._a2a_task_tracker.run())
         poller_task = self._a2a_task_poller
@@ -315,7 +281,7 @@ class ProgenitorLoop:
                     self._state["input_wait_seconds"] = self._current_input_wait_seconds
                     self._state["pending_messages_in_queue"] = self._current_input_pending_count
 
-                    self._stream_router.reset(enabled=not is_scheduled_input)
+                    self.stream.reset(enabled=not is_scheduled_input)
 
                     is_isolated_thread = bool(
                         requested_thread_id
@@ -342,12 +308,12 @@ class ProgenitorLoop:
                         )
                         await self._push_event("error", safe_error)
 
-                        if self._streaming_enabled and not self._stream_final_sent:
-                            if self._response_was_streamed:
-                                await self.stream_final()
+                        if self.stream.enabled and not self.stream.final_sent:
+                            if self.stream.response_was_streamed:
+                                await self.stream.stream_final()
                             else:
-                                await self._stream_response(f"Error: {safe_error}")
-                            self._stream_final_sent = True
+                                await self.stream.stream_response(f"Error: {safe_error}")
+                            self.stream.final_sent = True
 
                         self._last_cycle_response = f"Error: {safe_error}"
                         self._state["last_cycle_response"] = self._last_cycle_response
@@ -380,7 +346,7 @@ class ProgenitorLoop:
                                 },
                             )
 
-                        self._stream_router.reset(enabled=False)
+                        self.stream.reset(enabled=False)
 
                         logger.info("Graph cycle complete, signaling")
                         await self._signal_cycle_complete()
@@ -452,18 +418,6 @@ class ProgenitorLoop:
             await self._checkpoint_state(self._state)
             await self._update_health_file(self._state)
 
-    def _is_scheduler_enabled(self) -> bool:
-        return self._scheduler_runner.is_enabled()
-
-    def _scheduler_poll_seconds(self) -> float:
-        return self._scheduler_runner.poll_seconds()
-
-    async def _check_and_enqueue_scheduled_work(self, scheduler: Scheduler) -> int:
-        return await self._scheduler_runner.check_and_enqueue(scheduler)
-
-    async def _scheduler_loop(self) -> None:
-        await self._scheduler_runner.run_loop()
-
     async def _run_graph_cycle(
         self,
         _boot_thread_id: str,
@@ -504,9 +458,8 @@ class ProgenitorLoop:
         try:
             astream_kwargs: dict[str, Any] = {
                 "config": {"configurable": {"thread_id": effective_thread_id}},
+                "stream_mode": ["messages", "updates", "custom"],
             }
-            if self._graph_accepts_stream_mode():
-                astream_kwargs["stream_mode"] = ["messages", "updates", "custom"]
             pending_stream_final = False
 
             async for stream_item in self.graph.astream(
@@ -519,11 +472,11 @@ class ProgenitorLoop:
                     mode, event = stream_item
 
                 if mode == "messages":
-                    await self._handle_message_stream_event(event)
+                    await self.stream.handle_message_stream_event(event)
                     continue
 
                 if mode == "custom":
-                    await self._handle_custom_stream_event(event)
+                    await self.stream.handle_custom_stream_event(event)
                     continue
 
                 if mode != "updates" or not isinstance(event, dict):
@@ -545,8 +498,8 @@ class ProgenitorLoop:
                                 "messages": coerce_messages_list(node_output.get("messages")),
                             }
                         self._state.update(node_output)
-                        if self._streaming_enabled:
-                            await self._send_stream_event(
+                        if self.stream.enabled:
+                            await self.stream.send_stream_event(
                                 "node_update",
                                 metadata={
                                     "node_name": node_name,
@@ -563,16 +516,16 @@ class ProgenitorLoop:
                     pending_text = str(pending)
                     self._last_cycle_response = pending_text
                     self._state["last_cycle_response"] = pending_text
-                    if self._streaming_enabled:
-                        await self._ensure_response_streamed(pending_text)
+                    if self.stream.enabled:
+                        await self.stream.ensure_response_streamed(pending_text)
                         pending_stream_final = True
                     self._state["pending_response"] = None
-                elif self._response_was_streamed and not self._stream_final_sent:
-                    streamed_text = self._streamed_response_content
+                elif self.stream.response_was_streamed and not self.stream.final_sent:
+                    streamed_text = self.stream.streamed_response_content
                     if streamed_text:
                         self._last_cycle_response = streamed_text
                         self._state["last_cycle_response"] = streamed_text
-                    if self._streaming_enabled:
+                    if self.stream.enabled:
                         pending_stream_final = True
                     self._state["pending_response"] = None
 
@@ -581,18 +534,18 @@ class ProgenitorLoop:
             # stream consumer (for example scheduled tasks).
             last_ai_msg = get_last_ai_message(self._state.get("messages"))
             response_text: str | None = self._last_cycle_response
-            if not self._stream_final_sent:
+            if not self.stream.final_sent:
                 response_text = extract_message_text(last_ai_msg)
                 if response_text:
                     logger.info(
                         "Extracting AI response from messages (%d chars)", len(response_text)
                     )
-                    if self._streaming_enabled:
-                        await self._ensure_response_streamed(response_text)
+                    if self.stream.enabled:
+                        await self.stream.ensure_response_streamed(response_text)
                         pending_stream_final = True
                     self._last_cycle_response = response_text
                     self._state["last_cycle_response"] = response_text
-                elif self._streaming_enabled:
+                elif self.stream.enabled:
                     pending_stream_final = True
 
             reasoning_trace = (
@@ -603,21 +556,21 @@ class ProgenitorLoop:
             reasoning_tokens = (
                 extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
             )
-            if self._streaming_enabled and last_ai_msg is not None and bool(reasoning_trace):
+            if self.stream.enabled and last_ai_msg is not None and bool(reasoning_trace):
                 summary_event = build_reasoning_summary_event(
                     reasoning_trace or "",
                     metadata={
                         "reasoning_tokens": reasoning_tokens,
                     },
                 )
-                await self._send_stream_event(
+                await self.stream.send_stream_event(
                     summary_event["event_type"],
                     content=summary_event["content"],
                     metadata=cast(dict[str, Any], summary_event["metadata"]),
                 )
-            if self._streaming_enabled and pending_stream_final and not self._stream_final_sent:
-                await self.stream_final()
-                self._stream_final_sent = True
+            if self.stream.enabled and pending_stream_final and not self.stream.final_sent:
+                await self.stream.stream_final()
+                self.stream.final_sent = True
             if reasoning_trace:
                 logger.info("Extracted reasoning trace (%d chars)", len(reasoning_trace))
             elif last_ai_msg is not None and self.config.llm.reasoning_enabled:
@@ -757,74 +710,6 @@ class ProgenitorLoop:
         except TimeoutError:
             return False
 
-    async def _stream_response(self, text: str) -> None:
-        """Stream a response text directly through the stream queue."""
-        await self._stream_router.stream_response(text)
-
-    async def stream_token(self, token: str) -> None:
-        """Stream a single token directly to the client."""
-        await self._stream_router.stream_token(token)
-
-    async def _ensure_response_streamed(self, text: str) -> None:
-        """Send any missing response text without closing the stream."""
-        await self._stream_router.ensure_response_streamed(text)
-
-    async def _handle_message_stream_event(self, event: Any) -> None:
-        """Handle LangGraph `messages` stream events for token-level output."""
-        await self._stream_router.handle_message_stream_event(event)
-
-    async def _handle_custom_stream_event(self, event: Any) -> None:
-        """Forward LangGraph ``custom`` stream events through the IPC channel."""
-        await self._stream_router.handle_custom_stream_event(event)
-
-    def _graph_accepts_stream_mode(self) -> bool:
-        """Return True when the graph's astream accepts the stream_mode kwarg."""
-        astream = getattr(self.graph, "astream", None)
-        if not callable(astream):
-            return False
-        try:
-            parameters = inspect.signature(astream).parameters.values()
-            return any(
-                parameter.name == "stream_mode" or parameter.kind == inspect.Parameter.VAR_KEYWORD
-                for parameter in parameters
-            )
-        except (TypeError, ValueError):
-            return False
-
-    async def stream_final(self) -> None:
-        """Mark the end of a streaming response."""
-        await self._stream_router.stream_final()
-
-    async def _send_stream_event(
-        self,
-        event_type: str,
-        *,
-        content: str = "",
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """Send a structured streaming event to the output stream."""
-        await self._stream_router.send_stream_event(
-            event_type,
-            content=content,
-            metadata=metadata,
-        )
-
-    async def _send_stream_chunk(self, chunk: str, is_final: bool = False) -> None:
-        """Send a streaming chunk to the output stream."""
-        await self._stream_router.send_stream_chunk(chunk, is_final=is_final)
-
-    async def _send_stream_end(self) -> None:
-        """Signal the end of a streaming response."""
-        await self._stream_router.send_stream_end()
-
-    async def get_stream_item(self, timeout: float | None = None) -> dict[str, Any] | None:
-        """Get the next streaming queue item, including structured events."""
-        return await self._stream_router.get_stream_item(timeout=timeout)
-
-    async def get_stream_chunk(self, timeout: float | None = None) -> dict | None:
-        """Get the next text streaming chunk from the agent."""
-        return await self._stream_router.get_stream_chunk(timeout=timeout)
-
     async def _checkpoint_state(self, state: dict[str, Any]) -> None:
         """Save full recoverable state checkpoint.
 
@@ -891,10 +776,6 @@ class ProgenitorLoop:
                 self._input_queue.maxsize,
             )
             return False
-
-    async def _record_completed_a2a_task(self, record: A2ATaskRecord) -> None:
-        """Persist a terminal A2A task update into the active conversation state."""
-        await self._a2a_completion_bridge.record_completed_task(record)
 
     async def get_output(self, timeout: float | None = None) -> str | None:
         """Get output from the agent."""

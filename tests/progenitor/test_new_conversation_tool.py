@@ -58,12 +58,11 @@ async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: P
         state_manager=state_manager,
         config=cast(Any, _MockConfig()),
     )
-    loop._streaming_enabled = False
-    loop._response_was_streamed = False
-    loop._stream_final_sent = False
+    loop.stream.reset(enabled=False)
 
     class _FakeGraph:
-        async def astream(self, graph_input, config):  # noqa: ANN001
+        async def astream(self, graph_input, config, stream_mode):  # noqa: ANN001
+            assert stream_mode == ["messages", "updates", "custom"]
             yield {
                 "node": {
                     "messages": [{"role": "user", "content": "before"}],

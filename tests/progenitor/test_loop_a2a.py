@@ -28,7 +28,7 @@ class _Config:
 
 
 @pytest.mark.asyncio
-async def test_record_completed_a2a_task_persists_tool_message(tmp_path: Path) -> None:
+async def test_a2a_completion_bridge_persists_tool_message(tmp_path: Path) -> None:
     state_manager = MagicMock()
     state_manager.log_conversation = AsyncMock()
     state_manager.save_messages = AsyncMock()
@@ -48,8 +48,8 @@ async def test_record_completed_a2a_task_persists_tool_message(tmp_path: Path) -
         summary="Observe task completed.",
     )
 
-    await loop._record_completed_a2a_task(record)
-    await loop._record_completed_a2a_task(record)
+    await loop.a2a_completion.record_completed_task(record)
+    await loop.a2a_completion.record_completed_task(record)
 
     assert len(loop._state["messages"]) == 1
     message = loop._state["messages"][0]

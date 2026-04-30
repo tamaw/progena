@@ -11,6 +11,7 @@ import pytest
 
 from app.progenitor.ipc.client import IPCClient
 from app.progenitor.ipc.server import IPCServer
+from app.progenitor.runtime.streaming import StreamEventRouter
 
 
 class MockLoopRunner:
@@ -20,6 +21,7 @@ class MockLoopRunner:
         self._input_queue = asyncio.Queue()
         self._output_queue = asyncio.Queue()
         self._stream_queue = asyncio.Queue()
+        self.stream = StreamEventRouter(self._stream_queue)
         self._event_queue = asyncio.Queue()
         self._response = "Mock response"
         self._cycle_complete_event = asyncio.Event()
@@ -28,8 +30,13 @@ class MockLoopRunner:
         # Flag to enable automatic streaming (tests can disable to control manually)
         self._auto_stream = True
 
-    async def enqueue_input(self, content: str) -> None:
+    async def enqueue_input(
+        self,
+        content: str,
+        metadata: dict | None = None,
+    ) -> None:
         """Enqueue input message."""
+        del metadata
         await self._input_queue.put(content)
         # Simulate processing and produce output (for non-streaming)
         await self._output_queue.put(self._response)
@@ -56,19 +63,6 @@ class MockLoopRunner:
             return self._output_queue.get_nowait()
         except (TimeoutError, asyncio.QueueEmpty):
             return None
-
-    async def get_stream_chunk(self, timeout: float | None = None) -> dict | None:
-        """Get stream chunk from queue."""
-        try:
-            if timeout:
-                return await asyncio.wait_for(self._stream_queue.get(), timeout=timeout)
-            return self._stream_queue.get_nowait()
-        except (TimeoutError, asyncio.QueueEmpty):
-            return None
-
-    async def get_stream_item(self, timeout: float | None = None) -> dict | None:
-        """Get any stream queue item, including structured events."""
-        return await self.get_stream_chunk(timeout=timeout)
 
     async def wait_cycle_complete(self, timeout: float | None = None) -> bool:
         """Wait for cycle to complete (mock always returns True immediately)."""

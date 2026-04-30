@@ -168,7 +168,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
             self.loop._stream_queue.put_nowait({"content": f"chunk {i}"})
 
         # Should not raise, just log warning and drop
-        await self.loop._send_stream_chunk("overflow chunk")
+        await self.loop.stream.send_stream_chunk("overflow chunk")
 
         # Queue size should still be 10
         assert self.loop._stream_queue.qsize() == 10
@@ -223,7 +223,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         self.state_manager.get_schedule.return_value = scheduler.get_due_items.return_value
 
-        count = await self.loop._check_and_enqueue_scheduled_work(scheduler)
+        count = await self.loop.scheduled_work.check_and_enqueue(scheduler)
 
         assert count == 2
         assert self.loop._input_queue.qsize() == 2
@@ -280,7 +280,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         )
         self.loop.enqueue_input = AsyncMock(return_value=True)
 
-        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+        fired = await self.loop.scheduled_work.check_and_enqueue(Scheduler("UTC"))
 
         assert fired == 1
         self.loop.enqueue_input.assert_awaited_once()
@@ -307,7 +307,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         )
         self.loop.enqueue_input = AsyncMock(return_value=True)
 
-        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+        fired = await self.loop.scheduled_work.check_and_enqueue(Scheduler("UTC"))
 
         assert fired == 1
         self.loop.enqueue_input.assert_awaited_once()

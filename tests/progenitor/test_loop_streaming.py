@@ -44,7 +44,7 @@ def _make_loop_state():
 async def _collect_stream_chunks(loop: ProgenitorLoop) -> list[dict]:
     chunks: list[dict] = []
     while True:
-        chunk = await loop.get_stream_chunk(timeout=0.01)
+        chunk = await loop.stream.get_stream_chunk(timeout=0.01)
         if chunk is None:
             break
         chunks.append(chunk)
@@ -56,7 +56,7 @@ async def _collect_stream_chunks(loop: ProgenitorLoop) -> list[dict]:
 async def _collect_stream_items(loop: ProgenitorLoop) -> list[dict]:
     items: list[dict] = []
     while True:
-        item = await loop.get_stream_item(timeout=0.01)
+        item = await loop.stream.get_stream_item(timeout=0.01)
         if item is None:
             break
         items.append(item)
@@ -89,7 +89,7 @@ class TestProgenitorLoopStreaming:
             config=_make_config(),
         )
         loop._state = _make_loop_state()
-        loop._streaming_enabled = True
+        loop.stream.enabled = True
 
         await loop._run_graph_cycle("run-1", source="user_input")
         chunks = await _collect_stream_chunks(loop)
@@ -123,7 +123,7 @@ class TestProgenitorLoopStreaming:
             config=_make_config(),
         )
         loop._state = _make_loop_state()
-        loop._streaming_enabled = True
+        loop.stream.enabled = True
 
         await loop._run_graph_cycle("run-2", source="user_input")
         chunks = await _collect_stream_chunks(loop)
@@ -192,7 +192,7 @@ class TestProgenitorLoopStreaming:
             config=_make_config(),
         )
         loop._state = _make_loop_state()
-        loop._streaming_enabled = True
+        loop.stream.enabled = True
 
         await loop._run_graph_cycle("run-structured", source="user_input")
         items = await _collect_stream_items(loop)
@@ -333,7 +333,7 @@ class TestProgenitorLoopStreaming:
             config=_make_config(reasoning_enabled=True),
         )
         loop._state = _make_loop_state()
-        loop._streaming_enabled = True
+        loop.stream.enabled = True
 
         await loop._run_graph_cycle("run-native-reasoning", source="user_input")
         items = await _collect_stream_items(loop)
@@ -377,13 +377,13 @@ class TestProgenitorLoopStreaming:
             config=_make_config(),
         )
         loop._state = _make_loop_state()
-        loop._streaming_enabled = False
+        loop.stream.enabled = False
 
         await loop._run_graph_cycle("run-3", source="user_input")
         chunks = await _collect_stream_chunks(loop)
 
         assert chunks == []
-        assert loop._streamed_response_content == "Hello"
+        assert loop.stream.streamed_response_content == "Hello"
         assert loop._last_cycle_response == "Hello"
 
     @pytest.mark.asyncio
