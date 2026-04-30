@@ -4,6 +4,7 @@ Tests for Phase 8: Runtime loop integration with DeepAgent.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.progenitor.config import ProgenitorConfig
 from app.progenitor.runtime.deep_agent_adapter import (
     create_deep_agent_for_loop,
 )
@@ -24,7 +25,7 @@ class TestCreateDeepAgentForLoop:
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
 
-                result = create_deep_agent_for_loop()
+                result = create_deep_agent_for_loop(config=ProgenitorConfig())
                 assert result is mock_graph
 
     def test_passes_all_parameters(self):
@@ -42,6 +43,7 @@ class TestCreateDeepAgentForLoop:
                 mock_llm = MagicMock()
                 mock_sm = MagicMock()
                 create_deep_agent_for_loop(
+                    config=ProgenitorConfig(),
                     tool_registry=mock_registry,
                     llm_client=mock_llm,
                     state_manager=mock_sm,
@@ -69,5 +71,5 @@ class TestDeepAgentAstreamCompatibility:
             with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
 
-                result = create_deep_agent_for_loop()
+                result = create_deep_agent_for_loop(config=ProgenitorConfig())
                 assert hasattr(result, "astream")

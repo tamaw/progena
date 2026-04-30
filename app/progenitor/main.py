@@ -136,6 +136,11 @@ class Progenitor:
         # Allow the LLM client to emit realtime progress updates through IPC.
         self.llm_client.set_event_pusher(deferred_push_event)
 
+        def get_live_state() -> dict[str, Any] | None:
+            if self.loop_runner is None or not isinstance(self.loop_runner._state, dict):
+                return None
+            return self.loop_runner._state
+
         logger.info("Creating DeepAgent graph (core-only)")
         self.graph = create_deep_agent_for_loop(
             config=self.config,
@@ -144,6 +149,7 @@ class Progenitor:
             state_manager=self.state_manager,
             project_root=str(PROJECT_ROOT),
             log_dir=self.logs_dir,
+            get_live_state=get_live_state,
         )
 
         # Create loop runner

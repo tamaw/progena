@@ -12,6 +12,7 @@ queues, scheduling, state persistence, and IPC.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ def create_deep_agent_for_loop(
     state_manager: Any | None = None,
     project_root: str | None = None,
     log_dir: str | Path | None = None,
+    get_live_state: Callable[[], dict[str, Any] | None] | None = None,
 ) -> CompiledStateGraph:
     """Create a DeepAgent graph suitable for use as ProgenitorLoop's main graph.
 
@@ -43,6 +45,7 @@ def create_deep_agent_for_loop(
         state_manager: StateManager for persistence.
         project_root: Project root for filesystem backend.
         log_dir: Directory for audit logs.
+        get_live_state: Optional callback returning ProgenitorLoop's live mutable state.
 
     Returns:
         CompiledStateGraph that can be assigned to ProgenitorLoop.graph
@@ -59,6 +62,7 @@ def create_deep_agent_for_loop(
         state_manager=state_manager,
         project_root=project_root,
         log_dir=log_dir,
+        get_live_state=get_live_state,
     )
 
     logger.info("Created DeepAgent graph for ProgenitorLoop integration")

@@ -12,29 +12,24 @@ import pytest
 async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None:
     from app.progenitor.agent.tools_adapter import create_deepagent_tools
 
-    class _FakeLoop:  # noqa: D401
-        """Minimal loop stub for get_current_loop()."""
+    live_state = {
+        "thread_id": "thread_old",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    tools = create_deepagent_tools(
+        tool_registry=MagicMock(),
+        llm_client=MagicMock(),
+        state_manager=None,
+        get_live_state=lambda: live_state,
+    )
 
-        def __init__(self):
-            self._state = {
-                "thread_id": "thread_old",
-                "messages": [{"role": "user", "content": "hello"}],
-            }
-
-    fake_loop = _FakeLoop()
-
-    with patch("app.progenitor.agent.tools_adapter.get_current_loop", return_value=fake_loop):
-        tools = create_deepagent_tools(
-            tool_registry=MagicMock(), llm_client=MagicMock(), state_manager=None
-        )
-
-        new_conv = next(t for t in tools if t.name == "new_conversation")
-        result = await new_conv.ainvoke({"request": "reset the conversation"})
+    new_conv = next(t for t in tools if t.name == "new_conversation")
+    result = await new_conv.ainvoke({"request": "reset the conversation"})
 
     assert isinstance(result, dict)
     assert result.get("reset") is True
-    assert fake_loop._state["thread_id"] != "thread_old"
-    assert fake_loop._state["messages"] == []
+    assert live_state["thread_id"] != "thread_old"
+    assert live_state["messages"] == []
 
 
 @dataclass

@@ -9,11 +9,11 @@ consume.
 
 import inspect
 import logging
+from collections.abc import Callable
 from typing import Any, cast
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from ..runtime.loop import get_current_loop
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
 
@@ -28,11 +28,15 @@ def create_dynamic_mcp_tools(llm_client: Any = None) -> list[BaseTool]:
     return [tool for tool in raw_tools if isinstance(tool, BaseTool)]
 
 
-async def _resolve_state(state_manager: Any) -> Any:
-    """Return the live ProgenitorLoop state, falling back to the state manager."""
-    loop = get_current_loop()
-    if loop is not None and isinstance(getattr(loop, "_state", None), dict):
-        return loop._state
+async def _resolve_state(
+    state_manager: Any,
+    get_live_state: Callable[[], dict[str, Any] | None] | None,
+) -> Any:
+    """Return the explicitly provided live state, falling back to the state manager."""
+    if get_live_state is not None:
+        state = get_live_state()
+        if isinstance(state, dict):
+            return state
     if state_manager is None:
         return None
     get_state = getattr(state_manager, "get_current_state", None)
@@ -63,13 +67,14 @@ def create_deepagent_tools(
     tool_registry: Any = None,
     llm_client: Any = None,
     state_manager: Any = None,
+    get_live_state: Callable[[], dict[str, Any] | None] | None = None,
 ) -> list[StructuredTool]:
     """Wrap every registered system tool as a DeepAgent-compatible StructuredTool."""
 
     def _wrap(system_tool: Any) -> StructuredTool:
         async def _run(**kwargs: Any) -> dict[str, Any]:
             await _maybe_reload(tool_registry)
-            state = await _resolve_state(state_manager)
+            state = await _resolve_state(state_manager, get_live_state)
 
             ctx = ToolContext(
                 tool_registry=tool_registry,

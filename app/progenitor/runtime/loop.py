@@ -22,7 +22,7 @@ import json
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from langchain_core.messages import AIMessageChunk
 
@@ -58,15 +58,6 @@ class QueuedInput(NamedTuple):
 
     content: Any
     enqueue_time: float
-
-
-# Module-level reference to the current loop instance for streaming access
-_current_loop: Optional["ProgenitorLoop"] = None
-
-
-def get_current_loop() -> Optional["ProgenitorLoop"]:
-    """Get the current loop instance for streaming access."""
-    return _current_loop
 
 
 class ProgenitorLoop:
@@ -132,8 +123,6 @@ class ProgenitorLoop:
 
         Core-only profile: only processes explicit user input messages.
         """
-        global _current_loop
-        _current_loop = self
         self.running = True
 
         boot_thread_id = str(uuid.uuid4())
