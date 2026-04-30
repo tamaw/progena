@@ -278,8 +278,6 @@ class Progenitor:
         health_data = {
             "status": status,
             "last_active": utcnow_isoformat(),
-            "thread_id": None,
-            "cycle_count": 0,
             "pid": os.getpid(),
         }
 

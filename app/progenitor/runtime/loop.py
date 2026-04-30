@@ -157,7 +157,7 @@ class ProgenitorLoop:
         )
 
         # Update health immediately on startup
-        await self._update_health_file(self._state)
+        await self._update_health_file()
 
         # Push startup event
         await self._push_event(
@@ -223,7 +223,7 @@ class ProgenitorLoop:
 
         # Final checkpoint
         await self._checkpoint_state(self._state)
-        await self._update_health_file(self._state, status="stopped")
+        await self._update_health_file(status="stopped")
         await self._push_event("loop_stopped", "Perpetual loop stopped")
         logger.info("Loop terminated")
 
@@ -244,7 +244,7 @@ class ProgenitorLoop:
                     now = time.monotonic()
                     self._idle_cycles += 1
                     if now - last_health >= float(self.config.runtime.checkpoint_interval_seconds):
-                        await self._update_health_file(self._state)
+                        await self._update_health_file()
                         last_health = now
                     continue
 
@@ -318,9 +318,7 @@ class ProgenitorLoop:
                         self._last_cycle_response = f"Error: {safe_error}"
                         self._state["last_cycle_response"] = self._last_cycle_response
                         await self._checkpoint_state(self._state)
-                        await self._update_health_file(
-                            self._state, status="error", error=safe_error
-                        )
+                        await self._update_health_file(status="error")
                     finally:
                         if is_scheduled_input:
                             response_text = str(
@@ -416,7 +414,7 @@ class ProgenitorLoop:
         finally:
             self._restore_conversation_state(snapshot)
             await self._checkpoint_state(self._state)
-            await self._update_health_file(self._state)
+            await self._update_health_file()
 
     async def _run_graph_cycle(
         self,
@@ -589,7 +587,7 @@ class ProgenitorLoop:
 
             if checkpoint_state:
                 await self._checkpoint_state(self._state)
-                await self._update_health_file(self._state)
+                await self._update_health_file()
 
         except Exception as e:
             logger.error("Graph cycle %d failed: %s", cycle_num, e, exc_info=True)
@@ -823,17 +821,10 @@ class ProgenitorLoop:
 
     async def _update_health_file(
         self,
-        state: dict[str, Any],
         status: str = "running",
-        error: str | None = None,
     ) -> None:
         """Update health file for Docker health checks."""
         await update_health_file(
             state_dir=self.state_manager.state_dir,
-            state=state,
-            queue_stats=self.get_queue_stats(),
-            idle_cycles=self._idle_cycles,
-            current_backoff_seconds=self._current_backoff_seconds,
             status=status,
-            error=error,
         )
