@@ -12,6 +12,7 @@ from app.progenitor.runtime.a2a_tasks import (
     refresh_tracked_a2a_task,
     send_completion_notification,
 )
+from app.progenitor.runtime.time_utils import utcnow
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import A2ATaskRecord
 from app.progenitor.tools.get_a2a_task import GetA2ATaskTool
@@ -251,6 +252,18 @@ async def test_task_tracker_records_completion_callback_before_notifying(
             status="working",
         )
     )
+    await state_manager.upsert_a2a_task(
+        A2ATaskRecord(
+            task_id="historical-completed",
+            agent_name="observe_agent",
+            agent_url="http://localhost:8108",
+            context_id="ctx-old",
+            source="call_agent",
+            request_text="Already done",
+            status="completed",
+            notification_sent_at=utcnow(),
+        )
+    )
     refreshed = A2ATaskRecord(
         task_id="observe-4",
         agent_name="observe_agent",
@@ -279,5 +292,6 @@ async def test_task_tracker_records_completion_callback_before_notifying(
     )
     await tracker.poll_once()
 
+    refresh_mock.assert_awaited_once_with(state_manager, "observe-4")
     completion_callback.assert_awaited_once_with(refreshed)
     notify_mock.assert_awaited_once_with(state_manager, llm_client, refreshed)

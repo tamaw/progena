@@ -311,6 +311,16 @@ class StateManager:
             self._state_cache["a2a_tasks"] = task_rows
             return [A2ATaskRecord(**item) for item in copy.deepcopy(task_rows)]
 
+    async def get_active_a2a_tasks(self) -> list[A2ATaskRecord]:
+        """Return A2A tasks that still need polling or completion notification."""
+        tasks = await self.get_a2a_tasks()
+        return [
+            task
+            for task in tasks
+            if not task.is_terminal
+            or (task.notify_on_completion and task.notification_sent_at is None)
+        ]
+
     async def save_a2a_tasks(self, tasks: list[A2ATaskRecord]) -> None:
         """Persist the full tracked A2A task list."""
         task_rows = [task.model_dump(mode="json", exclude_none=True) for task in tasks]

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.progenitor.runtime.time_utils import utcnow
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import A2ATaskRecord, ConversationMessage, ScheduleEntry
 
@@ -87,6 +88,43 @@ class TestStateManager:
         assert refreshed is not None
         assert refreshed.status == "completed"
         assert refreshed.summary == "Observe task completed."
+
+    @pytest.mark.asyncio
+    async def test_get_active_a2a_tasks_filters_historical_terminal_tasks(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        working = A2ATaskRecord(task_id="working", agent_name="observe_agent", status="working")
+        terminal_needs_notification = A2ATaskRecord(
+            task_id="needs-notification",
+            agent_name="observe_agent",
+            status="completed",
+        )
+        terminal_notified = A2ATaskRecord(
+            task_id="notified",
+            agent_name="observe_agent",
+            status="completed",
+            notification_sent_at=utcnow(),
+        )
+        terminal_notify_disabled = A2ATaskRecord(
+            task_id="notify-disabled",
+            agent_name="observe_agent",
+            status="completed",
+            notify_on_completion=False,
+        )
+
+        for task in (
+            working,
+            terminal_needs_notification,
+            terminal_notified,
+            terminal_notify_disabled,
+        ):
+            await manager.upsert_a2a_task(task)
+
+        active = await manager.get_active_a2a_tasks()
+
+        assert [task.task_id for task in active] == ["working", "needs-notification"]
 
     async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
         state_dir = tmp_path / "data" / "state"

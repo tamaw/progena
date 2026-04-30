@@ -440,7 +440,7 @@ class A2ATaskTracker:
 
     async def poll_once(self) -> None:
         """Refresh active tasks and notify on newly terminal ones."""
-        tasks = await self.state_manager.get_a2a_tasks()
+        tasks = await self.state_manager.get_active_a2a_tasks()
         for record in tasks:
             try:
                 current = record
