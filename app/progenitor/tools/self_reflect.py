@@ -9,19 +9,13 @@ All operations are READ-ONLY to ensure safety.
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-if TYPE_CHECKING:
-    from ..llm.client import LLMClient
-
-from ..llm.prompts import PromptTemplates
 from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec
 
 logger = logging.getLogger(__name__)
-
-_prompts = PromptTemplates()
 
 # Root of the progenitor source code
 PROGENITOR_ROOT = Path(__file__).parent.parent  # app/progenitor/
@@ -98,16 +92,6 @@ class SearchResults(BaseModel):
     files_searched: int
 
 
-class IntrospectionSummary(BaseModel):
-    """Summary of what a module/file does based on LLM analysis."""
-
-    file_or_module: str
-    purpose: str
-    key_components: list[str]
-    capabilities: list[str]
-    related_files: list[str]
-
-
 class SelfReflectArgs(BaseModel):
     """Structured arguments for read-only self-reflection operations."""
 
@@ -158,17 +142,10 @@ class SelfReflection:
     - List directories and files
     - Read file contents
     - Search for patterns in code
-    - Get LLM-powered summaries of what code does
     """
 
-    def __init__(self, llm_client: Optional["LLMClient"] = None):
-        """
-        Initialize self-reflection tool.
-
-        Args:
-            llm_client: Optional LLM client for code analysis
-        """
-        self.llm_client = llm_client
+    def __init__(self):
+        """Initialize self-reflection tool."""
         self.root = PROGENITOR_ROOT
 
     def _is_safe_path(self, path: Path) -> bool:
@@ -509,51 +486,6 @@ class SelfReflection:
 
         return [entry for _, entry in scored_files[:max_files]]
 
-    async def analyze_file(self, relative_path: str) -> IntrospectionSummary:
-        """
-        Use LLM to analyze what a file does.
-
-        Args:
-            relative_path: Path to file relative to progenitor root
-
-        Returns:
-            IntrospectionSummary with analysis
-        """
-        if not self.llm_client:
-            raise ValueError("LLM client required for file analysis")
-
-        file_content = self.read_file(relative_path, max_lines=300)
-
-        prompt = _prompts.get(
-            "progenitor/self_reflect_file_analysis.md",
-            relative_path=relative_path,
-            language=file_content.language,
-            content=file_content.content,
-        )
-
-        response = await self.llm_client.chat(
-            prompt=prompt,
-            temperature=0.3,
-        )
-
-        # Parse the response into structured format
-        # Response could be a string or an object with content attribute
-        if isinstance(response, str):
-            content = response
-        elif hasattr(response, "content"):
-            content = str(response.content)
-        else:
-            content = str(response)
-
-        # Simple extraction (could use structured output in future)
-        return IntrospectionSummary(
-            file_or_module=relative_path,
-            purpose=content[:500] if len(content) > 500 else content,
-            key_components=[],  # Would need structured output
-            capabilities=[],
-            related_files=[],
-        )
-
     def get_module_overview(self, module_name: str) -> dict[str, Any]:
         """
         Get an overview of a module (directory) in the progenitor source.
@@ -769,7 +701,7 @@ class SelfReflectModuleTool(BaseSystemTool):
         return []
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        reflection = SelfReflection(llm_client=context.llm_client)
+        reflection = SelfReflection()
         modules = reflection.list_modules()
         return ToolResult.ok(
             {

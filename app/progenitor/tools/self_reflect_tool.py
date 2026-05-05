@@ -79,7 +79,7 @@ class SelfReflectTool(BaseSystemTool):
             )
             return ToolResult.ok(result)
 
-        reflection = SelfReflection(llm_client=context.llm_client)
+        reflection = SelfReflection()
 
         # For inline execution, return module listing
         modules = reflection.list_modules()

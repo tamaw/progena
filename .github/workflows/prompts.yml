@@ -1,0 +1,53 @@
+name: prompts
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_dir:
+        description: "Persistent prompts directory on the runner host"
+        required: false
+        default: "/var/lib/progenitor/data/prompts"
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync-prompts:
+    runs-on: [self-hosted, Linux]
+    env:
+      PROMPT_SOURCE_DIR: ${{ github.workspace }}/data/prompts
+      PROMPT_TARGET_DIR: ${{ inputs.target_dir }}
+    steps:
+      - name: Normalize workspace ownership
+        run: |
+          WORKSPACE_OWNER="$(stat -c '%u:%g' "$(dirname "$GITHUB_WORKSPACE")")"
+          mkdir -p "$GITHUB_WORKSPACE"
+          chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate prompt source
+        run: |
+          test -d "$PROMPT_SOURCE_DIR" || {
+            echo "Prompt source directory not found: $PROMPT_SOURCE_DIR"
+            exit 1
+          }
+
+      - name: Copy prompts into persistent volume
+        shell: bash
+        run: |
+          mkdir -p "$PROMPT_TARGET_DIR"
+          cp -a -n "$PROMPT_SOURCE_DIR/." "$PROMPT_TARGET_DIR/"
+          echo "Copied prompts from $PROMPT_SOURCE_DIR to $PROMPT_TARGET_DIR without overwriting existing files."
+
+      - name: Show synced prompt count
+        shell: bash
+        run: |
+          find "$PROMPT_TARGET_DIR" -type f -name '*.md' | sort | wc -l | xargs echo "Prompt files in target:"

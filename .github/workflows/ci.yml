@@ -208,7 +208,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PROGENITOR_HOST_DATA_DIR: /var/lib/progenitor/data
-          PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
           PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
         run: |
@@ -218,8 +217,8 @@ jobs:
           docker image inspect ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
-          test -d "$PROGENITOR_HOST_PROMPTS_DIR"
           test -d "$PROGENITOR_HOST_SKILLS_DIR"
+          mkdir -p "$PROGENITOR_HOST_DATA_DIR/prompts"
           docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 

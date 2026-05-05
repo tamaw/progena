@@ -83,7 +83,9 @@ Ephemeral storage:
 - `/app/tmp` is a `tmpfs` mount in `progenitor` and `backend`
 
 Notes:
-- Prompt assets now live inside `${PROGENITOR_HOST_DATA_DIR}/prompts` and resolve to `/app/data/prompts` in containers.
+- Prompt assets live inside `${PROGENITOR_HOST_DATA_DIR}/prompts` and resolve to `/app/data/prompts` in containers.
+- Deployment does not copy repo prompt files into `${PROGENITOR_HOST_DATA_DIR}/prompts`; that directory is treated as persistent runtime state.
+- Use the manual `prompts` workflow when you want to copy checked-in repo prompts into the persistent prompt volume without overwriting existing files.
 - Skill assets now live inside `${PROGENITOR_HOST_DATA_DIR}/skills` and resolve to `/app/data/skills` in containers.
 - The compose file does **not** currently mount `/app/worktrees` from the host.
 - `PROGENITOR_WORKTREE_DIR` is still set in the `progenitor` container, so the directory exists there, but it is container-local unless you add your own volume.
