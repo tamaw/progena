@@ -4,10 +4,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 _MODULE_NAMES = [
-    "app.progenitor.agent.deep_agent",
-    "app.progenitor.runtime.loop",
-    "app.progenitor.runtime.deep_agent_adapter",
-    "app.progenitor.stream_events",
+    "app.progenitor.agent.agent",
+    "app.progenitor.runtime.heartbeat",
+    "app.progenitor.agent.adapters",
+    "app.progenitor.ipc.stream_events",
 ]
 
 
@@ -29,13 +29,13 @@ def _isolated_imports() -> Iterator[None]:
 
 def test_stream_events_import_does_not_pull_in_agent_package():
     with _isolated_imports():
-        importlib.import_module("app.progenitor.stream_events")
+        importlib.import_module("app.progenitor.ipc.stream_events")
 
-        assert "app.progenitor.agent.deep_agent" not in sys.modules
+        assert "app.progenitor.agent.agent" not in sys.modules
 
 
-def test_runtime_loop_import_does_not_pull_in_agent_deep_agent():
+def test_runtime_loop_import_does_not_pull_in_agent_setup():
     with _isolated_imports():
-        importlib.import_module("app.progenitor.runtime.loop")
+        importlib.import_module("app.progenitor.runtime.heartbeat")
 
-        assert "app.progenitor.agent.deep_agent" not in sys.modules
+        assert "app.progenitor.agent.agent" not in sys.modules

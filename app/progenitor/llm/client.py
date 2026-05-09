@@ -3,19 +3,17 @@
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
-from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from ..config import LLMConfig, MCPConfig
-from ..mcp_tool_utils import normalize_mcp_tool_definition, parse_mcp_jsonrpc_response
 from ..tools.user_communication import EventPusher
-from .prompts import PromptTemplates
+
+if TYPE_CHECKING:
+    from ..mcp import MCPRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -89,18 +87,15 @@ class LLMClient:
         self,
         config: LLMConfig | None = None,
         mcp_config: MCPConfig | None = None,
-        prompts_dir: Path | str | None = None,
     ):
         """Initialize the LLM client.
 
         Args:
             config: LLM configuration. If None, loads from environment.
             mcp_config: MCP configuration. If None, loads from data/config/mcp.json.
-            prompts_dir: Prompt root to use for template loading.
         """
         self.config = config or LLMConfig.from_env()
         self.mcp_config = mcp_config or MCPConfig.load()
-        self.prompts = PromptTemplates(prompts_dir=prompts_dir)
         self.model = self.config.model_default
 
         self.endpoint_url = _build_responses_endpoint(self.config.base_url)
@@ -116,12 +111,8 @@ class LLMClient:
             headers=headers,
         )
 
-        # MCP context is initialized externally (startup)
-        self.mcp_servers: dict[str, dict[str, Any]] = {}
-        self.mcp_client: httpx.AsyncClient | None = None
-        self.mcp_tools: list[dict[str, Any]] = []
-        self.mcp_langchain_tools: list[BaseTool] = []
-        self.mcp_tool_lookup: dict[str, dict[str, Any]] = {}
+        # MCP runtime is initialized externally (startup)
+        self._mcp_runtime: MCPRuntime | None = None
 
         # Optional event pusher for realtime progress updates via IPC
         self._event_pusher: EventPusher | None = None
@@ -151,27 +142,20 @@ class LLMClient:
         await self.client.aclose()
         await self.close_mcp_context()
 
+    @property
+    def mcp_runtime(self) -> "MCPRuntime | None":
+        """Return the attached MCP runtime, if any."""
+        return self._mcp_runtime
+
+    def set_mcp_runtime(self, mcp_runtime: "MCPRuntime | None") -> None:
+        """Attach the runtime-owned MCP state holder."""
+        self._mcp_runtime = mcp_runtime
+
     async def close_mcp_context(self) -> None:
         """Close all initialized MCP clients and clear the active MCP context."""
-        seen_client_ids: set[int] = set()
-        for server in self.mcp_servers.values():
-            client = server.get("client") if isinstance(server, dict) else None
-            if not isinstance(client, httpx.AsyncClient):
-                continue
-            client_id = id(client)
-            if client_id in seen_client_ids:
-                continue
-            seen_client_ids.add(client_id)
-            await client.aclose()
-
-        if self.mcp_client is not None and id(self.mcp_client) not in seen_client_ids:
-            await self.mcp_client.aclose()
-
-        self.mcp_servers = {}
-        self.mcp_client = None
-        self.mcp_tools = []
-        self.mcp_langchain_tools = []
-        self.mcp_tool_lookup = {}
+        if self._mcp_runtime is None:
+            return
+        await self._mcp_runtime.close()
 
     async def __aenter__(self):
         return self
@@ -245,63 +229,6 @@ class LLMClient:
 
         return input_messages
 
-    def set_mcp_context(
-        self,
-        mcp_servers: dict[str, dict[str, Any]] | None,
-        mcp_tools: list[dict[str, Any]] | None = None,
-        mcp_langchain_tools: list[BaseTool] | None = None,
-    ) -> None:
-        """Set MCP server runtime metadata and tool list for tool calling."""
-        self.mcp_servers = mcp_servers or {}
-        first_server = next(iter(self.mcp_servers.values()), None)
-        first_client = (
-            first_server.get("client")
-            if isinstance(first_server, dict)
-            and isinstance(first_server.get("client"), httpx.AsyncClient)
-            else None
-        )
-        self.mcp_client = cast(httpx.AsyncClient | None, first_client)
-        self.mcp_tools = mcp_tools or []
-        self.mcp_langchain_tools = mcp_langchain_tools or []
-        self.mcp_tool_lookup = {}
-        for tool in self.mcp_tools:
-            name = str(tool.get("name") or "").strip()
-            if not name:
-                continue
-            self.mcp_tool_lookup[name] = tool
-
-    def get_mcp_tool_registry_entries(self) -> list[dict[str, Any]]:
-        """Return MCP tools formatted for tool registry storage."""
-        entries: list[dict[str, Any]] = []
-        for tool in self.mcp_tools:
-            name = tool.get("name")
-            if not name:
-                continue
-            entry = {
-                "name": name,
-                "description": tool.get("description", "MCP tool"),
-                "type": "mcp_tool",
-                "source": tool.get("mcp_server_name") or "mcp",
-                "endpoint": tool.get("mcp_server_url"),
-                "transport": "http",
-                "capabilities": tool.get("capabilities") or [name],
-                "server_name": tool.get("mcp_server_name"),
-                "original_name": tool.get("mcp_original_name") or name,
-            }
-            entries.append(entry)
-        return entries
-
-    def _normalize_tool_definition(self, tool: dict[str, Any]) -> dict[str, Any] | None:
-        """Normalize a tool definition into OpenAI-compatible format.
-
-        Handles both OpenAI format and MCP format tools.
-        """
-        # Already in OpenAI format
-        if tool.get("type") == "function" and "function" in tool:
-            return tool
-
-        return normalize_mcp_tool_definition(tool)
-
     def _merge_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         """Merge caller-supplied tools with MCP tools, de-duplicated by name."""
         if tools is not None and len(tools) == 0:
@@ -320,10 +247,8 @@ class LLMClient:
                 seen_names.add(name)
             merged.append(tool)
 
-        for tool in self.mcp_tools:
-            normalized = self._normalize_tool_definition(tool)
-            if not normalized:
-                continue
+        mcp_runtime = self._mcp_runtime
+        for normalized in mcp_runtime.iter_openai_tools() if mcp_runtime is not None else []:
             name = normalized.get("function", {}).get("name")
             if not name or name in seen_names:
                 continue
@@ -384,92 +309,9 @@ class LLMClient:
 
     async def _call_mcp_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool call against the correct MCP server for that tool."""
-        # Extract tool name
-        name = (
-            tool_call.get("name")
-            or tool_call.get("tool_name")
-            or tool_call.get("function", {}).get("name")
-        )
-        if not name:
-            return {"error": "Tool call missing name"}
-
-        if not self.mcp_config.enabled_servers:
-            return {"error": "MCP integration disabled"}
-
-        # Extract arguments
-        arguments = (
-            tool_call.get("arguments")
-            or tool_call.get("input")
-            or tool_call.get("params")
-            or tool_call.get("function", {}).get("arguments")
-            or {}
-        )
-
-        # Parse JSON string arguments
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = {"raw": arguments}
-
-        resolved_tool = self.mcp_tool_lookup.get(str(name))
-        if resolved_tool is None:
-            matches = [
-                tool
-                for tool in self.mcp_tools
-                if str(tool.get("mcp_original_name") or tool.get("name") or "") == str(name)
-            ]
-            if len(matches) == 1:
-                resolved_tool = matches[0]
-            elif len(matches) > 1:
-                return {"error": f"MCP tool name '{name}' is ambiguous across configured servers"}
-
-        if resolved_tool is None:
-            return {"error": f"MCP tool '{name}' is not registered"}
-
-        server_name = str(resolved_tool.get("mcp_server_name") or "").strip()
-        server_runtime = self.mcp_servers.get(server_name) if server_name else None
-        if not isinstance(server_runtime, dict):
-            return {"error": f"MCP server runtime unavailable for tool '{name}'"}
-
-        mcp_client = server_runtime.get("client")
-        endpoint = server_runtime.get("url")
-        post = getattr(mcp_client, "post", None)
-        if not callable(post) or not isinstance(endpoint, str):
-            return {"error": f"MCP server '{server_name}' is not initialized"}
-        post_typed = cast(Callable[..., Awaitable[httpx.Response]], post)
-
-        target_name = str(resolved_tool.get("mcp_original_name") or name)
-
-        logger.info("Calling MCP tool: %s", name)
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": tool_call.get("call_id")
-            or tool_call.get("id")
-            or tool_call.get("tool_call_id")
-            or 1,
-            "method": "tools/call",
-            "params": {
-                "name": target_name,
-                "arguments": arguments,
-            },
-        }
-
-        try:
-            response = await post_typed(endpoint, json=request)
-            response.raise_for_status()
-            payload = parse_mcp_jsonrpc_response(response.text)
-            if not isinstance(payload, dict):
-                raise ValueError("Invalid MCP JSON-RPC response")
-
-            if error := payload.get("error"):
-                return {"error": error}
-            return cast(dict[str, Any], payload.get("result", payload))
-
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
-            logger.warning("MCP tool call failed: %s", exc)
-            return {"error": f"MCP call failed: {exc}"}
+        if self._mcp_runtime is None:
+            return {"error": "MCP runtime unavailable"}
+        return await self._mcp_runtime.call_tool(tool_call)
 
     async def _execute_tool_call(
         self,

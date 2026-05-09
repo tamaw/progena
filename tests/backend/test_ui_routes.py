@@ -14,9 +14,9 @@ from fastapi.testclient import TestClient
 
 from app.backend.alerts import clear_alerts, create_alert
 from app.backend.main import app
+from app.backend.models import AgentResponse
 from app.backend.state_reader import StateReader, get_state_reader
 from app.backend.threads import clear_threads
-from app.progenitor.responses import AgentResponse
 
 
 @pytest.fixture

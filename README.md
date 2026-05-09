@@ -1,6 +1,6 @@
 # Progenitor Agent
 
-A perpetual, conversational personal assistant and bootstrap builder for the TARDIS system.
+A perpetual, conversational personal assistant and agent orchestrator for the TARDIS system.
 
 ## Overview
 
@@ -92,13 +92,13 @@ ScheduleDispatch → Intake → Chat → Respond
 app/
   progenitor/           # Core perpetual agent (chat + delegation)
     main.py             # Service entrypoint
-    routing.py          # Graph routing
+    graph/              # Conversation and heartbeat graph builders
     agent/              # DeepAgent integration layer
     llm/                # LLM client + prompts
     tools/              # Schedule, MCP, registry, shell, discovery tools
-    runtime/            # Loop, scheduler, HTTP agent manager, DeepAgent adapter
+    runtime/            # Loop, scheduler, persistent HTTP server, DeepAgent adapter
     state/              # State models + persistence
-    nodes/              # LangGraph nodes: intake, decide, chat, respond, idle, etc.
+    nodes/              # LangGraph nodes: intake, chat, respond, schedule, A2A, health
   agents/
     builder_agent/      # Build loop A2A agent (port 8107) — see agents/builder_agent/README.md
     observe_agent/      # Monitoring A2A agent

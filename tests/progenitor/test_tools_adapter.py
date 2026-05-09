@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.tools import StructuredTool
 
-from app.progenitor.agent.tools_adapter import create_deepagent_tools, create_dynamic_mcp_tools
+from app.progenitor.agent.adapters import create_deepagent_tools, create_dynamic_mcp_tools
+from app.progenitor.config import MCPConfig
+from app.progenitor.mcp import MCPRuntime
 from app.progenitor.state.models import A2ATaskRecord
 from app.progenitor.tools.call_agent import CallAgentArgs
 from app.progenitor.tools.protocol import RequestToolArgs
@@ -102,10 +104,10 @@ def test_schedule_and_reflection_tools_expose_structured_parameters() -> None:
     delete_schema = _tool_by_name(tools, "delete_schedule").args_schema.model_json_schema()
     reflect_schema = _tool_by_name(tools, "self_reflect").args_schema.model_json_schema()
 
-    assert {"user_request", "time_expression", "instruction"} <= set(
+    assert {"user_request", "instruction", "cron_expression", "scheduled_at"} <= set(
         schedule_schema.get("properties", {})
     )
-    assert schedule_schema.get("required") == ["user_request", "time_expression", "instruction"]
+    assert schedule_schema.get("required") == ["user_request", "instruction"]
 
     assert "schedule_id" in delete_schema.get("properties", {})
     assert delete_schema.get("required") == ["schedule_id"]
@@ -299,9 +301,9 @@ async def test_schedule_task_accepts_structured_arguments_without_llm_extraction
     result = await t.ainvoke(
         {
             "user_request": "Remind me to stretch",
-            "time_expression": "in 5 minutes",
             "instruction": "Tell the user to stretch.",
             "description": "Stretch reminder",
+            "scheduled_at": "2026-03-20T09:42:27Z",
         }
     )
 
@@ -313,7 +315,8 @@ async def test_schedule_task_accepts_structured_arguments_without_llm_extraction
 @pytest.mark.asyncio
 async def test_dynamic_mcp_tools_return_live_adapter_snapshot() -> None:
     llm_client = MagicMock()
-    llm_client.mcp_langchain_tools = [_mcp_tool("search_web")]
+    llm_client.mcp_runtime = MCPRuntime(MCPConfig(servers=[]))
+    llm_client.mcp_runtime.set_context({}, [], [_mcp_tool("search_web")])
 
     tools = create_dynamic_mcp_tools(llm_client)
     tool = _tool_by_name(tools, "search_web")
@@ -326,7 +329,8 @@ async def test_dynamic_mcp_tools_return_live_adapter_snapshot() -> None:
 
 def test_dynamic_mcp_tools_skip_non_tool_entries() -> None:
     llm_client = MagicMock()
-    llm_client.mcp_langchain_tools = [{"name": "not-a-tool"}, _mcp_tool("read_url")]
+    llm_client.mcp_runtime = MCPRuntime(MCPConfig(servers=[]))
+    llm_client.mcp_runtime.set_context({}, [], [{"name": "not-a-tool"}, _mcp_tool("read_url")])
 
     tools = create_dynamic_mcp_tools(llm_client)
 

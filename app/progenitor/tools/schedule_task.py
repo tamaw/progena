@@ -1,27 +1,13 @@
-"""
-Schedule Task - Schedule a task to run at a specific time.
-
-Handles the full flow: LLM parses the user request, extracts time/instruction,
-and creates a ScheduleEntry via the scheduler.
-"""
+"""Schedule Task - create schedule entries from explicit tool-call fields."""
 
 import logging
 
 from pydantic import BaseModel
 
-from ..llm.prompts import PromptTemplates
-from ..runtime.scheduler import Scheduler
+from ..schedule import Scheduler
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
-
-_prompts = PromptTemplates()
-
-
-class _ScheduleExtractionResponse(BaseModel):
-    time_expression: str | None = None
-    instruction: str | None = None
-    description: str | None = None
 
 
 class ScheduleTaskTool(BaseSystemTool):
@@ -51,64 +37,32 @@ class ScheduleTaskTool(BaseSystemTool):
             "alert me",
         ]
 
-    @property
-    def trigger_patterns(self) -> list[str]:
-        return [
-            # Time indicator + time pattern (e.g. "at 9am", "every day at 10:30pm")
-            r"(?:at|every|in)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)",
-            # "in X minutes/hours"
-            r"\bin\s+\d+\s+(?:minute|hour|day)s?\b",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
-        from .schedule import add_scheduled_task
+        from ..schedule import add_scheduled_task
 
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         user_input = str(args.get("user_request") or context.user_input or "").strip()
-        time_expr = str(args.get("time_expression") or "").strip()
         instruction = str(args.get("instruction") or "").strip()
+        cron_expression = str(args.get("cron_expression") or "").strip()
+        scheduled_at = str(args.get("scheduled_at") or "").strip()
         description = str(args.get("description") or "").strip()
         if not user_input:
             return ToolResult.fail("No user input provided for scheduling.")
-
-        # Use LLM to extract and process schedule parameters
-        system_prompt = _prompts.get("progenitor/schedule_task_extraction_system.md")
+        if not instruction:
+            return ToolResult.fail("Missing 'instruction'")
+        if bool(cron_expression) == bool(scheduled_at):
+            return ToolResult.fail("Provide exactly one of 'cron_expression' or 'scheduled_at'")
 
         try:
-            if not (time_expr and instruction):
-                structured = await context.llm_client.chat_structured(
-                    prompt=f"Schedule request: {user_input}",
-                    response_model=_ScheduleExtractionResponse,
-                    schema_name="schedule_task_extraction",
-                    system_prompt=system_prompt,
-                    temperature=0.3,
-                )
-
-                time_expr = (structured.time_expression or "").strip()
-                instruction = (structured.instruction or "").strip()
-                if not description:
-                    description = (structured.description or "").strip()
-
-                if not time_expr:
-                    return ToolResult.fail(
-                        "Could not extract time from your request. "
-                        "Please specify when (e.g., 'in 5 minutes', 'at 9am')."
-                    )
-                if not instruction:
-                    return ToolResult.fail(
-                        "Could not extract instruction from your request. "
-                        "Please restate what should happen at that time."
-                    )
-
             if not description:
                 description = instruction[:60].strip() or f"Scheduled: {user_input[:50]}"
 
-            # Add the scheduled task
             result, entry_data = await add_scheduled_task(
                 user_request=user_input,
-                time_expression=time_expr,
                 instruction=instruction,
                 description=description,
+                cron_expression=cron_expression,
+                scheduled_at=scheduled_at,
             )
 
             if not result.success:

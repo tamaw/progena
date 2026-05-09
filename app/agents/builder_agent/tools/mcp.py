@@ -14,11 +14,9 @@ from typing import Any, cast
 
 import httpx
 
+from app.progenitor.mcp import get_mcp_tool_description, parse_mcp_jsonrpc_response
+
 from ..config import MCPConfig
-from ..mcp_tool_utils import (
-    get_mcp_tool_description,
-    parse_mcp_jsonrpc_response,
-)
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

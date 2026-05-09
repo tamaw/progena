@@ -337,7 +337,7 @@ def agent_event(
     Returns:
         IPCMessage with type AGENT_EVENT.
     """
-    from ..runtime.time_utils import utcnow_isoformat
+    from ..utils import utcnow_isoformat
 
     return IPCMessage(
         type=MessageType.AGENT_EVENT,

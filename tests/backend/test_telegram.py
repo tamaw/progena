@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.backend.config import ChatServerConfig
+from app.backend.models import AgentResponse
 from app.backend.telegram_client import (
     TelegramClient,
     TelegramConfig,
@@ -21,7 +22,6 @@ from app.backend.telegram_client import (
     init_telegram_client,
     stop_telegram_client,
 )
-from app.progenitor.responses import AgentResponse
 
 
 async def _async_iter(*chunks: str):

@@ -15,15 +15,14 @@ from app.progenitor.config import (
     RuntimeConfig,
     SchedulerConfig,
     StorageConfig,
-    _resolve_required_env_template,
     get_config,
-    load_mcp_servers,
     reload_config,
     resolve_mcp_config_path,
     resolve_schedule_config_path,
-    setup_logging,
 )
-from app.progenitor.llm.prompts import DEFAULT_PROMPTS_DIR
+from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
+from app.progenitor.prompts import DEFAULT_PROMPTS_DIR
+from app.progenitor.runtime.logging import setup_logging
 from app.progenitor.utils import env_bool, env_float, env_int, env_list
 
 
@@ -149,6 +148,8 @@ class TestRuntimeConfig:
         assert config.idle_backoff_seconds == 30
         assert config.max_actions_per_cycle == 10
         assert config.log_level == "info"
+        assert config.http_host == "127.0.0.1"
+        assert config.http_port == 9501
 
     def test_from_env_overrides_defaults(self):
         """Test environment variables override defaults."""
@@ -157,6 +158,9 @@ class TestRuntimeConfig:
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "60",
             "PROGENITOR_MAX_ACTIONS_PER_CYCLE": "20",
             "PROGENITOR_LOG_LEVEL": "debug",
+            "PROGENITOR_HTTP_HOST": "0.0.0.0",
+            "PROGENITOR_HTTP_PORT": "9901",
+            "PROGENITOR_HTTP_PUBLIC_BASE_URL": "http://example.test/progenitor",
         }
         with patch.dict(os.environ, env, clear=False):
             config = RuntimeConfig.from_env()
@@ -164,14 +168,12 @@ class TestRuntimeConfig:
             assert config.idle_backoff_seconds == 60
             assert config.max_actions_per_cycle == 20
             assert config.log_level == "debug"
+            assert config.http_host == "0.0.0.0"
+            assert config.http_port == 9901
+            assert config.http_public_base_url == "http://example.test/progenitor"
 
-    def test_from_env_with_file_fallback(self):
-        """Test file config is used as fallback."""
-        file_config = {
-            "timezone": "Europe/London",
-            "idle_backoff_seconds": 45,
-        }
-        # Clear env vars
+    def test_from_env_uses_code_defaults_without_file_fallback(self):
+        """Runtime defaults come from code/env, not saved config payloads."""
         env_clear = {
             "PROGENITOR_TIMEZONE": "",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "",
@@ -179,9 +181,9 @@ class TestRuntimeConfig:
         with patch.dict(os.environ, env_clear, clear=False):
             os.environ.pop("PROGENITOR_TIMEZONE", None)
             os.environ.pop("PROGENITOR_IDLE_BACKOFF_SECONDS", None)
-            config = RuntimeConfig.from_env(file_config)
-            assert config.timezone == "Europe/London"
-            assert config.idle_backoff_seconds == 45
+            config = RuntimeConfig.from_env()
+            assert config.timezone == "Australia/Melbourne"
+            assert config.idle_backoff_seconds == 30
 
 
 class TestStorageConfig:
@@ -321,13 +323,22 @@ class TestMCPConfig:
 
     def test_resolve_required_env_template_supports_dollar_var(self):
         with patch.dict(os.environ, {"JINA_API_KEY": "jina_test_key"}, clear=False):
-            assert _resolve_required_env_template("Bearer $JINA_API_KEY") == (
+            assert resolve_required_env_template("Bearer $JINA_API_KEY") == (
                 "Bearer jina_test_key",
                 [],
             )
 
     def test_resolve_required_env_template_preserves_invalid_placeholder(self):
-        assert _resolve_required_env_template("Bearer ${1INVALID}") == ("Bearer ${1INVALID}", [])
+        assert resolve_required_env_template("Bearer ${1INVALID}") == (
+            "Bearer ${1INVALID}",
+            [],
+        )
+
+    def test_empty_mcp_config_has_no_servers(self, tmp_path):
+        config_path = tmp_path / "mcp.json"
+        config_path.write_text("", encoding="utf-8")
+
+        assert load_mcp_servers(config_path) == []
 
     def test_load_reads_checked_in_file(self, tmp_path):
         mcp_dir = tmp_path / "data" / "config"
@@ -382,8 +393,6 @@ class TestProgenitorConfig:
             "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "PROGENITOR_TIMEZONE": "Asia/Tokyo",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "15",
-            "PROGENITOR_COPILOT_MODEL": "gpt-5",
-            "PROGENITOR_COPILOT_TIMEOUT_SECONDS": "600",
         }
 
         with patch.dict(os.environ, env, clear=False):
@@ -391,8 +400,6 @@ class TestProgenitorConfig:
 
             assert config.runtime.timezone == "Asia/Tokyo"
             assert config.runtime.idle_backoff_seconds == 15
-            assert config.copilot.model == "gpt-5"
-            assert config.copilot.timeout_seconds == 600
 
     def test_to_dict_redacts_secrets(self):
         """Test secrets are redacted in dict output."""
@@ -405,6 +412,7 @@ class TestProgenitorConfig:
         result = config.to_dict(redact_secrets=True)
 
         assert result["llm"]["api_key"] == "***REDACTED***"
+        assert isinstance(result["storage"]["state_dir"], str)
 
     def test_to_dict_without_redaction(self):
         """Test secrets are exposed when redaction is disabled."""

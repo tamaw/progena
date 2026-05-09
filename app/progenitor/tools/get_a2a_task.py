@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..runtime.a2a_tasks import (
+from ..a2a import (
     DEFAULT_A2A_HISTORY_LENGTH,
     build_task_response,
     refresh_tracked_a2a_task,

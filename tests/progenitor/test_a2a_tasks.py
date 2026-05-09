@@ -6,8 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.runtime.a2a_tasks import (
-    A2ATaskTracker,
+from app.progenitor.a2a.tasks import (
     dispatch_tracked_a2a_task,
     refresh_tracked_a2a_task,
     send_completion_notification,
@@ -26,7 +25,6 @@ async def state_manager():
         yield manager
 
 
-@pytest.mark.asyncio
 async def test_dispatch_tracked_a2a_task_persists_submitted_task(
     monkeypatch, state_manager
 ) -> None:
@@ -45,7 +43,7 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
             },
         }
     )
-    monkeypatch.setattr("app.progenitor.runtime.a2a_tasks.A2AClient", lambda: fake_client)
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: fake_client)
 
     response, tracked_task = await dispatch_tracked_a2a_task(
         state_manager=state_manager,
@@ -68,6 +66,8 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
     assert saved is not None
     assert saved.agent_name == "builder_agent"
     assert saved.request_text == "Build a demo"
+    fake_client.call_agent.assert_awaited_once()
+    assert fake_client.call_agent.await_args.kwargs["callback_url"] is None
     assert saved.request_metadata["a2a_task_id"] == "builder_task_1"
     assert saved.request_metadata["a2a_context_id"] == "ctx-1"
 
@@ -77,6 +77,45 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
     assert "a2a_context_id" not in kwargs["context"]
     assert "task_id" not in kwargs
     assert "context_id" not in kwargs
+
+
+async def test_dispatch_tracked_a2a_task_uses_a2a_push_callback_url(
+    monkeypatch, state_manager
+) -> None:
+    fake_client = MagicMock()
+    fake_client.call_agent = AsyncMock(
+        return_value={
+            "success": True,
+            "result": {
+                "kind": "task",
+                "id": "builder_task_2",
+                "contextId": "ctx-2",
+                "status": {"state": "submitted"},
+            },
+        }
+    )
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: fake_client)
+
+    await dispatch_tracked_a2a_task(
+        state_manager=state_manager,
+        agent_name="builder_agent",
+        agent_config={
+            "url": "http://localhost:8107",
+            "transport": "http",
+            "callback_url": "http://127.0.0.1:9501/a2a/tasks/callback",
+        },
+        request_text="Build a demo",
+        request_metadata={"caller": "progenitor", "dispatch_mode": "async"},
+        source="call_agent",
+        timeout=5.0,
+        blocking=False,
+    )
+
+    fake_client.call_agent.assert_awaited_once()
+    assert (
+        fake_client.call_agent.await_args.kwargs["callback_url"]
+        == "http://127.0.0.1:9501/a2a/tasks/callback"
+    )
 
 
 @pytest.mark.asyncio
@@ -98,7 +137,7 @@ async def test_dispatch_tracked_a2a_task_ignores_client_supplied_ids(
             },
         }
     )
-    monkeypatch.setattr("app.progenitor.runtime.a2a_tasks.A2AClient", lambda: fake_client)
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: fake_client)
 
     response, tracked_task = await dispatch_tracked_a2a_task(
         state_manager=state_manager,
@@ -153,7 +192,7 @@ async def test_refresh_tracked_a2a_task_updates_terminal_status(monkeypatch, sta
             },
         }
     )
-    monkeypatch.setattr("app.progenitor.runtime.a2a_tasks.A2AClient", lambda: fake_client)
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: fake_client)
 
     refreshed = await refresh_tracked_a2a_task(state_manager, "observe-1")
 
@@ -234,50 +273,3 @@ async def test_send_completion_notification_pushes_agent_message(state_manager) 
     saved = await state_manager.get_a2a_task("observe-3")
     assert saved is not None
     assert saved.notification_sent_at is not None
-
-
-@pytest.mark.asyncio
-async def test_task_tracker_records_completion_callback_before_notifying(
-    monkeypatch, state_manager
-) -> None:
-    await state_manager.upsert_a2a_task(
-        A2ATaskRecord(
-            task_id="observe-4",
-            agent_name="observe_agent",
-            agent_url="http://localhost:8108",
-            context_id="ctx-4",
-            source="call_agent",
-            request_text="Inspect queue",
-            status="working",
-        )
-    )
-    refreshed = A2ATaskRecord(
-        task_id="observe-4",
-        agent_name="observe_agent",
-        agent_url="http://localhost:8108",
-        context_id="ctx-4",
-        source="call_agent",
-        request_text="Inspect queue",
-        status="completed",
-        summary="Observe task completed.",
-        latest_message="Observe task completed.",
-    )
-    refresh_mock = AsyncMock(return_value=refreshed)
-    notify_mock = AsyncMock(return_value=True)
-    completion_callback = AsyncMock()
-    llm_client = MagicMock()
-
-    monkeypatch.setattr("app.progenitor.runtime.a2a_tasks.refresh_tracked_a2a_task", refresh_mock)
-    monkeypatch.setattr(
-        "app.progenitor.runtime.a2a_tasks.send_completion_notification", notify_mock
-    )
-
-    tracker = A2ATaskTracker(
-        state_manager,
-        llm_client=llm_client,
-        completion_callback=completion_callback,
-    )
-    await tracker.poll_once()
-
-    completion_callback.assert_awaited_once_with(refreshed)
-    notify_mock.assert_awaited_once_with(state_manager, llm_client, refreshed)

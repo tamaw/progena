@@ -10,7 +10,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None:
-    from app.progenitor.agent.tools_adapter import create_deepagent_tools
+    from app.progenitor.agent.adapters import create_deepagent_tools
 
     class _FakeLoop:  # noqa: D401
         """Minimal loop stub for get_current_loop()."""
@@ -23,7 +23,7 @@ async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None
 
     fake_loop = _FakeLoop()
 
-    with patch("app.progenitor.agent.tools_adapter.get_current_loop", return_value=fake_loop):
+    with patch("app.progenitor.agent.adapters.get_current_loop", return_value=fake_loop):
         tools = create_deepagent_tools(
             tool_registry=MagicMock(), llm_client=MagicMock(), state_manager=None
         )
@@ -52,7 +52,7 @@ class _MockConfig:
 
 @pytest.mark.asyncio
 async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: Path) -> None:
-    from app.progenitor.runtime.loop import ProgenitorLoop
+    from app.progenitor.runtime.heartbeat import ProgenitorLoop
 
     state_manager = MagicMock()
     state_manager.save_current_state = AsyncMock()
@@ -63,24 +63,19 @@ async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: P
         state_manager=state_manager,
         config=cast(Any, _MockConfig()),
     )
-    loop._streaming_enabled = False
-    loop._response_was_streamed = False
-    loop._stream_final_sent = False
 
     class _FakeGraph:
-        async def astream(self, graph_input, config):  # noqa: ANN001
-            yield {
-                "node": {
-                    "messages": [{"role": "user", "content": "before"}],
-                    "pending_response": "ok",
-                }
-            }
+        async def ainvoke(self, graph_input, config):  # noqa: ANN001
             # Simulate new_conversation being invoked during the cycle.
             loop._state["thread_id"] = "thread_new"
             loop._state["messages"] = [{"role": "user", "content": "should_be_cleared"}]
-            yield {}
+            return {
+                "messages": [{"role": "user", "content": "before"}],
+                "pending_response": "ok",
+            }
 
     loop.graph = _FakeGraph()
+    loop.heartbeat_context.agent_graph = loop.graph
     loop._state = {
         "thread_id": "thread_old",
         "cycle_count": 1,
@@ -89,18 +84,23 @@ async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: P
         "messages": [{"role": "user", "content": "hello"}],
         "tool_calls": [],
         "attachments": [],
-        "current_input": "reset the conversation",
+        "queued_input": "reset the conversation",
     }
+    loop.heartbeat_context.live_state = loop.state
 
-    await loop._run_graph_cycle("ignored", source="user_input")
+    updates = await loop._heartbeat_graph.ainvoke(
+        cast(Any, loop.state),
+        context=loop.heartbeat_context,
+    )
+    loop.apply_graph_updates(cast(dict[str, Any], updates))
 
-    assert loop._state["thread_id"] == "thread_new"
-    assert loop._state["messages"] == []
+    assert loop.state["thread_id"] == "thread_new"
+    assert loop.state["messages"] == []
 
 
 @pytest.mark.asyncio
 async def test_loop_preserves_persisted_thread_id_on_startup(tmp_path: Path) -> None:
-    from app.progenitor.runtime.loop import ProgenitorLoop
+    from app.progenitor.runtime.heartbeat import ProgenitorLoop
 
     state_manager = MagicMock()
     state_manager.get_current_state = AsyncMock(return_value={"thread_id": "thread_persisted"})
@@ -115,14 +115,7 @@ async def test_loop_preserves_persisted_thread_id_on_startup(tmp_path: Path) -> 
     )
 
     loop._input_handler_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
-    loop._checkpoint_state = AsyncMock()  # type: ignore[method-assign]
-    loop._update_health_file = AsyncMock()  # type: ignore[method-assign]
-    loop._push_event = AsyncMock()  # type: ignore[method-assign]
 
-    with patch("app.progenitor.runtime.loop.A2ATaskTracker") as tracker_cls:
-        tracker = MagicMock()
-        tracker.run = AsyncMock(return_value=None)
-        tracker_cls.return_value = tracker
-        await loop.run_forever()
+    await loop.run_forever()
 
-    assert loop._state["thread_id"] == "thread_persisted"
+    assert loop.state["thread_id"] == "thread_persisted"

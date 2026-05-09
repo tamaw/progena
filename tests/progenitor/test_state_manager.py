@@ -39,7 +39,7 @@ class TestStateManager:
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
 
-        from app.progenitor.runtime.time_utils import utcnow
+        from app.progenitor.utils import utcnow
 
         entry = ScheduleEntry(
             id="schedule-1",

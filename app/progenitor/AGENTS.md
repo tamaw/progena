@@ -1,51 +1,52 @@
 # Progenitor - GitHub Copilot Agent
 
-## LangGraph Agent Loop
+## DeepAgent Orchestrator Loop
 
-The core perpetual agent implementing the "Last Algorithm" dual-loop pattern.
+The core perpetual agent is a conversational orchestrator. It hosts the
+DeepAgent chat surface, maintains durable state, runs schedules, and delegates
+specialized work to external A2A agents.
 
 ### Agent Capabilities
 - LangGraph state machine design and implementation
 - Async Python patterns and coroutines
 - State management and persistence
 - LLM integration (Azure OpenAI, OpenAI)
-- Agent decision-making and routing
-- Build orchestration via Copilot CLI
+- Agent routing and orchestration
 - A2A (Agent-to-Agent) communication
 - Scheduled task execution
 
 ### Architecture
 
 #### Dual-Loop Pattern
-**Outer Loop (Perpetual):**
+**User Loop:**
 ```
-User (outer loop):
-Intake → Chat → Respond → CycleLimit → (PickNext | Idle) → repeat
-
-Background (scheduled jobs):
-PickDueSchedule → Intake → Chat → Respond → AdvanceSchedule → repeat
+Intake → DeepAgent Chat → Respond → Idle → repeat
 ```
 
-**Inner Loop (Iteration):**
+**Background Loop:**
 ```
-Observe → Think → Plan → Build → Execute → Validate → Verify → Learn
+PickDueSchedule → Intake → DeepAgent Chat → Respond → AdvanceSchedule
+A2ACallback → RecordTaskUpdate → Notify
 ```
 
 #### Directory Structure
 ```
 progenitor/
 ├── config.py            # Configuration dataclasses
-├── routing.py           # Graph routing helpers
+├── graph/               # Graph builders
+│   ├── progenitor_graph.py  # Conversational DeepAgent graph
+│   └── heartbeat_graph.py   # Background heartbeat/schedule/A2A graph
 ├── main.py              # Entry point
 ├── nodes/               # LangGraph node implementations
 │   ├── chat.py          # Main LLM tool-calling node
 │   ├── intake.py        # Message intake node
-│   ├── pick_next.py     # Backlog selection node
-│   ├── register.py      # Result registration node
+│   ├── a2a.py           # A2A task/callback updates
+│   ├── schedule.py      # Scheduled work dispatch
 │   ├── respond.py       # Response generation node
 │   └── ...
 ├── runtime/
-│   └── loop.py          # Perpetual loop execution
+│   ├── progenitor.py    # Main Progenitor runtime lifecycle
+│   └── heartbeat.py     # Perpetual heartbeat/background loop execution
 ├── state/
 │   ├── models.py        # Pydantic state models
 │   └── manager.py       # State persistence manager
@@ -57,9 +58,9 @@ progenitor/
 
 #### State Models (`state/models.py`)
 - `ProgenitorState`: TypedDict for LangGraph nodes
-- `WorkItem`: Backlog items with types (BUILD_AGENT, A2A_CALL, SYSTEM_TOOL)
-- `Decision`: Routing decisions with actions (ANSWER_DIRECTLY, DELEGATE_A2A, BUILD_AGENT)
-- `VerificationResult`: Build validation results
+- `ConversationMessage`: persisted user/assistant/tool messages
+- `ScheduleEntry`: durable scheduled tasks
+- `A2ATaskRecord`: tracked external A2A task state
 
 #### Node Pattern
 All nodes follow this factory pattern:
@@ -71,9 +72,9 @@ def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], A
     return node
 ```
 
-#### Graph Routing (`routing.py`)
-Routing functions determine flow:
-- `route_after_decide()`: `pick_next` | `respond`
+Builder, worktree, Copilot CLI, and PR workflows belong to external builder
+agents. Progenitor can call those agents through `call_agent`, but it does not
+own their implementation loop.
 
 ### Development
 
@@ -113,7 +114,7 @@ pytest tests/progenitor/ --cov=app.progenitor
 
 #### Config Files
 - `current_state.json`: User session state
-- `build_state.json`: Build backlog and results
+- `a2a_tasks.json`: Tracked external A2A tasks
 - `data/config/schedule.json`: Scheduled tasks
 
 ### Key Patterns
@@ -132,14 +133,14 @@ await state_manager.save_state()
 
 #### LLM Calls
 ```python
-# Decision routing
-decision = await llm_client.decide(state)
+# Conversation graph
+graph = create_conversation_graph(config=config)
 
-# Planning
-plan = await llm_client.plan(work_item, context)
+# Heartbeat/background graph
+background = create_heartbeat_graph(state_manager=state_manager)
 
-# Verification
-result = await llm_client.verify(build_output)
+# Direct prompt loading
+prompt = load_prompt("progenitor/genesis.md")
 ```
 
 #### Secret Redaction
@@ -162,4 +163,4 @@ result = await llm_client.verify(build_output)
 - Runtime Spec: `docs/SPEC.md`
 - Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
 - State Models: `app/progenitor/state/models.py`
-- Graph Definition: `app/progenitor/graph.py`
+- Graph Definitions: `app/progenitor/graph/progenitor_graph.py`, `app/progenitor/graph/heartbeat_graph.py`
