@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.progenitor.llm.prompts import resolve_project_root, resolve_prompts_dir
+from app.progenitor.prompts import resolve_project_root, resolve_prompts_dir
 
 from .state_reader import StateReader, get_state_reader
 

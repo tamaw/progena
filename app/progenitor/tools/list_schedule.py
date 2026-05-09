@@ -78,6 +78,7 @@ class ListScheduleTool(BaseSystemTool):
                     "id": item_dict.get("id"),
                     "message": item_dict.get("message", "No message"),
                     "cron_expression": item_dict.get("cron_expression"),
+                    "scheduled_at": item_dict.get("scheduled_at"),
                     "last_run": item_dict.get("last_run"),
                     "created_at": item_dict.get("created_at"),
                 }

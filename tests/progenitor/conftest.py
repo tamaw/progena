@@ -1,6 +1,5 @@
 """Shared fixtures for progenitor unit tests."""
 
-
 import pytest
 
 
@@ -14,6 +13,6 @@ def patch_checkpointer(monkeypatch):
     from langgraph.checkpoint.memory import MemorySaver
 
     monkeypatch.setattr(
-        "app.progenitor.agent.deep_agent._build_checkpointer",
+        "app.progenitor.agent.agent._build_checkpointer",
         lambda db_path: MemorySaver(),
     )

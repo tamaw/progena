@@ -22,11 +22,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from app.progenitor.config import (
-    load_mcp_servers,
-    resolve_mcp_config_path,
-    resolve_schedule_config_path,
-)
+from app.progenitor.config import resolve_mcp_config_path, resolve_schedule_config_path
+from app.progenitor.mcp.loader import load_mcp_servers
 
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"

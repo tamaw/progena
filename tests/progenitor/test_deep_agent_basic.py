@@ -4,7 +4,7 @@ Tests for Phase 1: DeepAgent foundation — LangChain adapter and agent factory.
 
 from unittest.mock import MagicMock, patch
 
-from app.progenitor.agent.langchain_adapter import create_langchain_model
+from app.progenitor.agent.adapters import create_langchain_model
 from app.progenitor.config import LLMConfig
 
 
@@ -67,7 +67,7 @@ class TestLangChainAdapter:
             reasoning_effort="medium",
             reasoning_summary="detailed",
         )
-        with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -83,7 +83,7 @@ class TestLangChainAdapter:
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -100,7 +100,7 @@ class TestLangChainAdapter:
             reasoning_enabled=True,
             reasoning_effort="medium",
         )
-        with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -116,7 +116,7 @@ class TestLangChainAdapter:
             model_default="gpt-5.2-chat",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.langchain_adapter.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -130,9 +130,9 @@ class TestDeepAgentFactory:
     def test_create_agent_returns_compiled_graph(self):
         """Factory returns a compiled LangGraph state graph."""
         with (
-            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_create_model,
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_model = MagicMock()
             mock_create_model.return_value = mock_model
@@ -140,7 +140,7 @@ class TestDeepAgentFactory:
             mock_create_deep_agent.return_value = mock_graph
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.deep_agent import create_progenitor_agent
+            from app.progenitor.agent.agent import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
@@ -161,15 +161,15 @@ class TestDeepAgentFactory:
     def test_create_agent_uses_custom_checkpointer(self):
         """Custom checkpointer is passed through."""
         with (
-            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_create_model,
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create_model.return_value = MagicMock()
             mock_create_deep_agent.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.deep_agent import create_progenitor_agent
+            from app.progenitor.agent.agent import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
 
             custom_checkpointer = MagicMock()
@@ -184,17 +184,17 @@ class TestDeepAgentFactory:
     def test_create_agent_uses_genesis_prompt(self):
         """DeepAgent factory uses the canonical genesis prompt."""
         with (
-            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_create_model,
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompt_templates,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create_model.return_value = MagicMock()
             mock_create_deep_agent.return_value = MagicMock()
-            mock_prompt_templates.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.deep_agent import create_progenitor_agent
+            from app.progenitor.agent.agent import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
@@ -205,5 +205,7 @@ class TestDeepAgentFactory:
 
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["system_prompt"] == "GENESIS"
-            mock_prompt_templates.assert_called_once_with(prompts_dir=config.storage.prompts_dir)
-            mock_prompt_templates.return_value.get_genesis_prompt.assert_called_once()
+            mock_load_prompt.assert_called_once_with(
+                "progenitor/genesis.md",
+                prompts_dir=config.storage.prompts_dir,
+            )

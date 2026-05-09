@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.backend.alerts import clear_alerts
-from app.progenitor.responses import AgentResponse
+from app.backend.models import AgentResponse
 
 
 @pytest.fixture(autouse=True)

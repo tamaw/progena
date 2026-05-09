@@ -4,20 +4,15 @@ Centralized Configuration for Progenitor.
 Configuration is read from environment variables and live config files.
 """
 
-import json
 import logging
-import logging.handlers
 import os
-import sys
-from dataclasses import dataclass, field
-from datetime import UTC
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from string import Template
-from typing import Any
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
-from .utils import env_bool, env_float, env_int, env_list
+from .utils import env_bool, env_float, env_int
 
 # Auto-load .env file from project root
 load_dotenv()
@@ -85,37 +80,9 @@ def resolve_schedule_config_path(config_dir: Path | str | None = None) -> Path:
     return base_dir / "schedule.json"
 
 
-def _resolve_required_env_template(value: str) -> tuple[str | None, list[str]]:
-    """Resolve $VAR/${VAR} placeholders, returning missing variable names when unresolved."""
-    template = Template(value)
-    missing: list[str] = []
-
-    for match in template.pattern.finditer(value):
-        var_name = match.group("named") or match.group("braced")
-        if var_name is not None and os.getenv(var_name) is None:
-            missing.append(var_name)
-
-    if missing:
-        return None, missing
-
-    return template.safe_substitute(os.environ), []
-
-
 def default_mcp_config_payload() -> dict[str, Any]:
     """Return the default MCP server configuration written to data/config/mcp.json."""
-    return {
-        "mcpServers": {
-            "jina": {
-                "enabled": False,
-                "transport": "http",
-                "description": "Jina AI web search and page read tools",
-                "url": "https://mcp.jina.ai/v1?include_tags=search,read",
-                "headers": {
-                    "Authorization": "Bearer ${JINA_API_KEY}",
-                },
-            }
-        }
-    }
+    return {"mcpServers": {}}
 
 
 def default_schedule_config_payload() -> list[Any]:
@@ -186,51 +153,38 @@ class RuntimeConfig:
     ipc_port: int = 9500  # IPC server bind port
     ipc_max_clients: int = 10  # Maximum concurrent IPC clients
 
+    # Persistent HTTP service settings (health, agent card, A2A callbacks)
+    http_host: str = "127.0.0.1"
+    http_port: int = 9501
+    http_public_base_url: str | None = None
+
     @classmethod
-    def from_env(cls, file_config: dict[str, Any] | None = None) -> "RuntimeConfig":
-        """Load runtime config from environment with file fallbacks."""
-        fc = file_config or {}
+    def from_env(cls) -> "RuntimeConfig":
+        """Load runtime config from environment."""
         return cls(
-            timezone=os.getenv("PROGENITOR_TIMEZONE", fc.get("timezone", "Australia/Melbourne")),
-            idle_backoff_seconds=env_int(
-                "PROGENITOR_IDLE_BACKOFF_SECONDS", fc.get("idle_backoff_seconds", 30)
-            ),
-            max_actions_per_cycle=env_int(
-                "PROGENITOR_MAX_ACTIONS_PER_CYCLE", fc.get("max_actions_per_cycle", 10)
-            ),
-            log_level=os.getenv("PROGENITOR_LOG_LEVEL", fc.get("log_level", "info")),
-            log_format=os.getenv("PROGENITOR_LOG_FORMAT", fc.get("log_format", "text")),
-            backoff_multiplier=env_float(
-                "PROGENITOR_BACKOFF_MULTIPLIER", fc.get("backoff_multiplier", 1.5)
-            ),
-            max_backoff_seconds=env_int(
-                "PROGENITOR_MAX_BACKOFF_SECONDS", fc.get("max_backoff_seconds", 300)
-            ),
-            checkpoint_interval_seconds=env_int(
-                "PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", fc.get("checkpoint_interval_seconds", 30)
-            ),
-            input_timeout_seconds=env_int(
-                "PROGENITOR_INPUT_TIMEOUT_SECONDS", fc.get("input_timeout_seconds", 300)
-            ),
+            timezone=os.getenv("PROGENITOR_TIMEZONE", "Australia/Melbourne"),
+            idle_backoff_seconds=env_int("PROGENITOR_IDLE_BACKOFF_SECONDS", 30),
+            max_actions_per_cycle=env_int("PROGENITOR_MAX_ACTIONS_PER_CYCLE", 10),
+            log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
+            log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
+            backoff_multiplier=env_float("PROGENITOR_BACKOFF_MULTIPLIER", 1.5),
+            max_backoff_seconds=env_int("PROGENITOR_MAX_BACKOFF_SECONDS", 300),
+            checkpoint_interval_seconds=env_int("PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", 30),
+            input_timeout_seconds=env_int("PROGENITOR_INPUT_TIMEOUT_SECONDS", 300),
             # Queue bounds
-            max_input_queue_size=env_int(
-                "PROGENITOR_MAX_INPUT_QUEUE_SIZE", fc.get("max_input_queue_size", 100)
-            ),
-            max_output_queue_size=env_int(
-                "PROGENITOR_MAX_OUTPUT_QUEUE_SIZE", fc.get("max_output_queue_size", 100)
-            ),
-            max_stream_queue_size=env_int(
-                "PROGENITOR_MAX_STREAM_QUEUE_SIZE", fc.get("max_stream_queue_size", 1000)
-            ),
+            max_input_queue_size=env_int("PROGENITOR_MAX_INPUT_QUEUE_SIZE", 100),
+            max_output_queue_size=env_int("PROGENITOR_MAX_OUTPUT_QUEUE_SIZE", 100),
+            max_stream_queue_size=env_int("PROGENITOR_MAX_STREAM_QUEUE_SIZE", 1000),
             # Health check settings
-            health_stale_seconds=env_int(
-                "PROGENITOR_HEALTH_STALE_SECONDS", fc.get("health_stale_seconds", 120)
-            ),
+            health_stale_seconds=env_int("PROGENITOR_HEALTH_STALE_SECONDS", 120),
             # IPC settings
-            ipc_enabled=env_bool("PROGENITOR_IPC_ENABLED", fc.get("ipc_enabled", True)),
-            ipc_host=os.getenv("PROGENITOR_IPC_HOST", fc.get("ipc_host", "127.0.0.1")),
-            ipc_port=env_int("PROGENITOR_IPC_PORT", fc.get("ipc_port", 9500)),
-            ipc_max_clients=env_int("PROGENITOR_IPC_MAX_CLIENTS", fc.get("ipc_max_clients", 10)),
+            ipc_enabled=env_bool("PROGENITOR_IPC_ENABLED", True),
+            ipc_host=os.getenv("PROGENITOR_IPC_HOST", "127.0.0.1"),
+            ipc_port=env_int("PROGENITOR_IPC_PORT", 9500),
+            ipc_max_clients=env_int("PROGENITOR_IPC_MAX_CLIENTS", 10),
+            http_host=os.getenv("PROGENITOR_HTTP_HOST", "127.0.0.1"),
+            http_port=env_int("PROGENITOR_HTTP_PORT", 9501),
+            http_public_base_url=os.getenv("PROGENITOR_HTTP_PUBLIC_BASE_URL") or None,
         )
 
 
@@ -271,35 +225,6 @@ class StorageConfig:
 
 
 @dataclass
-class CopilotConfig:
-    """Copilot CLI configuration."""
-
-    bin_path: str = "copilot"
-    timeout_seconds: int = 1200  # 20 minutes per ACP request
-    default_flags: list[str] = field(default_factory=lambda: ["--yolo"])
-    model: str = "gpt-5.3-codex"
-    max_tokens: int = 8192
-
-    # ACP (Agent Client Protocol) settings
-    acp_port: int = 3000  # Port for the ACP server
-    acp_allowed_dirs: list[str] = field(default_factory=list)  # Restricted directories
-
-    @classmethod
-    def from_env(cls) -> "CopilotConfig":
-        """Load Copilot config from environment variables."""
-        return cls(
-            bin_path=os.getenv("PROGENITOR_COPILOT_BIN", "copilot"),
-            timeout_seconds=env_int("PROGENITOR_COPILOT_TIMEOUT_SECONDS", 1200),
-            default_flags=env_list("PROGENITOR_COPILOT_DEFAULT_FLAGS", ["--yolo"]),
-            model=os.getenv("PROGENITOR_COPILOT_MODEL", "gpt-5.3-codex"),
-            max_tokens=env_int("PROGENITOR_COPILOT_MAX_TOKENS", 8192),
-            # ACP settings
-            acp_port=env_int("PROGENITOR_COPILOT_ACP_PORT", 3000),
-            acp_allowed_dirs=env_list("PROGENITOR_COPILOT_ACP_ALLOWED_DIRS", []),
-        )
-
-
-@dataclass
 class SchedulerConfig:
     """Scheduler configuration."""
 
@@ -327,86 +252,6 @@ class MCPServerConfig:
     description: str = ""
 
 
-def load_mcp_servers(
-    config_path: Path | str | None = None,
-) -> list[MCPServerConfig]:
-    """Load external MCP server definitions from Progenitor's live config file."""
-    path = Path(config_path) if config_path is not None else resolve_mcp_config_path()
-    if not path.exists():
-        return []
-
-    try:
-        raw_data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to load MCP config from %s: %s", path, exc)
-        return []
-
-    raw_servers = raw_data.get("mcpServers") if isinstance(raw_data, dict) else None
-    if not isinstance(raw_servers, dict):
-        logger.warning("MCP config at %s is missing an 'mcpServers' object", path)
-        return []
-
-    servers: list[MCPServerConfig] = []
-    for server_name, raw_server in raw_servers.items():
-        if not isinstance(server_name, str) or not isinstance(raw_server, dict):
-            continue
-
-        transport = str(raw_server.get("transport") or "http").strip().lower()
-        if transport != "http":
-            logger.warning(
-                "Skipping MCP server '%s': unsupported transport '%s' (remote HTTP only)",
-                server_name,
-                transport,
-            )
-            continue
-
-        raw_url = str(raw_server.get("url") or raw_server.get("endpoint") or "").strip()
-        if not raw_url:
-            logger.warning("Skipping MCP server '%s': missing url", server_name)
-            continue
-
-        resolved_url, missing_url_vars = _resolve_required_env_template(raw_url)
-        if resolved_url is None:
-            logger.warning(
-                "Skipping MCP server '%s': unresolved env vars in url: %s",
-                server_name,
-                ", ".join(sorted(set(missing_url_vars))),
-            )
-            continue
-
-        headers: dict[str, str] = {}
-        raw_headers = raw_server.get("headers")
-        if isinstance(raw_headers, dict):
-            for header_name, header_value in raw_headers.items():
-                if not isinstance(header_name, str):
-                    continue
-                resolved_header, missing_header_vars = _resolve_required_env_template(
-                    str(header_value)
-                )
-                if resolved_header is None:
-                    logger.info(
-                        "Skipping header '%s' for MCP server '%s': missing env vars %s",
-                        header_name,
-                        server_name,
-                        ", ".join(sorted(set(missing_header_vars))),
-                    )
-                    continue
-                headers[header_name] = resolved_header
-
-        servers.append(
-            MCPServerConfig(
-                name=server_name,
-                url=resolved_url,
-                enabled=bool(raw_server.get("enabled", True)),
-                transport=transport,
-                headers=headers,
-                description=str(raw_server.get("description") or "").strip(),
-            )
-        )
-
-    return servers
-
-
 @dataclass
 class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
@@ -424,6 +269,8 @@ class MCPConfig:
         resolved_config_path = (
             Path(config_path) if config_path is not None else resolve_mcp_config_path()
         )
+        from .mcp.loader import load_mcp_servers
+
         return cls(
             config_path=resolved_config_path,
             servers=load_mcp_servers(resolved_config_path),
@@ -442,13 +289,16 @@ class ProgenitorConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
-    copilot: CopilotConfig = field(default_factory=CopilotConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
     @classmethod
     def load(
-        cls, project_root: Path | None = None, _config_dir: Path | None = None
+        cls,
+        project_root: Path | None = None,
+        _config_dir: Path | None = None,
+        *,
+        validate: bool = True,
     ) -> "ProgenitorConfig":
         """Load complete configuration from environment and files.
 
@@ -460,13 +310,12 @@ class ProgenitorConfig:
             llm=LLMConfig.from_env(),
             runtime=RuntimeConfig.from_env(),
             storage=storage_config,
-            copilot=CopilotConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             mcp=MCPConfig.load(),
         )
 
-        # Validate configuration
-        config.validate()
+        if validate:
+            config.validate()
 
         return config
 
@@ -495,67 +344,34 @@ class ProgenitorConfig:
             raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))
 
     def to_dict(self, redact_secrets: bool = True) -> dict[str, Any]:
-        """Convert config to dictionary for logging."""
-        result: dict[str, Any] = {
-            "llm": {
-                "base_url": self.llm.base_url,
-                "model_default": self.llm.model_default,
-            },
-            "runtime": {
-                "timezone": self.runtime.timezone,
-                "idle_backoff_seconds": self.runtime.idle_backoff_seconds,
-                "max_actions_per_cycle": self.runtime.max_actions_per_cycle,
-                "log_level": self.runtime.log_level,
-                "backoff_multiplier": self.runtime.backoff_multiplier,
-                "max_backoff_seconds": self.runtime.max_backoff_seconds,
-                "checkpoint_interval_seconds": self.runtime.checkpoint_interval_seconds,
-                "input_timeout_seconds": self.runtime.input_timeout_seconds,
-                "ipc_enabled": self.runtime.ipc_enabled,
-                "ipc_host": self.runtime.ipc_host,
-                "ipc_port": self.runtime.ipc_port,
-                "ipc_max_clients": self.runtime.ipc_max_clients,
-            },
-            "storage": {
-                "state_dir": str(self.storage.state_dir),
-                "log_dir": str(self.storage.log_dir),
-                "worktree_dir": str(self.storage.worktree_dir),
-                "state_lock_timeout_seconds": self.storage.state_lock_timeout_seconds,
-            },
-            "copilot": {
-                "bin_path": self.copilot.bin_path,
-                "timeout_seconds": self.copilot.timeout_seconds,
-                "default_flags": self.copilot.default_flags,
-                "model": self.copilot.model,
-                "max_tokens": self.copilot.max_tokens,
-                "acp_port": self.copilot.acp_port,
-                "acp_allowed_dirs": self.copilot.acp_allowed_dirs,
-            },
-            "scheduler": {
-                "enabled": self.scheduler.enabled,
-                "poll_seconds": self.scheduler.poll_seconds,
-            },
-            "mcp": {
-                "config_path": str(self.mcp.config_path),
-                "servers": [
-                    {
-                        "name": server.name,
-                        "url": server.url,
-                        "enabled": server.enabled,
-                        "transport": server.transport,
-                        "description": server.description,
-                        "header_keys": sorted(server.headers.keys()),
-                    }
-                    for server in self.mcp.servers
-                ],
-            },
-        }
+        """Convert config to a JSON-safe dictionary for logging."""
+        result = cast(dict[str, Any], _json_safe(asdict(self)))
 
         if redact_secrets:
             result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
+            for server in result["mcp"]["servers"]:
+                headers = server.get("headers")
+                if isinstance(headers, dict):
+                    server["headers"] = {
+                        key: "***REDACTED***" if value else value for key, value in headers.items()
+                    }
         else:
             result["llm"]["api_key"] = self.llm.api_key
 
         return result
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert dataclass/asdict output to JSON-safe primitives."""
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
@@ -649,17 +465,6 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
             f"state_lock_timeout_seconds={config.storage.state_lock_timeout_seconds!r}"
         )
 
-    if not config.copilot.bin_path:
-        issues.append("Copilot Config Error: bin_path must not be empty")
-    if not (0 < config.copilot.timeout_seconds <= 1800):
-        issues.append(
-            f"Copilot Config Error: invalid timeout_seconds={config.copilot.timeout_seconds!r}"
-        )
-    if not config.copilot.model:
-        issues.append("Copilot Config Error: model must not be empty")
-    if not (0 < config.copilot.max_tokens <= 1000000):
-        issues.append(f"Copilot Config Error: invalid max_tokens={config.copilot.max_tokens!r}")
-
     if not (0 < config.scheduler.poll_seconds <= 3600):
         issues.append(
             f"Scheduler Config Error: invalid poll_seconds={config.scheduler.poll_seconds!r}"
@@ -694,7 +499,7 @@ def get_config(
     """
     global _config
     if _config is None:
-        _config = ProgenitorConfig.load(project_root, config_dir)
+        _config = ProgenitorConfig.load(project_root, config_dir, validate=validate)
         if validate:
             _log_validation_issues(_config)
     return _config
@@ -711,129 +516,7 @@ def reload_config(
         validate: Whether to validate configuration at load time (default True).
     """
     global _config
-    _config = ProgenitorConfig.load(project_root, config_dir)
+    _config = ProgenitorConfig.load(project_root, config_dir, validate=validate)
     if validate:
         _log_validation_issues(_config)
     return _config
-
-
-def setup_logging(config: ProgenitorConfig, agent_name: str) -> None:
-    """Configure logging based on configuration.
-
-    Supports two formats:
-    - "text": Human-readable format (default)
-    - "json": Structured JSON format for production/log aggregation
-
-    Writes split rotating log files under {log_dir}/{agent_name}/:
-    - {log_dir}/{agent_name}/{agent_name}.stdout.log for records below ERROR
-    - {log_dir}/{agent_name}/{agent_name}.stderr.log for ERROR and above
-
-    Also emits non-error logs to stdout and errors to stderr so container logs
-    preserve the same split for mounted inspection and diagnostics.
-    """
-    log_levels = {
-        "debug": logging.DEBUG,
-        "info": logging.INFO,
-        "warn": logging.WARNING,
-        "warning": logging.WARNING,
-        "error": logging.ERROR,
-    }
-    level = log_levels.get(config.runtime.log_level.lower(), logging.INFO)
-
-    # Choose format based on config
-    if config.runtime.log_format.lower() == "json":
-        # JSON structured logging for production
-        formatter: logging.Formatter = JsonLogFormatter()
-    else:
-        # Standard text format
-        formatter = logging.Formatter(
-            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-
-    root_logger = logging.getLogger()
-    for existing_handler in root_logger.handlers[:]:
-        existing_handler.close()
-        root_logger.removeHandler(existing_handler)
-    root_logger.setLevel(level)
-
-    stdout_handler = logging.StreamHandler(stream=sys.stdout)
-    stdout_handler.setLevel(level)
-    stdout_handler.addFilter(_BelowErrorFilter())
-    stdout_handler.setFormatter(formatter)
-    root_logger.addHandler(stdout_handler)
-
-    stderr_handler = logging.StreamHandler(stream=sys.stderr)
-    stderr_handler.setLevel(logging.ERROR)
-    stderr_handler.setFormatter(formatter)
-    root_logger.addHandler(stderr_handler)
-
-    # Add rotating file handlers with the same split as stdout/stderr.
-    try:
-        log_dir = config.storage.log_dir / agent_name
-        log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_log_file = log_dir / f"{agent_name}.stdout.log"
-        stdout_file_handler = logging.handlers.RotatingFileHandler(
-            stdout_log_file,
-            maxBytes=10 * 1024 * 1024,  # 10 MB per file
-            backupCount=5,
-            encoding="utf-8",
-        )
-        stdout_file_handler.setLevel(level)
-        stdout_file_handler.addFilter(_BelowErrorFilter())
-        stdout_file_handler.setFormatter(formatter)
-        root_logger.addHandler(stdout_file_handler)
-
-        stderr_log_file = log_dir / f"{agent_name}.stderr.log"
-        stderr_file_handler = logging.handlers.RotatingFileHandler(
-            stderr_log_file,
-            maxBytes=10 * 1024 * 1024,  # 10 MB per file
-            backupCount=5,
-            encoding="utf-8",
-        )
-        stderr_file_handler.setLevel(logging.ERROR)
-        stderr_file_handler.setFormatter(formatter)
-        root_logger.addHandler(stderr_file_handler)
-    except Exception as exc:  # noqa: BLE001
-        logging.getLogger(__name__).warning(
-            "Could not create split log files for %s: %s", agent_name, exc
-        )
-
-    # Reduce noise from httpx and openai
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.WARNING)
-
-
-class _BelowErrorFilter(logging.Filter):
-    """Allow only records below ERROR."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        """Return True for records that should stay on stdout."""
-        return record.levelno < logging.ERROR
-
-
-class JsonLogFormatter(logging.Formatter):
-    """JSON formatter for structured logging."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        """Format log record as JSON."""
-        import json as json_module
-        from datetime import datetime
-
-        log_entry = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
-
-        # Add exception info if present
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
-
-        # Add extra fields if any
-        for key in ("thread_id", "cycle_count", "node", "work_item_id"):
-            if hasattr(record, key):
-                log_entry[key] = getattr(record, key)
-
-        return json_module.dumps(log_entry)

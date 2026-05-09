@@ -2,7 +2,6 @@
 Custom middleware for the Progenitor DeepAgent.
 
 Provides:
-- DynamicMCPToolMiddleware: Injects live external MCP tools into each DeepAgent model call
 - SecretRedactionMiddleware: Redacts API keys/secrets from tool call args and results
 - AuditLoggingMiddleware: Logs tool calls to JSONL audit trail
 - MetricsMiddleware: Tracks tool call counts and latency
@@ -14,126 +13,25 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
-    ModelRequest,
     ToolCallRequest,
 )
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
-from app.progenitor.state.models import redact_secrets
-from app.progenitor.stream_events import (
+from app.progenitor.ipc.stream_events import (
     build_tool_error_event,
     build_tool_result_event,
     build_tool_start_event,
     emit_stream_event,
 )
-
-from .tools_adapter import create_dynamic_mcp_tools
+from app.progenitor.state.models import redact_secrets
 
 logger = logging.getLogger(__name__)
-
-
-def _request_tool_name(tool: Any) -> str:
-    if hasattr(tool, "name"):
-        return str(tool.name or "").strip()
-    if isinstance(tool, dict):
-        function = tool.get("function")
-        if isinstance(function, dict):
-            return str(function.get("name") or "").strip()
-        return str(tool.get("name") or "").strip()
-    return ""
-
-
-class DynamicMCPToolMiddleware(AgentMiddleware):
-    """Inject and bind the current live external MCP tools for each agent turn."""
-
-    def __init__(self, llm_client: Any = None):
-        self._llm_client = llm_client
-        self._warned_name_collisions: set[str] = set()
-
-    def _dynamic_tools_by_name(self) -> dict[str, BaseTool]:
-        tools_by_name: dict[str, BaseTool] = {}
-        for tool in create_dynamic_mcp_tools(self._llm_client):
-            name = _request_tool_name(tool)
-            if name:
-                tools_by_name[name] = tool
-        return tools_by_name
-
-    def _merge_request_tools(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        dynamic_tools = self._dynamic_tools_by_name()
-        if not dynamic_tools:
-            return request
-
-        existing_tools = list(request.tools or [])
-        merged_tools = list(existing_tools)
-        seen_names: set[str] = set()
-        for tool in existing_tools:
-            name = _request_tool_name(tool)
-            if name:
-                seen_names.add(name)
-
-        for tool in dynamic_tools.values():
-            if tool.name in seen_names:
-                if tool.name not in self._warned_name_collisions:
-                    logger.warning(
-                        "Skipping dynamic MCP tool '%s' because a tool with that name already exists",
-                        tool.name,
-                    )
-                    self._warned_name_collisions.add(tool.name)
-                continue
-            seen_names.add(tool.name)
-            merged_tools.append(tool)
-
-        return request.override(tools=merged_tools)
-
-    def _bind_tool_request(self, request: ToolCallRequest) -> ToolCallRequest:
-        if request.tool is not None:
-            return request
-
-        tool_name = _request_tool_name(request.tool_call)
-        if not tool_name:
-            return request
-
-        dynamic_tool = self._dynamic_tools_by_name().get(tool_name)
-        if dynamic_tool is None:
-            return request
-
-        return replace(request, tool=dynamic_tool)
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Any],
-    ) -> Any:
-        return handler(self._merge_request_tools(request))
-
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[Any]],
-    ) -> Any:
-        return await handler(self._merge_request_tools(request))
-
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
-        return handler(self._bind_tool_request(request))
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        return await handler(self._bind_tool_request(request))
 
 
 class SecretRedactionMiddleware(AgentMiddleware):

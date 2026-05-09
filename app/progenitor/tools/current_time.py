@@ -4,7 +4,7 @@ Current Time - Return the current UTC time.
 
 import logging
 
-from ..runtime.time_utils import utcnow_isoformat
+from ..utils import utcnow_isoformat
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,9 @@ class CurrentTimeTool(BaseSystemTool):
 
     async def execute(self, context: ToolContext) -> ToolResult:
         _ = context
-        return ToolResult.ok({
-            "utc_time": utcnow_isoformat(),
-            "timezone": "UTC",
-        })
+        return ToolResult.ok(
+            {
+                "utc_time": utcnow_isoformat(),
+                "timezone": "UTC",
+            }
+        )

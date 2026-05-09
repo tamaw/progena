@@ -7,6 +7,7 @@ from contextlib import suppress
 from typing import Any, cast
 
 from ..config import MCPConfig
+from ..nodes.registry import refresh_agent_metadata
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -49,19 +50,16 @@ class ListToolsTool(BaseSystemTool):
         if hasattr(context.tool_registry, "load"):
             with suppress(Exception):
                 await context.tool_registry.load()
-        if hasattr(context.tool_registry, "refresh_agent_cards"):
-            with suppress(Exception):
-                from .mcp import A2AClient
-
-                await context.tool_registry.refresh_agent_cards(A2AClient())
+        with suppress(Exception):
+            await refresh_agent_metadata(context.tool_registry)
 
         llm_client = getattr(context, "llm_client", None)
         mcp_config = getattr(llm_client, "mcp_config", None) if llm_client is not None else None
         if llm_client is not None and isinstance(mcp_config, MCPConfig):
             with suppress(Exception):
-                from .mcp import refresh_mcp_runtime
+                from ..mcp import reload_mcp_runtime_context
 
-                await refresh_mcp_runtime(
+                await reload_mcp_runtime_context(
                     llm_client,
                     context.tool_registry,
                     cast(MCPConfig, mcp_config),
@@ -100,11 +98,10 @@ class ListToolsTool(BaseSystemTool):
         # Include in-memory discovered MCP tools even if they haven't been
         # persisted to agents.json yet (e.g. in-process service path).
         discovered_mcp_tools: list[dict] = []
-        if getattr(context, "llm_client", None) is not None and hasattr(
-            context.llm_client, "get_mcp_tool_registry_entries"
-        ):
+        mcp_runtime = getattr(getattr(context, "llm_client", None), "mcp_runtime", None)
+        if mcp_runtime is not None:
             try:
-                discovered_mcp_tools = context.llm_client.get_mcp_tool_registry_entries() or []
+                discovered_mcp_tools = mcp_runtime.get_tool_registry_entries() or []
             except Exception:
                 discovered_mcp_tools = []
 

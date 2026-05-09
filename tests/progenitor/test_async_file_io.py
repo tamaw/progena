@@ -253,11 +253,12 @@ class TestAiofilesImport:
     """Test that aiofiles is properly imported and used."""
 
     def test_aiofiles_in_imports(self):
-        """Verify aiofiles is imported in state manager."""
-        import app.progenitor.state.manager as manager_module
+        """Verify aiofiles is imported in the low-level persistence modules."""
+        import app.progenitor.state.log_store as log_store_module
+        import app.progenitor.state.persistence as persistence_module
 
-        # Check that aiofiles is imported
-        assert hasattr(manager_module, "aiofiles")
+        assert hasattr(log_store_module, "aiofiles")
+        assert hasattr(persistence_module, "aiofiles")
 
     def test_aiofiles_available(self):
         """Test that aiofiles package is available."""

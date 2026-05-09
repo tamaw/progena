@@ -7,10 +7,9 @@ middleware, skills, memory, and context management while preserving
 Progenitor's superior inner build loop, scheduling, and A2A protocol.
 
 Modules:
-    deep_agent: Main factory — create_progenitor_agent()
-    langchain_adapter: ChatOpenAI adapter for configured endpoint
-    tools_adapter: BaseSystemTool → DeepAgent tool wrappers
+    agent: Main factory — create_progenitor_agent()
+    adapters: ChatOpenAI adapter, runtime graph adapter, and DeepAgent tool wrappers
     backends: CompositeBackend (LocalShell + Store + State)
     middleware: SecretRedaction, AuditLogging, Metrics
-    subagents: Build loop, code reviewer, researcher
+    subagents: Progenitor helper subagents
 """

@@ -191,7 +191,7 @@ class TestAsyncResponseHandling:
                 captured["request_id"] = request_id
                 captured["metadata"] = metadata
                 captured["include_reasoning"] = include_reasoning
-                from app.progenitor.responses import AgentResponse
+                from app.backend.models import AgentResponse
 
                 return AgentResponse(response="Hello", reasoning=None, reasoning_tokens=None)
 
@@ -231,7 +231,7 @@ class TestAsyncResponseHandling:
             ):
                 del message, request_id, metadata
                 assert include_reasoning is True
-                from app.progenitor.responses import AgentResponse
+                from app.backend.models import AgentResponse
 
                 return AgentResponse(
                     response="10.50. At $0.75 per pencil, 14 pencils cost $10.50.",

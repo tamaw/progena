@@ -15,10 +15,10 @@ from app.backend.config import ChatServerConfig
 from app.backend.ipc_client import start_ipc_client_with_retry
 from app.backend.main import _build_alert_summary_prompt, _handle_alert_request
 from app.backend.models import (
+    AgentResponse,
     ResponsePayload,
     ResponseRequest,
 )
-from app.progenitor.responses import AgentResponse
 
 
 class TestChatServerConfig:

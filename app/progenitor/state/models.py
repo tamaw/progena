@@ -9,7 +9,7 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..runtime.time_utils import utcnow
+from ..utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +242,26 @@ class SchedulingState(TypedDict, total=False):
     new_schedule_entry: ScheduleEntry | None
     current_time: datetime | None
     due_items: list[str]
+    scheduled_enqueued_count: int
+    last_schedule_poll_at: str | None
     agents: list[AgentRegistryEntry]
+    a2a_completed_task: A2ATaskRecord | None
+    a2a_completed_tasks: list[A2ATaskRecord]
+    last_a2a_poll_at: str | None
+    a2a_poll_ran: bool
+    last_mcp_refresh_at: str | None
+    mcp_refresh_summary: dict[str, Any] | None
+    last_registry_discovery_at: str | None
+    registry_discovery_summary: dict[str, Any] | None
+    last_registry_refresh_at: str | None
+    registry_refresh_summary: dict[str, Any] | None
+    last_health_write_at: str | None
+    is_scheduled_input: bool
+    scheduled_message: str | None
+    scheduled_result_status: str | None
+    health_status_override: str | None
+    health_error: str | None
+    health: dict[str, Any]
 
 
 class LoopControlState(TypedDict, total=False):
@@ -253,6 +272,16 @@ class LoopControlState(TypedDict, total=False):
     shutdown_requested: bool
     last_commit_time: datetime | None
     thread_id: str
+    requested_thread_id: str | None
+    is_isolated_thread: bool
+    queued_input: Any
+    cycle_source: str | None
+    cycle_error: str | None
+    cycle_complete_signalled: bool
+    idle_cycles: int
+    current_backoff_seconds: float
+    startup_audit_logged: bool
+    heartbeat_action: str | None
     last_validation_result: dict[str, Any] | None
     validation_result_v2: dict[str, Any] | None
     last_checkpoint: str | None

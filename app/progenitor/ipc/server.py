@@ -1,5 +1,5 @@
 """
-IPC Server for Progenitor.
+IPC server for Progenitor.
 
 Provides a socket-based server that accepts connections from the backend
 and handles message processing through the Progenitor loop.
@@ -19,6 +19,11 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
+from langgraph.runtime import Runtime
+
+from ..nodes.checkpoint import checkpoint_node
+from ..state.models import ProgenitorState
+from .deepagent_stream import DeepAgentIPCStream
 from .protocol import (
     IPCMessage,
     MessageType,
@@ -35,7 +40,7 @@ from .protocol import (
 )
 
 if TYPE_CHECKING:
-    from ..runtime.loop import ProgenitorLoop
+    from ..runtime.heartbeat import ProgenitorLoop
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +295,12 @@ class IPCServer:
         async with self._request_lock:
             logger.info("Processing request %s: %s", request_id, content[:50])
 
+            if self._can_run_deepagent_direct():
+                response = await self._collect_direct_deepagent_response(content, metadata)
+                logger.info("Got response for %s: %d chars", request_id, len(response))
+                await write_message(writer, assistant_message(response, request_id))
+                return
+
             await self._drain_response_queues(request_id)
 
             # Enqueue input and wait for output
@@ -301,7 +312,7 @@ class IPCServer:
 
             # CRITICAL: Wait for the graph cycle to fully complete
             # before releasing the lock.
-            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+            cycle_done = await self.loop_runner.queues.wait_cycle_complete(timeout=30.0)
             if not cycle_done:
                 logger.warning("Cycle complete timeout for %s", request_id)
 
@@ -310,14 +321,8 @@ class IPCServer:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Enqueue input on loop implementations with or without metadata support."""
-
-        enqueue_input = self.loop_runner.enqueue_input
-        parameters = inspect.signature(enqueue_input).parameters
-        if "metadata" in parameters:
-            await enqueue_input(content, metadata=metadata)
-            return
-        await enqueue_input(content)
+        """Enqueue input on the loop queue service."""
+        await self.loop_runner.queues.enqueue_input(content, metadata=metadata)
 
     async def _wait_for_response(self, request_id: str) -> str:
         """Wait for a response from the loop runner.
@@ -364,6 +369,10 @@ class IPCServer:
         async with self._request_lock:
             logger.info("Processing streaming request %s: %s", request_id, content[:50])
 
+            if self._can_run_deepagent_direct():
+                await self._stream_direct_deepagent_response(content, request_id, writer, metadata)
+                return
+
             await self._drain_response_queues(request_id)
 
             # Enqueue input
@@ -396,7 +405,9 @@ class IPCServer:
                         if item_type == "stream_end":
                             await write_message(writer, stream_end(request_id))
                             logger.info("Stream complete for %s", request_id)
-                            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                            cycle_done = await self.loop_runner.queues.wait_cycle_complete(
+                                timeout=30.0
+                            )
                             if not cycle_done:
                                 logger.warning("Cycle complete timeout for %s", request_id)
                             return
@@ -417,7 +428,9 @@ class IPCServer:
                             # CRITICAL: Wait for the graph cycle to fully complete
                             # before releasing the lock. This prevents the next request
                             # from being enqueued before the progenitor is ready.
-                            cycle_done = await self.loop_runner.wait_cycle_complete(timeout=30.0)
+                            cycle_done = await self.loop_runner.queues.wait_cycle_complete(
+                                timeout=30.0
+                            )
                             if not cycle_done:
                                 logger.warning("Cycle complete timeout for %s", request_id)
 
@@ -445,7 +458,101 @@ class IPCServer:
             if inspect.isawaitable(result):
                 return cast(dict[str, Any] | None, await result)
             return cast(dict[str, Any] | None, result)
-        return await self.loop_runner.get_stream_chunk(timeout=timeout)
+        get_stream_chunk = getattr(self.loop_runner, "get_stream_chunk", None)
+        if callable(get_stream_chunk):
+            result = get_stream_chunk(timeout=timeout)
+            if inspect.isawaitable(result):
+                return cast(dict[str, Any] | None, await result)
+            return cast(dict[str, Any] | None, result)
+        return None
+
+    def _can_run_deepagent_direct(self) -> bool:
+        """Return True when the loop exposes the native DeepAgent graph to IPC."""
+
+        graph = getattr(self.loop_runner, "graph", None)
+        return callable(getattr(graph, "astream", None))
+
+    def _thread_id_for_request(self, metadata: dict[str, Any] | None) -> str:
+        state = getattr(self.loop_runner, "state", {})
+        requested_thread_id = str((metadata or {}).get("thread_id") or "").strip()
+        return requested_thread_id or str(state.get("thread_id") or "progenitor_main")
+
+    async def _collect_direct_deepagent_response(
+        self,
+        content: str,
+        metadata: dict[str, Any] | None,
+    ) -> str:
+        thread_id = self._thread_id_for_request(metadata)
+        async with self._direct_graph_lock():
+            bridge = self._create_direct_stream_bridge()
+            response = await bridge.collect_response(content, thread_id=thread_id)
+            await self._complete_direct_graph_cycle(bridge)
+            return response
+
+    async def _stream_direct_deepagent_response(
+        self,
+        content: str,
+        request_id: str,
+        writer: asyncio.StreamWriter,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        thread_id = self._thread_id_for_request(metadata)
+        async with self._direct_graph_lock():
+            bridge = self._create_direct_stream_bridge()
+            async for item in bridge.stream(content, thread_id=thread_id):
+                item_type = str(item.get("type", "stream_chunk"))
+                if item_type == "stream_event":
+                    await write_message(
+                        writer,
+                        stream_event(
+                            event_type=str(item.get("event_type", "unknown")),
+                            request_id=request_id,
+                            content=str(item.get("content", "")),
+                            metadata=cast(dict[str, Any] | None, item.get("metadata")),
+                        ),
+                    )
+                    continue
+
+                await write_message(
+                    writer,
+                    stream_chunk(
+                        str(item.get("content", "")),
+                        request_id,
+                        is_final=bool(item.get("is_final")),
+                    ),
+                )
+                if item.get("is_final"):
+                    break
+
+            await self._complete_direct_graph_cycle(bridge)
+
+    def _create_direct_stream_bridge(self) -> DeepAgentIPCStream:
+        return DeepAgentIPCStream(
+            self.loop_runner.graph,
+            config=self.loop_runner.config,
+            state=getattr(self.loop_runner, "state", {}),
+        )
+
+    def _direct_graph_lock(self):
+        lock = getattr(self.loop_runner, "graph_lock", None)
+        if lock is None:
+            return contextlib.nullcontext()
+        return lock
+
+    async def _complete_direct_graph_cycle(self, bridge: DeepAgentIPCStream) -> None:
+        state = getattr(self.loop_runner, "state", {})
+        context = getattr(self.loop_runner, "heartbeat_context", None)
+        if context is not None:
+            updates = await checkpoint_node(
+                cast(ProgenitorState, state),
+                Runtime(context=context),
+            )
+            if isinstance(state, dict):
+                state.update(updates)
+
+        queues = getattr(self.loop_runner, "queues", None)
+        if queues is not None:
+            queues.signal_cycle_complete()
 
     async def _notify_queued_request(self, request_id: str, *, streaming: bool) -> None:
         """Emit a message_queued event when another request already holds the lock."""
@@ -457,7 +564,7 @@ class IPCServer:
             "Streaming" if streaming else "Non-streaming",
             request_id,
         )
-        await self.loop_runner._push_event(
+        await self.loop_runner.queues.push_event(
             "message_queued",
             "A previous message is still being processed; this message will run next.",
             {"request_id": request_id, "streaming": streaming},
@@ -486,9 +593,11 @@ class IPCServer:
     async def _drain_response_queues(self, request_id: str) -> None:
         """Clear any stale response data left behind by earlier requests."""
         drained_output = 0
-        while not self.loop_runner._output_queue.empty():
+        queues = getattr(self.loop_runner, "queues", None)
+        output_queue = getattr(queues, "output_queue", None)
+        while output_queue is not None and not output_queue.empty():
             try:
-                stale = self.loop_runner._output_queue.get_nowait()
+                stale = output_queue.get_nowait()
                 drained_output += 1
                 logger.warning(
                     "Drained stale output (%d chars) for %s",
@@ -499,9 +608,10 @@ class IPCServer:
                 break
 
         drained_stream = 0
-        while not self.loop_runner._stream_queue.empty():
+        stream_queue = getattr(queues, "stream_queue", None)
+        while stream_queue is not None and not stream_queue.empty():
             try:
-                self.loop_runner._stream_queue.get_nowait()
+                stream_queue.get_nowait()
                 drained_stream += 1
                 logger.warning("Drained stale stream chunk for %s", request_id)
             except Exception:
@@ -526,7 +636,7 @@ class IPCServer:
         while self._running:
             try:
                 # Wait for an event from the loop runner
-                event = await self.loop_runner.get_event(timeout=1.0)
+                event = await self.loop_runner.queues.get_event(timeout=1.0)
 
                 if event is None:
                     continue

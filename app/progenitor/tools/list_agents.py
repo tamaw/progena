@@ -5,6 +5,7 @@ List Agents - List all registered agents with their status.
 import logging
 from contextlib import suppress
 
+from ..nodes.registry import refresh_agent_metadata
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -56,17 +57,9 @@ class ListAgentsTool(BaseSystemTool):
             with suppress(Exception):
                 await context.tool_registry.load()
 
-        # Best-effort: keep agent metadata aligned to live agent cards.
-        if hasattr(context.tool_registry, "refresh_agent_cards"):
-            with suppress(Exception):
-                from .mcp import A2AClient
-
-                a2a_client = A2AClient()
-                await context.tool_registry.refresh_agent_cards(a2a_client)
-
-        if hasattr(context.tool_registry, "refresh_agent_health"):
-            with suppress(Exception):
-                await context.tool_registry.refresh_agent_health()
+        # Best-effort: keep agent metadata aligned to live agent cards and health.
+        with suppress(Exception):
+            await refresh_agent_metadata(context.tool_registry)
 
         agents = context.tool_registry.get_agents()
 
@@ -99,12 +92,14 @@ class ListAgentsTool(BaseSystemTool):
                     agent.get("agent_card", {}).get("description")
                     if isinstance(agent.get("agent_card"), dict)
                     else None
-                ) or agent.get("description"),
+                )
+                or agent.get("description"),
                 "version": (
                     agent.get("agent_card", {}).get("version")
                     if isinstance(agent.get("agent_card"), dict)
                     else None
-                ) or agent.get("version"),
+                )
+                or agent.get("version"),
                 "capabilities": _capabilities(agent),
                 "status": agent.get("status", "unknown"),
                 "transport": agent.get("transport"),
@@ -121,8 +116,10 @@ class ListAgentsTool(BaseSystemTool):
 
         running = [a for a in agents if a.get("status") == "running"]
 
-        return ToolResult.ok({
-            "agents": all_agents,
-            "running_count": len(running),
-            "total_count": len(all_agents),
-        })
+        return ToolResult.ok(
+            {
+                "agents": all_agents,
+                "running_count": len(running),
+                "total_count": len(all_agents),
+            }
+        )

@@ -7,17 +7,17 @@ real Scheduler class.  No LLM or network access is required.
 
 import pytest
 
-from app.progenitor.runtime.scheduler import Scheduler
-from app.progenitor.runtime.time_utils import utcnow
+from app.progenitor.schedule import Scheduler
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import ScheduleEntry
-from app.progenitor.tools.schedule import (
+from app.progenitor.schedule import (
     add_scheduled_task,
     delete_scheduled_task,
     pause_scheduled_task,
     resume_scheduled_task,
     update_scheduled_task,
 )
+from app.progenitor.utils import utcnow
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -51,9 +51,9 @@ async def _add_and_persist(state_manager: StateManager) -> str:
     """Create a recurring task and persist it; return the schedule_id."""
     result, entry_data = await add_scheduled_task(
         user_request="test lifecycle task",
-        time_expression="every day at 9am",
         instruction="Run the lifecycle test.",
         description="Lifecycle test task",
+        cron_expression="0 9 * * *",
     )
     assert result.success, f"add_scheduled_task failed: {result.message}"
     assert entry_data is not None

@@ -8,13 +8,17 @@ executed at the scheduled time as if it were a new user request.
 
 import logging
 import re
-import uuid
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from ..runtime.scheduler import Scheduler
-from ..runtime.time_utils import utcnow
+from ..schedule import (
+    delete_scheduled_task,
+    list_scheduled_tasks,
+    pause_scheduled_task,
+    resume_scheduled_task,
+    update_scheduled_task,
+)
 from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec
 
 if TYPE_CHECKING:
@@ -28,11 +32,16 @@ class ScheduleRequest(BaseModel):
     """Request to add a scheduled task."""
 
     user_request: str = Field(description="The original user request (e.g., 'say hello at 9am')")
-    time_expression: str = Field(
-        description="Time expression (e.g., 'at 9am', 'every day at 9am', 'in 30 minutes')"
-    )
     instruction: str = Field(
         description="Processed instruction for the agent to execute at the scheduled time"
+    )
+    cron_expression: str | None = Field(
+        default=None,
+        description="Cron expression for recurring tasks (e.g. '0 9 * * *')",
+    )
+    scheduled_at: str | None = Field(
+        default=None,
+        description="ISO8601 datetime for one-off tasks (e.g. '2026-06-01T09:00:00+00:00')",
     )
     description: str | None = Field(
         default=None, description="Human-readable description of the scheduled task"
@@ -81,325 +90,6 @@ class ResumeScheduleArgs(BaseModel):
     schedule_id: str = Field(
         description="The ID of the scheduled task to resume (e.g. 'sched_abc123')"
     )
-
-
-class ScheduleResult(BaseModel):
-    """Result of a schedule operation."""
-
-    success: bool
-    schedule_id: str | None = None
-    message: str
-    next_run: str | None = None
-
-
-async def add_scheduled_task(
-    user_request: str,
-    time_expression: str,
-    instruction: str,
-    description: str | None = None,
-) -> tuple[ScheduleResult, dict | None]:
-    """
-    Add a scheduled task that will execute an instruction at the specified time.
-
-    Supports either a cron-like/natural-language time expression or an explicit
-    ISO8601 timestamp (scheduled_at). One-off timestamps are stored as
-    'scheduled_at' on the entry to avoid imprecise cron fallbacks.
-    """
-    scheduler = Scheduler()
-
-    # Parse the time expression
-    parsed = scheduler.parse_time_expression(time_expression)
-
-    # Require either a cron_expression (recurring) or scheduled_at (one-off)
-    if not parsed or not (parsed.get("cron_expression") or parsed.get("scheduled_at")):
-        return ScheduleResult(
-            success=False,
-            message=f"Could not parse time expression: {time_expression}",
-        ), None
-
-    schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
-    task_message = instruction.strip()
-    if not task_message:
-        task_message = f"Scheduled: {user_request[:100]}"
-    if description:
-        task_message = f"{description.strip()} — {task_message}"
-    created_at = utcnow().isoformat()
-
-    # Prepare entry dict depending on whether this is a one-off or recurring
-    entry = {
-        "id": schedule_id,
-        "message": task_message,
-        "user_request": user_request,
-        "last_run": None,
-        "created_at": created_at,
-    }
-
-    if parsed.get("scheduled_at"):
-        entry["scheduled_at"] = parsed["scheduled_at"]
-        next_run = scheduler.next_run_for_entry(entry)
-        logger.info(
-            "Created one-off schedule entry %s: %s (at %s)",
-            schedule_id,
-            task_message,
-            parsed["scheduled_at"],
-        )
-    else:
-        entry["cron_expression"] = parsed["cron_expression"]
-        next_run = scheduler.next_run_for_entry(
-            {
-                "cron_expression": parsed["cron_expression"],
-                "last_run": None,
-                "created_at": created_at,
-            }
-        )
-        logger.info(
-            "Created schedule entry %s: %s (%s)",
-            schedule_id,
-            task_message,
-            parsed["cron_expression"],
-        )
-
-    return ScheduleResult(
-        success=True,
-        schedule_id=schedule_id,
-        message=f"Scheduled task created: {task_message}",
-        next_run=next_run.isoformat() if next_run else None,
-    ), entry
-
-
-async def delete_scheduled_task(
-    schedule_id: str,
-    state_manager: Any | None = None,
-) -> ScheduleResult:
-    """
-    Delete a scheduled task by ID, removing it permanently from the schedule.
-
-    Unlike ``remove_scheduled_task`` (which only signals intent), this function
-    calls the state manager directly to persist the removal.
-
-    Args:
-        schedule_id: The ID of the task to delete (e.g. "sched_abc123").
-        state_manager: Optional StateManager instance.  When provided the entry
-            is removed from ``schedule.json``; otherwise only the ScheduleResult
-            is returned (useful for pure-logic tests).
-
-    Returns:
-        ScheduleResult with success=True if the entry was found and deleted, or
-        success=False with an explanatory message if the ID was not found.
-    """
-    if not schedule_id or not schedule_id.strip():
-        return ScheduleResult(
-            success=False,
-            message="schedule_id is required",
-        )
-
-    if state_manager is not None:
-        removed = await state_manager.remove_schedule_entry(schedule_id)
-        if not removed:
-            return ScheduleResult(
-                success=False,
-                schedule_id=schedule_id,
-                message=f"Task {schedule_id} not found",
-            )
-        logger.info("Deleted schedule entry %s", schedule_id)
-
-    return ScheduleResult(
-        success=True,
-        schedule_id=schedule_id,
-        message=f"Task {schedule_id} deleted",
-    )
-
-
-async def update_scheduled_task(
-    schedule_id: str,
-    updates: dict[str, Any],
-    state_manager: Any | None = None,
-) -> ScheduleResult:
-    """
-    Update fields of an existing scheduled task.
-
-    Allowed update keys include ``message``, ``cron_expression``,
-    ``scheduled_at``, and ``user_request``.  The ``id``, ``created_at``, and
-    ``last_run`` fields are intentionally excluded from the updates dict to
-    preserve task identity and execution history.
-
-    Args:
-        schedule_id: The ID of the task to update.
-        updates: Dict of fields to update (e.g. ``{"message": "new text",
-            "cron_expression": "0 10 * * *"}``).
-        state_manager: Optional StateManager instance for persistence.
-
-    Returns:
-        ScheduleResult with success=True when the entry was updated, or
-        success=False with an explanatory message on failure.
-    """
-    if not schedule_id or not schedule_id.strip():
-        return ScheduleResult(
-            success=False,
-            message="schedule_id is required",
-        )
-    if not updates:
-        return ScheduleResult(
-            success=False,
-            schedule_id=schedule_id,
-            message="updates dict must not be empty",
-        )
-
-    # Reject protected fields to prevent accidental corruption.
-    protected = {"id", "created_at", "last_run"}
-    bad_keys = protected & set(updates.keys())
-    if bad_keys:
-        return ScheduleResult(
-            success=False,
-            schedule_id=schedule_id,
-            message=f"Cannot update protected field(s): {', '.join(sorted(bad_keys))}",
-        )
-
-    if state_manager is not None:
-        updated = await state_manager.update_schedule_entry(schedule_id, updates)
-        if not updated:
-            return ScheduleResult(
-                success=False,
-                schedule_id=schedule_id,
-                message=f"Task {schedule_id} not found",
-            )
-        logger.info("Updated schedule entry %s: %s", schedule_id, list(updates.keys()))
-
-    return ScheduleResult(
-        success=True,
-        schedule_id=schedule_id,
-        message=f"Task {schedule_id} updated",
-    )
-
-
-async def pause_scheduled_task(
-    schedule_id: str,
-    state_manager: Any | None = None,
-) -> ScheduleResult:
-    """
-    Pause a scheduled task so it is skipped by the scheduler without being deleted.
-
-    Sets ``paused=True`` on the ScheduleEntry.  The entry is preserved in full
-    and can be resumed at any time with ``resume_scheduled_task``.
-
-    Args:
-        schedule_id: The ID of the task to pause.
-        state_manager: Optional StateManager instance for persistence.
-
-    Returns:
-        ScheduleResult with success=True when the entry was paused.
-    """
-    if not schedule_id or not schedule_id.strip():
-        return ScheduleResult(
-            success=False,
-            message="schedule_id is required",
-        )
-
-    if state_manager is not None:
-        updated = await state_manager.update_schedule_entry(schedule_id, {"paused": True})
-        if not updated:
-            return ScheduleResult(
-                success=False,
-                schedule_id=schedule_id,
-                message=f"Task {schedule_id} not found",
-            )
-        logger.info("Paused schedule entry %s", schedule_id)
-
-    return ScheduleResult(
-        success=True,
-        schedule_id=schedule_id,
-        message=f"Task {schedule_id} paused",
-    )
-
-
-async def resume_scheduled_task(
-    schedule_id: str,
-    state_manager: Any | None = None,
-) -> ScheduleResult:
-    """
-    Resume a previously paused scheduled task.
-
-    Sets ``paused=False`` on the ScheduleEntry, re-enabling normal scheduler
-    processing.
-
-    Args:
-        schedule_id: The ID of the task to resume.
-        state_manager: Optional StateManager instance for persistence.
-
-    Returns:
-        ScheduleResult with success=True when the entry was resumed.
-    """
-    if not schedule_id or not schedule_id.strip():
-        return ScheduleResult(
-            success=False,
-            message="schedule_id is required",
-        )
-
-    if state_manager is not None:
-        updated = await state_manager.update_schedule_entry(schedule_id, {"paused": False})
-        if not updated:
-            return ScheduleResult(
-                success=False,
-                schedule_id=schedule_id,
-                message=f"Task {schedule_id} not found",
-            )
-        logger.info("Resumed schedule entry %s", schedule_id)
-
-    return ScheduleResult(
-        success=True,
-        schedule_id=schedule_id,
-        message=f"Task {schedule_id} resumed",
-    )
-
-
-async def remove_scheduled_task(schedule_id: str) -> ScheduleResult:
-    """
-    Remove a scheduled task by ID.
-
-    Note: The actual removal happens in the state manager. This function
-    returns the ID to be removed.
-    """
-    return ScheduleResult(
-        success=True,
-        schedule_id=schedule_id,
-        message=f"Task {schedule_id} marked for removal",
-    )
-
-
-async def list_scheduled_tasks(schedule: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    List all scheduled tasks with their status.
-
-    Args:
-        schedule: Current schedule from state
-
-    Returns:
-        List of schedule entries with status info
-    """
-    result = []
-    scheduler = Scheduler()
-
-    for entry in schedule:
-        entry_dict = entry if isinstance(entry, dict) else entry.model_dump()
-
-        status = "scheduled"
-        next_run_dt = scheduler.next_run_for_entry(entry_dict)
-        next_run = next_run_dt.isoformat() if next_run_dt else "Unknown"
-        cron_expression = entry_dict.get("cron_expression")
-
-        result.append(
-            {
-                "id": entry_dict.get("id"),
-                "message": entry_dict.get("message"),
-                "status": status,
-                "next_run": str(next_run),
-                "cron_expression": cron_expression,
-                "last_run": entry_dict.get("last_run"),
-                "created_at": entry_dict.get("created_at"),
-            }
-        )
-
-    return result
 
 
 class ScheduleTool(BaseSystemTool):
@@ -613,18 +303,19 @@ SCHEDULE_TOOL_SPEC = build_tool_spec(
     name="schedule_task",
     description="""Schedule a task to run at a specific time or recurring interval.
 
-Use this tool when the user asks to:
-- Do something at a specific time (e.g., "remind me at 9am", "say hello tomorrow")
-- Set up recurring tasks (e.g., "check stock prices every day at 10am")
-- Schedule future actions (e.g., "in 30 minutes, tell me a joke")
+Use this tool when the user asks to schedule work. Convert the user's time
+request into explicit structured fields before calling the tool:
+- Use scheduled_at for one-off tasks, as an ISO8601 datetime.
+- Use cron_expression for recurring tasks.
 
 The tool takes:
 - user_request: The original user request
-- time_expression: The time/schedule (e.g., "at 9am", "every day at 9am", "in 30 minutes", "tomorrow")
 - instruction: A processed instruction that will run at the scheduled time as if the user sent it
+- scheduled_at: One-off ISO8601 datetime, mutually exclusive with cron_expression
+- cron_expression: Recurring cron expression, mutually exclusive with scheduled_at
 
-Example: If user says "say hello world at 9am", create:
-- time_expression: "every day at 9am" (or "at 9am" for one-time)
+Example: If user says "say hello world every day at 9am", create:
+- cron_expression: "0 9 * * *"
 - instruction: "Say 'Hello World!' to the user as they requested."
 """,
     args_model=ScheduleRequest,
