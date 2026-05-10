@@ -1,0 +1,372 @@
+"""Tests for explicit Progenitor graph builders."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from app.progenitor.graph.heartbeat_graph import (
+    create_runtime_heartbeat_graph,
+    validate_heartbeat_context,
+)
+from app.progenitor.graph.progenitor_graph import create_conversation_graph
+from app.progenitor.nodes.context import HeartbeatContext
+from app.progenitor.state.models import A2ATaskRecord, AsyncSubagentTaskRecord
+
+
+def test_create_conversation_graph_returns_native_deepagent_graph() -> None:
+    with patch("app.progenitor.graph.progenitor_graph.create_progenitor_agent") as mock_create:
+        mock_graph = MagicMock()
+        mock_create.return_value = mock_graph
+
+        result = create_conversation_graph(config=MagicMock())
+
+    assert result is mock_graph
+    mock_create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
+    state_manager = MagicMock()
+    state_manager.get_schedule = AsyncMock(return_value=[])
+    state_manager.get_a2a_tasks = AsyncMock(return_value=[])
+    state_manager.log_conversation = AsyncMock()
+    state_manager.save_messages = AsyncMock()
+    state_manager.update_a2a_task = AsyncMock()
+    record = A2ATaskRecord(
+        task_id="task-1",
+        agent_name="observe_agent",
+        status="completed",
+        summary="Observed logs.",
+    )
+    queues = _FakeQueues(a2a_completions=[record])
+    graph = create_runtime_heartbeat_graph()
+    context = _heartbeat_context(
+        state_manager=state_manager,
+        queues=queues,
+        tool_registry=_tool_registry(),
+    )
+
+    result = await graph.ainvoke({"messages": []}, context=context)
+
+    state_manager.log_conversation.assert_awaited_once()
+    state_manager.save_messages.assert_awaited_once()
+    state_manager.update_a2a_task.assert_awaited_once()
+    assert result["messages"][0].metadata["task_id"] == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_path) -> None:
+    state_manager = MagicMock()
+    state_manager.get_schedule = AsyncMock(return_value=[])
+    state_manager.get_a2a_tasks = AsyncMock(return_value=[])
+    state_manager.get_async_subagent_tasks = AsyncMock(
+        return_value=[
+            AsyncSubagentTaskRecord(
+                task_id="async-task-1",
+                agent_name="hello-world-async",
+                assistant_id="hello-world-async",
+                agent_url="http://127.0.0.1:9501/agent-protocol",
+                parent_thread_id="thread-1",
+                run_id="run-1",
+                status="running",
+                request_text="run later",
+            )
+        ]
+    )
+    state_manager.log_conversation = AsyncMock()
+    state_manager.save_messages = AsyncMock()
+    state_manager.update_async_subagent_task = AsyncMock()
+    queues = _FakeQueues()
+    graph = create_runtime_heartbeat_graph()
+    context = _heartbeat_context(
+        state_manager=state_manager,
+        queues=queues,
+        llm_client=None,
+    )
+    context.due_maintenance = {"async_subagent_poll"}
+
+    with patch(
+        "app.progenitor.nodes.async_subagents.refresh_tracked_async_subagent_task",
+        AsyncMock(
+            return_value=AsyncSubagentTaskRecord(
+                task_id="async-task-1",
+                agent_name="hello-world-async",
+                assistant_id="hello-world-async",
+                agent_url="http://127.0.0.1:9501/agent-protocol",
+                parent_thread_id="thread-1",
+                run_id="run-1",
+                status="success",
+                request_text="run later",
+                summary="HELLO_FROM_ASYNC_SUBAGENT",
+                latest_message="HELLO_FROM_ASYNC_SUBAGENT",
+            )
+        ),
+    ):
+        result = await graph.ainvoke({"messages": []}, context=context)
+
+    state_manager.log_conversation.assert_awaited_once()
+    state_manager.save_messages.assert_awaited_once()
+    state_manager.update_async_subagent_task.assert_awaited_once()
+    queues.push_event.assert_any_await(
+        "agent_message",
+        "Async subagent hello-world-async finished. task_id=async-task-1. Result: HELLO_FROM_ASYNC_SUBAGENT",
+        {
+            "source": "async_subagent_completion",
+            "task_id": "async-task-1",
+            "agent": "hello-world-async",
+            "status": "success",
+            "thread_id": "thread-1",
+        },
+    )
+    assert result["messages"][0].metadata["task_id"] == "async-task-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> None:
+    state_manager = MagicMock()
+    state_manager.save_current_state = AsyncMock()
+
+    tool_registry = _tool_registry()
+
+    class _FakeAgentGraph:
+        async def ainvoke(self, graph_input, config):  # noqa: ANN001
+            assert config == {"configurable": {"thread_id": "thread-1"}}
+            assert graph_input["messages"][0].content == "hello"
+            return {
+                "messages": [{"role": "assistant", "content": "ok"}],
+                "pending_response": "ok",
+            }
+
+    queues = _FakeQueues(input_item="hello", wait_seconds=0.25, pending_count=2)
+    live_state = {"thread_id": "thread-1", "messages": [], "tool_calls": [], "attachments": []}
+    context = _heartbeat_context(
+        queues=queues,
+        agent_graph=_FakeAgentGraph(),
+        live_state=live_state,
+        state_manager=state_manager,
+        health_state_dir=tmp_path / "state",
+        audit_logs_dir=tmp_path / "logs",
+        startup_audit_payload={"config": "redacted"},
+        tool_registry=tool_registry,
+        project_root=None,
+        llm_client=None,
+        idle_backoff_seconds=30.0,
+        scheduler_enabled=True,
+        scheduler_poll_seconds=30.0,
+        a2a_poll_seconds=5.0,
+        mcp_refresh_seconds=60.0,
+        registry_refresh_seconds=60.0,
+        heartbeat_health_seconds=30.0,
+        timezone="UTC",
+        reasoning_enabled=False,
+    )
+    graph = create_runtime_heartbeat_graph()
+
+    result = await graph.ainvoke(live_state, context=context)
+
+    assert result["last_cycle_response"] == "ok"
+    assert result["heartbeat_action"] == "processed"
+    assert result["current_input"] is None
+    state_manager.save_current_state.assert_awaited_once()
+    assert queues.last_input_timeout == 1.0
+    queues.signal_cycle_complete_mock.assert_called_once()
+    assert (tmp_path / "state" / "health.json").exists()
+    assert (tmp_path / "logs" / "decisions.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input(tmp_path) -> None:
+    state_manager = MagicMock()
+    state_manager.save_current_state = AsyncMock()
+
+    tool_registry = _tool_registry()
+
+    class _FakeAgentGraph:
+        async def ainvoke(self, graph_input, config):  # noqa: ANN001
+            assert config == {"configurable": {"thread_id": "thread-1"}}
+            assert graph_input["messages"][0].content == "hello"
+            return {
+                "messages": [{"role": "assistant", "content": "reply-token"}],
+                "pending_response": "reply-token",
+            }
+
+    queued_input = {
+        "content": "hello",
+        "metadata": {
+            "notify_on_completion": True,
+            "completion_event_type": "agent_message",
+        },
+    }
+    queues = _FakeQueues(input_item=queued_input)
+    live_state = {"thread_id": "thread-1", "messages": [], "tool_calls": [], "attachments": []}
+    context = _heartbeat_context(
+        queues=queues,
+        agent_graph=_FakeAgentGraph(),
+        live_state=live_state,
+        state_manager=state_manager,
+        health_state_dir=tmp_path / "state",
+        audit_logs_dir=tmp_path / "logs",
+        startup_audit_payload={"config": "redacted"},
+        tool_registry=tool_registry,
+        project_root=None,
+        llm_client=None,
+        idle_backoff_seconds=30.0,
+        scheduler_enabled=True,
+        scheduler_poll_seconds=30.0,
+        a2a_poll_seconds=5.0,
+        mcp_refresh_seconds=60.0,
+        registry_refresh_seconds=60.0,
+        heartbeat_health_seconds=30.0,
+        timezone="UTC",
+        reasoning_enabled=False,
+    )
+    graph = create_runtime_heartbeat_graph()
+
+    await graph.ainvoke(live_state, context=context)
+
+    queues.push_event.assert_any_await(
+        "agent_message",
+        "reply-token",
+        {"source": "heartbeat_input_completion", "thread_id": "thread-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_heartbeat_graph_reports_startup_node_errors(tmp_path) -> None:
+    state_manager = MagicMock()
+    state_manager.save_current_state = AsyncMock()
+
+    tool_registry = _tool_registry()
+
+    class _FakeAgentGraph:
+        async def ainvoke(self, graph_input, config):  # noqa: ANN001
+            assert config == {"configurable": {"thread_id": "thread-1"}}
+            assert graph_input["messages"][0].content == "hello"
+            return {
+                "messages": [{"role": "assistant", "content": "ok"}],
+                "pending_response": "ok",
+            }
+
+    async def _raising_startup_audit(_state, _runtime):  # noqa: ANN001
+        raise RuntimeError("startup audit exploded")
+
+    with patch(
+        "app.progenitor.graph.heartbeat_graph.startup_audit_node",
+        _raising_startup_audit,
+    ):
+        live_state = {"thread_id": "thread-1", "messages": [], "tool_calls": [], "attachments": []}
+        queues = _FakeQueues(input_item="hello", wait_seconds=0.25, pending_count=2)
+        context = _heartbeat_context(
+            queues=queues,
+            agent_graph=_FakeAgentGraph(),
+            live_state=live_state,
+            state_manager=state_manager,
+            health_state_dir=tmp_path / "state",
+            audit_logs_dir=tmp_path / "logs",
+            startup_audit_payload={"config": "redacted"},
+            tool_registry=tool_registry,
+            project_root=None,
+            llm_client=None,
+            idle_backoff_seconds=30.0,
+            scheduler_enabled=True,
+            scheduler_poll_seconds=30.0,
+            a2a_poll_seconds=5.0,
+            mcp_refresh_seconds=60.0,
+            registry_refresh_seconds=60.0,
+            heartbeat_health_seconds=30.0,
+            timezone="UTC",
+            reasoning_enabled=False,
+        )
+        graph = create_runtime_heartbeat_graph()
+
+    result = await graph.ainvoke(live_state, context=context)
+
+    assert result["last_cycle_response"] == "ok"
+    queues.push_event.assert_any_await(
+        "error",
+        "Heartbeat node startup_audit failed: startup audit exploded",
+        {"heartbeat_node": "startup_audit"},
+    )
+    queues.signal_cycle_complete_mock.assert_called_once()
+    health_payload = json.loads((tmp_path / "state" / "health.json").read_text(encoding="utf-8"))
+    assert health_payload["status"] == "error"
+    assert health_payload["error"] == "Heartbeat node startup_audit failed: startup audit exploded"
+
+
+def test_runtime_heartbeat_graph_rejects_invalid_intervals(tmp_path) -> None:
+    with pytest.raises(ValueError, match="input_timeout must be greater than 0"):
+        validate_heartbeat_context(
+            _heartbeat_context(
+                input_timeout=0.0,
+            )
+        )
+
+
+def _heartbeat_context(**overrides):
+    values = {
+        "queues": _FakeQueues(),
+        "agent_graph": MagicMock(),
+        "live_state": {},
+        "state_manager": MagicMock(),
+        "health_state_dir": ".",
+        "audit_logs_dir": None,
+        "startup_audit_payload": None,
+        "tool_registry": _tool_registry(),
+        "project_root": None,
+        "llm_client": None,
+        "idle_backoff_seconds": 30.0,
+        "scheduler_enabled": True,
+        "scheduler_poll_seconds": 30.0,
+        "a2a_poll_seconds": 5.0,
+        "async_subagent_poll_seconds": 5.0,
+        "mcp_refresh_seconds": 60.0,
+        "registry_refresh_seconds": 60.0,
+        "heartbeat_health_seconds": 30.0,
+        "timezone": "UTC",
+        "reasoning_enabled": False,
+    }
+    values.update(overrides)
+    return HeartbeatContext(**values)
+
+
+class _FakeQueues:
+    def __init__(
+        self,
+        input_item=None,  # noqa: ANN001
+        *,
+        wait_seconds: float = 0.0,
+        pending_count: int = 0,
+        a2a_completions: list[A2ATaskRecord] | None = None,
+    ) -> None:
+        self.input_item = input_item
+        self.last_input_timeout: float | None = None
+        self.current_input_wait_seconds = wait_seconds
+        self.current_input_pending_count = pending_count
+        self.a2a_completions = list(a2a_completions or [])
+        self.push_event = AsyncMock()
+        self.enqueue_input = AsyncMock(return_value=True)
+        self.signal_cycle_complete_mock = MagicMock()
+
+    async def get_input(self, timeout: float):  # noqa: ANN201
+        self.last_input_timeout = timeout
+        return self.input_item
+
+    def get_queue_stats(self) -> dict[str, dict[str, int | bool]]:
+        return {"input_queue": {"size": 0, "maxsize": 5, "full": False}}
+
+    def signal_cycle_complete(self) -> None:
+        self.signal_cycle_complete_mock()
+
+    def drain_a2a_completions(self) -> list[A2ATaskRecord]:
+        records = self.a2a_completions
+        self.a2a_completions = []
+        return records
+
+
+def _tool_registry() -> MagicMock:
+    tool_registry = MagicMock()
+    tool_registry.get_agents.return_value = []
+    return tool_registry

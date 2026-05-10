@@ -9,7 +9,7 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..runtime.time_utils import utcnow
+from ..utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +210,84 @@ class A2ATaskRecord(BaseModel):
         return self.status_value in TERMINAL_A2A_TASK_STATUSES
 
 
+class AsyncSubagentTaskStatus(StrEnum):
+    """Lifecycle states for tracked DeepAgents async subagent tasks."""
+
+    RUNNING = "running"
+    SUCCESS = "success"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
+TERMINAL_ASYNC_SUBAGENT_TASK_STATUSES = frozenset(
+    {
+        AsyncSubagentTaskStatus.SUCCESS.value,
+        AsyncSubagentTaskStatus.ERROR.value,
+        AsyncSubagentTaskStatus.CANCELLED.value,
+    }
+)
+
+
+class AsyncSubagentTaskRecord(BaseModel):
+    """Persisted metadata for a DeepAgents async subagent task."""
+
+    model_config = {"use_enum_values": True}
+
+    task_id: str
+    agent_name: str
+    assistant_id: str
+    agent_url: str
+    parent_thread_id: str | None = None
+    run_id: str
+    source: str = "start_async_task"
+    request_text: str = ""
+    request_metadata: dict[str, Any] = Field(default_factory=dict)
+    status: AsyncSubagentTaskStatus = AsyncSubagentTaskStatus.RUNNING
+    summary: str | None = None
+    latest_message: str | None = None
+    last_error: str | None = None
+    latest_run: dict[str, Any] | None = None
+    notify_on_completion: bool = True
+    notification_sent_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    completed_at: datetime | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, v: Any) -> AsyncSubagentTaskStatus:
+        """Convert raw async-subagent status strings into the normalized enum."""
+        if isinstance(v, AsyncSubagentTaskStatus):
+            return v
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            if normalized == "cancelled":
+                normalized = AsyncSubagentTaskStatus.CANCELLED.value
+            try:
+                return AsyncSubagentTaskStatus(normalized)
+            except ValueError:
+                logger.warning(
+                    "Unknown AsyncSubagentTaskStatus %r, defaulting to RUNNING",
+                    v,
+                )
+                return AsyncSubagentTaskStatus.RUNNING
+        logger.warning(
+            "Unexpected AsyncSubagentTaskRecord status type %s, defaulting to RUNNING",
+            type(v).__name__,
+        )
+        return AsyncSubagentTaskStatus.RUNNING
+
+    @property
+    def status_value(self) -> str:
+        """Return the current status value as a string."""
+        return self.status
+
+    @property
+    def is_terminal(self) -> bool:
+        """Return whether the task reached a terminal lifecycle state."""
+        return self.status_value in TERMINAL_ASYNC_SUBAGENT_TASK_STATUSES
+
+
 class ConversationMessage(BaseModel):
     """A message in the conversation history."""
 
@@ -218,6 +296,15 @@ class ConversationMessage(BaseModel):
     content: str
     timestamp: datetime = Field(default_factory=utcnow)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BackgroundTaskEntry(BaseModel):
+    """Persisted background work item that Heartbeat can drain and execute."""
+
+    id: str
+    content: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class ConversationState(TypedDict, total=False):
@@ -242,7 +329,30 @@ class SchedulingState(TypedDict, total=False):
     new_schedule_entry: ScheduleEntry | None
     current_time: datetime | None
     due_items: list[str]
+    scheduled_enqueued_count: int
+    last_schedule_poll_at: str | None
     agents: list[AgentRegistryEntry]
+    a2a_completed_task: A2ATaskRecord | None
+    a2a_completed_tasks: list[A2ATaskRecord]
+    last_a2a_poll_at: str | None
+    a2a_poll_ran: bool
+    async_subagent_completed_task: AsyncSubagentTaskRecord | None
+    async_subagent_completed_tasks: list[AsyncSubagentTaskRecord]
+    last_async_subagent_poll_at: str | None
+    async_subagent_poll_ran: bool
+    last_mcp_refresh_at: str | None
+    mcp_refresh_summary: dict[str, Any] | None
+    last_registry_discovery_at: str | None
+    registry_discovery_summary: dict[str, Any] | None
+    last_registry_refresh_at: str | None
+    registry_refresh_summary: dict[str, Any] | None
+    last_health_write_at: str | None
+    is_scheduled_input: bool
+    scheduled_message: str | None
+    scheduled_result_status: str | None
+    health_status_override: str | None
+    health_error: str | None
+    health: dict[str, Any]
 
 
 class LoopControlState(TypedDict, total=False):
@@ -253,6 +363,16 @@ class LoopControlState(TypedDict, total=False):
     shutdown_requested: bool
     last_commit_time: datetime | None
     thread_id: str
+    requested_thread_id: str | None
+    is_isolated_thread: bool
+    queued_input: Any
+    cycle_source: str | None
+    cycle_error: str | None
+    cycle_complete_signalled: bool
+    idle_cycles: int
+    current_backoff_seconds: float
+    startup_audit_logged: bool
+    heartbeat_action: str | None
     last_validation_result: dict[str, Any] | None
     validation_result_v2: dict[str, Any] | None
     last_checkpoint: str | None

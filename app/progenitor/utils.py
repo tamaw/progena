@@ -6,6 +6,7 @@ Helpers for working with data structures and environment variable parsing.
 
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Any, TypeVar, cast
 
 logger = logging.getLogger(__name__)
@@ -126,3 +127,20 @@ def env_list(key: str, default: list[str] | None = None) -> list[str]:
     if val:
         return [item.strip() for item in val.split(",") if item.strip()]
     return default or []
+
+
+def utcnow() -> datetime:
+    """Get current UTC time as timezone-aware datetime."""
+    return datetime.now(UTC)
+
+
+def utcnow_isoformat() -> str:
+    """Get current UTC time as ISO format string."""
+    return utcnow().isoformat()
+
+
+def format_timestamp(dt: datetime | None = None) -> str:
+    """Format a datetime for file naming. Uses current time if not provided."""
+    if dt is None:
+        dt = utcnow()
+    return dt.strftime("%Y%m%d_%H%M%S")

@@ -12,18 +12,21 @@ Features:
 - Automatic reconnection
 """
 
-from .client import IPCClient
-from .protocol import (
-    IPCMessage,
-    MessageType,
-    agent_event,
-    decode_message,
-    encode_message,
-    read_message,
-    stream_event,
-    write_message,
-)
-from .server import IPCServer
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .client import IPCClient
+    from .protocol import (
+        IPCMessage,
+        MessageType,
+        agent_event,
+        decode_message,
+        encode_message,
+        read_message,
+        stream_event,
+        write_message,
+    )
+    from .server import IPCServer
 
 __all__ = [
     "MessageType",
@@ -34,6 +37,31 @@ __all__ = [
     "write_message",
     "agent_event",
     "stream_event",
-    "IPCServer",
     "IPCClient",
+    "IPCServer",
 ]
+
+
+def __getattr__(name: str):
+    if name == "IPCClient":
+        from .client import IPCClient
+
+        return IPCClient
+    if name == "IPCServer":
+        from .server import IPCServer
+
+        return IPCServer
+    if name in {
+        "IPCMessage",
+        "MessageType",
+        "agent_event",
+        "decode_message",
+        "encode_message",
+        "read_message",
+        "stream_event",
+        "write_message",
+    }:
+        from . import protocol
+
+        return getattr(protocol, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

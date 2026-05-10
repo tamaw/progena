@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from app.progenitor.registry import ToolRegistry
 from app.progenitor.state.models import AgentRegistryEntry
-from app.progenitor.tools.registry import ToolRegistry
 
 
 class TestToolRegistry:

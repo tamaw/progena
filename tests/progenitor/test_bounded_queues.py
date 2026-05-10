@@ -10,6 +10,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langgraph.runtime import Runtime
 
 
 @dataclass
@@ -55,7 +56,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test fixtures."""
-        from app.progenitor.runtime.loop import ProgenitorLoop
+        from app.progenitor.runtime.heartbeat import ProgenitorLoop
 
         self.config = MockConfig()
         self.state_manager = MagicMock()
@@ -74,28 +75,24 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
     async def test_input_queue_is_bounded(self):
         """Test that input queue has a max size."""
-        assert self.loop._input_queue.maxsize == 5
+        assert self.loop.queues.input_queue.maxsize == 5
 
     async def test_output_queue_is_bounded(self):
         """Test that output queue has a max size."""
-        assert self.loop._output_queue.maxsize == 5
-
-    async def test_stream_queue_is_bounded(self):
-        """Test that stream queue has a max size."""
-        assert self.loop._stream_queue.maxsize == 10
+        assert self.loop.queues.output_queue.maxsize == 5
 
     async def test_enqueue_input_success(self):
         """Test successful input enqueue."""
-        result = await self.loop.enqueue_input("test message")
+        result = await self.loop.queues.enqueue_input("test message")
         assert result is True
-        assert self.loop._input_queue.qsize() == 1
+        assert self.loop.queues.input_queue.qsize() == 1
 
     async def test_enqueue_input_stores_queued_input_wrapper(self):
         """Enqueued items should carry both content and enqueue timing."""
-        from app.progenitor.runtime.loop import QueuedInput
+        from app.progenitor.runtime.heartbeat import QueuedInput
 
-        await self.loop.enqueue_input("wrapped message")
-        queued = self.loop._input_queue.get_nowait()
+        await self.loop.queues.enqueue_input("wrapped message")
+        queued = self.loop.queues.input_queue.get_nowait()
 
         assert isinstance(queued, QueuedInput)
         assert queued.content == "wrapped message"
@@ -103,84 +100,72 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_input_records_wait_time(self):
         """Dequeuing input should capture how long the message waited."""
-        await self.loop.enqueue_input("timed message")
+        await self.loop.queues.enqueue_input("timed message")
         await asyncio.sleep(0.05)
 
-        result = await self.loop._get_input(timeout=1.0)
+        result = await self.loop.queues.get_input(timeout=1.0)
 
         assert result == "timed message"
-        assert self.loop._current_input_wait_seconds >= 0.0
-        assert self.loop._current_input_wait_seconds < 10.0
+        assert self.loop.queues.current_input_wait_seconds >= 0.0
+        assert self.loop.queues.current_input_wait_seconds < 10.0
 
     async def test_get_input_records_pending_count(self):
         """Dequeuing input should record how many messages remain queued."""
         for index in range(3):
-            await self.loop.enqueue_input(f"message {index}")
+            await self.loop.queues.enqueue_input(f"message {index}")
 
-        assert await self.loop._get_input(timeout=1.0) == "message 0"
-        assert self.loop._current_input_pending_count == 2
+        assert await self.loop.queues.get_input(timeout=1.0) == "message 0"
+        assert self.loop.queues.current_input_pending_count == 2
 
-        assert await self.loop._get_input(timeout=1.0) == "message 1"
-        assert self.loop._current_input_pending_count == 1
+        assert await self.loop.queues.get_input(timeout=1.0) == "message 1"
+        assert self.loop.queues.current_input_pending_count == 1
 
-        assert await self.loop._get_input(timeout=1.0) == "message 2"
-        assert self.loop._current_input_pending_count == 0
+        assert await self.loop.queues.get_input(timeout=1.0) == "message 2"
+        assert self.loop.queues.current_input_pending_count == 0
 
     async def test_enqueue_input_with_timeout(self):
         """Test enqueue with timeout when queue is full."""
         # Fill the queue
         for i in range(5):
-            await self.loop.enqueue_input(f"message {i}")
+            await self.loop.queues.enqueue_input(f"message {i}")
 
         # Queue should now be full
-        assert self.loop._input_queue.full()
+        assert self.loop.queues.input_queue.full()
 
         # Try to enqueue with short timeout - should fail
-        result = await self.loop.enqueue_input("overflow", timeout=0.1)
+        result = await self.loop.queues.enqueue_input("overflow", timeout=0.1)
         assert result is False
 
     async def test_enqueue_input_non_blocking_raises_on_full(self):
         """Test non-blocking enqueue raises QueueFull when full."""
         # Fill the queue
         for i in range(5):
-            await self.loop.enqueue_input(f"message {i}")
+            await self.loop.queues.enqueue_input(f"message {i}")
 
         # Non-blocking mode (timeout=0) should raise
         with pytest.raises(asyncio.QueueFull):
-            await self.loop.enqueue_input("overflow", timeout=0)
+            await self.loop.queues.enqueue_input("overflow", timeout=0)
 
     async def test_send_output_drops_on_full(self):
         """Test that output drops messages when queue is full."""
         # Fill the output queue
         for i in range(5):
-            self.loop._output_queue.put_nowait(f"output {i}")
+            self.loop.queues.output_queue.put_nowait(f"output {i}")
 
         # Should not raise, just log warning and drop
-        await self.loop._send_output("overflow message")
+        await self.loop.queues.send_output("overflow message")
 
         # Queue size should still be 5
-        assert self.loop._output_queue.qsize() == 5
-
-    async def test_send_stream_chunk_drops_on_full(self):
-        """Test that stream chunks are dropped when queue is full."""
-        # Fill the stream queue
-        for i in range(10):
-            self.loop._stream_queue.put_nowait({"content": f"chunk {i}"})
-
-        # Should not raise, just log warning and drop
-        await self.loop._send_stream_chunk("overflow chunk")
-
-        # Queue size should still be 10
-        assert self.loop._stream_queue.qsize() == 10
+        assert self.loop.queues.output_queue.qsize() == 5
 
     async def test_get_queue_stats(self):
         """Test queue statistics reporting."""
         # Add some items
-        await self.loop.enqueue_input("msg1")
-        await self.loop.enqueue_input("msg2")
-        self.loop._output_queue.put_nowait("out1")
+        await self.loop.queues.enqueue_input("msg1")
+        await self.loop.queues.enqueue_input("msg2")
+        self.loop.queues.output_queue.put_nowait("out1")
 
-        stats = self.loop.get_queue_stats()
+        stats = self.loop.queues.get_queue_stats()
 
         assert stats["input_queue"]["size"] == 2
         assert stats["input_queue"]["maxsize"] == 5
@@ -198,47 +183,57 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         """Test queue stats when queues are full."""
         # Fill input queue
         for i in range(5):
-            await self.loop.enqueue_input(f"msg {i}")
+            await self.loop.queues.enqueue_input(f"msg {i}")
 
-        stats = self.loop.get_queue_stats()
+        stats = self.loop.queues.get_queue_stats()
 
         assert stats["input_queue"]["full"] is True
 
     async def test_scheduler_enqueues_all_due_items(self):
         """Scheduler should enqueue every due task in a single poll cycle."""
-        scheduler = MagicMock()
-        scheduler.get_due_items.return_value = [
+        from app.progenitor.nodes.schedule import scheduler_tick_node
+        from app.progenitor.utils import utcnow
+
+        due_time = utcnow().replace(microsecond=0).isoformat()
+        due_items = [
             {
                 "id": "sched-1",
                 "message": "first task",
-                "cron_expression": "0 9 * * *",
+                "scheduled_at": due_time,
             },
             {
                 "id": "sched-2",
                 "message": "second task",
-                "cron_expression": "0 10 5 5 *",
+                "scheduled_at": due_time,
             },
         ]
-        scheduler.is_one_shot_expression.side_effect = [False, True]
 
-        self.state_manager.get_schedule.return_value = scheduler.get_due_items.return_value
+        self.state_manager.get_schedule.return_value = due_items
 
-        count = await self.loop._check_and_enqueue_scheduled_work(scheduler)
+        self.loop.heartbeat_context.scheduler_enabled = True
+        self.loop.heartbeat_context.scheduler_poll_seconds = 0.1
+        self.loop.heartbeat_context.due_maintenance = {"schedule_tick"}
+        updates = await scheduler_tick_node(
+            cast(Any, {}),
+            Runtime(context=self.loop.heartbeat_context),
+        )
+        count = int(updates.get("scheduled_enqueued_count") or 0)
 
         assert count == 2
-        assert self.loop._input_queue.qsize() == 2
-        self.state_manager.update_schedule_entry.assert_awaited_once()
-        self.state_manager.remove_schedule_entry.assert_awaited_once_with("sched-2")
+        assert self.loop.queues.input_queue.qsize() == 2
+        self.state_manager.update_schedule_entry.assert_not_awaited()
+        self.state_manager.remove_schedule_entry.assert_any_await("sched-1")
+        self.state_manager.remove_schedule_entry.assert_any_await("sched-2")
 
     async def test_enqueue_input_none_timeout_waits_forever(self):
         """Test that timeout=None waits indefinitely (until space available)."""
         # Fill the queue
         for i in range(5):
-            await self.loop.enqueue_input(f"message {i}")
+            await self.loop.queues.enqueue_input(f"message {i}")
 
         # Start a task that will add with no timeout
         async def slow_enqueue():
-            return await self.loop.enqueue_input("delayed", timeout=None)
+            return await self.loop.queues.enqueue_input("delayed", timeout=None)
 
         # Start enqueue task
         task = asyncio.create_task(slow_enqueue())
@@ -250,7 +245,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert not task.done()
 
         # Free up space
-        await self.loop._input_queue.get()
+        await self.loop.queues.input_queue.get()
 
         # Now task should complete
         await asyncio.sleep(0.1)
@@ -262,8 +257,8 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         """Due one-off-like cron tasks should enqueue input and be removed."""
         from datetime import timedelta
 
-        from app.progenitor.runtime.scheduler import Scheduler
-        from app.progenitor.runtime.time_utils import utcnow
+        from app.progenitor.nodes.schedule import scheduler_tick_node
+        from app.progenitor.utils import utcnow
 
         now = utcnow().replace(microsecond=0)
         due_time = (now - timedelta(minutes=1)).isoformat()
@@ -278,20 +273,28 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
                 }
             ]
         )
-        self.loop.enqueue_input = AsyncMock(return_value=True)
+        enqueue_input = AsyncMock(return_value=True)
+        self.loop.heartbeat_context.queues.enqueue_input = enqueue_input
 
-        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+        self.loop.heartbeat_context.scheduler_enabled = True
+        self.loop.heartbeat_context.scheduler_poll_seconds = 0.1
+        self.loop.heartbeat_context.due_maintenance = {"schedule_tick"}
+        updates = await scheduler_tick_node(
+            cast(Any, {}),
+            Runtime(context=self.loop.heartbeat_context),
+        )
+        fired = int(updates.get("scheduled_enqueued_count") or 0)
 
         assert fired == 1
-        self.loop.enqueue_input.assert_awaited_once()
+        enqueue_input.assert_awaited_once()
         self.state_manager.remove_schedule_entry.assert_awaited_once_with("sched_one_off")
 
     async def test_scheduler_dispatches_recurring_task(self):
         """Due recurring tasks should enqueue input and advance schedule."""
         from datetime import timedelta
 
-        from app.progenitor.runtime.scheduler import Scheduler
-        from app.progenitor.runtime.time_utils import utcnow
+        from app.progenitor.nodes.schedule import scheduler_tick_node
+        from app.progenitor.utils import utcnow
 
         due_time = (utcnow() - timedelta(minutes=10)).replace(microsecond=0).isoformat()
         self.state_manager.get_schedule = AsyncMock(
@@ -305,12 +308,20 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
                 }
             ]
         )
-        self.loop.enqueue_input = AsyncMock(return_value=True)
+        enqueue_input = AsyncMock(return_value=True)
+        self.loop.heartbeat_context.queues.enqueue_input = enqueue_input
 
-        fired = await self.loop._check_and_enqueue_scheduled_work(Scheduler("UTC"))
+        self.loop.heartbeat_context.scheduler_enabled = True
+        self.loop.heartbeat_context.scheduler_poll_seconds = 0.1
+        self.loop.heartbeat_context.due_maintenance = {"schedule_tick"}
+        updates = await scheduler_tick_node(
+            cast(Any, {}),
+            Runtime(context=self.loop.heartbeat_context),
+        )
+        fired = int(updates.get("scheduled_enqueued_count") or 0)
 
         assert fired == 1
-        self.loop.enqueue_input.assert_awaited_once()
+        enqueue_input.assert_awaited_once()
         self.state_manager.update_schedule_entry.assert_awaited_once()
 
 
@@ -319,7 +330,7 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
 
     async def test_custom_queue_sizes(self):
         """Test that custom queue sizes are respected."""
-        from app.progenitor.runtime.loop import ProgenitorLoop
+        from app.progenitor.runtime.heartbeat import ProgenitorLoop
 
         config = MockConfig(
             runtime=MockRuntimeConfig(
@@ -336,9 +347,8 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
             config=cast(Any, config),
         )
 
-        assert loop._input_queue.maxsize == 50
-        assert loop._output_queue.maxsize == 25
-        assert loop._stream_queue.maxsize == 500
+        assert loop.queues.input_queue.maxsize == 50
+        assert loop.queues.output_queue.maxsize == 25
 
 
 class TestConfigQueueSettings(unittest.TestCase):
@@ -372,60 +382,52 @@ class TestConfigQueueSettings(unittest.TestCase):
             assert config.max_output_queue_size == 150
             assert config.max_stream_queue_size == 2000
 
-    def test_queue_sizes_from_file_config(self):
-        """Test loading queue sizes from file config."""
+    def test_queue_sizes_use_code_defaults_without_file_config(self):
+        """Runtime queue defaults are not pulled from saved config payloads."""
         from app.progenitor.config import RuntimeConfig
 
-        file_config = {
-            "max_input_queue_size": 75,
-            "max_output_queue_size": 60,
-            "max_stream_queue_size": 800,
-        }
+        config = RuntimeConfig.from_env()
 
-        config = RuntimeConfig.from_env(file_config=file_config)
-
-        assert config.max_input_queue_size == 75
-        assert config.max_output_queue_size == 60
-        assert config.max_stream_queue_size == 800
+        assert config.max_input_queue_size == 100
+        assert config.max_output_queue_size == 100
+        assert config.max_stream_queue_size == 1000
 
 
 class TestReasoningTraceExtraction(unittest.TestCase):
     """Tests for runtime reasoning extraction helpers."""
 
-    def setUp(self):
-        from app.progenitor.runtime.loop import ProgenitorLoop
-
-        config = MockConfig()
-        state_manager = MagicMock()
-        state_manager.state_dir = Path(tempfile.mkdtemp())
-        self.loop = ProgenitorLoop(
-            graph=MagicMock(),
-            state_manager=state_manager,
-            config=cast(Any, config),
-        )
-
     def test_extracts_from_response_metadata(self):
+        from app.progenitor.runtime.messages import extract_reasoning_trace
+
         msg = SimpleNamespace(response_metadata={"reasoning": {"summary": "done"}})
-        trace = self.loop._extract_reasoning_trace(msg)
+        trace = extract_reasoning_trace(msg)
         assert trace is not None and "summary" in trace
 
     def test_extracts_summary_effort_schema(self):
+        from app.progenitor.runtime.messages import extract_reasoning_trace
+
         msg = SimpleNamespace(response_metadata={"effort": "medium", "summary": "detailed"})
-        trace = self.loop._extract_reasoning_trace(msg)
+        trace = extract_reasoning_trace(msg)
         assert trace is not None and "medium" in trace and "detailed" in trace
 
     def test_extracts_from_content_parts(self):
+        from app.progenitor.runtime.messages import extract_reasoning_trace
+
         msg = {
             "role": "assistant",
             "content": [{"type": "reasoning", "text": "step-by-step"}],
         }
-        assert self.loop._extract_reasoning_trace(msg) == "step-by-step"
+        assert extract_reasoning_trace(msg) == "step-by-step"
 
     def test_extract_message_text_from_string_content(self):
+        from app.progenitor.runtime.messages import extract_message_text
+
         msg = {"role": "assistant", "content": "hello there"}
-        assert self.loop._extract_message_text(msg) == "hello there"
+        assert extract_message_text(msg) == "hello there"
 
     def test_extract_message_text_from_list_blocks(self):
+        from app.progenitor.runtime.messages import extract_message_text
+
         msg = {
             "role": "assistant",
             "content": [
@@ -433,14 +435,16 @@ class TestReasoningTraceExtraction(unittest.TestCase):
                 {"type": "text", "text": "two"},
             ],
         }
-        assert self.loop._extract_message_text(msg) == "one\ntwo"
+        assert extract_message_text(msg) == "one\ntwo"
 
     def test_finds_last_assistant_message(self):
+        from app.progenitor.runtime.messages import get_last_ai_message
+
         messages = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello", "response_metadata": {"thinking": "brief"}},
         ]
-        msg = self.loop._get_last_ai_message(messages)
+        msg = get_last_ai_message(messages)
         assert isinstance(msg, dict)
         assert msg["role"] == "assistant"
 

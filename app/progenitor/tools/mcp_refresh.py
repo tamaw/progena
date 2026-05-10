@@ -7,7 +7,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from ..config import MCPConfig
-from .mcp import refresh_mcp_runtime
+from ..mcp import attach_mcp_runtime_context, reload_mcp_runtime_context
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ class MCPRefreshTool(BaseSystemTool):
         persist = bool(args.get("persist", True))
 
         if persist:
-            await refresh_mcp_runtime(
+            await reload_mcp_runtime_context(
                 llm_client,
                 context.tool_registry,
                 mcp_config,
@@ -60,13 +60,13 @@ class MCPRefreshTool(BaseSystemTool):
             )
         else:
             refreshed_config = MCPConfig.load(config_path=mcp_config.config_path)
-            from .mcp import setup_mcp_for_llm_client
+            await attach_mcp_runtime_context(llm_client, refreshed_config)
 
-            await setup_mcp_for_llm_client(llm_client, refreshed_config)
+        mcp_runtime = llm_client.mcp_runtime
 
         return ToolResult.ok(
             {
                 "success": True,
-                "tool_count": len(getattr(llm_client, "mcp_tools", None) or []),
+                "tool_count": len(mcp_runtime.mcp_tools if mcp_runtime is not None else []),
             }
         )

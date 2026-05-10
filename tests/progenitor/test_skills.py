@@ -97,14 +97,14 @@ class TestSkillsWiring:
             ),
         )
         with (
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
-            with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
+            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
-                from app.progenitor.agent.deep_agent import create_progenitor_agent
+                from app.progenitor.agent.agent import create_progenitor_agent
 
                 create_progenitor_agent(
                     config=fake_config,
@@ -117,7 +117,7 @@ class TestSkillsWiring:
                 assert call_kwargs["skills"] == ["data/skills/progenitor"]
 
     def test_factory_auto_discovers_skills_dir(self):
-        """When no skills_dirs given, auto-discovers from data/skills/progenitor/."""
+        """When no skills_dirs given, auto-discovers the backend-mounted skill source."""
         fake_config = SimpleNamespace(
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
@@ -126,14 +126,14 @@ class TestSkillsWiring:
             ),
         )
         with (
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
-            with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
+            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
-                from app.progenitor.agent.deep_agent import create_progenitor_agent
+                from app.progenitor.agent.agent import create_progenitor_agent
 
                 # Use project root (which has data/skills/progenitor/)
                 create_progenitor_agent(
@@ -143,4 +143,4 @@ class TestSkillsWiring:
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
-                assert call_kwargs.get("skills") is not None
+                assert call_kwargs.get("skills") == ["/data/skills/progenitor"]

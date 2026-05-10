@@ -33,17 +33,17 @@ class TestRuntimeMemoryWiring:
         config = _fake_config(tmp_path)
 
         with (
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
-            patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
-            mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.deep_agent import create_progenitor_agent
+            from app.progenitor.agent.agent import create_progenitor_agent
 
             create_progenitor_agent(
                 config=config,
@@ -58,17 +58,17 @@ class TestRuntimeMemoryWiring:
         config = _fake_config(tmp_path)
 
         with (
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
-            patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
-            mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.deep_agent import (
+            from app.progenitor.agent.agent import (
                 DEFAULT_RUNTIME_MEMORY_CONTENT,
                 create_progenitor_agent,
             )
@@ -91,17 +91,17 @@ class TestRuntimeMemoryWiring:
         memory_file.write_text("Prefer concise summaries.\n", encoding="utf-8")
 
         with (
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model,
-            patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
-            mock_prompts.return_value.get_genesis_prompt.return_value = "GENESIS"
+            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.deep_agent import create_progenitor_agent
+            from app.progenitor.agent.agent import create_progenitor_agent
 
             create_progenitor_agent(
                 config=config,

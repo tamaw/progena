@@ -5,7 +5,8 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from app.progenitor.llm.prompts import resolve_prompts_dir
+from app.progenitor.prompts import load_prompt as load_repo_prompt
+from app.progenitor.prompts import resolve_prompts_dir
 
 
 @lru_cache(maxsize=1)
@@ -21,11 +22,8 @@ def load_prompt(
     **replacements: str,
 ) -> str:
     """Load an observe_agent prompt file and apply simple replacements."""
-    prompt_path = get_prompts_dir(prompts_dir) / filename
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"observe_agent prompt file not found: {prompt_path}")
-
-    content = prompt_path.read_text(encoding="utf-8")
-    for key, value in replacements.items():
-        content = content.replace(f"{{{key}}}", str(value))
-    return content
+    return load_repo_prompt(
+        f"observe_agent/{filename}",
+        prompts_dir=resolve_prompts_dir(prompts_dir),
+        **replacements,
+    )

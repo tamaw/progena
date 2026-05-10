@@ -85,7 +85,6 @@ class TestAgentDiscovery:
     def mock_registry(self):
         """Create a mock registry."""
         registry = MagicMock()
-        registry.allocate_port = MagicMock(return_value=8100)
         registry.register_agent = AsyncMock()
         return registry
 
@@ -164,14 +163,18 @@ class TestAgentDiscovery:
         assert agent.entrypoint == "http_agent.py"
         assert agent.transport == "http"
 
-    def test_fallback_extraction_detects_http_in_content(self, mock_llm_client, mock_registry, tmp_path):
+    def test_fallback_extraction_detects_http_in_content(
+        self, mock_llm_client, mock_registry, tmp_path
+    ):
         """Test fallback extraction detects HTTP from content."""
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
 
         agent_folder = agents_dir / "my_agent"
         agent_folder.mkdir()
-        (agent_folder / "agent.py").write_text('"""My Agent."""\nfrom aiohttp import web\nclass MyAgent: pass')
+        (agent_folder / "agent.py").write_text(
+            '"""My Agent."""\nfrom aiohttp import web\nclass MyAgent: pass'
+        )
 
         discovery = AgentDiscovery(
             agents_dir=agents_dir,
@@ -191,7 +194,9 @@ class TestAgentDiscovery:
 
         agent_folder = agents_dir / "doc_agent"
         agent_folder.mkdir()
-        (agent_folder / "agent.py").write_text('"""This is a greeting agent that says hello."""\nclass Agent: pass')
+        (agent_folder / "agent.py").write_text(
+            '"""This is a greeting agent that says hello."""\nclass Agent: pass'
+        )
 
         discovery = AgentDiscovery(
             agents_dir=agents_dir,
@@ -243,3 +248,61 @@ class TestAgentDiscoveryIntegration:
         assert result["success"] is True
         assert result["agents_found"] == 0
         assert result["agents_registered"] == 0
+
+    @pytest.mark.asyncio
+    async def test_register_agent_uses_explicit_url(self, tmp_path):
+        """Discovery should register explicit endpoints without allocating ports."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        mock_llm = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.register_agent = AsyncMock()
+
+        discovery = AgentDiscovery(
+            agents_dir=agents_dir,
+            llm_client=mock_llm,
+            registry=mock_registry,
+        )
+        spec = DiscoveredAgentSpec(
+            name="builder_agent",
+            description="External builder",
+            entrypoint="agent.py",
+            capabilities=["build_progenitor"],
+            url="http://builder:8107/",
+        )
+
+        await discovery._register_agent(spec)
+
+        entry = mock_registry.register_agent.await_args.args[0]
+        assert entry.url == "http://builder:8107"
+        assert entry.port is None
+        assert entry.agent_card_url == "http://builder:8107/.well-known/agent-card.json"
+
+    @pytest.mark.asyncio
+    async def test_register_agent_without_endpoint_does_not_allocate_port(self, tmp_path):
+        """Discovery records metadata only when an agent has no declared endpoint."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        mock_llm = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.register_agent = AsyncMock()
+
+        discovery = AgentDiscovery(
+            agents_dir=agents_dir,
+            llm_client=mock_llm,
+            registry=mock_registry,
+        )
+        spec = DiscoveredAgentSpec(
+            name="metadata_only",
+            description="Agent with no declared runtime endpoint",
+            entrypoint="agent.py",
+        )
+
+        await discovery._register_agent(spec)
+
+        entry = mock_registry.register_agent.await_args.args[0]
+        assert entry.url is None
+        assert entry.port is None
+        assert entry.agent_card_url is None

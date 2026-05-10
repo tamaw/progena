@@ -1,9 +1,19 @@
-"""OpenAI-compatible Responses API models."""
+"""OpenAI-compatible Responses API and backend client models."""
 
 import time
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+@dataclass(slots=True)
+class AgentResponse:
+    """Normalized non-stream response payload returned from Progenitor."""
+
+    response: str
+    reasoning: str | None
+    reasoning_tokens: int | None
 
 
 class Usage(BaseModel):
@@ -101,21 +111,19 @@ class ErrorResponse(BaseModel):
     error: ErrorDetail
 
 
-# CR-002: Simple chat request validation model
 class SimpleChatRequest(BaseModel):
-    """Simple chat request for /chat endpoint (CR-002)."""
+    """Simple chat request for /chat endpoint."""
 
     message: str = Field(..., min_length=1, max_length=100000)
     stream: bool = False
 
 
 class StreamingResponseRequest(ResponseRequest):
-    """Response request with additional streaming validation (CR-002)."""
+    """Response request with additional streaming validation."""
 
     @classmethod
-    def validate_for_streaming(cls, request: "ResponseRequest") -> None:
+    def validate_for_streaming(cls, request: ResponseRequest) -> None:
         """Additional validation for streaming requests."""
-        # Check input size
         if isinstance(request.input, str):
             if len(request.input) > 500000:
                 raise ValueError(
@@ -125,12 +133,9 @@ class StreamingResponseRequest(ResponseRequest):
                 raise ValueError("Input cannot be empty")
         else:
             total_length = 0
-            for m in request.input:
-                content = getattr(m, "content", None)
-                if content is None:
-                    total_length += len(str(m))
-                else:
-                    total_length += len(content)
+            for message in request.input:
+                content = getattr(message, "content", None)
+                total_length += len(str(message)) if content is None else len(content)
             if total_length > 500000:
                 raise ValueError(
                     f"Total input ({total_length} chars) exceeds streaming limit of 500000 chars"

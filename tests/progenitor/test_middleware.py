@@ -12,9 +12,9 @@ import pytest
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.tools import StructuredTool
 
+from app.progenitor.agent.adapters import DynamicMCPToolMiddleware
 from app.progenitor.agent.middleware import (
     AuditLoggingMiddleware,
-    DynamicMCPToolMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
@@ -84,10 +84,9 @@ class TestDynamicMCPToolMiddleware:
         )
 
     async def test_injects_live_mcp_tools(self):
-        llm_client = MagicMock()
-        llm_client.mcp_langchain_tools = [self._base_tool("search_web")]
+        mcp_tools = [self._base_tool("search_web")]
 
-        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+        mw = DynamicMCPToolMiddleware(mcp_tools_provider=lambda: mcp_tools)
 
         async def handler(request):
             return request
@@ -101,26 +100,24 @@ class TestDynamicMCPToolMiddleware:
         assert {"current_time", "search_web"} == names
 
     async def test_uses_latest_mcp_tool_snapshot_each_call(self):
-        llm_client = MagicMock()
-        llm_client.mcp_langchain_tools = [self._base_tool("search_web")]
+        mcp_tools = [self._base_tool("search_web")]
 
-        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+        mw = DynamicMCPToolMiddleware(mcp_tools_provider=lambda: mcp_tools)
 
         async def handler(request):
             return request
 
         first = await mw.awrap_model_call(self._request(self._base_tool()), handler)
-        llm_client.mcp_langchain_tools = [self._base_tool("read_url")]
+        mcp_tools[:] = [self._base_tool("read_url")]
         second = await mw.awrap_model_call(self._request(self._base_tool()), handler)
 
         assert {tool.name for tool in first.tools} == {"current_time", "search_web"}
         assert {tool.name for tool in second.tools} == {"current_time", "read_url"}
 
     async def test_binds_dynamic_tool_for_execution(self):
-        llm_client = MagicMock()
-        llm_client.mcp_langchain_tools = [self._base_tool("read_url")]
+        mcp_tools = [self._base_tool("read_url")]
 
-        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+        mw = DynamicMCPToolMiddleware(mcp_tools_provider=lambda: mcp_tools)
         request = self._tool_request("read_url")
         handler = AsyncMock(return_value="ok")
 
@@ -134,10 +131,9 @@ class TestDynamicMCPToolMiddleware:
         assert request.tool is None
 
     async def test_leaves_unknown_tool_unbound(self):
-        llm_client = MagicMock()
-        llm_client.mcp_langchain_tools = [self._base_tool("read_url")]
+        mcp_tools = [self._base_tool("read_url")]
 
-        mw = DynamicMCPToolMiddleware(llm_client=llm_client)
+        mw = DynamicMCPToolMiddleware(mcp_tools_provider=lambda: mcp_tools)
         request = self._tool_request("search_web")
         handler = AsyncMock(return_value="ok")
 
@@ -340,16 +336,16 @@ class TestMiddlewareIntegration:
         from unittest.mock import patch
 
         with (
-            patch("app.progenitor.agent.deep_agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.deep_agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
-            with patch("app.progenitor.agent.deep_agent.create_langchain_model") as mock_model:
+            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
-                with patch("app.progenitor.agent.deep_agent.PromptTemplates") as mock_prompts:
-                    mock_prompts.return_value.get_genesis_prompt.return_value = "Genesis"
-                    from app.progenitor.agent.deep_agent import create_progenitor_agent
+                with patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt:
+                    mock_load_prompt.return_value = "Genesis"
+                    from app.progenitor.agent.agent import create_progenitor_agent
 
                     with tempfile.TemporaryDirectory() as tmpdir:
                         prompts_dir = Path(tmpdir) / "prompts"

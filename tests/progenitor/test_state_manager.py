@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from app.progenitor.state.manager import StateManager
-from app.progenitor.state.models import A2ATaskRecord, ConversationMessage, ScheduleEntry
+from app.progenitor.state.models import (
+    A2ATaskRecord,
+    AsyncSubagentTaskRecord,
+    BackgroundTaskEntry,
+    ConversationMessage,
+    ScheduleEntry,
+)
 
 
 class TestStateManager:
@@ -28,6 +34,8 @@ class TestStateManager:
 
         assert (state_dir / "current_state.json").exists()
         assert (state_dir / "a2a_tasks.json").exists()
+        assert (state_dir / "async_subagent_tasks.json").exists()
+        assert (state_dir / "background_tasks.json").exists()
         assert (state_dir.parent / "config" / "agents.json").exists()
         assert (state_dir.parent / "config" / "mcp.json").exists()
         assert (state_dir.parent / "config" / "schedule.json").exists()
@@ -39,7 +47,7 @@ class TestStateManager:
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
 
-        from app.progenitor.runtime.time_utils import utcnow
+        from app.progenitor.utils import utcnow
 
         entry = ScheduleEntry(
             id="schedule-1",
@@ -87,6 +95,63 @@ class TestStateManager:
         assert refreshed is not None
         assert refreshed.status == "completed"
         assert refreshed.summary == "Observe task completed."
+
+    @pytest.mark.asyncio
+    async def test_background_task_queue_persistence(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        entry = BackgroundTaskEntry(
+            id="bg-1",
+            content="Reply exactly BG_TOKEN",
+            metadata={"thread_id": "thread-bg", "notify_on_completion": True},
+        )
+
+        await manager.enqueue_background_task(entry)
+        queued = await manager.get_background_tasks()
+        assert len(queued) == 1
+        assert queued[0].id == "bg-1"
+
+        dequeued = await manager.dequeue_background_task()
+        assert dequeued is not None
+        assert dequeued.content == "Reply exactly BG_TOKEN"
+        assert await manager.get_background_tasks() == []
+
+    @pytest.mark.asyncio
+    async def test_async_subagent_task_persistence(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        record = AsyncSubagentTaskRecord(
+            task_id="async-task-1",
+            agent_name="hello-world-async",
+            assistant_id="hello-world-async",
+            agent_url="http://127.0.0.1:9501/agent-protocol",
+            parent_thread_id="thread-main",
+            run_id="run-1",
+            request_text="Return the hello token later.",
+        )
+
+        await manager.upsert_async_subagent_task(record)
+        loaded = await manager.get_async_subagent_task("async-task-1")
+        assert loaded is not None
+        assert loaded.agent_name == "hello-world-async"
+        assert loaded.status == "running"
+
+        updated = await manager.update_async_subagent_task(
+            "async-task-1",
+            {
+                "status": "success",
+                "summary": "HELLO_FROM_ASYNC_SUBAGENT",
+            },
+        )
+        assert updated is True
+        refreshed = await manager.get_async_subagent_task("async-task-1")
+        assert refreshed is not None
+        assert refreshed.status == "success"
+        assert refreshed.summary == "HELLO_FROM_ASYNC_SUBAGENT"
 
     async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
         state_dir = tmp_path / "data" / "state"

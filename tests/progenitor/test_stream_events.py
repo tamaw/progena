@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from app.progenitor.agent.middleware import AuditLoggingMiddleware
-from app.progenitor.stream_events import (
+from app.progenitor.ipc.stream_events import (
     ALLOWED_CUSTOM_EVENT_TYPES,
     CUSTOM_EVENT_FALLBACK_TYPE,
     build_reasoning_delta_event,
@@ -18,11 +18,21 @@ from app.progenitor.stream_events import (
     build_tool_start_event,
     normalize_custom_event,
 )
-from app.progenitor.streaming_utils import DEFAULT_STREAM_PREVIEW_BYTES
+from app.progenitor.ipc.stream_payloads import DEFAULT_STREAM_PREVIEW_BYTES
 
 
 def test_allowed_event_types_cover_tool_lifecycle():
     for name in ("tool_start", "tool_result", "tool_error"):
+        assert name in ALLOWED_CUSTOM_EVENT_TYPES
+
+
+def test_allowed_event_types_cover_async_subagent_lifecycle():
+    for name in (
+        "async_subagent_start",
+        "async_subagent_update",
+        "async_subagent_result",
+        "async_subagent_cancel",
+    ):
         assert name in ALLOWED_CUSTOM_EVENT_TYPES
 
 
@@ -287,7 +297,7 @@ async def test_audit_middleware_swallows_writer_failure():
     # get_stream_writer returns a writer that raises when invoked; emit_stream_event
     # must swallow the failure so tool execution is unaffected.
     with patch(
-        "app.progenitor.stream_events.get_stream_writer",
+        "app.progenitor.ipc.stream_events.get_stream_writer",
         return_value=boom,
     ):
         result = await middleware.awrap_tool_call(request, handler)

@@ -2,15 +2,15 @@
 
 import pytest
 
-from app.progenitor.runtime.time_utils import utcnow
-from app.progenitor.state.models import ScheduleEntry
-from app.progenitor.tools.schedule import (
-    SCHEDULE_TOOL_SPEC,
+from app.progenitor.schedule import (
     ScheduleResult,
     add_scheduled_task,
     list_scheduled_tasks,
     remove_scheduled_task,
 )
+from app.progenitor.state.models import ScheduleEntry
+from app.progenitor.tools.schedule import SCHEDULE_TOOL_SPEC
+from app.progenitor.utils import utcnow
 
 
 class TestAddScheduledTask:
@@ -18,9 +18,9 @@ class TestAddScheduledTask:
     async def test_add_task_every_day_at_time(self):
         result, entry_data = await add_scheduled_task(
             user_request="say hello world",
-            time_expression="every day at 9am",
             instruction="Output the message 'Hello, World!' to the user.",
             description="Greeting task",
+            cron_expression="0 9 * * *",
         )
 
         assert result.success is True
@@ -32,15 +32,14 @@ class TestAddScheduledTask:
         assert "next_run" not in entry_data
 
     @pytest.mark.asyncio
-    async def test_add_task_invalid_time(self):
+    async def test_add_task_requires_exactly_one_schedule_field(self):
         result, entry_data = await add_scheduled_task(
             user_request="do something",
-            time_expression="invalid time format xyz",
             instruction="Some instruction",
         )
 
         assert result.success is False
-        assert "Could not parse" in result.message
+        assert "exactly one" in result.message
         assert entry_data is None
 
     @pytest.mark.asyncio
@@ -49,14 +48,17 @@ class TestAddScheduledTask:
         ts = "2026-03-20T09:42:27Z"
         result, entry_data = await add_scheduled_task(
             user_request="remind me",
-            time_expression=f"at {ts}",
             instruction="Say hello",
+            scheduled_at=ts,
         )
 
         assert result.success is True
         assert entry_data is not None
         assert "scheduled_at" in entry_data
-        assert entry_data.get("scheduled_at") == ts.replace("Z", "+00:00") or entry_data.get("scheduled_at") == ts
+        assert (
+            entry_data.get("scheduled_at") == ts.replace("Z", "+00:00")
+            or entry_data.get("scheduled_at") == ts
+        )
         assert "cron_expression" not in entry_data
         assert result.next_run is not None
 
@@ -66,8 +68,8 @@ class TestAddScheduledTask:
         bad_ts = "2026-03-20T99:99:99Z"
         result, entry_data = await add_scheduled_task(
             user_request="remind me",
-            time_expression=f"at {bad_ts}",
             instruction="Say hello",
+            scheduled_at=bad_ts,
         )
 
         assert result.success is False
@@ -111,8 +113,9 @@ class TestScheduleToolSpec:
         assert SCHEDULE_TOOL_SPEC["name"] == "schedule_task"
         required = SCHEDULE_TOOL_SPEC["parameters"].get("required", [])
         assert "user_request" in required
-        assert "time_expression" in required
         assert "instruction" in required
+        assert "cron_expression" in SCHEDULE_TOOL_SPEC["parameters"].get("properties", {})
+        assert "scheduled_at" in SCHEDULE_TOOL_SPEC["parameters"].get("properties", {})
 
 
 class TestScheduleResult:
@@ -141,4 +144,3 @@ class TestScheduleEntryIntegration:
         assert "created_at" in data
         assert "next_run" not in data
         assert "instruction" not in data
-

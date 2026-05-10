@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from ..runtime.a2a_tasks import build_task_response, dispatch_tracked_a2a_task
+from ..a2a import build_task_response, dispatch_tracked_a2a_task
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
