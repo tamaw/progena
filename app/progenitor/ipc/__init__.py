@@ -12,6 +12,22 @@ Features:
 - Automatic reconnection
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .client import IPCClient
+    from .protocol import (
+        IPCMessage,
+        MessageType,
+        agent_event,
+        decode_message,
+        encode_message,
+        read_message,
+        stream_event,
+        write_message,
+    )
+    from .server import IPCServer
+
 __all__ = [
     "MessageType",
     "IPCMessage",
