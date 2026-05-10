@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from langgraph.runtime import Runtime
 
 from ..schedule import SCHEDULED_INPUT_PREFIX
-from ..state.models import ProgenitorState
+from ..state.models import BackgroundTaskEntry, ProgenitorState
 from .context import HeartbeatContext
 
 
@@ -36,7 +37,11 @@ async def dequeue_input_node(
     if not callable(dequeue_background):
         return {"queued_input": None}
 
-    background_task = await dequeue_background()
+    dequeue_background_fn = cast(
+        Callable[[], Awaitable[BackgroundTaskEntry | None]],
+        dequeue_background,
+    )
+    background_task = await dequeue_background_fn()
     if background_task is None:
         return {"queued_input": None}
     return {
