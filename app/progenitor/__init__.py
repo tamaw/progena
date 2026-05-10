@@ -1,9 +1,8 @@
-"""
-Progenitor Agent - Personal assistant and bootstrap builder for the TARDIS system.
+"""Progenitor Agent - conversational orchestrator for the TARDIS system.
 
 A perpetual loop agent that:
 - Accepts conversational user input
-- Decides whether to answer directly, delegate via A2A, or build new capabilities
+- Delegates specialized work to external A2A agents
 - Orchestrates via LangGraph with persistent state and logging
 """
 

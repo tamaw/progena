@@ -5,11 +5,12 @@ registered/executed via :mod:`app.progenitor.tools.system_registry`.
 """
 
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, Field
 
+import app.progenitor.tools.list_agents as list_agents_module
 from app.progenitor.state.models import ProgenitorState
 from app.progenitor.tools.current_time import CurrentTimeTool
 from app.progenitor.tools.list_agents import ListAgentsTool
@@ -188,7 +189,8 @@ class TestListToolsTool:
         ]
 
         mock_llm = MagicMock()
-        mock_llm.get_mcp_tool_registry_entries.return_value = [
+        mock_llm.mcp_runtime = MagicMock()
+        mock_llm.mcp_runtime.get_tool_registry_entries.return_value = [
             {"name": "remote_tool", "description": "Remote MCP tool"},
         ]
 
@@ -320,15 +322,9 @@ class TestScheduleTaskTool:
         """Should have correct name."""
         assert tool.name == "schedule_task"
 
-    async def test_execute_fails_when_structured_output_missing_time(self, tool):
-        """Should fail when structured extraction does not include time_expression."""
+    async def test_execute_fails_without_schedule_fields(self, tool):
+        """Should fail without explicit cron_expression or scheduled_at."""
         mock_llm = MagicMock()
-        structured = MagicMock(
-            time_expression="",
-            instruction="Stretch",
-            description="Stretch reminder",
-        )
-        mock_llm.chat_structured = AsyncMock(return_value=structured)
         mock_state_manager = AsyncMock()
 
         ctx = ToolContext(
@@ -336,24 +332,22 @@ class TestScheduleTaskTool:
             llm_client=mock_llm,
             state=cast(ProgenitorState, {"schedule": []}),
             state_manager=mock_state_manager,
-            user_input="remind me to stretch in 5 minutes",
+            tool_args={
+                "user_request": "remind me to stretch in 5 minutes",
+                "instruction": "Stretch",
+            },
         )
 
         result = await tool.execute(ctx)
 
         assert result.success is False
-        assert "extract time" in str(result.error).lower()
+        assert "exactly one" in str(result.error).lower()
 
-    async def test_execute_prefers_structured_extraction(self, tool):
-        """Should use chat_structured when available."""
+    async def test_execute_uses_explicit_tool_call_fields(self, tool):
+        """Should create schedules from explicit tool-call fields without LLM extraction."""
         mock_llm = MagicMock()
-        structured = MagicMock(
-            time_expression="in 2 minutes",
-            instruction="Say hi to the user",
-            description="Say hi reminder",
-        )
-        mock_llm.chat_structured = AsyncMock(return_value=structured)
-        mock_llm.chat = AsyncMock(return_value='{"time_expression":"in 99 minutes"}')
+        mock_llm.chat_structured = AsyncMock()
+        mock_llm.chat = AsyncMock()
         mock_state_manager = AsyncMock()
 
         ctx = ToolContext(
@@ -361,13 +355,18 @@ class TestScheduleTaskTool:
             llm_client=mock_llm,
             state=cast(ProgenitorState, {"schedule": []}),
             state_manager=mock_state_manager,
-            user_input="can you schedule to say hi to me in 2 minutes please",
+            tool_args={
+                "user_request": "can you schedule to say hi to me tomorrow",
+                "instruction": "Say hi to the user",
+                "description": "Say hi reminder",
+                "scheduled_at": "2026-03-20T09:42:27Z",
+            },
         )
 
         result = await tool.execute(ctx)
 
         assert result.success is True
-        mock_llm.chat_structured.assert_awaited_once()
+        mock_llm.chat_structured.assert_not_awaited()
         mock_llm.chat.assert_not_awaited()
 
 
@@ -387,17 +386,19 @@ class TestListAgentsTool:
         """list_agents should refresh metadata and health before returning output."""
         mock_registry = MagicMock()
         mock_registry.load = AsyncMock()
-        mock_registry.refresh_agent_cards = AsyncMock()
-        mock_registry.refresh_agent_health = AsyncMock()
         mock_registry.get_agents.return_value = []
         ctx = ToolContext(tool_registry=mock_registry, llm_client=MagicMock())
 
-        result = await tool.execute(ctx)
+        refresh_mock = AsyncMock(
+            return_value={"agent_card_refresh": {}, "agent_health_refresh": {}},
+        )
+
+        with patch.object(list_agents_module, "refresh_agent_metadata", refresh_mock):
+            result = await tool.execute(ctx)
 
         assert result.success is True
         mock_registry.load.assert_awaited_once()
-        mock_registry.refresh_agent_cards.assert_awaited_once()
-        mock_registry.refresh_agent_health.assert_awaited_once()
+        refresh_mock.assert_awaited_once_with(mock_registry)
 
 
 class TestSelfReflectTool:

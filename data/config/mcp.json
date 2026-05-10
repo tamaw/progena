@@ -8,6 +8,12 @@
       "headers": {
         "Authorization": "Bearer ${JINA_API_KEY}"
       }
+    },
+    "microsoft_learn": {
+      "enabled": true,
+      "transport": "http",
+      "description": "Microsoft Learn MCP Server for official Microsoft and Azure documentation",
+      "url": "https://learn.microsoft.com/api/mcp"
     }
   }
 }

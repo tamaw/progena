@@ -6,12 +6,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.progenitor.config import MCPConfig
 from app.progenitor.llm.client import LLMClient, _build_responses_endpoint
+from app.progenitor.mcp import MCPRuntime
 
 
 def _extract(data: dict):
     client = LLMClient.__new__(LLMClient)
     return LLMClient._extract_text_and_reasoning(client, data)
+
+
+def _client_with_runtime() -> LLMClient:
+    client = LLMClient.__new__(LLMClient)
+    client.mcp_config = MCPConfig(servers=[])
+    client._mcp_runtime = MCPRuntime(client.mcp_config)
+    return client
 
 
 def test_build_responses_endpoint_from_base_url():
@@ -132,28 +141,34 @@ def test_extract_tool_calls_supports_function_call_in_message_content():
 
 
 def test_merge_tools_respects_explicit_empty_list():
-    client = LLMClient.__new__(LLMClient)
-    client.mcp_tools = [
-        {
-            "name": "primer",
-            "description": "Primer tool",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
-    ]
+    client = _client_with_runtime()
+    client.mcp_runtime.set_context(
+        {},
+        [
+            {
+                "name": "primer",
+                "description": "Primer tool",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ],
+    )
 
     merged = LLMClient._merge_tools(client, [])
     assert merged == []
 
 
 def test_resolve_request_tools_includes_tools_for_structured_by_default():
-    client = LLMClient.__new__(LLMClient)
-    client.mcp_tools = [
-        {
-            "name": "primer",
-            "description": "Primer tool",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
-    ]
+    client = _client_with_runtime()
+    client.mcp_runtime.set_context(
+        {},
+        [
+            {
+                "name": "primer",
+                "description": "Primer tool",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ],
+    )
 
     resolved = LLMClient._resolve_request_tools(
         client,
@@ -165,14 +180,17 @@ def test_resolve_request_tools_includes_tools_for_structured_by_default():
 
 
 def test_resolve_request_tools_keeps_tools_for_non_structured_requests():
-    client = LLMClient.__new__(LLMClient)
-    client.mcp_tools = [
-        {
-            "name": "primer",
-            "description": "Primer tool",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
-    ]
+    client = _client_with_runtime()
+    client.mcp_runtime.set_context(
+        {},
+        [
+            {
+                "name": "primer",
+                "description": "Primer tool",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ],
+    )
 
     resolved = LLMClient._resolve_request_tools(
         client,
@@ -225,23 +243,24 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
 
 @pytest.mark.asyncio
 async def test_call_mcp_tool_parses_sse_result():
-    client = LLMClient.__new__(LLMClient)
+    client = _client_with_runtime()
     client.mcp_config = SimpleNamespace(enabled_servers=[SimpleNamespace(name="jina")])
-    client.mcp_tool_lookup = {
+    tool_lookup = {
         "jina_read_url": {
             "name": "jina_read_url",
             "mcp_original_name": "read_url",
             "mcp_server_name": "jina",
         }
     }
-    client.mcp_tools = list(client.mcp_tool_lookup.values())
+    client.mcp_runtime.mcp_tool_lookup = dict(tool_lookup)
+    client.mcp_runtime.mcp_tools = list(tool_lookup.values())
     response = MagicMock()
     response.raise_for_status.return_value = None
     response.text = 'event: message\ndata: {"result":{"content":[{"type":"text","text":"ok"}]}}\n\n'
     response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
     mcp_client = AsyncMock()
     mcp_client.post.return_value = response
-    client.mcp_servers = {
+    client.mcp_runtime.mcp_servers = {
         "jina": {
             "client": mcp_client,
             "url": "https://mcp.jina.ai/v1",
@@ -263,23 +282,24 @@ async def test_call_mcp_tool_parses_sse_result():
 
 @pytest.mark.asyncio
 async def test_call_mcp_tool_routes_to_server_by_alias():
-    client = LLMClient.__new__(LLMClient)
+    client = _client_with_runtime()
     client.mcp_config = SimpleNamespace(enabled_servers=[SimpleNamespace(name="jina")])
-    client.mcp_tool_lookup = {
+    tool_lookup = {
         "jina_search_web": {
             "name": "jina_search_web",
             "mcp_original_name": "search_web",
             "mcp_server_name": "jina",
         }
     }
-    client.mcp_tools = list(client.mcp_tool_lookup.values())
+    client.mcp_runtime.mcp_tool_lookup = dict(tool_lookup)
+    client.mcp_runtime.mcp_tools = list(tool_lookup.values())
     response = MagicMock()
     response.raise_for_status.return_value = None
     response.text = '{"result":{"items":["ok"]}}'
     response.json.return_value = {"result": {"items": ["ok"]}}
     mcp_client = AsyncMock()
     mcp_client.post.return_value = response
-    client.mcp_servers = {
+    client.mcp_runtime.mcp_servers = {
         "jina": {
             "client": mcp_client,
             "url": "https://mcp.jina.ai/v1",

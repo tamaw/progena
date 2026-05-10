@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.progenitor.runtime.time_utils import utcnow_isoformat
+from app.progenitor.utils import utcnow_isoformat
 
 InvocationType = Literal["user", "automation", "system"]
 ThreadStatus = Literal["running", "completed", "error"]

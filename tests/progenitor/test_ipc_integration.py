@@ -27,8 +27,17 @@ class MockLoopRunner:
         self._cycle_complete_event.set()
         # Flag to enable automatic streaming (tests can disable to control manually)
         self._auto_stream = True
+        self.queues = self
 
-    async def enqueue_input(self, content: str) -> None:
+    @property
+    def output_queue(self) -> asyncio.Queue:
+        return self._output_queue
+
+    @property
+    def stream_queue(self) -> asyncio.Queue:
+        return self._stream_queue
+
+    async def enqueue_input(self, content: str, **_kwargs) -> None:
         """Enqueue input message."""
         await self._input_queue.put(content)
         # Simulate processing and produce output (for non-streaming)
@@ -93,6 +102,12 @@ class MockLoopRunner:
         self, event_type: str, content: str = "", metadata: dict | None = None
     ) -> None:
         """Record an event pushed by the IPC server."""
+        await self.push_event(event_type, content, metadata)
+
+    async def push_event(
+        self, event_type: str, content: str = "", metadata: dict | None = None
+    ) -> None:
+        """Record an event pushed through the queue service."""
         self._event_queue.put_nowait(
             {
                 "event_type": event_type,

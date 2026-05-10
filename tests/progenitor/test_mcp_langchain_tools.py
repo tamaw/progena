@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.tools import StructuredTool
 
-from app.progenitor.tools.mcp import initialize_mcp_langchain_tools
+from app.progenitor.mcp import build_mcp_langchain_tool_wrappers
 
 
 def _adapter_tool(name: str) -> StructuredTool:
@@ -19,7 +19,7 @@ def _adapter_tool(name: str) -> StructuredTool:
 
 
 @pytest.mark.asyncio
-async def test_initialize_mcp_langchain_tools_applies_runtime_aliases() -> None:
+async def test_build_mcp_langchain_tool_wrappers_applies_runtime_aliases() -> None:
     captured_connections: dict[str, dict[str, dict[str, str]]] = {}
 
     class FakeClient:
@@ -49,8 +49,8 @@ async def test_initialize_mcp_langchain_tools_applies_runtime_aliases() -> None:
         }
     ]
 
-    with patch("app.progenitor.tools.mcp.MultiServerMCPClient", FakeClient):
-        tools = await initialize_mcp_langchain_tools(config, mcp_tools)
+    with patch("app.progenitor.mcp.context.MultiServerMCPClient", FakeClient):
+        tools = await build_mcp_langchain_tool_wrappers(config, mcp_tools)
 
     assert captured_connections["value"] == {
         "jina": {

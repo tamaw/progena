@@ -2,7 +2,6 @@
 Custom middleware for the Progenitor DeepAgent.
 
 Provides:
-- DynamicMCPToolMiddleware: Injects live external MCP tools into each DeepAgent model call
 - SecretRedactionMiddleware: Redacts API keys/secrets from tool call args and results
 - AuditLoggingMiddleware: Logs tool calls to JSONL audit trail
 - MetricsMiddleware: Tracks tool call counts and latency
@@ -14,126 +13,28 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from deepagents.middleware.async_subagents import AsyncSubAgent
 from langchain.agents.middleware.types import (
     AgentMiddleware,
-    ModelRequest,
     ToolCallRequest,
 )
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
-from app.progenitor.state.models import redact_secrets
-from app.progenitor.stream_events import (
+from app.progenitor.async_subagents import build_tracked_task_record
+from app.progenitor.ipc.stream_events import (
     build_tool_error_event,
     build_tool_result_event,
     build_tool_start_event,
     emit_stream_event,
 )
-
-from .tools_adapter import create_dynamic_mcp_tools
+from app.progenitor.state.models import redact_secrets
+from app.progenitor.utils import utcnow
 
 logger = logging.getLogger(__name__)
-
-
-def _request_tool_name(tool: Any) -> str:
-    if hasattr(tool, "name"):
-        return str(tool.name or "").strip()
-    if isinstance(tool, dict):
-        function = tool.get("function")
-        if isinstance(function, dict):
-            return str(function.get("name") or "").strip()
-        return str(tool.get("name") or "").strip()
-    return ""
-
-
-class DynamicMCPToolMiddleware(AgentMiddleware):
-    """Inject and bind the current live external MCP tools for each agent turn."""
-
-    def __init__(self, llm_client: Any = None):
-        self._llm_client = llm_client
-        self._warned_name_collisions: set[str] = set()
-
-    def _dynamic_tools_by_name(self) -> dict[str, BaseTool]:
-        tools_by_name: dict[str, BaseTool] = {}
-        for tool in create_dynamic_mcp_tools(self._llm_client):
-            name = _request_tool_name(tool)
-            if name:
-                tools_by_name[name] = tool
-        return tools_by_name
-
-    def _merge_request_tools(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        dynamic_tools = self._dynamic_tools_by_name()
-        if not dynamic_tools:
-            return request
-
-        existing_tools = list(request.tools or [])
-        merged_tools = list(existing_tools)
-        seen_names: set[str] = set()
-        for tool in existing_tools:
-            name = _request_tool_name(tool)
-            if name:
-                seen_names.add(name)
-
-        for tool in dynamic_tools.values():
-            if tool.name in seen_names:
-                if tool.name not in self._warned_name_collisions:
-                    logger.warning(
-                        "Skipping dynamic MCP tool '%s' because a tool with that name already exists",
-                        tool.name,
-                    )
-                    self._warned_name_collisions.add(tool.name)
-                continue
-            seen_names.add(tool.name)
-            merged_tools.append(tool)
-
-        return request.override(tools=merged_tools)
-
-    def _bind_tool_request(self, request: ToolCallRequest) -> ToolCallRequest:
-        if request.tool is not None:
-            return request
-
-        tool_name = _request_tool_name(request.tool_call)
-        if not tool_name:
-            return request
-
-        dynamic_tool = self._dynamic_tools_by_name().get(tool_name)
-        if dynamic_tool is None:
-            return request
-
-        return replace(request, tool=dynamic_tool)
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Any],
-    ) -> Any:
-        return handler(self._merge_request_tools(request))
-
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[Any]],
-    ) -> Any:
-        return await handler(self._merge_request_tools(request))
-
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
-        return handler(self._bind_tool_request(request))
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        return await handler(self._bind_tool_request(request))
 
 
 class SecretRedactionMiddleware(AgentMiddleware):
@@ -263,6 +164,108 @@ class AuditLoggingMiddleware(AgentMiddleware):
         return handler(request)
 
 
+class AsyncSubagentTrackingMiddleware(AgentMiddleware):
+    """Persists and emits lifecycle events for DeepAgents async-subagent tools."""
+
+    _ASYNC_TOOL_NAMES = {
+        "start_async_task",
+        "check_async_task",
+        "update_async_task",
+        "cancel_async_task",
+        "list_async_tasks",
+    }
+
+    def __init__(
+        self,
+        *,
+        state_manager: Any = None,
+        async_subagents: list[AsyncSubAgent] | None = None,
+    ):
+        self._state_manager = state_manager
+        self._async_subagents = {
+            str(spec["name"]): spec for spec in (async_subagents or []) if "name" in spec
+        }
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        tool_name = str(request.tool_call.get("name") or "")
+        if tool_name not in self._ASYNC_TOOL_NAMES:
+            return await handler(request)
+
+        result = await handler(request)
+        tasks = _extract_async_tasks(result)
+        if tasks:
+            await self._persist_async_tasks(request, tool_name, tasks, result)
+            _emit_async_subagent_events(request, tool_name, tasks)
+        return result
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        return handler(request)
+
+    async def _persist_async_tasks(
+        self,
+        request: ToolCallRequest,
+        tool_name: str,
+        tasks: dict[str, dict[str, Any]],
+        result: ToolMessage | Command[Any],
+    ) -> None:
+        if self._state_manager is None:
+            return
+
+        raw_args = request.tool_call.get("args", {})
+        parent_thread_id = _tool_thread_id(request)
+        request_text = str(raw_args.get("description") or raw_args.get("message") or "")
+        if tool_name == "start_async_task":
+            subagent_name = str(raw_args.get("subagent_type") or "")
+            spec = self._async_subagents.get(subagent_name)
+            if spec is None:
+                return
+            for task in tasks.values():
+                record = build_tracked_task_record(
+                    task,
+                    spec=spec,
+                    parent_thread_id=parent_thread_id,
+                    request_text=request_text,
+                    request_metadata={"tool_args": dict(raw_args)},
+                )
+                await self._state_manager.upsert_async_subagent_task(record)
+            return
+
+        result_payload = _extract_check_result_payload(result)
+        for task_id, task in tasks.items():
+            existing = await self._state_manager.get_async_subagent_task(task_id)
+            if existing is None:
+                continue
+            updates: dict[str, Any] = {
+                "run_id": str(task.get("run_id") or existing.run_id),
+                "status": str(task.get("status") or existing.status),
+                "updated_at": utcnow(),
+            }
+            if tool_name == "update_async_task":
+                updates["request_metadata"] = {
+                    **dict(existing.request_metadata),
+                    "last_update_message": request_text,
+                }
+            if tool_name == "cancel_async_task":
+                updates["completed_at"] = existing.completed_at or utcnow()
+            if result_payload is not None:
+                if "result" in result_payload:
+                    updates["summary"] = str(result_payload.get("result") or "")
+                    updates["latest_message"] = str(result_payload.get("result") or "")
+                    updates["completed_at"] = existing.completed_at or utcnow()
+                if "error" in result_payload:
+                    updates["last_error"] = str(result_payload.get("error") or "")
+                    updates["completed_at"] = existing.completed_at or utcnow()
+            await self._state_manager.update_async_subagent_task(task_id, updates)
+
+
 class MetricsMiddleware(AgentMiddleware):
     """Tracks tool call counts and latency for observability.
 
@@ -336,3 +339,100 @@ class MetricsMiddleware(AgentMiddleware):
         self._total_duration_ms.clear()
         self._error_counts.clear()
         self._model_calls = 0
+
+
+def _extract_async_tasks(result: ToolMessage | Command[Any]) -> dict[str, dict[str, Any]]:
+    update = getattr(result, "update", None)
+    if not isinstance(update, dict):
+        return {}
+    async_tasks = update.get("async_tasks")
+    if not isinstance(async_tasks, dict):
+        return {}
+    return {
+        str(task_id): dict(task) for task_id, task in async_tasks.items() if isinstance(task, dict)
+    }
+
+
+def _extract_check_result_payload(result: ToolMessage | Command[Any]) -> dict[str, Any] | None:
+    update = getattr(result, "update", None)
+    if not isinstance(update, dict):
+        return None
+    messages = update.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+    first = messages[0]
+    content = getattr(first, "content", None)
+    if not isinstance(content, str):
+        return None
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _tool_thread_id(request: ToolCallRequest) -> str | None:
+    config = getattr(getattr(request, "runtime", None), "config", None)
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    thread_id = str(configurable.get("thread_id") or "").strip()
+    return thread_id or None
+
+
+def _emit_async_subagent_events(
+    request: ToolCallRequest,
+    tool_name: str,
+    tasks: dict[str, dict[str, Any]],
+) -> None:
+    parent_thread_id = _tool_thread_id(request)
+    raw_args = request.tool_call.get("args", {})
+    for task in tasks.values():
+        agent_name = str(task.get("agent_name") or raw_args.get("subagent_type") or "")
+        task_id = str(task.get("task_id") or "")
+        status = str(task.get("status") or "")
+        metadata = {
+            "subagent_name": agent_name,
+            "task_id": task_id,
+            "status": status,
+        }
+        if parent_thread_id:
+            metadata["thread_id"] = parent_thread_id
+        if tool_name == "start_async_task":
+            emit_stream_event(
+                {
+                    "event_type": "async_subagent_start",
+                    "content": agent_name,
+                    "metadata": metadata,
+                }
+            )
+        elif tool_name == "update_async_task":
+            emit_stream_event(
+                {
+                    "event_type": "async_subagent_update",
+                    "content": agent_name,
+                    "metadata": metadata,
+                }
+            )
+        elif tool_name == "cancel_async_task":
+            emit_stream_event(
+                {
+                    "event_type": "async_subagent_cancel",
+                    "content": agent_name,
+                    "metadata": metadata,
+                }
+            )
+        elif tool_name in {"check_async_task", "list_async_tasks"} and status in {
+            "success",
+            "error",
+            "cancelled",
+        }:
+            emit_stream_event(
+                {
+                    "event_type": "async_subagent_result",
+                    "content": agent_name,
+                    "metadata": metadata,
+                }
+            )

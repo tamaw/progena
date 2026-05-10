@@ -516,14 +516,15 @@ Strength: strongly used for streaming UI behavior and reasoning display.
 
 Sources:
 
-- `app/progenitor/runtime/scheduler.py`
+- `app/progenitor/schedule/engine.py`
+- `app/progenitor/schedule/dispatch.py`
 - `app/progenitor/runtime/loop.py`
 
 ```text
 ProgenitorLoop.run_forever()
   -> _is_scheduler_enabled()
   -> create_task(_scheduler_loop())
-      -> Scheduler(timezone=...)
+      -> Scheduler()
       -> _check_and_enqueue_scheduled_work()
           -> state_manager.get_schedule()
           -> Scheduler.get_due_items()
@@ -610,7 +611,7 @@ Status: removed legacy/test-only code.
 
 Evidence:
 
-- Current `app/progenitor` has no `graph.py`.
+- Current `app/progenitor` keeps graph builders under `graph/`.
 - `create_deep_agent_for_loop()` returns a DeepAgent graph directly.
 - No production graph builder imports `route_after_decide()` or routing utility
   functions in this checkout.
@@ -636,8 +637,9 @@ Evidence:
 - No production call site found under `app/progenitor`.
 - It is not wired into `main.py`, `runtime/loop.py`, or
   DeepAgent construction.
-- `runtime/port_utils.py` remains because active tool registry port allocation
-  still imports it.
+- `runtime/port_utils.py` has been removed from Progenitor ownership. External
+  agents are expected to register explicit URLs or agent-card URLs instead of
+  receiving dynamically allocated ports from Progenitor.
 
 ## Activity classification
 

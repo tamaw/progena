@@ -16,11 +16,11 @@ Features:
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, cast
 
 from ..progenitor.ipc import IPCClient
-from ..progenitor.responses import AgentResponse
 from .config import ChatServerConfig
+from .models import AgentResponse
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +247,7 @@ class IPCProgenitorClient:
     def last_heartbeat(self) -> float | None:
         """Get last heartbeat timestamp."""
         if self._ipc_client:
-            return self._ipc_client.last_heartbeat()
+            return cast(float | None, self._ipc_client.last_heartbeat())
         return None
 
     def queue_depth(self) -> int:

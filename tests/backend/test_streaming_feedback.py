@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.backend.models import AgentResponse
 from app.backend.streaming import (
     AsyncIteratorize,
     Iteratorize,
@@ -23,7 +24,6 @@ from app.backend.streaming import (
     stop_everything,
     stream_with_callback,
 )
-from app.progenitor.responses import AgentResponse
 
 
 class TestIteratorize:
