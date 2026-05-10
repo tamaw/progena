@@ -5,9 +5,22 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import utcnow_isoformat
-from . import a2a_store, config_store, log_store, session_store
+from . import (
+    a2a_store,
+    async_subagent_store,
+    background_store,
+    config_store,
+    log_store,
+    session_store,
+)
 from .layout import CORE_FILES, LOG_FILES, core_file_path, ensure_initial_state
-from .models import A2ATaskRecord, ConversationMessage, ScheduleEntry
+from .models import (
+    A2ATaskRecord,
+    AsyncSubagentTaskRecord,
+    BackgroundTaskEntry,
+    ConversationMessage,
+    ScheduleEntry,
+)
 from .persistence import StatePersistence
 
 logger = logging.getLogger(__name__)
@@ -248,6 +261,82 @@ class StateManager:
             updates=updates,
             get_a2a_tasks_fn=self.get_a2a_tasks,
             save_a2a_tasks_fn=self.save_a2a_tasks,
+        )
+
+    # ==========================================================================
+    # Async Subagent Task Tracking (stored in async_subagent_tasks.json)
+    # ==========================================================================
+
+    async def get_async_subagent_tasks(self) -> list[AsyncSubagentTaskRecord]:
+        return await async_subagent_store.get_async_subagent_tasks(
+            state_cache=self._state_cache,
+            file_lock=self._file_lock,
+            read_json=self._read_json,
+            async_subagent_tasks_path=self._core_file_path("async_subagent_tasks"),
+        )
+
+    async def save_async_subagent_tasks(self, tasks: list[AsyncSubagentTaskRecord]) -> None:
+        await async_subagent_store.save_async_subagent_tasks(
+            tasks=tasks,
+            state_cache=self._state_cache,
+            file_lock=self._file_lock,
+            atomic_write_json=self._atomic_write_json,
+            async_subagent_tasks_path=self._core_file_path("async_subagent_tasks"),
+        )
+
+    async def get_async_subagent_task(self, task_id: str) -> AsyncSubagentTaskRecord | None:
+        return await async_subagent_store.get_async_subagent_task(
+            task_id=task_id,
+            get_async_subagent_tasks_fn=self.get_async_subagent_tasks,
+        )
+
+    async def upsert_async_subagent_task(self, task: AsyncSubagentTaskRecord) -> None:
+        await async_subagent_store.upsert_async_subagent_task(
+            task=task,
+            get_async_subagent_tasks_fn=self.get_async_subagent_tasks,
+            save_async_subagent_tasks_fn=self.save_async_subagent_tasks,
+        )
+
+    async def update_async_subagent_task(self, task_id: str, updates: dict[str, Any]) -> bool:
+        return await async_subagent_store.update_async_subagent_task(
+            task_id=task_id,
+            updates=updates,
+            get_async_subagent_tasks_fn=self.get_async_subagent_tasks,
+            save_async_subagent_tasks_fn=self.save_async_subagent_tasks,
+        )
+
+    # ==========================================================================
+    # Background Task Queue (stored in background_tasks.json)
+    # ==========================================================================
+
+    async def get_background_tasks(self) -> list[BackgroundTaskEntry]:
+        return await background_store.get_background_tasks(
+            state_cache=self._state_cache,
+            file_lock=self._file_lock,
+            read_json=self._read_json,
+            background_tasks_path=self._core_file_path("background_tasks"),
+        )
+
+    async def save_background_tasks(self, tasks: list[BackgroundTaskEntry]) -> None:
+        await background_store.save_background_tasks(
+            tasks=tasks,
+            state_cache=self._state_cache,
+            file_lock=self._file_lock,
+            atomic_write_json=self._atomic_write_json,
+            background_tasks_path=self._core_file_path("background_tasks"),
+        )
+
+    async def enqueue_background_task(self, task: BackgroundTaskEntry) -> None:
+        await background_store.enqueue_background_task(
+            task=task,
+            get_background_tasks_fn=self.get_background_tasks,
+            save_background_tasks_fn=self.save_background_tasks,
+        )
+
+    async def dequeue_background_task(self) -> BackgroundTaskEntry | None:
+        return await background_store.dequeue_background_task(
+            get_background_tasks_fn=self.get_background_tasks,
+            save_background_tasks_fn=self.save_background_tasks,
         )
 
     # ==========================================================================

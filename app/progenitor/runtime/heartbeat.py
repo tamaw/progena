@@ -33,6 +33,7 @@ QueuedInput = _QueuedInput
 _SCHEDULE_TICK = "schedule_tick"
 _MCP_REFRESH = "mcp_refresh"
 _A2A_POLL = "a2a_poll"
+_ASYNC_SUBAGENT_POLL = "async_subagent_poll"
 _REGISTRY_DISCOVER = "registry_discover"
 _REGISTRY_REFRESH = "registry_refresh"
 _IDLE_HEALTH = "idle_health"
@@ -41,6 +42,7 @@ _MAINTENANCE_INTERVALS: tuple[tuple[str, str, str], ...] = (
     (_SCHEDULE_TICK, "last_schedule_poll_at", "scheduler_poll_seconds"),
     (_MCP_REFRESH, "last_mcp_refresh_at", "mcp_refresh_seconds"),
     (_A2A_POLL, "last_a2a_poll_at", "a2a_poll_seconds"),
+    (_ASYNC_SUBAGENT_POLL, "last_async_subagent_poll_at", "async_subagent_poll_seconds"),
     (_REGISTRY_DISCOVER, "last_registry_discovery_at", "registry_refresh_seconds"),
     (_REGISTRY_REFRESH, "last_registry_refresh_at", "registry_refresh_seconds"),
     (_IDLE_HEALTH, "last_health_write_at", "heartbeat_health_seconds"),
@@ -131,6 +133,7 @@ class ProgenitorLoop:
             scheduler_enabled=scheduler_enabled,
             scheduler_poll_seconds=scheduler_poll_seconds,
             a2a_poll_seconds=DEFAULT_A2A_POLL_SECONDS,
+            async_subagent_poll_seconds=DEFAULT_A2A_POLL_SECONDS,
             mcp_refresh_seconds=60.0,
             registry_refresh_seconds=60.0,
             heartbeat_health_seconds=float(
@@ -166,6 +169,7 @@ class ProgenitorLoop:
             "idle_cycles": 0,
             "current_backoff_seconds": float(self.config.runtime.idle_backoff_seconds),
             "last_health_write_at": None,
+            "last_async_subagent_poll_at": None,
         }
 
         current_state = await self.state_manager.get_current_state()

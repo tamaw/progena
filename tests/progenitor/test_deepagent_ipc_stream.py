@@ -138,6 +138,67 @@ async def test_stream_items_include_reasoning_and_custom_events():
 
 
 @pytest.mark.asyncio
+async def test_task_tool_events_expand_into_subagent_events():
+    graph = _FakeGraph(
+        [
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call_1",
+                        "args_preview": {"subagent_type": "hello-world"},
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_result",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call_1",
+                        "duration_ms": 12.5,
+                        "success": True,
+                        "result_preview": "HELLO_FROM_SUBAGENT",
+                    },
+                },
+            ),
+            ("updates", {"respond": {"pending_response": "HELLO_FROM_SUBAGENT"}}),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    assert {
+        "type": "stream_event",
+        "event_type": "subagent_start",
+        "content": "hello-world",
+        "metadata": {
+            "subagent_name": "hello-world",
+            "tool_call_id": "call_1",
+        },
+    } in items
+    assert {
+        "type": "stream_event",
+        "event_type": "subagent_result",
+        "content": "hello-world",
+        "metadata": {
+            "subagent_name": "hello-world",
+            "tool_call_id": "call_1",
+            "success": True,
+            "duration_ms": 12.5,
+            "result_preview": "HELLO_FROM_SUBAGENT",
+        },
+    } in items
+    assert {"type": "stream_chunk", "content": "HELLO_FROM_SUBAGENT", "is_final": False} in items
+
+
+@pytest.mark.asyncio
 async def test_native_reasoning_deltas_stream_without_synthetic_preview():
     reasoning_fragments = [
         "**Calculating pencil costs**\n\nI'm",

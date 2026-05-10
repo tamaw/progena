@@ -26,6 +26,16 @@ def test_allowed_event_types_cover_tool_lifecycle():
         assert name in ALLOWED_CUSTOM_EVENT_TYPES
 
 
+def test_allowed_event_types_cover_async_subagent_lifecycle():
+    for name in (
+        "async_subagent_start",
+        "async_subagent_update",
+        "async_subagent_result",
+        "async_subagent_cancel",
+    ):
+        assert name in ALLOWED_CUSTOM_EVENT_TYPES
+
+
 def test_normalize_custom_event_passes_known_type_unchanged():
     payload = {
         "event_type": "tool_start",

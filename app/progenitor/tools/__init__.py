@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from ..registry import ToolRegistry
     from .agent_discovery import AgentDiscovery, discover_agents
     from .current_time import CurrentTimeTool
+    from .enqueue_background_task import EnqueueBackgroundTaskTool
     from .list_agents import ListAgentsTool
     from .list_schedule import ListScheduleTool
     from .list_tools import ListToolsTool
@@ -55,6 +56,7 @@ def __getattr__(name: str):
         "ListAgentsTool": "list_agents",
         "NewConversationTool": "new_conversation",
         "CurrentTimeTool": "current_time",
+        "EnqueueBackgroundTaskTool": "enqueue_background_task",
         "ListScheduleTool": "list_schedule",
         "SelfReflectTool": "self_reflect_tool",
         "ScheduleTaskTool": "schedule_task",
@@ -92,6 +94,7 @@ __all__ = [
     "ListAgentsTool",
     "NewConversationTool",
     "CurrentTimeTool",
+    "EnqueueBackgroundTaskTool",
     "ListScheduleTool",
     "SelfReflectTool",
     "ScheduleTaskTool",

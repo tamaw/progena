@@ -23,6 +23,7 @@ class HeartbeatContext:
     scheduler_enabled: bool
     scheduler_poll_seconds: float
     a2a_poll_seconds: float
+    async_subagent_poll_seconds: float
     mcp_refresh_seconds: float
     registry_refresh_seconds: float
     heartbeat_health_seconds: float

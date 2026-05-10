@@ -27,11 +27,15 @@ from .adapters import (
 )
 from .backends import create_progenitor_backend
 from .middleware import (
+    AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
-from .subagents import create_progenitor_subagents
+from .subagents import (
+    create_progenitor_async_subagents,
+    create_progenitor_subagents,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -222,10 +226,26 @@ def create_progenitor_agent(
 
     # Use the canonical genesis prompt so every conversation starts with it.
     system_prompt = load_prompt("progenitor/genesis.md", prompts_dir=prompts_dir).strip()
-    subagents = create_progenitor_subagents()
+    runtime_config = getattr(config, "runtime", None)
+    http_host = getattr(runtime_config, "http_host", "127.0.0.1")
+    if http_host in {"0.0.0.0", "::"}:  # nosec B104 - normalize wildcard binds to loopback for local callbacks
+        http_host = "127.0.0.1"
+    http_port = int(getattr(runtime_config, "http_port", 9501))
+    http_base_url = (
+        getattr(runtime_config, "http_public_base_url", None) or f"http://{http_host}:{http_port}"
+    )
+    subagents = create_progenitor_subagents(http_base_url)
+    async_subagents = create_progenitor_async_subagents(http_base_url)
 
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # durable filesystem-backed memories directory.
+    custom_middleware.insert(
+        3,
+        AsyncSubagentTrackingMiddleware(
+            state_manager=state_manager,
+            async_subagents=async_subagents,
+        ),
+    )
     agent = create_deep_agent(
         name="progenitor",
         model=model,

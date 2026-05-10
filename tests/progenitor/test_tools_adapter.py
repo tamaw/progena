@@ -54,6 +54,7 @@ def test_core_only_tools_present() -> None:
         "notify_user",
         "list_agents",
         "call_agent",
+        "enqueue_background_task",
         "get_a2a_task",
         "mcp_refresh",
     }.issubset(names)
@@ -123,6 +124,9 @@ def test_call_agent_and_task_tools_expose_structured_parameters() -> None:
     call_schema = _tool_by_name(tools, "call_agent").args_schema.model_json_schema()
     task_schema = _tool_by_name(tools, "get_a2a_task").args_schema.model_json_schema()
     refresh_schema = _tool_by_name(tools, "mcp_refresh").args_schema.model_json_schema()
+    background_schema = _tool_by_name(
+        tools, "enqueue_background_task"
+    ).args_schema.model_json_schema()
 
     call_properties = call_schema.get("properties", {})
     assert {"request", "agent", "agent_name", "timeout_seconds", "blocking", "context"} <= set(
@@ -136,6 +140,12 @@ def test_call_agent_and_task_tools_expose_structured_parameters() -> None:
 
     assert "persist" in refresh_schema.get("properties", {})
     assert "required" not in refresh_schema or refresh_schema.get("required") == []
+
+    background_properties = background_schema.get("properties", {})
+    assert {"request", "notify_on_completion", "isolated_thread", "completion_event_type"} <= set(
+        background_properties
+    )
+    assert background_schema.get("required") == ["request"]
 
 
 @pytest.mark.asyncio

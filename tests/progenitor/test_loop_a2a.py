@@ -40,6 +40,7 @@ async def test_a2a_completion_node_persists_one_tool_message(tmp_path: Path) -> 
             scheduler_enabled=True,
             scheduler_poll_seconds=30.0,
             a2a_poll_seconds=5.0,
+            async_subagent_poll_seconds=5.0,
             mcp_refresh_seconds=60.0,
             registry_refresh_seconds=60.0,
             heartbeat_health_seconds=30.0,

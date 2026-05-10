@@ -102,6 +102,15 @@ from ..nodes.a2a import (
     notify_completed_tasks_node,
     poll_tracked_tasks_node,
 )
+from ..nodes.async_subagents import (
+    apply_completed_tasks_node as apply_completed_async_subagent_tasks_node,
+)
+from ..nodes.async_subagents import (
+    notify_completed_tasks_node as notify_completed_async_subagent_tasks_node,
+)
+from ..nodes.async_subagents import (
+    poll_tracked_tasks_node as poll_tracked_async_subagent_tasks_node,
+)
 from ..nodes.audit import startup_audit_node
 from ..nodes.checkpoint import checkpoint_node
 from ..nodes.context import HeartbeatContext
@@ -174,6 +183,7 @@ def validate_heartbeat_context(context: HeartbeatContext) -> None:
     for interval_name, interval_value in (
         ("scheduler_poll_seconds", context.scheduler_poll_seconds),
         ("a2a_poll_seconds", context.a2a_poll_seconds),
+        ("async_subagent_poll_seconds", context.async_subagent_poll_seconds),
         ("mcp_refresh_seconds", context.mcp_refresh_seconds),
         ("registry_refresh_seconds", context.registry_refresh_seconds),
         ("heartbeat_health_seconds", context.heartbeat_health_seconds),
@@ -206,6 +216,27 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_node("a2a_poll", _guard_maintenance_node("a2a_poll", poll_tracked_tasks_node))
     graph.add_node("a2a_apply", _guard_maintenance_node("a2a_apply", apply_completed_tasks_node))
     graph.add_node("a2a_notify", _guard_maintenance_node("a2a_notify", notify_completed_tasks_node))
+    graph.add_node(
+        "async_subagent_poll",
+        _guard_maintenance_node(
+            "async_subagent_poll",
+            poll_tracked_async_subagent_tasks_node,
+        ),
+    )
+    graph.add_node(
+        "async_subagent_apply",
+        _guard_maintenance_node(
+            "async_subagent_apply",
+            apply_completed_async_subagent_tasks_node,
+        ),
+    )
+    graph.add_node(
+        "async_subagent_notify",
+        _guard_maintenance_node(
+            "async_subagent_notify",
+            notify_completed_async_subagent_tasks_node,
+        ),
+    )
     graph.add_node(
         "registry_discover", _guard_maintenance_node("registry_discover", discover_agents_node)
     )
@@ -244,7 +275,10 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_edge("mcp_refresh", "a2a_poll")
     graph.add_edge("a2a_poll", "a2a_apply")
     graph.add_edge("a2a_apply", "a2a_notify")
-    graph.add_edge("a2a_notify", "registry_discover")
+    graph.add_edge("a2a_notify", "async_subagent_poll")
+    graph.add_edge("async_subagent_poll", "async_subagent_apply")
+    graph.add_edge("async_subagent_apply", "async_subagent_notify")
+    graph.add_edge("async_subagent_notify", "registry_discover")
     graph.add_edge("registry_discover", "registry_refresh")
     graph.add_edge("registry_refresh", "idle_health")
     graph.add_edge("idle_health", END)

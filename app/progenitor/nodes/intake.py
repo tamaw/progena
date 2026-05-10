@@ -28,7 +28,23 @@ async def dequeue_input_node(
     """Dequeue one pending input item."""
     if state.get("queued_input") is not None:
         return {}
-    return {"queued_input": await runtime.context.queues.get_input(runtime.context.input_timeout)}
+    queued_input = await runtime.context.queues.get_input(runtime.context.input_timeout)
+    if queued_input is not None:
+        return {"queued_input": queued_input}
+
+    dequeue_background = getattr(runtime.context.state_manager, "dequeue_background_task", None)
+    if not callable(dequeue_background):
+        return {"queued_input": None}
+
+    background_task = await dequeue_background()
+    if background_task is None:
+        return {"queued_input": None}
+    return {
+        "queued_input": {
+            "content": background_task.content,
+            "metadata": background_task.metadata,
+        }
+    }
 
 
 async def cycle_setup_node(

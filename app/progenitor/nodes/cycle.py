@@ -90,6 +90,7 @@ async def _run_cycle(
     cycle_num = int(state.get("cycle_count", 0) or 0)
     source = str(state.get("cycle_source") or "unknown")
     current_input = str(state.get("current_input") or "").strip()
+    input_metadata = state.get("current_input_metadata")
     requested_thread_id = str(state.get("requested_thread_id") or "").strip() or None
     effective_thread_id = str(requested_thread_id or state.get("thread_id") or "progenitor_main")
 
@@ -113,6 +114,18 @@ async def _run_cycle(
     response_text = cast(str | None, working_state.get("last_cycle_response"))
     if response_text:
         logger.info("Extracted AI response (%d chars)", len(response_text))
+        if isinstance(input_metadata, dict) and bool(input_metadata.get("notify_on_completion")):
+            event_type = (
+                str(input_metadata.get("completion_event_type") or "").strip() or "agent_message"
+            )
+            await runtime.context.queues.push_event(
+                event_type,
+                response_text,
+                {
+                    "source": "heartbeat_input_completion",
+                    "thread_id": effective_thread_id,
+                },
+            )
 
     reasoning_trace = cast(str | None, working_state.get("last_reasoning_trace"))
     if reasoning_trace:
