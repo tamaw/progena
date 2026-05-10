@@ -48,6 +48,7 @@ class DeepAgentIPCStream:
         self.last_reasoning_trace: str | None = None
         self._streamed_response_content = ""
         self._response_was_streamed = False
+        self._task_subagent_calls: dict[str, str] = {}
 
     async def stream(
         self,
@@ -78,8 +79,7 @@ class DeepAgentIPCStream:
                 continue
 
             if mode == "custom":
-                custom_item = self._handle_custom_stream_event(event)
-                if custom_item is not None:
+                for custom_item in self._handle_custom_stream_event(event):
                     yield custom_item
                 continue
 
@@ -147,16 +147,20 @@ class DeepAgentIPCStream:
             },
         }
 
-    def _handle_custom_stream_event(self, event: Any) -> dict[str, Any] | None:
+    def _handle_custom_stream_event(self, event: Any) -> list[dict[str, Any]]:
         envelope = normalize_custom_event(event)
         if envelope is None:
-            return None
-        return {
-            "type": "stream_event",
-            "event_type": envelope["event_type"],
-            "content": envelope["content"],
-            "metadata": envelope["metadata"],
-        }
+            return []
+        items = [
+            {
+                "type": "stream_event",
+                "event_type": envelope["event_type"],
+                "content": envelope["content"],
+                "metadata": envelope["metadata"],
+            }
+        ]
+        items.extend(self._expand_task_subagent_events(envelope))
+        return items
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():
@@ -231,6 +235,79 @@ class DeepAgentIPCStream:
             )
 
         yield {"type": "stream_chunk", "content": "", "is_final": True}
+
+    def _expand_task_subagent_events(self, envelope: dict[str, Any]) -> list[dict[str, Any]]:
+        metadata = envelope.get("metadata")
+        if not isinstance(metadata, dict):
+            return []
+
+        tool_name = str(metadata.get("tool_name") or envelope.get("content") or "")
+        if tool_name != "task":
+            return []
+
+        tool_call_id = str(metadata.get("tool_call_id") or "")
+        event_type = str(envelope.get("event_type") or "")
+
+        if event_type == "tool_start":
+            args_preview = metadata.get("args_preview")
+            subagent_name = ""
+            if isinstance(args_preview, dict):
+                raw_name = args_preview.get("subagent_type")
+                if isinstance(raw_name, str):
+                    subagent_name = raw_name
+            if not subagent_name:
+                return []
+            if tool_call_id:
+                self._task_subagent_calls[tool_call_id] = subagent_name
+            return [
+                {
+                    "type": "stream_event",
+                    "event_type": "subagent_start",
+                    "content": subagent_name,
+                    "metadata": {
+                        "subagent_name": subagent_name,
+                        "tool_call_id": tool_call_id,
+                    },
+                }
+            ]
+
+        subagent_name = self._task_subagent_calls.pop(tool_call_id, "")
+        if not subagent_name:
+            return []
+
+        if event_type == "tool_result":
+            return [
+                {
+                    "type": "stream_event",
+                    "event_type": "subagent_result",
+                    "content": subagent_name,
+                    "metadata": {
+                        "subagent_name": subagent_name,
+                        "tool_call_id": tool_call_id,
+                        "success": bool(metadata.get("success", True)),
+                        "duration_ms": metadata.get("duration_ms"),
+                        "result_preview": metadata.get("result_preview"),
+                    },
+                }
+            ]
+
+        if event_type == "tool_error":
+            return [
+                {
+                    "type": "stream_event",
+                    "event_type": "subagent_result",
+                    "content": subagent_name,
+                    "metadata": {
+                        "subagent_name": subagent_name,
+                        "tool_call_id": tool_call_id,
+                        "success": False,
+                        "duration_ms": metadata.get("duration_ms"),
+                        "error": metadata.get("error"),
+                    },
+                }
+            ]
+
+        return []
 
     async def _ensure_response_streamed(self, text: str) -> AsyncIterator[dict[str, Any]]:
         if not text:

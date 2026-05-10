@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
+from app.progenitor.async_subagents import HELLO_WORLD_ASYNC_RESULT
 from app.progenitor.runtime.http import ProgenitorHTTPServer
 from app.progenitor.state.models import A2ATaskRecord
 
@@ -82,5 +84,46 @@ async def test_http_server_records_a2a_task_callback() -> None:
         assert saved.agent_name == "observe_agent"
         assert saved.summary == "Finished callback task."
         loop_runner.queues.enqueue_a2a_completions.assert_called_once_with([saved])
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_http_server_serves_hello_world_async_agent_protocol() -> None:
+    state_manager = _StateManager()
+    server = ProgenitorHTTPServer(state_manager=state_manager, port=0)
+    await server.start()
+    try:
+        async with httpx.AsyncClient() as client:
+            thread = await client.post(f"{server.base_url}/agent-protocol/threads", json={})
+            assert thread.status_code == 200
+            thread_id = thread.json()["thread_id"]
+
+            run = await client.post(
+                f"{server.base_url}/agent-protocol/threads/{thread_id}/runs",
+                json={
+                    "assistant_id": "hello-world-async",
+                    "input": {"messages": [{"role": "user", "content": "hello"}]},
+                },
+            )
+            assert run.status_code == 200
+            run_id = run.json()["run_id"]
+
+            status = ""
+            for _ in range(20):
+                response = await client.get(
+                    f"{server.base_url}/agent-protocol/threads/{thread_id}/runs/{run_id}"
+                )
+                assert response.status_code == 200
+                status = response.json()["status"]
+                if status == "success":
+                    break
+                await asyncio.sleep(0.2)
+
+            assert status == "success"
+            thread_state = await client.get(f"{server.base_url}/agent-protocol/threads/{thread_id}")
+            assert thread_state.status_code == 200
+            messages = thread_state.json()["values"]["messages"]
+            assert messages[-1]["content"] == HELLO_WORLD_ASYNC_RESULT
     finally:
         await server.stop()

@@ -36,6 +36,10 @@ ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
         "tool_error",
         "subagent_start",
         "subagent_result",
+        "async_subagent_start",
+        "async_subagent_update",
+        "async_subagent_result",
+        "async_subagent_cancel",
         "debug_event",
     }
 )

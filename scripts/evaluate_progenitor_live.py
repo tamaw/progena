@@ -5,22 +5,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import socket
 import struct
 import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
-from urllib import error, request
 
-DEFAULT_HTTP_BASE = "http://127.0.0.1:9501"
 DEFAULT_IPC_HOST = "127.0.0.1"
 DEFAULT_IPC_PORT = 9500
-DEFAULT_STATE_DIR = Path("data/state")
 HEADER_SIZE = 4
 ENCODING = "utf-8"
+ASYNC_SUBAGENT_RESULT = "HELLO_FROM_ASYNC_SUBAGENT"
 
 
 @dataclass
@@ -31,36 +29,6 @@ class EvaluationResult:
     observed: str
     details: dict[str, Any] = field(default_factory=dict)
     root_cause_area: str | None = None
-
-
-def _http_json(
-    url: str,
-    *,
-    method: str = "GET",
-    payload: dict[str, Any] | None = None,
-    raw_body: bytes | None = None,
-    timeout: float = 10.0,
-) -> tuple[int, dict[str, Any]]:
-    body = raw_body
-    headers = {"Accept": "application/json"}
-    if payload is not None:
-        body = json.dumps(payload).encode(ENCODING)
-        headers["Content-Type"] = "application/json"
-    elif raw_body is not None:
-        headers["Content-Type"] = "application/json"
-
-    req = request.Request(url, data=body, method=method, headers=headers)
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            data = response.read()
-            return response.status, json.loads(data.decode(ENCODING) or "{}")
-    except error.HTTPError as exc:
-        data = exc.read()
-        try:
-            parsed = json.loads(data.decode(ENCODING) or "{}")
-        except json.JSONDecodeError:
-            parsed = {"raw": data.decode(ENCODING, errors="replace")}
-        return exc.code, parsed
 
 
 def _write_ipc(sock: socket.socket, payload: dict[str, Any]) -> None:
@@ -101,6 +69,77 @@ def _open_ipc(host: str, port: int, timeout: float) -> socket.socket:
     return sock
 
 
+def _ipc_assistant_response(
+    host: str,
+    port: int,
+    timeout: float,
+    prompt: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    with _open_ipc(host, port, timeout) as sock:
+        _write_ipc(
+            sock,
+            {
+                "type": "user_message",
+                "content": prompt,
+                "request_id": f"live-eval-{uuid.uuid4().hex[:8]}",
+                "metadata": metadata or {"source": "live_evaluation"},
+            },
+        )
+        while True:
+            msg = _read_ipc(sock)
+            if msg is None:
+                raise RuntimeError("connection closed before assistant response")
+            msg_type = msg.get("type")
+            if msg_type == "agent_event":
+                continue
+            if msg_type == "error":
+                raise RuntimeError(str(msg.get("content") or "unknown IPC error"))
+            if msg_type == "assistant_message":
+                return str(msg.get("content") or "")
+            raise RuntimeError(f"unexpected IPC message type: {msg_type}")
+
+
+def _ipc_stream_items(
+    host: str,
+    port: int,
+    timeout: float,
+    prompt: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    with _open_ipc(host, port, timeout) as sock:
+        _write_ipc(
+            sock,
+            {
+                "type": "user_message",
+                "content": prompt,
+                "stream": True,
+                "request_id": f"live-eval-stream-{uuid.uuid4().hex[:8]}",
+                "metadata": metadata or {"source": "live_evaluation"},
+            },
+        )
+        while True:
+            msg = _read_ipc(sock)
+            if msg is None:
+                raise RuntimeError("connection closed before final stream item")
+            items.append(msg)
+            msg_type = msg.get("type")
+            if msg_type == "error":
+                raise RuntimeError(str(msg.get("content") or "unknown IPC error"))
+            if msg_type == "stream_chunk" and msg.get("is_final") is True:
+                return items
+            if msg_type in {"stream_end", "assistant_message"}:
+                return items
+
+
+def _extract_task_id(text: str) -> str | None:
+    match = re.search(r"(?:TASK_ID=|task_id[:=]\s*)([A-Za-z0-9_\-]+)", text)
+    return match.group(1) if match else None
+
+
 def _pass(name: str, expectation: str, observed: str, **details: Any) -> EvaluationResult:
     return EvaluationResult(name, True, expectation, observed, details)
 
@@ -114,163 +153,6 @@ def _fail(
     **details: Any,
 ) -> EvaluationResult:
     return EvaluationResult(name, False, expectation, observed, details, root_cause_area)
-
-
-def eval_http_health(http_base: str) -> EvaluationResult:
-    name = "http_health"
-    expectation = "GET /health returns 200 with status=ok, service=progenitor, and queue stats."
-    try:
-        status, body = _http_json(f"{http_base}/health")
-    except Exception as exc:
-        return _fail(name, expectation, f"request failed: {exc}", root_cause_area="runtime/http.py")
-
-    queues = body.get("queues")
-    if (
-        status == 200
-        and body.get("status") == "ok"
-        and body.get("service") == "progenitor"
-        and queues
-    ):
-        return _pass(name, expectation, "health endpoint returned expected payload", status=status)
-    return _fail(
-        name,
-        expectation,
-        f"unexpected status/body shape: status={status}, keys={sorted(body)}",
-        root_cause_area="runtime/http.py",
-        body=body,
-    )
-
-
-def eval_agent_card(http_base: str) -> EvaluationResult:
-    name = "agent_card"
-    expectation = (
-        "GET /.well-known/agent-card.json advertises Progenitor and A2A callback endpoint."
-    )
-    try:
-        status, body = _http_json(f"{http_base}/.well-known/agent-card.json")
-    except Exception as exc:
-        return _fail(name, expectation, f"request failed: {exc}", root_cause_area="runtime/http.py")
-
-    endpoints = body.get("endpoints") if isinstance(body, dict) else {}
-    callback = endpoints.get("a2a_task_callback") if isinstance(endpoints, dict) else None
-    if (
-        status == 200
-        and body.get("name") == "progenitor"
-        and str(callback or "").endswith("/a2a/tasks/callback")
-    ):
-        return _pass(
-            name, expectation, "agent card returned expected Progenitor metadata", status=status
-        )
-    return _fail(
-        name,
-        expectation,
-        f"unexpected status/body shape: status={status}, callback={callback!r}",
-        root_cause_area="runtime/http.py",
-        body=body,
-    )
-
-
-def eval_invalid_callback(http_base: str) -> EvaluationResult:
-    name = "a2a_callback_invalid_json"
-    expectation = "POST /a2a/tasks/callback rejects invalid JSON with HTTP 400 and success=false."
-    try:
-        status, body = _http_json(
-            f"{http_base}/a2a/tasks/callback",
-            method="POST",
-            raw_body=b"{not-json",
-        )
-    except Exception as exc:
-        return _fail(name, expectation, f"request failed: {exc}", root_cause_area="runtime/http.py")
-
-    if status == 400 and body.get("success") is False:
-        return _pass(name, expectation, "invalid callback rejected as expected", status=status)
-    return _fail(
-        name,
-        expectation,
-        f"unexpected invalid-callback response: status={status}, body={body}",
-        root_cause_area="runtime/http.py",
-        body=body,
-    )
-
-
-def eval_valid_callback(http_base: str, state_dir: Path) -> EvaluationResult:
-    name = "a2a_callback_records_terminal_task"
-    expectation = "Terminal A2A callback is accepted and persisted to data/state/a2a_tasks.json."
-    task_id = f"live-eval-{uuid.uuid4().hex[:12]}"
-    payload = {
-        "kind": "task",
-        "id": task_id,
-        "contextId": f"ctx-{task_id}",
-        "status": {
-            "state": "completed",
-            "message": {"parts": [{"kind": "text", "text": "Live evaluation callback completed."}]},
-        },
-        "metadata": {"source": "live_evaluation"},
-    }
-    try:
-        status, body = _http_json(
-            f"{http_base}/a2a/tasks/callback?agent=live_eval_agent",
-            method="POST",
-            payload=payload,
-        )
-    except Exception as exc:
-        return _fail(name, expectation, f"request failed: {exc}", root_cause_area="runtime/http.py")
-
-    if status != 200 or body.get("success") is not True or body.get("task_id") != task_id:
-        return _fail(
-            name,
-            expectation,
-            f"callback response did not match: status={status}, body={body}",
-            root_cause_area="runtime/http.py",
-            body=body,
-        )
-
-    task_file = state_dir / "a2a_tasks.json"
-    for _ in range(20):
-        record = _find_task_record(task_file, task_id)
-        if record:
-            if (
-                record.get("status") == "completed"
-                and record.get("agent_name") == "live_eval_agent"
-            ):
-                return _pass(
-                    name,
-                    expectation,
-                    "callback accepted and task record persisted",
-                    status=status,
-                    task_id=task_id,
-                )
-            return _fail(
-                name,
-                expectation,
-                f"task persisted with unexpected fields: {record}",
-                root_cause_area="state/a2a_store.py",
-                task_id=task_id,
-            )
-        time.sleep(0.25)
-
-    return _fail(
-        name,
-        expectation,
-        f"task {task_id} not found in {task_file}",
-        root_cause_area="state/a2a_store.py",
-        task_id=task_id,
-    )
-
-
-def _find_task_record(task_file: Path, task_id: str) -> dict[str, Any] | None:
-    if not task_file.exists():
-        return None
-    try:
-        rows = json.loads(task_file.read_text(encoding=ENCODING))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(rows, list):
-        return None
-    for row in rows:
-        if isinstance(row, dict) and row.get("task_id") == task_id:
-            return row
-    return None
 
 
 def eval_ipc_heartbeat(host: str, port: int, timeout: float) -> EvaluationResult:
@@ -302,42 +184,21 @@ def eval_ipc_non_streaming(host: str, port: int, timeout: float) -> EvaluationRe
     expectation = f"Non-streaming IPC user message returns assistant_message containing {marker}."
     prompt = f"Reply with exactly this token and no other text: {marker}"
     try:
-        with _open_ipc(host, port, timeout) as sock:
-            _write_ipc(
-                sock,
-                {
-                    "type": "user_message",
-                    "content": prompt,
-                    "request_id": f"live-eval-{uuid.uuid4().hex[:8]}",
-                    "metadata": {"source": "live_evaluation", "mode": "non_streaming"},
-                },
-            )
-            while True:
-                msg = _read_ipc(sock)
-                if msg is None:
-                    raise RuntimeError("connection closed before assistant response")
-                if msg.get("type") == "agent_event":
-                    continue
-                if msg.get("type") == "error":
-                    return _fail(
-                        name,
-                        expectation,
-                        f"IPC returned error: {msg.get('content')}",
-                        root_cause_area="ipc/server.py or agent/agent.py",
-                        message=msg,
-                    )
-                if msg.get("type") == "assistant_message":
-                    content = str(msg.get("content") or "")
-                    if marker in content:
-                        return _pass(
-                            name, expectation, "assistant_message contained expected marker"
-                        )
-                    return _fail(
-                        name,
-                        expectation,
-                        f"assistant response did not contain marker: {content[:300]!r}",
-                        root_cause_area="agent/adapters.py or live LLM configuration",
-                    )
+        content = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            prompt,
+            metadata={"source": "live_evaluation", "mode": "non_streaming"},
+        )
+        if marker in content:
+            return _pass(name, expectation, "assistant_message contained expected marker")
+        return _fail(
+            name,
+            expectation,
+            f"assistant response did not contain marker: {content[:300]!r}",
+            root_cause_area="agent/adapters.py or live LLM configuration",
+        )
     except Exception as exc:
         return _fail(
             name,
@@ -358,47 +219,27 @@ def eval_ipc_streaming(host: str, port: int, timeout: float) -> EvaluationResult
     final_seen = False
     event_types: list[str] = []
     try:
-        with _open_ipc(host, port, timeout) as sock:
-            _write_ipc(
-                sock,
-                {
-                    "type": "user_message",
-                    "content": prompt,
-                    "stream": True,
-                    "request_id": f"live-eval-stream-{uuid.uuid4().hex[:8]}",
-                    "metadata": {"source": "live_evaluation", "mode": "streaming"},
-                },
-            )
-            while True:
-                msg = _read_ipc(sock)
-                if msg is None:
-                    raise RuntimeError("connection closed before final stream chunk")
-                msg_type = msg.get("type")
-                if msg_type == "agent_event":
-                    continue
-                if msg_type == "stream_event":
-                    event_types.append(str(msg.get("event_type") or "unknown"))
-                    continue
-                if msg_type == "error":
-                    return _fail(
-                        name,
-                        expectation,
-                        f"IPC returned error: {msg.get('content')}",
-                        root_cause_area="ipc/server.py or ipc/deepagent_stream.py",
-                        message=msg,
-                    )
-                if msg_type == "stream_chunk":
-                    chunks.append(str(msg.get("content") or ""))
-                    if msg.get("is_final") is True:
-                        final_seen = True
-                        break
-                elif msg_type == "stream_end":
+        for msg in _ipc_stream_items(
+            host,
+            port,
+            timeout,
+            prompt,
+            metadata={"source": "live_evaluation", "mode": "streaming"},
+        ):
+            msg_type = msg.get("type")
+            if msg_type == "agent_event":
+                continue
+            if msg_type == "stream_event":
+                event_types.append(str(msg.get("event_type") or "unknown"))
+                continue
+            if msg_type == "stream_chunk":
+                chunks.append(str(msg.get("content") or ""))
+                if msg.get("is_final") is True:
                     final_seen = True
-                    break
-                elif msg_type == "assistant_message":
+            elif msg_type in {"stream_end", "assistant_message"}:
+                if msg_type == "assistant_message":
                     chunks.append(str(msg.get("content") or ""))
-                    final_seen = True
-                    break
+                final_seen = True
     except Exception as exc:
         return _fail(
             name,
@@ -426,40 +267,718 @@ def eval_ipc_streaming(host: str, port: int, timeout: float) -> EvaluationResult
     )
 
 
-def run(args: argparse.Namespace) -> list[EvaluationResult]:
-    results = [
-        eval_http_health(args.http_base),
-        eval_agent_card(args.http_base),
-        eval_invalid_callback(args.http_base),
+def eval_reasoning_stream(host: str, port: int, timeout: float) -> EvaluationResult:
+    name = "ipc_reasoning_stream"
+    expectation = (
+        "With reasoning enabled and summary=auto, at least one reasoning-heavy streaming "
+        "prompt emits a reasoning_delta stream_event before the final answer."
+    )
+    prompts = [
+        "Think carefully about 217 * 384, verify once, then answer exactly PRODUCT=83328.",
+        "Work out 37*49 + 18*23 carefully and answer exactly RESULT=2227.",
+        (
+            "Solve this step by step: 14 workers need 18 days to finish a job at constant rate. "
+            "How many days would 21 workers need? End with DAYS=12."
+        ),
     ]
-    if not args.skip_mutating_callback:
-        results.append(eval_valid_callback(args.http_base, args.state_dir))
-    results.append(eval_ipc_heartbeat(args.ipc_host, args.ipc_port, args.ipc_timeout))
+    attempts: list[dict[str, Any]] = []
+    for prompt_index, prompt in enumerate(prompts, start=1):
+        for attempt in range(1, 3):
+            try:
+                items = _ipc_stream_items(
+                    host,
+                    port,
+                    timeout,
+                    prompt,
+                    metadata={
+                        "source": "live_evaluation",
+                        "mode": "reasoning_stream",
+                        "prompt_index": prompt_index,
+                        "attempt": attempt,
+                    },
+                )
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "prompt_index": prompt_index,
+                        "attempt": attempt,
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            reasoning_events = [
+                item
+                for item in items
+                if item.get("type") == "stream_event"
+                and item.get("event_type") == "reasoning_delta"
+            ]
+            combined = "".join(
+                str(item.get("content") or "")
+                for item in items
+                if item.get("type") == "stream_chunk"
+            )
+            attempts.append(
+                {
+                    "prompt_index": prompt_index,
+                    "attempt": attempt,
+                    "reasoning_event_count": len(reasoning_events),
+                    "final_text": combined[:200],
+                }
+            )
+            if reasoning_events:
+                return _pass(
+                    name,
+                    expectation,
+                    "reasoning_delta events were observed during streaming",
+                    prompt_index=prompt_index,
+                    attempt=attempt,
+                    reasoning_event_count=len(reasoning_events),
+                    final_text=combined,
+                )
+    return _fail(
+        name,
+        expectation,
+        "no reasoning_delta events observed across the reasoning prompt corpus",
+        root_cause_area="ipc/deepagent_stream.py or live model/provider reasoning behavior",
+        attempts=attempts,
+    )
+
+
+def eval_tool_catalog(host: str, port: int, timeout: float) -> EvaluationResult:
+    name = "tool_catalog_via_chat"
+    expectation = (
+        "Via list_tools, the live agent exposes schedule_task, self_reflect, new_conversation, "
+        "get_a2a_task, and call_agent."
+    )
+    prompt = (
+        "Use the list_tools tool. Reply with only a comma-separated list of the available system "
+        "tool names."
+    )
+    try:
+        response = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            prompt,
+            metadata={"source": "live_evaluation", "mode": "tool_catalog"},
+        )
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"tool catalog request failed: {exc}",
+            root_cause_area="tools/list_tools.py or agent tool wiring",
+        )
+    required = ["schedule_task", "self_reflect", "new_conversation", "get_a2a_task", "call_agent"]
+    missing = [tool for tool in required if tool not in response]
+    if not missing:
+        return _pass(name, expectation, "required system tools were listed", response=response)
+    return _fail(
+        name,
+        expectation,
+        f"missing tools from response: {missing}; response={response[:300]!r}",
+        root_cause_area="tools/list_tools.py or agent tool wiring",
+    )
+
+
+def eval_microsoft_learn_mcp(host: str, port: int, timeout: float) -> EvaluationResult:
+    name = "microsoft_learn_mcp_via_chat"
+    expectation = (
+        "The live agent can refresh MCP discovery, expose the Microsoft Learn MCP tools, "
+        "and call microsoft_learn_microsoft_docs_search from chat."
+    )
+    check_prompt = (
+        "Use the mcp_refresh tool, then use list_tools, and tell me whether these MCP tools are available: "
+        "microsoft_learn_microsoft_docs_search, "
+        "microsoft_learn_microsoft_code_sample_search, "
+        "microsoft_learn_microsoft_docs_fetch."
+    )
+    try:
+        check_response = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            check_prompt,
+            metadata={"source": "live_evaluation", "mode": "mcp_catalog"},
+        )
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"Microsoft Learn MCP tool discovery failed: {exc}",
+            root_cause_area="tools/mcp_refresh.py, tools/list_tools.py, or MCP runtime wiring",
+        )
+
+    required_tools = [
+        "microsoft_learn_microsoft_docs_search",
+        "microsoft_learn_microsoft_code_sample_search",
+        "microsoft_learn_microsoft_docs_fetch",
+    ]
+    missing = [tool for tool in required_tools if tool not in check_response]
+    if missing:
+        return _fail(
+            name,
+            expectation,
+            f"Microsoft Learn MCP tools were not all visible: missing={missing}; response={check_response[:300]!r}",
+            root_cause_area="tools/mcp_refresh.py, tools/list_tools.py, or MCP config loading",
+        )
+
+    tool_prompt = (
+        "Use the microsoft_learn_microsoft_docs_search MCP tool to find official Microsoft Learn guidance "
+        "for Azure Blob Storage lifecycle management. Return only two lines in this format:\n"
+        "TITLE=<title>\nURL=<url>"
+    )
+    try:
+        items = _ipc_stream_items(
+            host,
+            port,
+            max(timeout, 120.0),
+            tool_prompt,
+            metadata={"source": "live_evaluation", "mode": "microsoft_learn_mcp"},
+        )
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"Microsoft Learn MCP tool call failed: {exc}",
+            root_cause_area="MCP runtime wiring, ipc/deepagent_stream.py, or Microsoft Learn MCP availability",
+        )
+
+    tool_events = [
+        item
+        for item in items
+        if item.get("type") == "stream_event"
+        and item.get("event_type") in {"tool_start", "tool_result"}
+        and "microsoft_learn_microsoft_docs_search" in str(item.get("content") or "")
+    ]
+    combined = "".join(
+        str(item.get("content") or "") for item in items if item.get("type") == "stream_chunk"
+    )
+    if (
+        len(tool_events) >= 2
+        and "TITLE=" in combined
+        and "URL=https://learn.microsoft.com/" in combined
+    ):
+        return _pass(
+            name,
+            expectation,
+            "Microsoft Learn MCP tools were exposed and microsoft_docs_search was called successfully",
+            catalog_response=check_response,
+            tool_event_types=[str(item.get("event_type") or "") for item in tool_events],
+            response=combined,
+        )
+    return _fail(
+        name,
+        expectation,
+        (
+            "Microsoft Learn MCP discovery succeeded but the live tool call did not produce the expected "
+            f"tool events/output: response={combined[:300]!r}"
+        ),
+        root_cause_area="MCP runtime wiring, ipc/deepagent_stream.py, or Microsoft Learn MCP behavior",
+        catalog_response=check_response,
+        tool_events=tool_events,
+        response=combined,
+    )
+
+
+def eval_subagent_delegation(host: str, port: int, timeout: float) -> EvaluationResult:
+    name = "subagent_delegation_via_chat"
+    expectation = (
+        "A streaming chat request can delegate to the hello-world subagent, emit subagent_start and "
+        "subagent_result events, and return HELLO_FROM_SUBAGENT to the user."
+    )
+    prompt = (
+        "Use the hello-world subagent for this request. "
+        "Reply with exactly HELLO_FROM_SUBAGENT and nothing else."
+    )
+    try:
+        items = _ipc_stream_items(
+            host,
+            port,
+            timeout,
+            prompt,
+            metadata={"source": "live_evaluation", "mode": "subagent_delegation"},
+        )
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"subagent delegation request failed: {exc}",
+            root_cause_area="agent/agent.py, agent/subagents.py, or ipc/deepagent_stream.py",
+        )
+
+    event_types = [
+        str(item.get("event_type") or "") for item in items if item.get("type") == "stream_event"
+    ]
+    final_text = "".join(
+        str(item.get("content") or "")
+        for item in items
+        if item.get("type") in {"stream_chunk", "assistant_message"}
+    )
+    if (
+        "subagent_start" in event_types
+        and "subagent_result" in event_types
+        and "HELLO_FROM_SUBAGENT" in final_text
+    ):
+        return _pass(
+            name,
+            expectation,
+            "hello-world subagent delegated and returned HELLO_FROM_SUBAGENT",
+            stream_events=event_types,
+            final_text=final_text,
+        )
+    return _fail(
+        name,
+        expectation,
+        "subagent delegation did not surface the expected events and final answer",
+        root_cause_area="agent/subagents.py, agent/agent.py, or ipc/stream_events.py",
+        stream_events=event_types,
+        final_text=final_text[:500],
+    )
+
+
+def eval_async_subagent_background_completion(
+    host: str,
+    port: int,
+    timeout: float,
+) -> EvaluationResult:
+    name = "async_subagent_background_completion"
+    expectation = (
+        "A chat request can launch hello-world-async via start_async_task, surface async kickoff "
+        "telemetry, return a task id immediately, and later receive a heartbeat-driven IPC callback "
+        f"with {ASYNC_SUBAGENT_RESULT}."
+    )
+    prompt = (
+        "Use the start_async_task tool with subagent_type hello-world-async. "
+        f"description should say to return exactly {ASYNC_SUBAGENT_RESULT}. "
+        "Do not call check_async_task, list_async_tasks, update_async_task, or cancel_async_task. "
+        "Reply with exactly TASK_ID=<task_id>."
+    )
+    request_id = f"live-eval-async-{uuid.uuid4().hex[:8]}"
+    try:
+        with _open_ipc(host, port, max(timeout, 120.0)) as sock:
+            _write_ipc(
+                sock,
+                {
+                    "type": "user_message",
+                    "content": prompt,
+                    "stream": True,
+                    "request_id": request_id,
+                    "metadata": {"source": "live_evaluation", "mode": "async_subagent"},
+                },
+            )
+            kickoff_items: list[dict[str, Any]] = []
+            while True:
+                msg = _read_ipc(sock)
+                if msg is None:
+                    raise RuntimeError("connection closed before async-subagent kickoff completed")
+                kickoff_items.append(msg)
+                msg_type = msg.get("type")
+                if msg_type == "error":
+                    raise RuntimeError(str(msg.get("content") or "unknown IPC error"))
+                if msg_type == "stream_chunk" and msg.get("is_final") is True:
+                    break
+                if msg_type in {"stream_end", "assistant_message"}:
+                    break
+
+            stream_events = [
+                str(item.get("event_type") or "")
+                for item in kickoff_items
+                if item.get("type") == "stream_event"
+            ]
+            final_text = "".join(
+                str(item.get("content") or "")
+                for item in kickoff_items
+                if item.get("type") in {"stream_chunk", "assistant_message"}
+            )
+            task_id = _extract_task_id(final_text)
+            if not task_id:
+                for item in kickoff_items:
+                    metadata = item.get("metadata")
+                    if not isinstance(metadata, dict):
+                        continue
+                    task_id = _extract_task_id(json.dumps(metadata, default=str))
+                    if task_id:
+                        break
+            if not task_id:
+                raise RuntimeError(f"could not extract async task id from kickoff: {final_text!r}")
+
+            callback: dict[str, Any] | None = None
+            deadline = time.time() + 45.0
+            while time.time() < deadline:
+                remaining = max(1.0, deadline - time.time())
+                sock.settimeout(min(remaining, 5.0))
+                try:
+                    msg = _read_ipc(sock)
+                except TimeoutError:
+                    continue
+                if msg is None or msg.get("type") != "agent_event":
+                    continue
+                if str(msg.get("event_type") or "") != "agent_message":
+                    continue
+                content = str(msg.get("content") or "")
+                metadata = msg.get("metadata") if isinstance(msg.get("metadata"), dict) else {}
+                serialized = json.dumps(metadata, default=str)
+                if (
+                    ASYNC_SUBAGENT_RESULT in content
+                    and task_id in serialized
+                    and metadata.get("source") == "async_subagent_completion"
+                ):
+                    callback = msg
+                    break
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"async subagent live eval failed: {exc}",
+            root_cause_area=(
+                "agent/subagents.py, agent/middleware.py, async_subagents/, or heartbeat async-subagent nodes"
+            ),
+        )
+
+    if (
+        "async_subagent_start" in stream_events
+        and f"TASK_ID={task_id}" in final_text
+        and callback is not None
+    ):
+        return _pass(
+            name,
+            expectation,
+            "async subagent launched, returned a task id, and later emitted a heartbeat IPC callback",
+            task_id=task_id,
+            stream_events=stream_events,
+            final_text=final_text,
+            callback=callback,
+        )
+    return _fail(
+        name,
+        expectation,
+        (
+            "async subagent kickoff/callback did not meet expectations: "
+            f"stream_events={stream_events}, final_text={final_text[:300]!r}, callback={callback}"
+        ),
+        root_cause_area=(
+            "agent/middleware.py, async_subagents/, runtime/http.py, or heartbeat async-subagent nodes"
+        ),
+        task_id=task_id,
+        stream_events=stream_events,
+        final_text=final_text,
+        callback=callback,
+    )
+
+
+def eval_self_reflect_tool(host: str, port: int, timeout: float) -> EvaluationResult:
+    name = "self_reflect_via_chat"
+    expectation = "The live agent can use self_reflect to inspect its codebase."
+    prompt = (
+        "Use the self_reflect tool with file_path config.py to read that file. If that succeeds, reply with exactly "
+        "FOUND_CONFIG."
+    )
+    try:
+        response = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            prompt,
+            metadata={"source": "live_evaluation", "mode": "self_reflect"},
+        )
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"self_reflect request failed: {exc}",
+            root_cause_area="tools/self_reflect.py or tool wiring",
+        )
+    if "FOUND_CONFIG" in response:
+        return _pass(name, expectation, "agent used self_reflect successfully")
+    return _fail(
+        name,
+        expectation,
+        f"unexpected self_reflect response: {response[:300]!r}",
+        root_cause_area="tools/self_reflect.py or tool wiring",
+    )
+
+
+def eval_conversation_history(host: str, port: int, timeout: float) -> tuple[EvaluationResult, str]:
+    token = "marzipan"
+    name = "conversation_history"
+    expectation = (
+        "The current thread remembers the previous user message and can recall a token from it."
+    )
+    try:
+        first = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            f"For this conversation only, the code word is {token}.",
+            metadata={"source": "live_evaluation", "mode": "conversation_history_start"},
+        )
+        second = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            "What is the conversation-only code word? Reply with one word only.",
+            metadata={"source": "live_evaluation", "mode": "conversation_history_check"},
+        )
+    except Exception as exc:
+        return (
+            _fail(
+                name,
+                expectation,
+                f"conversation history request failed: {exc}",
+                root_cause_area="nodes/cycle.py or conversation state persistence",
+            ),
+            token,
+        )
+    if first.strip() and second.strip().lower() == token:
+        return _pass(
+            name, expectation, "agent recalled the prior-message token", token=token
+        ), token
+    return (
+        _fail(
+            name,
+            expectation,
+            f"unexpected memory of prior turn: first={first[:120]!r}, second={second[:200]!r}",
+            root_cause_area="conversation graph/checkpointer/state persistence",
+        ),
+        token,
+    )
+
+
+def eval_new_conversation_reset(
+    host: str,
+    port: int,
+    timeout: float,
+    prior_token: str,
+) -> EvaluationResult:
+    name = "new_conversation_reset"
+    expectation = (
+        "new_conversation starts a fresh conversation so the old token is no longer available."
+    )
+    try:
+        _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            "new conversation",
+            metadata={"source": "live_evaluation", "mode": "new_conversation"},
+        )
+        recall = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            "What is the conversation-only code word? If you do not know, reply with exactly UNKNOWN.",
+            metadata={"source": "live_evaluation", "mode": "new_conversation_check"},
+        )
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"new_conversation eval failed: {exc}",
+            root_cause_area="tools/new_conversation.py or nodes/cycle.py",
+        )
+
+    normalized = recall.strip().lower()
+    if normalized == "unknown" or prior_token not in normalized:
+        return _pass(name, expectation, "post-reset conversation did not expose the prior token")
+    return _fail(
+        name,
+        expectation,
+        f"agent still appeared to know the prior token after reset: {recall[:200]!r}",
+        root_cause_area="tools/new_conversation.py or conversation state reset handling",
+    )
+
+
+def eval_schedule_create_and_trigger(
+    host: str,
+    port: int,
+    timeout: float,
+) -> EvaluationResult:
+    name = "schedule_create_and_trigger"
+    token = f"SCHEDULE_TOKEN_{uuid.uuid4().hex[:8]}"
+    expectation = (
+        "A one-off scheduled task can be created via chat, confirmed via list_schedule, "
+        "and later trigger scheduled_response/work_completed IPC events."
+    )
+    scheduled_at = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+        time.gmtime(time.time() + 45),
+    )
+    prompt = (
+        "Use the schedule_task tool now. "
+        f"user_request should be 'say {token}'. "
+        f"instruction should be 'Reply exactly {token}.'. "
+        f"scheduled_at should be '{scheduled_at}'. "
+        f"description should be 'live eval {token}'."
+    )
+    try:
+        response_text = _ipc_assistant_response(
+            host,
+            port,
+            max(timeout, 120.0),
+            prompt,
+            metadata={"source": "live_evaluation", "mode": "schedule"},
+        )
+        schedule_listing = ""
+        for _ in range(12):
+            schedule_listing = _ipc_assistant_response(
+                host,
+                port,
+                timeout,
+                "Use the list_schedule tool and reply with the raw schedule list only.",
+                metadata={"source": "live_evaluation", "mode": "schedule_check"},
+            )
+            if token in schedule_listing:
+                break
+            time.sleep(1.0)
+        else:
+            raise RuntimeError(
+                f"list_schedule did not expose the scheduled token: {schedule_listing!r}"
+            )
+
+        with _open_ipc(host, port, max(timeout, 120.0)) as sock:
+            observed_events: list[str] = []
+            deadline = time.time() + 100.0
+            while time.time() < deadline:
+                remaining = max(1.0, deadline - time.time())
+                sock.settimeout(min(remaining, 5.0))
+                try:
+                    msg = _read_ipc(sock)
+                except TimeoutError:
+                    continue
+                if msg is None:
+                    continue
+                if msg.get("type") != "agent_event":
+                    continue
+                event_type = str(msg.get("event_type") or "")
+                content = str(msg.get("content") or "")
+                metadata = msg.get("metadata") or {}
+                if token in content or token in json.dumps(metadata):
+                    observed_events.append(event_type)
+                if {"scheduled_response", "work_completed"} <= set(observed_events):
+                    break
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"schedule live eval failed: {exc}",
+            root_cause_area="tools/schedule_task.py, schedule/dispatch.py, or heartbeat graph scheduler path",
+        )
+
+    if {"scheduled_response", "work_completed"} <= set(observed_events):
+        return _pass(
+            name,
+            expectation,
+            "schedule was persisted and later emitted scheduled completion events",
+            response=response_text,
+            observed_events=observed_events,
+            token=token,
+        )
+    return _fail(
+        name,
+        expectation,
+        f"schedule created but did not emit expected events; observed={observed_events}",
+        root_cause_area="schedule/dispatch.py or heartbeat scheduler loop",
+        response=response_text,
+        token=token,
+    )
+
+
+def eval_memory_backend_write(host: str, port: int, timeout: float) -> EvaluationResult:
+    name = "memory_backend_write"
+    expectation = (
+        "The live agent can write and immediately read durable memory content under /memories/."
+    )
+    token = f"MEMORY_TOKEN_{uuid.uuid4().hex[:8]}"
+    prompt = (
+        f"Write the exact text '{token}' into /memories/live-eval-memory.md, then read that file back, "
+        f"and reply with exactly {token}."
+    )
+    try:
+        response = _ipc_assistant_response(
+            host,
+            port,
+            timeout,
+            prompt,
+            metadata={"source": "live_evaluation", "mode": "memory_write"},
+        )
+    except Exception as exc:
+        return _fail(
+            name,
+            expectation,
+            f"memory write request failed: {exc}",
+            root_cause_area="agent/backends.py or backend file tools",
+        )
+    if response.strip() == token:
+        return _pass(name, expectation, "memory file write/read round-trip succeeded")
+    return _fail(
+        name,
+        expectation,
+        f"memory round-trip did not return the expected token: {response[:200]!r}",
+        root_cause_area="agent/backends.py or backend file tools",
+    )
+
+
+def run(args: argparse.Namespace) -> list[EvaluationResult]:
+    results = [eval_ipc_heartbeat(args.ipc_host, args.ipc_port, args.ipc_timeout)]
+    results.append(eval_tool_catalog(args.ipc_host, args.ipc_port, args.llm_timeout))
+    results.append(eval_microsoft_learn_mcp(args.ipc_host, args.ipc_port, args.llm_timeout))
+    results.append(eval_subagent_delegation(args.ipc_host, args.ipc_port, args.llm_timeout))
+    results.append(
+        eval_async_subagent_background_completion(
+            args.ipc_host,
+            args.ipc_port,
+            args.llm_timeout,
+        )
+    )
+    history_result, history_token = eval_conversation_history(
+        args.ipc_host, args.ipc_port, args.llm_timeout
+    )
+    results.append(history_result)
+    results.append(
+        eval_new_conversation_reset(
+            args.ipc_host,
+            args.ipc_port,
+            args.llm_timeout,
+            history_token,
+        )
+    )
+    results.append(eval_reasoning_stream(args.ipc_host, args.ipc_port, args.llm_timeout))
     if not args.skip_llm:
         results.append(eval_ipc_non_streaming(args.ipc_host, args.ipc_port, args.llm_timeout))
         results.append(eval_ipc_streaming(args.ipc_host, args.ipc_port, args.llm_timeout))
+        if not args.skip_schedule:
+            results.append(
+                eval_schedule_create_and_trigger(
+                    args.ipc_host,
+                    args.ipc_port,
+                    args.llm_timeout,
+                )
+            )
+        if not args.skip_memory_write:
+            results.append(
+                eval_memory_backend_write(args.ipc_host, args.ipc_port, args.llm_timeout)
+            )
     return results
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--http-base", default=DEFAULT_HTTP_BASE)
     parser.add_argument("--ipc-host", default=DEFAULT_IPC_HOST)
     parser.add_argument("--ipc-port", type=int, default=DEFAULT_IPC_PORT)
-    parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--ipc-timeout", type=float, default=10.0)
-    parser.add_argument("--llm-timeout", type=float, default=180.0)
+    parser.add_argument("--llm-timeout", type=float, default=240.0)
     parser.add_argument("--skip-llm", action="store_true")
-    parser.add_argument("--skip-mutating-callback", action="store_true")
+    parser.add_argument("--skip-schedule", action="store_true")
+    parser.add_argument("--skip-memory-write", action="store_true")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON results.")
     args = parser.parse_args()
 
     results = run(args)
     payload = {
         "target": {
-            "http_base": args.http_base,
             "ipc": f"{args.ipc_host}:{args.ipc_port}",
-            "state_dir": str(args.state_dir),
         },
         "results": [asdict(result) for result in results],
         "summary": {

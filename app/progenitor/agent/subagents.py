@@ -2,6 +2,7 @@
 Subagent definitions for the Progenitor DeepAgent.
 
 Wraps specialized helper capabilities as DeepAgent subagents:
+- Hello-world subagent: deterministic delegation smoke test
 - Code review subagent: lightweight read-only review
 - Research subagent: source/documentation lookup and summarization
 """
@@ -10,9 +11,29 @@ from __future__ import annotations
 
 import logging
 
+from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.subagents import SubAgent
 
+from ..async_subagents import HELLO_WORLD_ASYNC_ASSISTANT_ID
+
 logger = logging.getLogger(__name__)
+
+
+def create_hello_world_subagent() -> SubAgent:
+    """Create a deterministic subagent for delegation smoke tests."""
+    return SubAgent(
+        name="hello-world",
+        description=(
+            "Returns the fixed token HELLO_FROM_SUBAGENT for delegation smoke tests. "
+            "Use only when explicitly asked to verify that subagent delegation is working."
+        ),
+        system_prompt=(
+            "You are a hello-world subagent used only for delegation tests. "
+            "Reply with exactly HELLO_FROM_SUBAGENT and nothing else. "
+            "Do not call tools."
+        ),
+        tools=[],
+    )
 
 
 def create_code_review_subagent() -> SubAgent:
@@ -53,9 +74,40 @@ def create_research_subagent() -> SubAgent:
     )
 
 
-def create_progenitor_subagents() -> list[SubAgent]:
+def create_hello_world_async_subagent(http_base_url: str) -> AsyncSubAgent:
+    """Create the deterministic async subagent used for background delegation tests."""
+    return AsyncSubAgent(
+        name="hello-world-async",
+        description=(
+            "Runs in the background and later returns the fixed token "
+            "HELLO_FROM_ASYNC_SUBAGENT. Use when explicitly asked to test async "
+            "subagent delegation or background completion callbacks."
+        ),
+        graph_id=HELLO_WORLD_ASYNC_ASSISTANT_ID,
+        url=f"{http_base_url.rstrip('/')}/agent-protocol",
+    )
+
+
+def create_progenitor_sync_subagents() -> list[SubAgent]:
+    """Create Progenitor's inline DeepAgent subagents."""
+    return [
+        create_hello_world_subagent(),
+        create_code_review_subagent(),
+        create_research_subagent(),
+    ]
+
+
+def create_progenitor_async_subagents(http_base_url: str) -> list[AsyncSubAgent]:
+    """Create Progenitor's background async subagents."""
+    return [create_hello_world_async_subagent(http_base_url)]
+
+
+def create_progenitor_subagents(http_base_url: str) -> list[SubAgent | AsyncSubAgent]:
     """Create Progenitor's active DeepAgent subagents."""
-    subagents = [create_code_review_subagent(), create_research_subagent()]
+    subagents: list[SubAgent | AsyncSubAgent] = [
+        *create_progenitor_sync_subagents(),
+        *create_progenitor_async_subagents(http_base_url),
+    ]
     logger.info(
         "Created %d subagents: %s",
         len(subagents),
