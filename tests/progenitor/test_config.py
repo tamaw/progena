@@ -146,6 +146,8 @@ class TestRuntimeConfig:
         config = RuntimeConfig()
         assert config.timezone == "Australia/Melbourne"
         assert config.idle_backoff_seconds == 30
+        assert config.mcp_refresh_seconds == 900
+        assert config.registry_refresh_seconds == 900
         assert config.max_actions_per_cycle == 10
         assert config.log_level == "info"
         assert config.http_host == "127.0.0.1"
@@ -156,6 +158,8 @@ class TestRuntimeConfig:
         env = {
             "PROGENITOR_TIMEZONE": "UTC",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "60",
+            "PROGENITOR_MCP_REFRESH_SECONDS": "900",
+            "PROGENITOR_REGISTRY_REFRESH_SECONDS": "1200",
             "PROGENITOR_MAX_ACTIONS_PER_CYCLE": "20",
             "PROGENITOR_LOG_LEVEL": "debug",
             "PROGENITOR_HTTP_HOST": "0.0.0.0",
@@ -166,6 +170,8 @@ class TestRuntimeConfig:
             config = RuntimeConfig.from_env()
             assert config.timezone == "UTC"
             assert config.idle_backoff_seconds == 60
+            assert config.mcp_refresh_seconds == 900
+            assert config.registry_refresh_seconds == 1200
             assert config.max_actions_per_cycle == 20
             assert config.log_level == "debug"
             assert config.http_host == "0.0.0.0"
@@ -177,13 +183,19 @@ class TestRuntimeConfig:
         env_clear = {
             "PROGENITOR_TIMEZONE": "",
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "",
+            "PROGENITOR_MCP_REFRESH_SECONDS": "",
+            "PROGENITOR_REGISTRY_REFRESH_SECONDS": "",
         }
         with patch.dict(os.environ, env_clear, clear=False):
             os.environ.pop("PROGENITOR_TIMEZONE", None)
             os.environ.pop("PROGENITOR_IDLE_BACKOFF_SECONDS", None)
+            os.environ.pop("PROGENITOR_MCP_REFRESH_SECONDS", None)
+            os.environ.pop("PROGENITOR_REGISTRY_REFRESH_SECONDS", None)
             config = RuntimeConfig.from_env()
             assert config.timezone == "Australia/Melbourne"
             assert config.idle_backoff_seconds == 30
+            assert config.mcp_refresh_seconds == 900
+            assert config.registry_refresh_seconds == 900
 
 
 class TestStorageConfig:
