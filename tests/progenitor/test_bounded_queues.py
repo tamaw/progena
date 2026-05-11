@@ -18,6 +18,8 @@ class MockRuntimeConfig:
     """Mock runtime config for testing."""
 
     idle_backoff_seconds: int = 30
+    mcp_refresh_seconds: int = 900
+    registry_refresh_seconds: int = 900
     max_backoff_seconds: int = 300
     backoff_multiplier: float = 1.5
     max_input_queue_size: int = 5
