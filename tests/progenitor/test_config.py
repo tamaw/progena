@@ -146,8 +146,8 @@ class TestRuntimeConfig:
         config = RuntimeConfig()
         assert config.timezone == "Australia/Melbourne"
         assert config.idle_backoff_seconds == 30
-        assert config.mcp_refresh_seconds == 300
-        assert config.registry_refresh_seconds == 300
+        assert config.mcp_refresh_seconds == 900
+        assert config.registry_refresh_seconds == 900
         assert config.max_actions_per_cycle == 10
         assert config.log_level == "info"
         assert config.http_host == "127.0.0.1"
@@ -194,8 +194,8 @@ class TestRuntimeConfig:
             config = RuntimeConfig.from_env()
             assert config.timezone == "Australia/Melbourne"
             assert config.idle_backoff_seconds == 30
-            assert config.mcp_refresh_seconds == 300
-            assert config.registry_refresh_seconds == 300
+            assert config.mcp_refresh_seconds == 900
+            assert config.registry_refresh_seconds == 900
 
 
 class TestStorageConfig:
