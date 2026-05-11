@@ -134,8 +134,8 @@ class ProgenitorLoop:
             scheduler_poll_seconds=scheduler_poll_seconds,
             a2a_poll_seconds=DEFAULT_A2A_POLL_SECONDS,
             async_subagent_poll_seconds=DEFAULT_A2A_POLL_SECONDS,
-            mcp_refresh_seconds=60.0,
-            registry_refresh_seconds=60.0,
+            mcp_refresh_seconds=float(config.runtime.mcp_refresh_seconds),
+            registry_refresh_seconds=float(config.runtime.registry_refresh_seconds),
             heartbeat_health_seconds=float(
                 getattr(self.config.runtime, "checkpoint_interval_seconds", 30.0)
             ),
