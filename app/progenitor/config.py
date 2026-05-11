@@ -131,6 +131,8 @@ class RuntimeConfig:
 
     timezone: str = "Australia/Melbourne"
     idle_backoff_seconds: int = 30
+    mcp_refresh_seconds: int = 900
+    registry_refresh_seconds: int = 900
     max_actions_per_cycle: int = 10
     log_level: str = "info"
     log_format: str = "text"  # "text" | "json" for structured logging
@@ -164,6 +166,8 @@ class RuntimeConfig:
         return cls(
             timezone=os.getenv("PROGENITOR_TIMEZONE", "Australia/Melbourne"),
             idle_backoff_seconds=env_int("PROGENITOR_IDLE_BACKOFF_SECONDS", 30),
+            mcp_refresh_seconds=env_int("PROGENITOR_MCP_REFRESH_SECONDS", 900),
+            registry_refresh_seconds=env_int("PROGENITOR_REGISTRY_REFRESH_SECONDS", 900),
             max_actions_per_cycle=env_int("PROGENITOR_MAX_ACTIONS_PER_CYCLE", 10),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
@@ -389,6 +393,16 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
             "idle_backoff_seconds",
             config.runtime.idle_backoff_seconds,
             lambda v: isinstance(v, int) and 0 < v <= 3600,
+        ),
+        (
+            "mcp_refresh_seconds",
+            config.runtime.mcp_refresh_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 86400,
+        ),
+        (
+            "registry_refresh_seconds",
+            config.runtime.registry_refresh_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 86400,
         ),
         (
             "max_actions_per_cycle",

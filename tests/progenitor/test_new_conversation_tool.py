@@ -40,6 +40,8 @@ async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None
 @dataclass
 class _MockRuntimeConfig:
     idle_backoff_seconds: int = 30
+    mcp_refresh_seconds: int = 900
+    registry_refresh_seconds: int = 900
     max_input_queue_size: int = 5
     max_output_queue_size: int = 5
     max_stream_queue_size: int = 10
