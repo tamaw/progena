@@ -15,6 +15,7 @@ from ..mcp import MCPRuntime
 from ..nodes.health import write_health_status
 from ..registry import AgentRegistryRuntime
 from ..state.manager import StateManager
+from ..state.postgres_store import PostgresStateStore
 from .heartbeat import ProgenitorLoop
 from .http import ProgenitorHTTPServer
 
@@ -38,10 +39,15 @@ class Progenitor:
         self.state_dir = self.config.storage.state_dir
         self.config_dir = self.state_dir.parent / "config"
         self.logs_dir = self.config.storage.log_dir
+        if not self.config.database.enabled:
+            raise ValueError(
+                "PROGENITOR_DATABASE_URL is required; file-backed persistence is removed"
+            )
         self.state_manager = StateManager(
             self.state_dir,
             self.logs_dir,
             lock_timeout=self.config.storage.state_lock_timeout_seconds,
+            postgres_store=PostgresStateStore(self.config.database.url),
         )
         self.llm_client = LLMClient(
             config=self.config.llm,
@@ -53,17 +59,39 @@ class Progenitor:
         self.tool_registry = self.registry_runtime.agent_registry
         self.graph: Any = None
         self.loop_runner: Any = None
+        self.log_store: Any | None = None
         self._http_server: ProgenitorHTTPServer | None = None
         self._ipc_server: IPCServer | None = None
         self._background_tasks: list[asyncio.Task] = []
+        self._persistence_stack = contextlib.AsyncExitStack()
 
     async def initialize(self) -> None:
         """Initialize all components."""
         for dir_path in [self.state_dir, self.config_dir, self.logs_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
+        checkpointer: Any | None = None
+        store: Any | None = None
+        if self.config.database.enabled:
+            from ..database import PostgresLogStore, setup_application_schema
+
+            if self.config.database.setup:
+                await setup_application_schema(self.config.database.url)
+            self.log_store = PostgresLogStore(self.config.database.url)
+            await self.log_store.open()
         await self.state_manager.initialize()
         await self.registry_runtime.load()
+        if self.config.database.enabled:
+            from ..database import open_langgraph_persistence
+
+            persistence = await self._persistence_stack.enter_async_context(
+                open_langgraph_persistence(
+                    self.config.database.url,
+                    setup=self.config.database.setup,
+                )
+            )
+            checkpointer = persistence.checkpointer
+            store = persistence.store
 
         async def deferred_push_event(event_type: str, content: str, metadata=None):
             """Event pusher that delegates to the loop runner when available."""
@@ -79,11 +107,13 @@ class Progenitor:
 
         self.graph = create_deep_agent_for_runtime(
             config=self.config,
+            checkpointer=checkpointer,
+            store=store,
             tool_registry=self.tool_registry,
             llm_client=self.llm_client,
             state_manager=self.state_manager,
             project_root=str(PROJECT_ROOT),
-            log_dir=self.logs_dir,
+            log_sink=self.log_store,
         )
 
         self.loop_runner = ProgenitorLoop(
@@ -93,6 +123,7 @@ class Progenitor:
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             project_root=PROJECT_ROOT,
+            log_sink=self.log_store,
         )
 
     async def run(self) -> None:
@@ -180,6 +211,10 @@ class Progenitor:
         self._background_tasks.clear()
 
         await self.state_manager.commit_state()
+        await self._persistence_stack.aclose()
+        if self.log_store is not None:
+            await self.log_store.close()
+            self.log_store = None
         await self.llm_client.close()
         await write_health_status(self.state_dir, "offline")
 

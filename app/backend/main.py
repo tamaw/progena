@@ -22,7 +22,6 @@ import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
@@ -92,16 +91,17 @@ logger = logging.getLogger(__name__)
 config = ChatServerConfig.from_env()
 # Client can be either IPC-based or subprocess-based
 client: ProgenitorClient | IPCProgenitorClient | None = None
+repository = None
 
 # Enhanced feature managers
 session_manager: SessionManager = SessionManager(
     SessionConfig(
-        persist_dir=Path("data/sessions") if config.host else None,
+        persist_dir=None,
     )
 )
 attachment_manager: AttachmentManager = AttachmentManager(
     AttachmentConfig(
-        cache_dir=Path("data/attachments"),
+        cache_dir=None,
     )
 )
 conversation_history: ConversationHistory = ConversationHistory()
@@ -579,11 +579,21 @@ async def lifespan(app: FastAPI):
     - Attachment manager cleanup
     - Graceful shutdown with callbacks
     """
-    global client
+    global client, repository
     ipc_event_forwarding_task: asyncio.Task | None = None
 
     # Startup
     logger.info("Starting backend with enhanced features...")
+
+    if config.database_url:
+        from app.progenitor.database import ProgenitorRepository, setup_application_schema
+
+        if config.database_setup:
+            await setup_application_schema(config.database_url)
+        repository = ProgenitorRepository(config.database_url)
+        await repository.open()
+        session_manager.set_store(repository)
+        logger.info("Postgres repository started")
 
     # Initialize session manager
     await session_manager.start()
@@ -618,6 +628,19 @@ async def lifespan(app: FastAPI):
         _clear_attachment_cache,
         priority=60,
         timeout=2.0,
+    )
+
+    async def _close_repository():
+        global repository
+        if repository is not None:
+            await repository.close()
+            repository = None
+
+    graceful_shutdown.register_callback(
+        "close_postgres_repository",
+        _close_repository,
+        priority=65,
+        timeout=5.0,
     )
 
     # Initialize Telegram client if enabled
@@ -1153,6 +1176,13 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
         _attach_session_cookie(request, session, response)
         response_id = f"resp-{uuid.uuid4().hex[:8]}"
         response_text = response_details.response
+        await _persist_chat_exchange(
+            conversation_id=thread_id,
+            user_message=last_user_msg,
+            assistant_message=response_text,
+            request_id=request_id,
+            model=body.model,
+        )
         reasoning_text = (response_details.reasoning or "").strip()
         output_content: list[ResponseOutputReasoning | ResponseOutputText] = []
         if reasoning_text:
@@ -1242,8 +1272,18 @@ async def stream_response_unified(
     """Stream SSE events using the Responses API shape."""
     assert client is not None, "Client must be initialized"
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
+    conversation_id = str((metadata or {}).get("thread_id") or "").strip()
+    chunks: list[str] = []
 
     try:
+        if conversation_id:
+            await _persist_message(
+                conversation_id=conversation_id,
+                role="user",
+                content=message,
+                request_id=request_id,
+                model=model,
+            )
         async for item in client.send_message_stream_events(
             message,
             request_id=request_id,
@@ -1254,6 +1294,7 @@ async def stream_response_unified(
                 chunk = str(item.get("content", ""))
                 if not chunk:
                     continue
+                chunks.append(chunk)
                 delta_event = {
                     "id": response_id,
                     "object": "response.output_text.delta",
@@ -1284,6 +1325,14 @@ async def stream_response_unified(
             "object": "response.completed",
             "model": model,
         }
+        if conversation_id and chunks:
+            await _persist_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content="".join(chunks),
+                request_id=request_id,
+                model=model,
+            )
         yield "event: response.completed\n" + f"data: {json.dumps(completed_event)}\n\n"
 
     except Exception as e:
@@ -1300,6 +1349,52 @@ async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIte
         chunk_text = str(item.get("content", ""))
         if chunk_text:
             yield chunk_text
+
+
+async def _persist_chat_exchange(
+    *,
+    conversation_id: str,
+    user_message: str,
+    assistant_message: str,
+    request_id: str | None,
+    model: str,
+) -> None:
+    """Persist a user/assistant exchange when Postgres is enabled."""
+    await _persist_message(
+        conversation_id=conversation_id,
+        role="user",
+        content=user_message,
+        request_id=request_id,
+        model=model,
+    )
+    await _persist_message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=assistant_message,
+        request_id=request_id,
+        model=model,
+    )
+
+
+async def _persist_message(
+    *,
+    conversation_id: str,
+    role: str,
+    content: str,
+    request_id: str | None,
+    model: str,
+) -> None:
+    """Persist a single product-facing message."""
+    if repository is None:
+        return
+    await repository.add_message(
+        conversation_id,
+        role=role,
+        content=content,
+        message_id=f"msg_{uuid.uuid4().hex}",
+        checkpoint_thread_id=conversation_id,
+        metadata={"request_id": request_id, "model": model},
+    )
 
 
 # Simple chat endpoint (non-OpenAI format)
@@ -1323,6 +1418,13 @@ async def simple_chat(request: Request, response: Response, body: SimpleChatRequ
         response_details = await client.send_message(
             body.message,
             metadata=request_metadata,
+        )
+        await _persist_chat_exchange(
+            conversation_id=thread_id,
+            user_message=body.message,
+            assistant_message=response_details.response,
+            request_id=getattr(request.state, "request_id", None),
+            model=config.model_name,
         )
         _attach_session_cookie(request, session, response)
         return {"response": response_details.response}
@@ -1359,10 +1461,28 @@ async def upload_attachment(
 
     # Store in session if available
     session_id = request.cookies.get("progenitor_session")
+    conversation_id: str | None = None
     if session_id:
         session = await session_manager.get_session(session_id)
         if session:
+            conversation_id = _default_conversation_id(session)
             session.pending_attachments.append(result.id)
+
+    if repository is not None:
+        await repository.add_attachment(
+            attachment_id=result.id,
+            conversation_id=conversation_id,
+            filename=result.original_filename,
+            media_type=result.mime_type,
+            size_bytes=result.size_bytes,
+            content=content,
+            metadata={
+                "name": result.name,
+                "content": result.content,
+                "content_truncated": result.content_truncated,
+                "extraction_metadata": result.metadata,
+            },
+        )
 
     return {
         "id": result.id,
@@ -1380,18 +1500,20 @@ async def upload_attachment(
 @app.get("/v1/attachments/{attachment_id}")
 async def get_attachment(attachment_id: str):
     """Get attachment metadata and content by ID."""
-    # Search in cache by ID
-    for result in attachment_manager._cache.values():
-        if result.id == attachment_id:
+    if repository is not None:
+        persisted = await repository.get_attachment(attachment_id)
+        if persisted is not None:
+            metadata = persisted.metadata
+            extracted_content = str(metadata.get("content") or "")
             return {
-                "id": result.id,
-                "name": result.name,
-                "filename": result.original_filename,
-                "mime_type": result.mime_type,
-                "size_bytes": result.size_bytes,
-                "content": result.content,
-                "content_truncated": result.content_truncated,
-                "metadata": result.metadata,
+                "id": persisted.id,
+                "name": metadata.get("name") or persisted.filename,
+                "filename": persisted.filename,
+                "mime_type": persisted.media_type,
+                "size_bytes": persisted.size_bytes,
+                "content": extracted_content,
+                "content_truncated": bool(metadata.get("content_truncated", False)),
+                "metadata": metadata.get("extraction_metadata", metadata),
             }
 
     raise HTTPException(status_code=404, detail="Attachment not found")
@@ -1485,8 +1607,30 @@ async def import_settings(request: Request, response: Response):
 
 
 @app.get("/v1/conversation")
-async def get_conversation():
+async def get_conversation(request: Request, response: Response):
     """Get current conversation history."""
+    session = await get_session_from_request(request, session_manager)
+    _attach_session_cookie(request, session, response)
+    conversation_id = _default_conversation_id(session)
+    if repository is not None:
+        messages = await repository.list_messages(conversation_id)
+        return {
+            "conversation_id": conversation_id,
+            "message_count": len(messages),
+            "messages": [
+                {
+                    "id": str(msg["id"]),
+                    "role": str(msg["role"]),
+                    "content": str(msg["content"])[:500] + "..."
+                    if len(str(msg["content"])) > 500
+                    else str(msg["content"]),
+                    "timestamp": msg["created_at"].isoformat(),
+                    "has_attachments": bool(msg["metadata"].get("attachments", [])),
+                    "has_tool_calls": bool(msg["metadata"].get("tool_calls", [])),
+                }
+                for msg in messages
+            ],
+        }
     return {
         "message_count": len(conversation_history),
         "messages": [
@@ -1521,8 +1665,12 @@ async def get_conversation_message(message_id: str):
 
 
 @app.delete("/v1/conversation")
-async def clear_conversation():
+async def clear_conversation(request: Request, response: Response):
     """Clear conversation history."""
+    session = await get_session_from_request(request, session_manager)
+    _attach_session_cookie(request, session, response)
+    if repository is not None:
+        await repository.clear_conversation(_default_conversation_id(session))
     conversation_history.clear()
     return {"status": "cleared"}
 

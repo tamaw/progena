@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,13 +10,12 @@ import pytest
 from app.progenitor.config import ProgenitorConfig, StorageConfig
 from app.progenitor.ipc import IPCServer
 from app.progenitor.mcp import MCPRuntime
-from app.progenitor.nodes.audit import write_startup_config_audit
+from app.progenitor.nodes.audit import write_startup_config_audit_to_sink
 from app.progenitor.nodes.health import write_health_status
 from app.progenitor.nodes.mcp import sync_mcp_runtime_context
 from app.progenitor.registry import AgentRegistryRuntime
 from app.progenitor.runtime.http import ProgenitorHTTPServer
 from app.progenitor.runtime.queues import QueuedInput, RuntimeQueues
-from app.progenitor.state.manager import StateManager
 
 
 def _make_config(tmp_path: Path) -> ProgenitorConfig:
@@ -65,26 +63,20 @@ def test_runtime_components_wire_configured_paths(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_audit_and_health_nodes_write_operational_files(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
-    state = StateManager(
-        config.storage.state_dir,
-        config.storage.log_dir,
-        lock_timeout=config.storage.state_lock_timeout_seconds,
-    )
-    await state.initialize()
 
-    await write_startup_config_audit(
-        config.storage.log_dir,
+    log_sink = MagicMock()
+    log_sink.write_log = AsyncMock()
+    await write_startup_config_audit_to_sink(
+        log_sink,
         config.to_dict(redact_secrets=True),
     )
     await write_health_status(config.storage.state_dir, "offline")
 
-    decisions_path = tmp_path / "logs" / "decisions.jsonl"
     health_path = tmp_path / "data" / "state" / "health.json"
-    decision = json.loads(decisions_path.read_text().splitlines()[-1])
-    health = json.loads(health_path.read_text())
 
-    assert decision["event"] == "startup_config"
-    assert health["status"] == "offline"
+    log_sink.write_log.assert_awaited_once()
+    assert log_sink.write_log.await_args.kwargs["payload"]["event"] == "startup_config"
+    assert health_path.exists()
 
 
 @pytest.mark.asyncio

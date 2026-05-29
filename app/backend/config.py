@@ -38,6 +38,10 @@ class ChatServerConfig:
     progenitor_ipc_host: str = "127.0.0.1"  # IPC server host
     progenitor_ipc_port: int = 9500  # IPC server port
 
+    # Postgres datastore settings shared with the Progenitor runtime
+    database_url: str = ""
+    database_setup: bool = True
+
     # API settings
     api_title: str = "Progenitor Chat API"
     api_version: str = "0.1.0"
@@ -90,6 +94,8 @@ class ChatServerConfig:
             # IPC settings
             progenitor_ipc_host=os.getenv("CHAT_SERVER_IPC_HOST", "127.0.0.1"),
             progenitor_ipc_port=env_int("CHAT_SERVER_IPC_PORT", 9500),
+            database_url=os.getenv("PROGENITOR_DATABASE_URL", "").strip(),
+            database_setup=env_bool("PROGENITOR_DATABASE_SETUP", True),
             # API settings
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),

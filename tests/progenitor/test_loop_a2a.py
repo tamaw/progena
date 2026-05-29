@@ -31,7 +31,6 @@ async def test_a2a_completion_node_persists_one_tool_message(tmp_path: Path) -> 
             live_state={},
             state_manager=state_manager,
             health_state_dir=tmp_path,
-            audit_logs_dir=None,
             startup_audit_payload=None,
             tool_registry=MagicMock(),
             project_root=None,

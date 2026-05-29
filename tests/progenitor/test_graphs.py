@@ -142,13 +142,14 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> No
 
     queues = _FakeQueues(input_item="hello", wait_seconds=0.25, pending_count=2)
     live_state = {"thread_id": "thread-1", "messages": [], "tool_calls": [], "attachments": []}
+    audit_log_sink = MagicMock()
+    audit_log_sink.write_log = AsyncMock()
     context = _heartbeat_context(
         queues=queues,
         agent_graph=_FakeAgentGraph(),
         live_state=live_state,
         state_manager=state_manager,
         health_state_dir=tmp_path / "state",
-        audit_logs_dir=tmp_path / "logs",
         startup_audit_payload={"config": "redacted"},
         tool_registry=tool_registry,
         project_root=None,
@@ -162,6 +163,7 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> No
         heartbeat_health_seconds=30.0,
         timezone="UTC",
         reasoning_enabled=False,
+        audit_log_sink=audit_log_sink,
     )
     graph = create_runtime_heartbeat_graph()
 
@@ -174,7 +176,11 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> No
     assert queues.last_input_timeout == 1.0
     queues.signal_cycle_complete_mock.assert_called_once()
     assert (tmp_path / "state" / "health.json").exists()
-    assert (tmp_path / "logs" / "decisions.jsonl").exists()
+    assert audit_log_sink.write_log.await_count == 2
+    checkpoint_log = audit_log_sink.write_log.await_args_list[-1].kwargs
+    assert checkpoint_log["source"] == "checkpoints"
+    assert checkpoint_log["payload"]["event"] == "state_checkpoint"
+    assert checkpoint_log["payload"]["thread_id"] == "thread-1"
 
 
 @pytest.mark.asyncio
@@ -208,7 +214,6 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input(t
         live_state=live_state,
         state_manager=state_manager,
         health_state_dir=tmp_path / "state",
-        audit_logs_dir=tmp_path / "logs",
         startup_audit_payload={"config": "redacted"},
         tool_registry=tool_registry,
         project_root=None,
@@ -265,7 +270,6 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors(tmp_path) -> 
             live_state=live_state,
             state_manager=state_manager,
             health_state_dir=tmp_path / "state",
-            audit_logs_dir=tmp_path / "logs",
             startup_audit_payload={"config": "redacted"},
             tool_registry=tool_registry,
             project_root=None,
@@ -312,7 +316,6 @@ def _heartbeat_context(**overrides):
         "live_state": {},
         "state_manager": MagicMock(),
         "health_state_dir": ".",
-        "audit_logs_dir": None,
         "startup_audit_payload": None,
         "tool_registry": _tool_registry(),
         "project_root": None,

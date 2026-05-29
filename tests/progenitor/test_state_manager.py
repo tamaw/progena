@@ -17,6 +17,26 @@ from app.progenitor.state.models import (
 )
 
 
+class FakePostgresStateStore:
+    def __init__(self):
+        self.documents = {}
+        self.opened = False
+        self.closed = False
+
+    async def open(self):
+        self.opened = True
+
+    async def close(self):
+        self.closed = True
+
+    async def get_document(self, name, default):
+        self.documents.setdefault(name, default)
+        return self.documents[name]
+
+    async def save_document(self, name, payload):
+        self.documents[name] = payload
+
+
 class TestStateManager:
     """Tests for the StateManager class."""
 
@@ -117,6 +137,31 @@ class TestStateManager:
         assert dequeued is not None
         assert dequeued.content == "Reply exactly BG_TOKEN"
         assert await manager.get_background_tasks() == []
+
+    @pytest.mark.asyncio
+    async def test_postgres_state_store_replaces_file_documents(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        store = FakePostgresStateStore()
+        manager = StateManager(state_dir, logs_dir, postgres_store=store)
+        await manager.initialize()
+
+        message = ConversationMessage(id="msg-pg", role="user", content="Hello Postgres")
+        await manager.add_message(message)
+        await manager.add_tool_call({"id": "tool-1", "name": "demo"})
+        await manager.add_attachment({"id": "att-1", "content": b"bytes".hex()})
+
+        state = await manager.get_current_state()
+        assert store.opened is True
+        assert not (state_dir / "current_state.json").exists()
+        assert state["messages"][0]["content"] == "Hello Postgres"
+        assert state["tool_calls"] == [{"id": "tool-1", "name": "demo"}]
+        assert state["attachments"] == [{"id": "att-1", "content": b"bytes".hex()}]
+
+        await manager.commit_state()
+        assert store.documents["current_state"]["messages"][0]["id"] == "msg-pg"
+
+        await manager.close()
+        assert store.closed is True
 
     @pytest.mark.asyncio
     async def test_async_subagent_task_persistence(self, temp_dirs):
