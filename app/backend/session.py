@@ -19,30 +19,13 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 import aiofiles
 import yaml
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-
-
-class SessionStore(Protocol):
-    async def save_session(
-        self,
-        session_id: str,
-        *,
-        payload: dict[str, Any],
-        user_id: str | None = None,
-        expires_at: datetime | None = None,
-    ) -> None: ...
-
-    async def list_sessions(self) -> list[dict[str, Any]]: ...
-
-    async def delete_session(self, session_id: str) -> None: ...
-
-    async def delete_expired_sessions(self) -> int: ...
 
 
 class SessionConfig(BaseModel):
@@ -136,28 +119,21 @@ class SessionManager:
     - Multi-user isolation
     """
 
-    def __init__(self, config: SessionConfig | None = None, store: SessionStore | None = None):
+    def __init__(self, config: SessionConfig | None = None):
         self.config = config or SessionConfig()
-        self.store = store
         self._sessions: dict[str, SessionState] = {}
         self._user_sessions: dict[str, str] = {}  # user_id -> session_id
         self._cleanup_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
         # Persistence directory
-        if self.config.persist_dir and self.store is None:
+        if self.config.persist_dir:
             self.config.persist_dir.mkdir(parents=True, exist_ok=True)
-
-    def set_store(self, store: SessionStore | None) -> None:
-        """Set the durable session store used for future load/save operations."""
-        self.store = store
 
     async def start(self) -> None:
         """Start the session manager."""
         # Load persisted sessions
-        if self.store is not None:
-            await self._load_sessions_from_store()
-        elif self.config.persist_dir:
+        if self.config.persist_dir:
             await self._load_sessions()
 
         # Start cleanup task
@@ -173,9 +149,7 @@ class SessionManager:
                 await self._cleanup_task
 
         # Persist sessions
-        if self.store is not None:
-            await self._save_sessions_to_store()
-        elif self.config.persist_dir:
+        if self.config.persist_dir:
             await self._save_sessions()
 
         logger.info("Session manager stopped")
@@ -212,7 +186,6 @@ class SessionManager:
             if user_id:
                 self._user_sessions[user_id] = session.session_id
 
-            await self._save_session(session)
             logger.debug("Created session: %s (user=%s)", session.session_id, user_id)
             return session
 
@@ -231,7 +204,6 @@ class SessionManager:
 
             if touch:
                 session.touch()
-                await self._save_session(session)
 
         return session
 
@@ -268,7 +240,6 @@ class SessionManager:
             current.touch()
             if message_increment:
                 current.message_count = max(0, current.message_count + message_increment)
-            await self._save_session(current)
             return current
 
     async def update_preferences(
@@ -287,7 +258,6 @@ class SessionManager:
             else:
                 session.preferences.custom[key] = value
 
-        await self._save_session(session)
         return session
 
     async def delete_session(self, session_id: str) -> bool:
@@ -297,8 +267,6 @@ class SessionManager:
             if session:
                 if session.user_id and session.user_id in self._user_sessions:
                     del self._user_sessions[session.user_id]
-                if self.store is not None:
-                    await self.store.delete_session(session_id)
                 logger.debug("Deleted session: %s", session_id)
                 return True
             return False
@@ -349,9 +317,6 @@ class SessionManager:
                     self._user_sessions.pop(expired_session.user_id, "")
 
             if expired:
-                if self.store is not None:
-                    for session_id in expired:
-                        await self.store.delete_session(session_id)
                 logger.debug("Cleaned up %d expired sessions", len(expired))
 
             return len(expired)
@@ -361,8 +326,6 @@ class SessionManager:
         while True:
             try:
                 await asyncio.sleep(self.config.cleanup_interval_seconds)
-                if self.store is not None:
-                    await self.store.delete_expired_sessions()
                 await self._cleanup_expired()
             except asyncio.CancelledError:
                 break
@@ -416,39 +379,6 @@ class SessionManager:
 
         except Exception as e:
             logger.error("Failed to load sessions: %s", e)
-
-    async def _save_session(self, session: SessionState) -> None:
-        if self.store is None:
-            return
-        await self.store.save_session(
-            session.session_id,
-            payload=session.model_dump(mode="json"),
-            user_id=session.user_id,
-            expires_at=session.last_activity
-            + timedelta(minutes=self.config.session_timeout_minutes),
-        )
-
-    async def _save_sessions_to_store(self) -> None:
-        if self.store is None:
-            return
-        for session in self._sessions.values():
-            await self._save_session(session)
-
-    async def _load_sessions_from_store(self) -> None:
-        if self.store is None:
-            return
-        loaded = 0
-        for session_data in await self.store.list_sessions():
-            try:
-                session = SessionState.model_validate(session_data)
-                if not session.is_expired(self.config.session_timeout_minutes):
-                    self._sessions[session.session_id] = session
-                    if session.user_id:
-                        self._user_sessions[session.user_id] = session.session_id
-                    loaded += 1
-            except Exception as e:
-                logger.warning("Failed to load database session: %s", e)
-        logger.info("Loaded %d sessions from Postgres", loaded)
 
     def get_stats(self) -> dict[str, Any]:
         """Get session statistics."""
