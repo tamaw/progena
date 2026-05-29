@@ -516,11 +516,12 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
     for field_name, value in storage_rules:
         if not isinstance(value, Path):
             issues.append(f"Storage Config Error: {field_name} must be a Path")
-        if not (0 < config.storage.state_lock_timeout_seconds <= 300):
-            issues.append(
-                "Storage Config Error: invalid "
-                f"state_lock_timeout_seconds={config.storage.state_lock_timeout_seconds!r}"
-            )
+
+    if not (0 < config.storage.state_lock_timeout_seconds <= 300):
+        issues.append(
+            "Storage Config Error: invalid "
+            f"state_lock_timeout_seconds={config.storage.state_lock_timeout_seconds!r}"
+        )
 
     if config.database.enabled and not (
         1 <= config.database.pool_min_size <= config.database.pool_max_size <= 100
