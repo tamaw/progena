@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 from langgraph.runtime import Runtime
@@ -13,20 +11,24 @@ from ..utils import utcnow_isoformat
 from .context import HeartbeatContext
 
 
-async def write_startup_config_audit(
-    logs_dir: str | Path,
+async def write_startup_config_audit_to_sink(
+    log_sink: Any,
     config_payload: dict[str, Any],
 ) -> None:
-    """Write the startup configuration audit entry."""
-    decisions_path = Path(logs_dir) / "decisions.jsonl"
-    decisions_path.parent.mkdir(parents=True, exist_ok=True)
+    """Write the startup configuration audit entry to the configured log sink."""
     entry = {
         "event": "startup_config",
         "timestamp": utcnow_isoformat(),
         "config": config_payload,
     }
-    with decisions_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry) + "\n")
+    await log_sink.write_log(
+        source="decisions",
+        message="Startup configuration",
+        level="info",
+        payload=entry,
+        timestamp=entry["timestamp"],
+        relative_path="decisions",
+    )
 
 
 async def startup_audit_node(
@@ -37,10 +39,10 @@ async def startup_audit_node(
     context = runtime.context
     if (
         "startup_audit" in context.startup_flags
-        or context.audit_logs_dir is None
         or context.startup_audit_payload is None
+        or context.audit_log_sink is None
     ):
         return {}
-    await write_startup_config_audit(context.audit_logs_dir, context.startup_audit_payload)
+    await write_startup_config_audit_to_sink(context.audit_log_sink, context.startup_audit_payload)
     context.startup_flags.add("startup_audit")
     return {"startup_audit_logged": True}

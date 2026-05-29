@@ -27,7 +27,6 @@ It delegates the conversational graph to the agent factory and returns it.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
@@ -40,11 +39,13 @@ logger = logging.getLogger(__name__)
 
 def create_conversation_graph(
     config: ProgenitorConfig | None = None,
+    checkpointer: Any | None = None,
+    store: Any | None = None,
     tool_registry: Any | None = None,
     llm_client: Any | None = None,
     state_manager: Any | None = None,
     project_root: str | None = None,
-    log_dir: str | Path | None = None,
+    log_sink: Any | None = None,
 ) -> CompiledStateGraph:
     """Create the primary user-facing graph.
 
@@ -56,11 +57,13 @@ def create_conversation_graph(
         config = get_config(validate=False)
     graph = create_progenitor_agent(
         config=config,
+        checkpointer=checkpointer,
+        store=store,
         tool_registry=tool_registry,
         llm_client=llm_client,
         state_manager=state_manager,
         project_root=project_root,
-        log_dir=log_dir,
+        log_sink=log_sink,
     )
     logger.info("Created Progenitor conversation graph")
     return graph

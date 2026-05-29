@@ -50,7 +50,7 @@ from .alerts import (
     create_alert as store_alert,
 )
 from .prompt_service import PromptService
-from .state_reader import StateReader, get_state_reader
+from .state_reader import StateReader, _parse_date_boundary, get_state_reader
 from .threads import (
     ThreadsResponse,
     complete_thread,
@@ -62,6 +62,195 @@ from .threads import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
+
+
+def _database_url() -> str | None:
+    return os.getenv("PROGENITOR_DATABASE_URL") or None
+
+
+def _require_database_url() -> str:
+    database_url = _database_url()
+    if not database_url:
+        raise HTTPException(status_code=503, detail="Postgres database is required")
+    return database_url
+
+
+def _postgres_log_entry(row: Mapping[str, Any]) -> dict[str, Any]:
+    timestamp = row["timestamp"]
+    timestamp_text = (
+        timestamp.astimezone(UTC).isoformat() if isinstance(timestamp, datetime) else str(timestamp)
+    )
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    return {
+        "id": f"pg:{row['id']}",
+        "timestamp": timestamp_text,
+        "time": timestamp_text,
+        "level": str(row["level"]),
+        "source": str(row["source"]),
+        "message": str(row["message"]),
+        "path": "postgres://progenitor_logs",
+        "relative_path": str(row.get("relative_path") or row["source"]),
+        "group": str(row["source"]),
+        "data": payload,
+    }
+
+
+async def _query_postgres_logs(
+    *,
+    level: str | None = None,
+    search: str | None = None,
+    limit: int = 500,
+    source: str | None = None,
+    folder: str | None = None,
+    file_path: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    after: str | None = None,
+    search_mode: str = "plain",
+) -> dict[str, Any] | None:
+    database_url = _database_url()
+    if not database_url:
+        return None
+
+    import psycopg
+    from psycopg import sql
+    from psycopg.rows import dict_row
+
+    clauses: list[Any] = []
+    params: list[Any] = []
+    if level:
+        clauses.append(sql.SQL("level = %s"))
+        params.append(level.lower())
+    selected_source = source or folder
+    if selected_source:
+        clauses.append(sql.SQL("source = %s"))
+        params.append(selected_source)
+    if file_path:
+        clauses.append(sql.SQL("relative_path = %s"))
+        params.append(file_path)
+    start_boundary = _parse_date_boundary(start_date, end_of_day=False)
+    end_boundary = _parse_date_boundary(end_date, end_of_day=True)
+    if start_boundary is not None:
+        clauses.append(sql.SQL("timestamp >= %s"))
+        params.append(start_boundary)
+    if end_boundary is not None:
+        clauses.append(sql.SQL("timestamp <= %s"))
+        params.append(end_boundary)
+    if search and search_mode == "plain":
+        clauses.append(
+            sql.SQL(
+                "(message ILIKE %s OR payload::text ILIKE %s OR to_tsvector('simple', message) @@ plainto_tsquery('simple', %s))"
+            )
+        )
+        params.extend([f"%{search}%", f"%{search}%", search])
+
+    where = sql.SQL(" WHERE {}").format(sql.SQL(" AND ").join(clauses)) if clauses else sql.SQL("")
+    async with (
+        await psycopg.AsyncConnection.connect(database_url) as conn,
+        conn.cursor(row_factory=dict_row) as cursor,
+    ):
+        query = sql.SQL(
+            """
+            SELECT id, timestamp, level, source, message, relative_path, payload
+            FROM progenitor_logs
+            {}
+            ORDER BY timestamp DESC, id DESC
+            """
+        ).format(where)
+        await cursor.execute(
+            query,
+            params,
+        )
+        rows = [dict(row) async for row in cursor]
+
+    entries = [_postgres_log_entry(row) for row in rows]
+    if search and search_mode == "regex":
+        regex = re.compile(search, re.IGNORECASE)
+        entries = [
+            entry
+            for entry in entries
+            if regex.search(
+                " ".join(
+                    str(entry.get(key, ""))
+                    for key in ("message", "source", "level", "relative_path")
+                )
+            )
+        ]
+
+    newest_cursor = entries[0]["id"] if entries else ""
+    cursor_found = True
+    returned_entries = entries
+    if after:
+        cursor_index = next(
+            (index for index, entry in enumerate(entries) if entry["id"] == after), None
+        )
+        if cursor_index is None:
+            cursor_found = False
+        else:
+            returned_entries = entries[:cursor_index]
+    if limit < 0:
+        returned_entries = []
+    elif limit > 0:
+        returned_entries = returned_entries[:limit]
+
+    return {
+        "entries": returned_entries,
+        "total": len(entries),
+        "returned": len(returned_entries),
+        "newest_cursor": newest_cursor,
+        "cursor_found": cursor_found,
+    }
+
+
+async def _postgres_log_sources() -> dict[str, list[dict[str, Any]]] | None:
+    database_url = _database_url()
+    if not database_url:
+        return None
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    async with (
+        await psycopg.AsyncConnection.connect(database_url) as conn,
+        conn.cursor(row_factory=dict_row) as cursor,
+    ):
+        await cursor.execute(
+            """
+            SELECT source, COALESCE(relative_path, source) AS relative_path, max(timestamp) AS updated_at, count(*) AS count
+            FROM progenitor_logs
+            GROUP BY source, COALESCE(relative_path, source)
+            ORDER BY source ASC, relative_path ASC
+            """
+        )
+        rows = [dict(row) async for row in cursor]
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        source = str(row["source"])
+        relative_path = str(row["relative_path"])
+        updated_at = row["updated_at"]
+        groups.setdefault(source, []).append(
+            {
+                "id": relative_path,
+                "label": relative_path,
+                "path": relative_path,
+                "group": source,
+                "source": source,
+                "updated_at": updated_at.astimezone(UTC).isoformat()
+                if isinstance(updated_at, datetime)
+                else str(updated_at),
+                "count": row["count"],
+            }
+        )
+    source_groups = [
+        {"id": source, "label": source, "options": options}
+        for source, options in sorted(groups.items())
+    ]
+    folders = [
+        {"id": group["id"], "label": group["label"], "file_count": len(group["options"])}
+        for group in source_groups
+    ]
+    return {"source_groups": source_groups, "folders": folders}
+
 
 KANBAN_EVENT_TYPE_LABELS = {
     "kanban.card.created": "Card created",
@@ -3155,41 +3344,20 @@ async def get_logs(
     if search_mode not in {"plain", "regex"}:
         raise HTTPException(status_code=400, detail="search_mode must be 'plain' or 'regex'")
 
-    source_groups = state_reader.get_log_sources()
+    postgres_sources = await _postgres_log_sources()
+    if postgres_sources is not None:
+        source_groups = postgres_sources["source_groups"]
+        folders = postgres_sources["folders"]
+    else:
+        source_groups = state_reader.get_log_sources()
+        folders = state_reader.get_log_folders()
     default_end = datetime.now(UTC).date()
     default_start = default_end - timedelta(days=6)
     start_date = start_date or default_start.isoformat()
     end_date = end_date or default_end.isoformat()
-    if not any(value is not None for value in (level, search, source, folder, file_path)):
-        candidate_path = None
-        for log_path in state_reader._iter_log_files():
-            candidate_result = state_reader.query_logs(
-                folder=state_reader._log_group(log_path),
-                file_path=state_reader._relative_log_path(log_path),
-                start_date=start_date,
-                end_date=end_date,
-                limit=1,
-            )
-            if candidate_result["entries"]:
-                candidate_path = log_path
-                break
-
-        if candidate_path is None:
-            candidate_path = next(iter(state_reader._iter_log_files()), None)
-
-        if candidate_path is not None:
-            folder = state_reader._log_group(candidate_path)
-            file_path = state_reader._relative_log_path(candidate_path)
-        else:
-            for group in source_groups:
-                options = group.get("options", [])
-                if options:
-                    folder = str(group.get("id") or "")
-                    file_path = str(options[0].get("id") or "")
-                    break
 
     try:
-        result = state_reader.query_logs(
+        result = await _query_postgres_logs(
             level=level,
             search=search,
             source=source,
@@ -3201,11 +3369,23 @@ async def get_logs(
             limit=limit,
             search_mode=search_mode,
         )
+        if result is None:
+            result = state_reader.query_logs(
+                level=level,
+                search=search,
+                source=source,
+                folder=folder,
+                file_path=file_path,
+                start_date=start_date,
+                end_date=end_date,
+                after=after,
+                limit=limit,
+                search_mode=search_mode,
+            )
     except re.error as exc:
         raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
 
     entries = result["entries"]
-    folders = state_reader.get_log_folders()
 
     if format == "json":
         return {
@@ -3237,6 +3417,9 @@ async def get_logs(
 @router.get("/logs/sources")
 async def get_log_sources():
     """Return available log groups/files without loading log entries."""
+    postgres_sources = await _postgres_log_sources()
+    if postgres_sources is not None:
+        return postgres_sources
     state_reader = get_state_reader()
     return {
         "source_groups": state_reader.get_log_sources(),
@@ -3267,7 +3450,7 @@ async def export_logs(
     end_date = end_date or default_end.isoformat()
 
     try:
-        result = state_reader.query_logs(
+        result = await _query_postgres_logs(
             level=level,
             search=search,
             source=source,
@@ -3278,6 +3461,18 @@ async def export_logs(
             limit=0,
             search_mode=search_mode,
         )
+        if result is None:
+            result = state_reader.query_logs(
+                level=level,
+                search=search,
+                source=source,
+                folder=folder,
+                file_path=file_path,
+                start_date=start_date,
+                end_date=end_date,
+                limit=0,
+                search_mode=search_mode,
+            )
     except re.error as exc:
         raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
 

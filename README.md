@@ -71,6 +71,10 @@ docker compose -f docker/docker-compose.progenitor.yml down
 
 Open `http://localhost` for the UI and `http://localhost:8000` for the backend API.
 
+The Docker Compose stack includes a Postgres database with a named volume. Both
+the Progenitor runtime and backend receive `PROGENITOR_DATABASE_URL` pointing at
+that service.
+
 ## Architecture
 
 ### LangGraph Topology (Outer Loop)
@@ -122,6 +126,17 @@ worktrees/              # Git worktrees for builds (used by Builder Agent)
 - `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
 - `data/config/agents.json` - Agent registry
 - `data/config/mcp.json` - Progenitor external MCP server configuration
+
+### Postgres persistence
+
+Set `PROGENITOR_DATABASE_URL` to enable Postgres-backed persistence for new
+runtime data. Startup initializes native LangGraph Postgres checkpoint/store
+tables plus Progenitor-owned tables for conversations, messages, attachments,
+schedules, and build item projections when `PROGENITOR_DATABASE_SETUP=true`.
+
+Existing JSON files are not migrated. With Postgres enabled, they should be
+treated as legacy/local fallback state while new persistence paths are moved to
+the database.
 
 ### Log Files
 

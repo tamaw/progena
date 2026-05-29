@@ -3,7 +3,7 @@ Custom middleware for the Progenitor DeepAgent.
 
 Provides:
 - SecretRedactionMiddleware: Redacts API keys/secrets from tool call args and results
-- AuditLoggingMiddleware: Logs tool calls to JSONL audit trail
+- AuditLoggingMiddleware: Logs tool calls to Postgres
 - MetricsMiddleware: Tracks tool call counts and latency
 """
 
@@ -13,8 +13,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from deepagents.middleware.async_subagents import AsyncSubAgent
 from langchain.agents.middleware.types import (
@@ -31,10 +30,23 @@ from app.progenitor.ipc.stream_events import (
     build_tool_start_event,
     emit_stream_event,
 )
-from app.progenitor.state.models import redact_secrets
+from app.progenitor.state.models import AsyncSubagentTaskRecord, redact_secrets
 from app.progenitor.utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+class AuditLogSink(Protocol):
+    async def write_log(
+        self,
+        *,
+        source: str,
+        message: str,
+        level: str = "info",
+        payload: dict[str, Any] | None = None,
+        timestamp: Any = None,
+        relative_path: str | None = None,
+    ) -> None: ...
 
 
 class SecretRedactionMiddleware(AgentMiddleware):
@@ -80,22 +92,22 @@ class SecretRedactionMiddleware(AgentMiddleware):
 
 
 class AuditLoggingMiddleware(AgentMiddleware):
-    """Logs tool calls to a JSONL audit trail.
+    """Logs tool calls to the configured Postgres audit trail.
 
     Each tool invocation is logged with: timestamp, tool name, arguments
-    (redacted), duration, and success/failure status. Compatible with
-    Progenitor's existing JSONL logging format.
+    (redacted), duration, and success/failure status.
     """
 
-    def __init__(self, log_dir: str | Path | None = None):
+    def __init__(
+        self,
+        log_sink: AuditLogSink | None = None,
+    ):
         """Initialize audit logger.
 
         Args:
-            log_dir: Directory for audit logs. If None, logs to Python logger only.
+            log_sink: Async sink for durable audit logs.
         """
-        self._log_dir = Path(log_dir) if log_dir else None
-        if self._log_dir:
-            self._log_dir.mkdir(parents=True, exist_ok=True)
+        self._log_sink = log_sink
 
     async def awrap_tool_call(
         self,
@@ -147,13 +159,20 @@ class AuditLoggingMiddleware(AgentMiddleware):
             else:
                 emit_stream_event(build_tool_error_event(tool_name, tool_id, duration_ms, error))
 
-            if self._log_dir:
-                log_file = self._log_dir / "tool_calls.jsonl"
+            if self._log_sink is None:
+                logger.warning("No audit log sink configured; dropping tool audit entry")
+            else:
                 try:
-                    with open(log_file, "a", encoding="utf-8") as f:
-                        f.write(json.dumps(entry) + "\n")
-                except OSError:
-                    logger.warning("Failed to write audit log to %s", log_file)
+                    await self._log_sink.write_log(
+                        source="tool_calls",
+                        message=f"Tool call: {tool_name}",
+                        level="error" if error else "info",
+                        payload=entry,
+                        timestamp=entry["timestamp"],
+                        relative_path="tool_calls",
+                    )
+                except Exception:
+                    logger.warning("Failed to write audit log to Postgres", exc_info=True)
 
     def wrap_tool_call(
         self,
@@ -197,6 +216,13 @@ class AsyncSubagentTrackingMiddleware(AgentMiddleware):
 
         result = await handler(request)
         tasks = _extract_async_tasks(result)
+        if tool_name in {"list_async_tasks", "check_async_task"}:
+            result, tasks = await self._merge_persisted_async_tasks(
+                request,
+                tool_name,
+                result,
+                tasks,
+            )
         if tasks:
             await self._persist_async_tasks(request, tool_name, tasks, result)
             _emit_async_subagent_events(request, tool_name, tasks)
@@ -264,6 +290,32 @@ class AsyncSubagentTrackingMiddleware(AgentMiddleware):
                     updates["last_error"] = str(result_payload.get("error") or "")
                     updates["completed_at"] = existing.completed_at or utcnow()
             await self._state_manager.update_async_subagent_task(task_id, updates)
+
+    async def _merge_persisted_async_tasks(
+        self,
+        request: ToolCallRequest,
+        tool_name: str,
+        result: ToolMessage | Command[Any],
+        tasks: dict[str, dict[str, Any]],
+    ) -> tuple[ToolMessage | Command[Any], dict[str, dict[str, Any]]]:
+        if self._state_manager is None:
+            return result, tasks
+
+        persisted = await self._state_manager.get_async_subagent_tasks()
+        if tool_name == "check_async_task":
+            raw_args = request.tool_call.get("args", {})
+            task_id = str(raw_args.get("task_id") or "").strip()
+            persisted = [task for task in persisted if task.task_id == task_id]
+        if not persisted:
+            return result, tasks
+
+        merged_tasks = dict(tasks)
+        for task in persisted:
+            merged_tasks.setdefault(task.task_id, _async_task_record_payload(task))
+
+        if merged_tasks == tasks:
+            return result, tasks
+        return _replace_async_tool_result(request, result, merged_tasks), merged_tasks
 
 
 class MetricsMiddleware(AgentMiddleware):
@@ -369,6 +421,56 @@ def _extract_check_result_payload(result: ToolMessage | Command[Any]) -> dict[st
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _replace_async_tool_result(
+    request: ToolCallRequest,
+    result: ToolMessage | Command[Any],
+    tasks: dict[str, dict[str, Any]],
+) -> ToolMessage | Command[Any]:
+    content = json.dumps(_async_tasks_result_payload(tasks), sort_keys=True)
+    tool_call_id = str(request.tool_call.get("id") or "")
+    message = ToolMessage(content=content, tool_call_id=tool_call_id)
+    if not isinstance(result, Command):
+        return message
+
+    update = getattr(result, "update", None)
+    if not isinstance(update, dict):
+        update = {}
+    return Command(
+        graph=getattr(result, "graph", None),
+        update={**update, "async_tasks": tasks, "messages": [message]},
+        resume=getattr(result, "resume", None),
+        goto=getattr(result, "goto", ()),
+    )
+
+
+def _async_task_record_payload(task: AsyncSubagentTaskRecord) -> dict[str, Any]:
+    payload = task.model_dump(mode="json")
+    payload["task_id"] = task.task_id
+    payload["agent_name"] = task.agent_name
+    payload["run_id"] = task.run_id
+    payload["status"] = str(task.status)
+    return payload
+
+
+def _async_tasks_result_payload(tasks: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    rows = list(tasks.values())
+    counts = {
+        "total": len(rows),
+        "running": sum(1 for task in rows if str(task.get("status")) == "running"),
+        "success": sum(1 for task in rows if str(task.get("status")) == "success"),
+        "error": sum(1 for task in rows if str(task.get("status")) == "error"),
+        "cancelled": sum(1 for task in rows if str(task.get("status")) == "cancelled"),
+    }
+    return {
+        "tasks": rows,
+        "total": counts["total"],
+        "running": counts["running"],
+        "success": counts["success"],
+        "error": counts["error"],
+        "cancelled": counts["cancelled"],
+    }
 
 
 def _tool_thread_id(request: ToolCallRequest) -> str | None:
