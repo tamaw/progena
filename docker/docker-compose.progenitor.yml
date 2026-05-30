@@ -171,3 +171,4 @@ networks:
 volumes:
   progenitor-postgres-data:
     name: progenitor-postgres-data
+    external: true
