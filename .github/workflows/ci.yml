@@ -244,6 +244,7 @@ jobs:
             return 1
           }
 
+          wait_healthy progenitor-postgres 60
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
           wait_healthy progenitor-frontend 60
