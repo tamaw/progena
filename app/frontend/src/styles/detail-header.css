@@ -235,7 +235,7 @@
 
 .detail-tab:not(.is-active):hover,
 .dtab.detail-tab:not(.is-active):hover {
-    border-bottom-color: #fff;
+    border-bottom-color: currentColor;
 }
 
 .detail-tab.is-active,
