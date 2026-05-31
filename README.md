@@ -109,34 +109,35 @@ app/
 .env                    # Local environment configuration
 data/
   config/               # Runtime-managed config (agents, MCP, schedules)
-  state/                # Persisted state (JSON)
+  state/                # File-backed state for non-runtime helpers/tests
   sessions/             # Session persistence
   attachments/          # Uploaded file cache/data
   prompts/              # Prompt templates
   skills/               # DeepAgent SKILL.md files (grouped by agent)
-logs/                   # Append-only logs (JSONL)
+logs/                   # File-backed logs for non-runtime helpers/tests
 worktrees/              # Git worktrees for builds (used by Builder Agent)
 ```
 
-### State Files
+### Runtime persistence
 
-- `data/state/current_state.json` - Conversation state (messages, tool calls)
-- `data/config/schedule.json` - Scheduled tasks
-- `data/state/build_checkpoints.db` - Builder Agent LangGraph checkpoints (SQLite)
-- `data/config/agents.json` - Agent registry
-- `data/config/mcp.json` - Progenitor external MCP server configuration
+- Native LangGraph checkpoint tables store conversation checkpoint history.
+- Native LangGraph `store` table stores Progenitor runtime documents under
+  `("progenitor", "state")`, including current state, schedules, MCP config,
+  agent registry data, background tasks, A2A tasks, and async subagent tasks.
+- Native LangGraph `store` table also stores structured append-only logs under
+  `("progenitor", "logs", <log-name>)`.
+- `data/state/build_checkpoints.db` remains the Builder Agent checkpoint store.
 
 ### Postgres persistence
 
 Set `PROGENITOR_DATABASE_URL` to enable Postgres-backed persistence for new
 runtime data. Startup initializes native LangGraph Postgres checkpoint/store
-tables plus Progenitor-owned state and log tables when
-`PROGENITOR_DATABASE_SETUP=true`.
+tables when `PROGENITOR_DATABASE_SETUP=true`.
 
 The main Progenitor runtime requires Postgres and does not write runtime state
 through backend-managed conversation/session stores.
 
-### Log Files
+### File-backed logs
 
 - `logs/conversation.jsonl` - All user/assistant messages
 - `logs/decisions.jsonl` - Routing decisions
