@@ -1,9 +1,8 @@
 """High-level state manager façade for Progenitor persistence."""
 
-import json
 import logging
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from ..utils import utcnow_isoformat
 from . import (
@@ -14,6 +13,7 @@ from . import (
     log_store,
     session_store,
 )
+from .langgraph_store import LangGraphRuntimeStore
 from .layout import CORE_FILES, LOG_FILES, core_file_path, ensure_initial_state
 from .models import (
     A2ATaskRecord,
@@ -21,46 +21,13 @@ from .models import (
     BackgroundTaskEntry,
     ConversationMessage,
     ScheduleEntry,
-    redact_secrets,
 )
 from .persistence import StatePersistence
-from .postgres_store import PostgresStateStore
 
 logger = logging.getLogger(__name__)
 
 
-class PostgresJSONLLogStore(Protocol):
-    """Minimal log sink API needed by Postgres-backed JSONL helpers."""
-
-    async def write_log(
-        self,
-        *,
-        source: str,
-        message: str,
-        level: str = "info",
-        payload: dict[str, Any] | None = None,
-        timestamp: Any = None,
-        relative_path: str | None = None,
-    ) -> None: ...
-
-    async def query_logs(
-        self,
-        *,
-        level: str | None = None,
-        source: str | None = None,
-        search: str | None = None,
-        limit: int = 200,
-    ) -> list[dict[str, Any]]: ...
-
-
-def _redacted_log_payload(entry: dict[str, Any]) -> dict[str, Any]:
-    """Match JSONL secret redaction before writing structured log rows."""
-    redacted = redact_secrets(json.dumps(entry, default=str))
-    payload = json.loads(redacted)
-    return payload if isinstance(payload, dict) else {"message": redacted}
-
-
-def _postgres_log_message(log_name: str, payload: dict[str, Any]) -> str:
+def _structured_log_message(log_name: str, payload: dict[str, Any]) -> str:
     """Extract a concise searchable message from one structured log payload."""
     for field in ("content", "message", "event", "id"):
         value = payload.get(field)
@@ -98,8 +65,7 @@ class StateManager:
         state_dir: Path,
         logs_dir: Path,
         lock_timeout: int = 10,
-        postgres_store: PostgresStateStore | None = None,
-        postgres_log_store: PostgresJSONLLogStore | None = None,
+        runtime_store: LangGraphRuntimeStore | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.config_dir = self.state_dir.parent / "config"
@@ -112,8 +78,7 @@ class StateManager:
             config_dir=self.config_dir,
         )
         self._state_cache: dict[str, Any] = {}
-        self._postgres_store = postgres_store
-        self._postgres_log_store = postgres_log_store
+        self._runtime_store = runtime_store
         self._initialized = False
 
     def _core_file_path(self, name: str) -> Path:
@@ -139,8 +104,8 @@ class StateManager:
         try:
             for name in self.CORE_FILES:
                 if name in self._state_cache:
-                    if self._postgres_store is not None:
-                        await self._postgres_store.save_document(name, self._state_cache[name])
+                    if self._runtime_store is not None:
+                        await self._runtime_store.save_document(name, self._state_cache[name])
                         continue
                     filepath = self._core_file_path(name)
                     await self._atomic_write_json(filepath, self._state_cache[name])
@@ -150,8 +115,8 @@ class StateManager:
 
         # Clear locks and cache
         self._persistence.clear_locks()
-        if self._postgres_store is not None:
-            await self._postgres_store.close()
+        if self._runtime_store is not None:
+            await self._runtime_store.close()
         self._state_cache.clear()
         self._initialized = False
 
@@ -160,12 +125,12 @@ class StateManager:
         if self._initialized:
             return
 
-        if self._postgres_store is None:
+        if self._runtime_store is None:
             await self._persistence.initialize()
             await self._ensure_initial_state()
         else:
-            await self._postgres_store.open()
-            await self._ensure_postgres_initial_state()
+            await self._runtime_store.open()
+            await self._ensure_runtime_store_initial_state()
         self._initialized = True
 
     async def _ensure_initial_state(self) -> None:
@@ -179,8 +144,8 @@ class StateManager:
             atomic_write_json=self._atomic_write_json,
         )
 
-    async def _ensure_postgres_initial_state(self) -> None:
-        """Ensure all state documents exist in Postgres."""
+    async def _ensure_runtime_store_initial_state(self) -> None:
+        """Ensure all state documents exist in the native runtime store."""
         from ..config import default_mcp_config_payload, default_schedule_config_payload
         from ..utils import utcnow_isoformat
 
@@ -205,9 +170,9 @@ class StateManager:
             "mcp": default_mcp_config_payload(),
             "schedule": default_schedule_config_payload(),
         }
-        assert self._postgres_store is not None
+        assert self._runtime_store is not None
         for name, default in defaults.items():
-            self._state_cache[name] = await self._postgres_store.get_document(name, default)
+            self._state_cache[name] = await self._runtime_store.get_document(name, default)
 
     def _cleanup_stale_temp_files(self) -> None:
         """Remove leftover .tmp files from failed atomic writes."""
@@ -229,33 +194,29 @@ class StateManager:
         """Read JSON file asynchronously."""
         return await self._persistence.read_json(filepath)
 
-    async def _get_postgres_document(self, name: str) -> Any:
-        """Return a cached Postgres-backed state document."""
+    async def _get_runtime_document(self, name: str) -> Any:
+        """Return a cached native-store-backed state document."""
         if name not in self._state_cache:
-            assert self._postgres_store is not None
-            self._state_cache[name] = await self._postgres_store.get_document(name, {})
+            assert self._runtime_store is not None
+            self._state_cache[name] = await self._runtime_store.get_document(name, {})
         return self._state_cache[name]
 
-    async def _save_postgres_document(self, name: str, payload: Any) -> None:
-        """Save and cache a Postgres-backed state document."""
-        assert self._postgres_store is not None
+    async def _save_runtime_document(self, name: str, payload: Any) -> None:
+        """Save and cache a native-store-backed state document."""
+        assert self._runtime_store is not None
         self._state_cache[name] = payload
-        await self._postgres_store.save_document(name, payload)
+        await self._runtime_store.save_document(name, payload)
 
     async def append_jsonl(self, log_name: str, entry: dict[str, Any]) -> None:
         """Append a single entry to a JSONL log file with secret redaction."""
         if log_name not in self.LOG_FILES:
             raise ValueError(f"Unknown log: {log_name}")
-        if self._postgres_store is not None:
-            if self._postgres_log_store is None:
-                raise RuntimeError(
-                    "postgres_log_store is required when Postgres logging is enabled"
-                )
-            payload = _redacted_log_payload(entry)
+        if self._runtime_store is not None:
+            payload = dict(entry)
             timestamp = payload.pop("timestamp", None)
-            await self._postgres_log_store.write_log(
+            await self._runtime_store.write_log(
                 source=log_name,
-                message=_postgres_log_message(log_name, payload),
+                message=_structured_log_message(log_name, payload),
                 payload=payload,
                 timestamp=timestamp,
                 relative_path=self.LOG_FILES[log_name],
@@ -272,7 +233,7 @@ class StateManager:
 
     async def log_conversation(self, message: ConversationMessage) -> None:
         """Log a conversation message."""
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             await self.add_message(message)
             await self.append_jsonl("conversation", message.model_dump(mode="json"))
             return
@@ -284,8 +245,8 @@ class StateManager:
 
     # Schedule management (stored in data/config/schedule.json)
     async def get_schedule(self) -> list[ScheduleEntry]:
-        if self._postgres_store is not None:
-            payload = await self._get_postgres_document("schedule")
+        if self._runtime_store is not None:
+            payload = await self._get_runtime_document("schedule")
             return [ScheduleEntry.model_validate(item) for item in payload]
         return await config_store.get_schedule(
             file_lock=self._file_lock,
@@ -294,8 +255,8 @@ class StateManager:
         )
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
-        if self._postgres_store is not None:
-            await self._save_postgres_document(
+        if self._runtime_store is not None:
+            await self._save_runtime_document(
                 "schedule",
                 [entry.model_dump(mode="json") for entry in schedule],
             )
@@ -310,8 +271,8 @@ class StateManager:
 
     # Registry management
     async def get_registry(self) -> dict[str, Any]:
-        if self._postgres_store is not None:
-            registry = await self._get_postgres_document("registry")
+        if self._runtime_store is not None:
+            registry = await self._get_runtime_document("registry")
             return dict(registry) if isinstance(registry, dict) else {}
         return await config_store.get_registry(
             file_lock=self._file_lock,
@@ -320,8 +281,8 @@ class StateManager:
         )
 
     async def save_registry(self, registry: dict[str, Any]) -> None:
-        if self._postgres_store is not None:
-            await self._save_postgres_document("registry", registry)
+        if self._runtime_store is not None:
+            await self._save_runtime_document("registry", registry)
             return
         await config_store.save_registry(
             registry=registry,
@@ -336,8 +297,8 @@ class StateManager:
     # ==========================================================================
 
     async def get_current_state(self) -> dict[str, Any]:
-        if self._postgres_store is not None:
-            state = await self._get_postgres_document("current_state")
+        if self._runtime_store is not None:
+            state = await self._get_runtime_document("current_state")
             return dict(state) if isinstance(state, dict) else {}
         return await session_store.get_current_state(
             state_cache=self._state_cache,
@@ -347,8 +308,8 @@ class StateManager:
         )
 
     async def save_current_state(self, state: dict[str, Any]) -> None:
-        if self._postgres_store is not None:
-            await self._save_postgres_document("current_state", state)
+        if self._runtime_store is not None:
+            await self._save_runtime_document("current_state", state)
             return
         await session_store.save_current_state(
             state=state,
@@ -359,7 +320,7 @@ class StateManager:
         )
 
     async def update_current_state(self, updates: dict[str, Any]) -> None:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             current = await self.get_current_state()
             current.update(updates)
             await self.save_current_state(current)
@@ -378,8 +339,8 @@ class StateManager:
     # ==========================================================================
 
     async def get_a2a_tasks(self) -> list[A2ATaskRecord]:
-        if self._postgres_store is not None:
-            payload = await self._get_postgres_document("a2a_tasks")
+        if self._runtime_store is not None:
+            payload = await self._get_runtime_document("a2a_tasks")
             return [A2ATaskRecord.model_validate(item) for item in payload]
         return await a2a_store.get_a2a_tasks(
             state_cache=self._state_cache,
@@ -389,8 +350,8 @@ class StateManager:
         )
 
     async def save_a2a_tasks(self, tasks: list[A2ATaskRecord]) -> None:
-        if self._postgres_store is not None:
-            await self._save_postgres_document(
+        if self._runtime_store is not None:
+            await self._save_runtime_document(
                 "a2a_tasks",
                 [task.model_dump(mode="json") for task in tasks],
             )
@@ -426,8 +387,8 @@ class StateManager:
     # ==========================================================================
 
     async def get_async_subagent_tasks(self) -> list[AsyncSubagentTaskRecord]:
-        if self._postgres_store is not None:
-            payload = await self._get_postgres_document("async_subagent_tasks")
+        if self._runtime_store is not None:
+            payload = await self._get_runtime_document("async_subagent_tasks")
             return [AsyncSubagentTaskRecord.model_validate(item) for item in payload]
         return await async_subagent_store.get_async_subagent_tasks(
             state_cache=self._state_cache,
@@ -437,8 +398,8 @@ class StateManager:
         )
 
     async def save_async_subagent_tasks(self, tasks: list[AsyncSubagentTaskRecord]) -> None:
-        if self._postgres_store is not None:
-            await self._save_postgres_document(
+        if self._runtime_store is not None:
+            await self._save_runtime_document(
                 "async_subagent_tasks",
                 [task.model_dump(mode="json") for task in tasks],
             )
@@ -477,8 +438,8 @@ class StateManager:
     # ==========================================================================
 
     async def get_background_tasks(self) -> list[BackgroundTaskEntry]:
-        if self._postgres_store is not None:
-            payload = await self._get_postgres_document("background_tasks")
+        if self._runtime_store is not None:
+            payload = await self._get_runtime_document("background_tasks")
             return [BackgroundTaskEntry.model_validate(item) for item in payload]
         return await background_store.get_background_tasks(
             state_cache=self._state_cache,
@@ -488,8 +449,8 @@ class StateManager:
         )
 
     async def save_background_tasks(self, tasks: list[BackgroundTaskEntry]) -> None:
-        if self._postgres_store is not None:
-            await self._save_postgres_document(
+        if self._runtime_store is not None:
+            await self._save_runtime_document(
                 "background_tasks",
                 [task.model_dump(mode="json") for task in tasks],
             )
@@ -520,7 +481,7 @@ class StateManager:
     # ==========================================================================
 
     async def get_messages(self) -> list[ConversationMessage]:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             state = await self.get_current_state()
             return [ConversationMessage.model_validate(item) for item in state.get("messages", [])]
         return await session_store.get_messages(
@@ -531,7 +492,7 @@ class StateManager:
         )
 
     async def save_messages(self, messages: list[ConversationMessage]) -> None:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             state = await self.get_current_state()
             state["messages"] = [message.model_dump(mode="json") for message in messages]
             await self.save_current_state(state)
@@ -546,7 +507,7 @@ class StateManager:
         )
 
     async def add_message(self, message: ConversationMessage) -> None:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             messages = await self.get_messages()
             messages.append(message)
             await self.save_messages(messages)
@@ -595,7 +556,7 @@ class StateManager:
     # ==========================================================================
 
     async def get_tool_calls(self) -> list[dict[str, Any]]:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             state = await self.get_current_state()
             tool_calls = state.get("tool_calls", [])
             return list(tool_calls) if isinstance(tool_calls, list) else []
@@ -607,7 +568,7 @@ class StateManager:
         )
 
     async def add_tool_call(self, tool_call: dict[str, Any]) -> None:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             state = await self.get_current_state()
             tool_calls = state.get("tool_calls", [])
             if not isinstance(tool_calls, list):
@@ -630,7 +591,7 @@ class StateManager:
     # ==========================================================================
 
     async def get_attachments(self) -> list[dict[str, Any]]:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             state = await self.get_current_state()
             attachments = state.get("attachments", [])
             return list(attachments) if isinstance(attachments, list) else []
@@ -642,7 +603,7 @@ class StateManager:
         )
 
     async def add_attachment(self, attachment: dict[str, Any]) -> None:
-        if self._postgres_store is not None:
+        if self._runtime_store is not None:
             state = await self.get_current_state()
             attachments = state.get("attachments", [])
             if not isinstance(attachments, list):
@@ -666,19 +627,15 @@ class StateManager:
             if name not in self.CORE_FILES:
                 continue
 
-            if self._postgres_store is not None:
-                await self._postgres_store.save_document(name, data)
+            if self._runtime_store is not None:
+                await self._runtime_store.save_document(name, data)
                 continue
             async with self._file_lock(name):
                 await self._atomic_write_json(self._core_file_path(name), data)
 
     async def read_conversation_log(self, limit: int = 100) -> list[dict[str, Any]]:
-        if self._postgres_store is not None:
-            if self._postgres_log_store is None:
-                raise RuntimeError(
-                    "postgres_log_store is required when Postgres logging is enabled"
-                )
-            rows = await self._postgres_log_store.query_logs(source="conversation", limit=limit)
+        if self._runtime_store is not None:
+            rows = await self._runtime_store.query_logs(source="conversation", limit=limit)
             history: list[dict[str, Any]] = []
             for row in rows:
                 payload = row.get("payload")

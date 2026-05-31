@@ -3,12 +3,16 @@
 import asyncio
 import json
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from app.progenitor.database.logs import PostgresLogStore
+from app.progenitor.state.langgraph_store import (
+    LOG_NAMESPACE_PREFIX,
+    STATE_NAMESPACE,
+    LangGraphRuntimeStore,
+)
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import (
     A2ATaskRecord,
@@ -17,68 +21,31 @@ from app.progenitor.state.models import (
     ConversationMessage,
     ScheduleEntry,
 )
-from app.progenitor.state.postgres_store import PostgresStateStore
 
 
-class FakePostgresStateStore:
-    def __init__(self):
-        self.documents = {}
-        self.opened = False
-        self.closed = False
+class FakeLangGraphStore:
+    def __init__(self) -> None:
+        self.items: dict[tuple[tuple[str, ...], str], dict] = {}
 
-    async def open(self):
-        self.opened = True
+    async def aget(self, namespace, key, **kwargs):
+        value = self.items.get((tuple(namespace), key))
+        return SimpleNamespace(value=value) if value is not None else None
 
-    async def close(self):
-        self.closed = True
+    async def aput(self, namespace, key, value, **kwargs):
+        self.items[(tuple(namespace), key)] = value
 
-    async def get_document(self, name, default):
-        self.documents.setdefault(name, default)
-        return self.documents[name]
-
-    async def save_document(self, name, payload):
-        self.documents[name] = payload
-
-
-class FakePostgresLogStore:
-    def __init__(self):
-        self.entries = []
-
-    async def write_log(
-        self,
-        *,
-        source,
-        message,
-        level="info",
-        payload=None,
-        timestamp=None,
-        relative_path=None,
+    async def asearch(
+        self, namespace_prefix, *, query=None, filter=None, limit=10, offset=0, **kwargs
     ):
-        self.entries.append(
-            {
-                "timestamp": timestamp or datetime.now(UTC),
-                "level": level,
-                "source": source,
-                "message": message,
-                "payload": payload or {},
-                "relative_path": relative_path,
-            }
-        )
-
-    async def query_logs(self, *, level=None, source=None, search=None, limit=200):
-        rows = list(self.entries)
-        if level is not None:
-            rows = [row for row in rows if row["level"] == level]
-        if source is not None:
-            rows = [row for row in rows if row["source"] == source]
-        if search is not None:
-            rows = [
-                row
-                for row in rows
-                if search.lower() in row["message"].lower()
-                or search.lower() in json.dumps(row["payload"]).lower()
-            ]
-        return rows[-limit:] if limit > 0 else rows
+        prefix = tuple(namespace_prefix)
+        rows = []
+        for (namespace, key), value in self.items.items():
+            if namespace[: len(prefix)] != prefix:
+                continue
+            if filter and any(value.get(name) != expected for name, expected in filter.items()):
+                continue
+            rows.append(SimpleNamespace(namespace=namespace, key=key, value=value))
+        return rows[offset : offset + limit]
 
 
 class TestStateManager:
@@ -183,29 +150,29 @@ class TestStateManager:
         assert await manager.get_background_tasks() == []
 
     @pytest.mark.asyncio
-    async def test_postgres_state_store_replaces_file_documents(self, temp_dirs):
+    async def test_native_runtime_store_replaces_file_documents(self, temp_dirs):
         state_dir, logs_dir = temp_dirs
-        store = FakePostgresStateStore()
-        manager = StateManager(state_dir, logs_dir, postgres_store=store)
+        native_store = FakeLangGraphStore()
+        runtime_store = LangGraphRuntimeStore(native_store)
+        manager = StateManager(state_dir, logs_dir, runtime_store=runtime_store)
         await manager.initialize()
 
-        message = ConversationMessage(id="msg-pg", role="user", content="Hello Postgres")
+        message = ConversationMessage(id="msg-native", role="user", content="Hello native store")
         await manager.add_message(message)
         await manager.add_tool_call({"id": "tool-1", "name": "demo"})
         await manager.add_attachment({"id": "att-1", "content": b"bytes".hex()})
 
         state = await manager.get_current_state()
-        assert store.opened is True
         assert not (state_dir / "current_state.json").exists()
-        assert state["messages"][0]["content"] == "Hello Postgres"
+        assert state["messages"][0]["content"] == "Hello native store"
         assert state["tool_calls"] == [{"id": "tool-1", "name": "demo"}]
         assert state["attachments"] == [{"id": "att-1", "content": b"bytes".hex()}]
 
         await manager.commit_state()
-        assert store.documents["current_state"]["messages"][0]["id"] == "msg-pg"
+        current_state = native_store.items[(STATE_NAMESPACE, "current_state")]["payload"]
+        assert current_state["messages"][0]["id"] == "msg-native"
 
         await manager.close()
-        assert store.closed is True
 
     @pytest.mark.asyncio
     async def test_async_subagent_task_persistence(self, temp_dirs):
@@ -242,25 +209,39 @@ class TestStateManager:
         assert refreshed.status == "success"
         assert refreshed.summary == "HELLO_FROM_ASYNC_SUBAGENT"
 
-    def test_postgres_state_store_honors_pool_bounds(self):
-        store = PostgresStateStore(
-            "postgresql://user:pass@localhost/testdb",
-            pool_min_size=2,
-            pool_max_size=7,
+    @pytest.mark.asyncio
+    async def test_langgraph_runtime_store_round_trips_documents(self):
+        native_store = FakeLangGraphStore()
+        store = LangGraphRuntimeStore(native_store)
+
+        assert await store.get_document("current_state", {"messages": []}) == {"messages": []}
+        await store.update_document("current_state", {"cycle_count": 2}, {"messages": []})
+
+        assert await store.get_document("current_state", {}) == {
+            "messages": [],
+            "cycle_count": 2,
+        }
+        assert native_store.items[(STATE_NAMESPACE, "current_state")] == {
+            "payload": {"messages": [], "cycle_count": 2}
+        }
+
+    @pytest.mark.asyncio
+    async def test_langgraph_runtime_store_appends_logs_as_native_items(self):
+        native_store = FakeLangGraphStore()
+        store = LangGraphRuntimeStore(native_store)
+
+        await store.write_log(
+            source="tool",
+            message="started",
+            payload={"event": "tool_started", "api_key": "sk-secret"},
+            timestamp="2024-01-01T00:00:00+00:00",
         )
 
-        assert store._pool.min_size == 2
-        assert store._pool.max_size == 7
-
-    def test_postgres_log_store_honors_pool_bounds(self):
-        store = PostgresLogStore(
-            "postgresql://user:pass@localhost/testdb",
-            pool_min_size=3,
-            pool_max_size=8,
-        )
-
-        assert store._pool.min_size == 3
-        assert store._pool.max_size == 8
+        rows = await store.query_logs(source="tool", search="tool_started")
+        assert len(rows) == 1
+        assert rows[0]["message"] == "started"
+        assert rows[0]["payload"]["api_key"] == "[REDACTED]"
+        assert next(iter(native_store.items))[0][:3] == (*LOG_NAMESPACE_PREFIX, "tool")
 
     async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
         state_dir = tmp_path / "data" / "state"
@@ -323,15 +304,14 @@ class TestStateManager:
         assert history[0]["content"] == "Test message"
 
     @pytest.mark.asyncio
-    async def test_postgres_logs_write_rows_instead_of_log_documents(self, temp_dirs):
+    async def test_native_runtime_store_logs_write_rows_instead_of_documents(self, temp_dirs):
         state_dir, logs_dir = temp_dirs
-        store = FakePostgresStateStore()
-        log_store = FakePostgresLogStore()
+        native_store = FakeLangGraphStore()
+        runtime_store = LangGraphRuntimeStore(native_store)
         manager = StateManager(
             state_dir,
             logs_dir,
-            postgres_store=store,
-            postgres_log_store=log_store,
+            runtime_store=runtime_store,
         )
         await manager.initialize()
 
@@ -339,10 +319,15 @@ class TestStateManager:
             "schedule", {"event": "schedule_created", "schedule_id": "sched-1"}
         )
 
-        assert "log_schedule" not in store.documents
-        assert log_store.entries == [
+        assert (STATE_NAMESPACE, "log_schedule") not in native_store.items
+        log_entries = [
+            item
+            for (namespace, _key), item in native_store.items.items()
+            if namespace == (*LOG_NAMESPACE_PREFIX, "schedule")
+        ]
+        assert log_entries == [
             {
-                "timestamp": log_store.entries[0]["timestamp"],
+                "timestamp": log_entries[0]["timestamp"],
                 "level": "info",
                 "source": "schedule",
                 "message": "schedule_created",
@@ -352,26 +337,26 @@ class TestStateManager:
         ]
 
     @pytest.mark.asyncio
-    async def test_postgres_conversation_logs_round_trip_through_log_store(self, temp_dirs):
+    async def test_native_runtime_store_conversation_logs_round_trip(self, temp_dirs):
         state_dir, logs_dir = temp_dirs
-        store = FakePostgresStateStore()
-        log_store = FakePostgresLogStore()
+        native_store = FakeLangGraphStore()
+        runtime_store = LangGraphRuntimeStore(native_store)
         manager = StateManager(
             state_dir,
             logs_dir,
-            postgres_store=store,
-            postgres_log_store=log_store,
+            runtime_store=runtime_store,
         )
         await manager.initialize()
 
-        message = ConversationMessage(id="msg-pg-log", role="user", content="Log this to Postgres")
+        message = ConversationMessage(id="msg-native-log", role="user", content="Log this natively")
 
         await manager.log_conversation(message)
 
         history = await manager.read_conversation_log()
         assert len(history) == 1
-        assert history[0]["content"] == "Log this to Postgres"
-        assert store.documents["current_state"]["messages"][0]["id"] == "msg-pg-log"
+        assert history[0]["content"] == "Log this natively"
+        current_state = native_store.items[(STATE_NAMESPACE, "current_state")]["payload"]
+        assert current_state["messages"][0]["id"] == "msg-native-log"
 
     @pytest.mark.asyncio
     async def test_atomic_write_recreates_missing_parent_dir(self, temp_dirs):
