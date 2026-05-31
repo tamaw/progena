@@ -40,6 +40,7 @@ function ChatInput({
   enableSlashCommands = true,
   allowStop = true,
   autoFocus = false,
+  focusToken = null,
   keepFocusAfterSend = false,
   initialMessage = '',
   className = '',
@@ -72,7 +73,7 @@ function ChatInput({
     if (autoFocus && !disabled) {
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
-  }, [autoFocus, disabled, isGenerating]);
+  }, [autoFocus, disabled, focusToken, isGenerating]);
 
   const executeSlashCommand = (command) => {
     if (command.requiresArguments) {

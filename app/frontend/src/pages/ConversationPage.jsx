@@ -1088,7 +1088,10 @@ function ConversationPage() {
           ) : (
             visibleSessionGroups.map((group) => (
               <div className="chat-pane-group" key={group.key}>
-                <div className="chat-pane-group__head">{group.label}</div>
+                <div className="chat-pane-group__head">
+                  {group.label}
+                  <span className="muted">· {group.items.length}</span>
+                </div>
                 {group.items.map((item) => (
                   <article
                     key={item.id}
@@ -1306,6 +1309,8 @@ function ConversationPage() {
           onCommand={handleCommand}
           isGenerating={isGenerating}
           disabled={connectionState === 'error' || isClearingSession}
+          autoFocus
+          focusToken={sessionId}
           keepFocusAfterSend
         />
       </section>
