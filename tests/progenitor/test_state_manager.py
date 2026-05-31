@@ -1,6 +1,7 @@
 """Tests for active StateManager persistence paths."""
 
 import asyncio
+import copy
 import json
 import tempfile
 from pathlib import Path
@@ -26,17 +27,19 @@ from app.progenitor.state.models import (
 class FakeLangGraphStore:
     def __init__(self) -> None:
         self.items: dict[tuple[tuple[str, ...], str], dict] = {}
+        self.search_queries: list[str | None] = []
 
     async def aget(self, namespace, key, **kwargs):
         value = self.items.get((tuple(namespace), key))
-        return SimpleNamespace(value=value) if value is not None else None
+        return SimpleNamespace(value=copy.deepcopy(value)) if value is not None else None
 
     async def aput(self, namespace, key, value, **kwargs):
-        self.items[(tuple(namespace), key)] = value
+        self.items[(tuple(namespace), key)] = copy.deepcopy(value)
 
     async def asearch(
         self, namespace_prefix, *, query=None, filter=None, limit=10, offset=0, **kwargs
     ):
+        self.search_queries.append(query)
         prefix = tuple(namespace_prefix)
         rows = []
         for (namespace, key), value in self.items.items():
@@ -46,6 +49,16 @@ class FakeLangGraphStore:
                 continue
             rows.append(SimpleNamespace(namespace=namespace, key=key, value=value))
         return rows[offset : offset + limit]
+
+
+class SlowFakeLangGraphStore(FakeLangGraphStore):
+    async def aget(self, namespace, key, **kwargs):
+        await asyncio.sleep(0)
+        return await super().aget(namespace, key, **kwargs)
+
+    async def aput(self, namespace, key, value, **kwargs):
+        await asyncio.sleep(0)
+        await super().aput(namespace, key, value, **kwargs)
 
 
 class TestStateManager:
@@ -175,6 +188,27 @@ class TestStateManager:
         await manager.close()
 
     @pytest.mark.asyncio
+    async def test_native_runtime_store_serializes_current_state_mutations(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        native_store = SlowFakeLangGraphStore()
+        runtime_store = LangGraphRuntimeStore(native_store)
+        manager = StateManager(state_dir, logs_dir, runtime_store=runtime_store)
+        await manager.initialize()
+
+        await asyncio.gather(
+            manager.add_message(
+                ConversationMessage(id="msg-concurrent", role="user", content="Concurrent")
+            ),
+            manager.add_tool_call({"id": "tool-concurrent", "name": "demo"}),
+            manager.add_attachment({"id": "att-concurrent", "content": "payload"}),
+        )
+
+        state = await manager.get_current_state()
+        assert [message["id"] for message in state["messages"]] == ["msg-concurrent"]
+        assert state["tool_calls"] == [{"id": "tool-concurrent", "name": "demo"}]
+        assert state["attachments"] == [{"id": "att-concurrent", "content": "payload"}]
+
+    @pytest.mark.asyncio
     async def test_async_subagent_task_persistence(self, temp_dirs):
         state_dir, logs_dir = temp_dirs
         manager = StateManager(state_dir, logs_dir)
@@ -241,6 +275,7 @@ class TestStateManager:
         assert len(rows) == 1
         assert rows[0]["message"] == "started"
         assert rows[0]["payload"]["api_key"] == "[REDACTED]"
+        assert native_store.search_queries == [None]
         assert next(iter(native_store.items))[0][:3] == (*LOG_NAMESPACE_PREFIX, "tool")
 
     async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):

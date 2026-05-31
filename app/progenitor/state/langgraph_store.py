@@ -108,9 +108,10 @@ class LangGraphRuntimeStore:
         namespace = (*LOG_NAMESPACE_PREFIX, source) if source else LOG_NAMESPACE_PREFIX
         filter_value = {"level": level.lower()} if level else None
         requested_limit = max(limit, 1) if limit > 0 else 1000
+        if search:
+            requested_limit = max(requested_limit, 1000)
         items = await self._store.asearch(
             namespace,
-            query=search,
             filter=filter_value,
             limit=requested_limit,
         )
