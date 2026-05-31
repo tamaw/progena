@@ -5,14 +5,15 @@ import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import ChatInput from '../components/chat/ChatInput';
 import { Message } from '../components/chat/Message';
-import TypingIndicator from '../components/chat/TypingIndicator';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
 import {
   CHAT_AGENT_NAME,
   buildSessionItems,
+  countToolInvocations,
   deriveChatTitle,
-  formatClockTime,
+  formatStartedTime,
+  groupSessionItems,
 } from '../components/chat/conversationModel';
 import {
   PERSISTED_CATEGORIES,
@@ -25,6 +26,110 @@ import {
 const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
 const CANCELLED_SUFFIX = ' [Cancelled]';
 const ARCHIVED_CHAT_SESSIONS_KEY = 'progenitor:archived-chat-sessions';
+const CUSTOM_CHAT_TITLE_KEY = 'progenitor:chat-custom-title';
+const PINNED_CHAT_SESSIONS_KEY = 'progenitor:pinned-chat-sessions';
+const SHARED_CHAT_SESSIONS_KEY = 'progenitor:shared-chat-sessions';
+
+function loadStoredArchivedChatSessions() {
+  const saved = localStorage.getItem(ARCHIVED_CHAT_SESSIONS_KEY);
+  if (!saved) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn('Failed to load archived chat sessions:', error);
+    return [];
+  }
+}
+
+function loadStoredPinnedSessionIds() {
+  const saved = localStorage.getItem(PINNED_CHAT_SESSIONS_KEY);
+  if (!saved) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed)
+      ? parsed.filter((value) => typeof value === 'string' && value)
+      : [];
+  } catch (error) {
+    console.warn('Failed to load pinned chat sessions:', error);
+    return [];
+  }
+}
+
+function persistPinnedSessionIds(pinnedSessionIds) {
+  if (!Array.isArray(pinnedSessionIds) || pinnedSessionIds.length === 0) {
+    localStorage.removeItem(PINNED_CHAT_SESSIONS_KEY);
+    return;
+  }
+
+  localStorage.setItem(PINNED_CHAT_SESSIONS_KEY, JSON.stringify(pinnedSessionIds));
+}
+
+function loadStoredSharedSessionIds() {
+  const saved = localStorage.getItem(SHARED_CHAT_SESSIONS_KEY);
+  if (!saved) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed)
+      ? parsed.filter((value) => typeof value === 'string' && value)
+      : [];
+  } catch (error) {
+    console.warn('Failed to load shared chat sessions:', error);
+    return [];
+  }
+}
+
+function persistSharedSessionIds(sharedSessionIds) {
+  if (!Array.isArray(sharedSessionIds) || sharedSessionIds.length === 0) {
+    localStorage.removeItem(SHARED_CHAT_SESSIONS_KEY);
+    return;
+  }
+
+  localStorage.setItem(SHARED_CHAT_SESSIONS_KEY, JSON.stringify(sharedSessionIds));
+}
+
+function loadStoredCustomChatTitle() {
+  const saved = localStorage.getItem(CUSTOM_CHAT_TITLE_KEY);
+  if (!saved) {
+    return { sessionId: null, title: '' };
+  }
+
+  try {
+    const parsed = JSON.parse(saved);
+    if (!parsed || typeof parsed !== 'object') {
+      return { sessionId: null, title: '' };
+    }
+    return {
+      sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+      title: typeof parsed.title === 'string' ? parsed.title : '',
+    };
+  } catch (error) {
+    console.warn('Failed to load custom chat title:', error);
+    return { sessionId: null, title: '' };
+  }
+}
+
+function persistCustomChatTitle(sessionId, title) {
+  const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+  if (!normalizedTitle) {
+    localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+    return;
+  }
+
+  localStorage.setItem(CUSTOM_CHAT_TITLE_KEY, JSON.stringify({
+    sessionId: typeof sessionId === 'string' ? sessionId : null,
+    title: normalizedTitle,
+  }));
+}
 
 function normalizeStreamEvent(event, index) {
   if (!event || typeof event !== 'object') {
@@ -268,6 +373,11 @@ function ConversationPage() {
     initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
   }
   const initialQuickChatHandoff = initialQuickChatHandoffRef.current;
+  const initialStoredCustomTitleRef = useRef(undefined);
+  if (initialStoredCustomTitleRef.current === undefined) {
+    initialStoredCustomTitleRef.current = loadStoredCustomChatTitle();
+  }
+  const initialStoredCustomTitle = initialStoredCustomTitleRef.current;
 
   const [messages, setMessages] = useState(() => {
     if (Array.isArray(initialQuickChatHandoff?.messages) && initialQuickChatHandoff.messages.length > 0) {
@@ -296,8 +406,6 @@ function ConversationPage() {
   });
   const [isGenerating, setIsGenerating] = useState(false);
   const [isClearingSession, setIsClearingSession] = useState(false);
-  const [typingState, setTypingState] = useState('thinking');
-  const [tokenCount, setTokenCount] = useState(0);
   const [sessionId, setSessionId] = useState(() => (
     typeof initialQuickChatHandoff?.sessionId === 'string' ? initialQuickChatHandoff.sessionId : null
   ));
@@ -305,9 +413,21 @@ function ConversationPage() {
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
+  const [customChatTitle, setCustomChatTitle] = useState(() => initialStoredCustomTitle.title);
+  const [customChatTitleSessionId, setCustomChatTitleSessionId] = useState(() => initialStoredCustomTitle.sessionId);
+  const [archivedSessions, setArchivedSessions] = useState(() => loadStoredArchivedChatSessions());
+  const [pinnedSessionIds, setPinnedSessionIds] = useState(() => loadStoredPinnedSessionIds());
+  const [sharedSessionIds, setSharedSessionIds] = useState(() => loadStoredSharedSessionIds());
+  const [sidebarFilter, setSidebarFilter] = useState('all');
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
   const messagesEndRef = useRef(null);
   const activeAssistantIdRef = useRef(null);
   const chatMenuRef = useRef(null);
+  const titleInputRef = useRef(null);
+
+  const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
+  const chatTitle = customChatTitle || derivedChatTitle;
 
   const streamEventFilter = useCallback(
     (event) => isEventVisible(event, streamFilters),
@@ -325,6 +445,70 @@ function ConversationPage() {
     },
     [config.storage.streamFilters],
   );
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      return undefined;
+    }
+    titleInputRef.current?.focus();
+    titleInputRef.current?.select();
+    return undefined;
+  }, [isEditingTitle]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+    if (!customChatTitle) {
+      if (customChatTitleSessionId && customChatTitleSessionId !== sessionId) {
+        setCustomChatTitleSessionId(sessionId);
+      }
+      return;
+    }
+    if (!customChatTitleSessionId) {
+      persistCustomChatTitle(sessionId, customChatTitle);
+      setCustomChatTitleSessionId(sessionId);
+      return;
+    }
+    if (customChatTitleSessionId !== sessionId) {
+      setCustomChatTitle('');
+      setCustomChatTitleSessionId(sessionId);
+      setTitleDraft('');
+      setIsEditingTitle(false);
+      localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+    }
+  }, [customChatTitle, customChatTitleSessionId, sessionId]);
+
+  const cancelTitleEdit = useCallback(() => {
+    setTitleDraft(chatTitle);
+    setIsEditingTitle(false);
+  }, [chatTitle]);
+
+  const startTitleEdit = useCallback(() => {
+    setChatMenuOpen(false);
+    setTitleDraft(chatTitle);
+    setIsEditingTitle(true);
+  }, [chatTitle]);
+
+  const saveTitleEdit = useCallback(() => {
+    const normalizedTitle = titleDraft.replace(/\s+/g, ' ').trim();
+    if (!normalizedTitle) {
+      cancelTitleEdit();
+      return;
+    }
+
+    const nextCustomTitle = normalizedTitle === derivedChatTitle ? '' : normalizedTitle;
+    setCustomChatTitle(nextCustomTitle);
+    setCustomChatTitleSessionId(sessionId);
+    setTitleDraft(nextCustomTitle || derivedChatTitle);
+    setIsEditingTitle(false);
+
+    if (nextCustomTitle) {
+      persistCustomChatTitle(sessionId, nextCustomTitle);
+    } else {
+      localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+    }
+  }, [cancelTitleEdit, derivedChatTitle, sessionId, titleDraft]);
 
   useEffect(() => {
     if (!chatMenuOpen) return undefined;
@@ -404,8 +588,8 @@ function ConversationPage() {
       activeAssistantIdRef.current = null;
       setMessages(normalizedMessages);
       setIsGenerating(false);
-      setTypingState('thinking');
-      setTokenCount(0);
+      setIsEditingTitle(false);
+      setTitleDraft('');
       if (typeof event.detail?.sessionId === 'string') {
         setSessionId(event.detail.sessionId);
       }
@@ -521,8 +705,6 @@ function ConversationPage() {
 
     setMessages(prev => [...prev, userMessage]);
     setIsGenerating(true);
-    setTypingState('thinking');
-    setTokenCount(0);
 
     let assistantContent = '';
     const assistantId = `msg_${Date.now()}_assistant`;
@@ -567,9 +749,7 @@ function ConversationPage() {
         // onChunk
         (chunk) => {
           if (isStale()) return;
-          setTypingState('generating');
           assistantContent += chunk;
-          setTokenCount(prev => prev + 1);
           setMessages(prev => prev.map(m =>
             m.id === assistantId
               ? { ...m, content: assistantContent, tokenCount: (m.tokenCount || 0) + 1 }
@@ -607,15 +787,6 @@ function ConversationPage() {
           const nextEvent = createStreamEvent(streamEvent);
           if (!nextEvent) {
             return;
-          }
-
-          if (nextEvent.eventType === 'reasoning_delta') {
-            setTypingState('thinking');
-          } else if (
-            nextEvent.eventType !== 'message_delta'
-            && nextEvent.eventType !== 'reasoning_summary'
-          ) {
-            setTypingState('tool-use');
           }
           const reasoningTokenCount = extractReasoningTokenCount(nextEvent);
           setMessages(prev => prev.map(m =>
@@ -658,11 +829,20 @@ function ConversationPage() {
       let archiveError = null;
       if (archive && archivedMessages.length > 0) {
         try {
+          const archivedToolCount = countToolInvocations(archivedMessages);
+          const startedAt = archivedMessages.find((message) => Number.isFinite(message.timestamp))?.timestamp ?? null;
+          const lastActivityAt = [...archivedMessages]
+            .reverse()
+            .find((message) => Number.isFinite(message.timestamp))?.timestamp ?? startedAt;
           const archiveEntry = {
             id: `archived_${Date.now()}`,
             sessionId,
-            title: deriveChatTitle(archivedMessages),
+            title: chatTitle,
             archivedAt: new Date().toISOString(),
+            startedAt,
+            lastActivityAt,
+            messageCount: archivedMessages.length,
+            toolCount: archivedToolCount,
             tokenCount: archivedMessages.reduce(
               (total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0),
               0,
@@ -674,16 +854,20 @@ function ConversationPage() {
             ? [archiveEntry, ...currentArchive].slice(0, 25)
             : [archiveEntry];
           localStorage.setItem(ARCHIVED_CHAT_SESSIONS_KEY, JSON.stringify(nextArchive));
+          setArchivedSessions(nextArchive);
         } catch (error) {
           archiveError = error;
         }
       }
       setMessages([]);
       setIsGenerating(false);
-      setTypingState('thinking');
-      setTokenCount(0);
+      setCustomChatTitle('');
+      setCustomChatTitleSessionId(session.session_id);
+      setTitleDraft('');
+      setIsEditingTitle(false);
       setSessionId(session.session_id);
       localStorage.removeItem(config.storage.chatHistory);
+      localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
       if (archiveError) {
         show('error', 'Archive failed', archiveError.message);
       }
@@ -698,13 +882,12 @@ function ConversationPage() {
           .filter(Boolean));
       }
       setIsGenerating(false);
-      setTypingState('thinking');
-      setTokenCount(0);
+      setIsEditingTitle(false);
       show('error', 'New chat failed', error.message);
     } finally {
       setIsClearingSession(false);
     }
-  }, [cancelStream, config.storage.chatHistory, createSession, messages, sessionId, show]);
+  }, [cancelStream, chatTitle, config.storage.chatHistory, createSession, messages, sessionId, show]);
 
   const handleCommand = useCallback(async (commandName) => {
     if (commandName !== 'new') {
@@ -714,37 +897,152 @@ function ConversationPage() {
     await startNewChatSession();
   }, [startNewChatSession]);
 
-  const chatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   const totalTokenCount = useMemo(
     () => messages.reduce((total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0), 0),
     [messages],
   );
+  const totalToolCount = useMemo(() => countToolInvocations(messages), [messages]);
   const firstMessageTime = useMemo(
     () => messages.find((message) => Number.isFinite(message.timestamp))?.timestamp,
     [messages],
   );
-  const visibleEventCount = useMemo(
-    () => messages.reduce((total, message) => (
-      total + (Array.isArray(message.streamEvents) ? message.streamEvents.filter(streamEventFilter).length : 0)
-    ), 0),
-    [messages, streamEventFilter],
-  );
   const sessionItems = useMemo(
-    () => buildSessionItems(messages, sessionId, chatTitle, totalTokenCount),
-    [chatTitle, messages, sessionId, totalTokenCount],
+    () => buildSessionItems({
+      messages,
+      sessionId,
+      chatTitle,
+      totalTokenCount,
+      totalToolCount,
+      firstMessageTime,
+      archivedSessions,
+      pinnedSessionIds,
+      sharedSessionIds,
+    }),
+    [
+      archivedSessions,
+      chatTitle,
+      firstMessageTime,
+      messages,
+      pinnedSessionIds,
+      sessionId,
+      sharedSessionIds,
+      totalTokenCount,
+      totalToolCount,
+    ],
   );
-  const activeFilterCount = useMemo(
-    () => STREAM_EVENT_CATEGORIES.filter((category) => streamFilters[category.id]).length,
-    [streamFilters],
+  const sessionGroups = useMemo(() => groupSessionItems(sessionItems), [sessionItems]);
+  const currentSessionItem = useMemo(
+    () => sessionItems.find((item) => item.selected) ?? null,
+    [sessionItems],
   );
+  const visibleSessionGroups = useMemo(() => {
+    if (sidebarFilter === 'shared') {
+      return [{ key: 'shared', label: 'Shared', items: sessionItems.filter((item) => item.shared) }]
+        .filter((group) => group.items.length > 0);
+    }
+    if (sidebarFilter === 'mine') {
+      return [{ key: 'mine', label: 'Mine', items: sessionItems.filter((item) => item.selected) }]
+        .filter((group) => group.items.length > 0);
+    }
+    if (sidebarFilter === 'archived') {
+      return [{ key: 'archived', label: 'Archived', items: sessionItems.filter((item) => !item.selected) }]
+        .filter((group) => group.items.length > 0);
+    }
+    return sessionGroups;
+  }, [sessionGroups, sessionItems, sidebarFilter]);
+  const sidebarEmptyMessage = useMemo(() => {
+    if (sidebarFilter === 'shared') {
+      return 'No shared chats yet.';
+    }
+    if (sidebarFilter === 'archived') {
+      return 'No archived chats yet.';
+    }
+    return 'No chats yet.';
+  }, [sidebarFilter]);
+
+  useEffect(() => {
+    const activePinKeys = new Set(sessionItems.map((item) => item.pinKey));
+    if (!pinnedSessionIds.some((pinKey) => !activePinKeys.has(pinKey))) {
+      return;
+    }
+
+    const nextPinnedSessionIds = pinnedSessionIds.filter((pinKey) => activePinKeys.has(pinKey));
+    try {
+      persistPinnedSessionIds(nextPinnedSessionIds);
+      setPinnedSessionIds(nextPinnedSessionIds);
+    } catch (error) {
+      show('error', 'Pinned chats sync failed', error.message);
+    }
+  }, [pinnedSessionIds, sessionItems, show]);
+
+  const togglePinnedSession = useCallback((sessionItem) => {
+    if (!sessionItem?.pinKey) {
+      return;
+    }
+
+    setPinnedSessionIds((currentPinnedSessionIds) => {
+      const nextPinnedSessionIds = currentPinnedSessionIds.includes(sessionItem.pinKey)
+        ? currentPinnedSessionIds.filter((pinKey) => pinKey !== sessionItem.pinKey)
+        : [sessionItem.pinKey, ...currentPinnedSessionIds];
+
+      try {
+        persistPinnedSessionIds(nextPinnedSessionIds);
+        return nextPinnedSessionIds;
+      } catch (error) {
+        show('error', 'Pinning failed', error.message);
+        return currentPinnedSessionIds;
+      }
+    });
+  }, [show]);
+
+  useEffect(() => {
+    const activeShareKeys = new Set(sessionItems.map((item) => item.pinKey));
+    if (!sharedSessionIds.some((shareKey) => !activeShareKeys.has(shareKey))) {
+      return;
+    }
+
+    const nextSharedSessionIds = sharedSessionIds.filter((shareKey) => activeShareKeys.has(shareKey));
+    try {
+      persistSharedSessionIds(nextSharedSessionIds);
+      setSharedSessionIds(nextSharedSessionIds);
+    } catch (error) {
+      show('error', 'Shared chats sync failed', error.message);
+    }
+  }, [sessionItems, sharedSessionIds, show]);
+
+  const toggleSharedSession = useCallback((sessionItem) => {
+    if (!sessionItem?.pinKey) {
+      return;
+    }
+
+    setSharedSessionIds((currentSharedSessionIds) => {
+      const isCurrentlyShared = currentSharedSessionIds.includes(sessionItem.pinKey);
+      const nextSharedSessionIds = isCurrentlyShared
+        ? currentSharedSessionIds.filter((shareKey) => shareKey !== sessionItem.pinKey)
+        : [sessionItem.pinKey, ...currentSharedSessionIds];
+
+      try {
+        persistSharedSessionIds(nextSharedSessionIds);
+        show(
+          'success',
+          isCurrentlyShared ? 'Chat unshared' : 'Chat shared',
+          isCurrentlyShared
+            ? 'Removed this chat from the shared list.'
+            : 'Added this chat to the shared list.',
+        );
+        return nextSharedSessionIds;
+      } catch (error) {
+        show('error', 'Sharing failed', error.message);
+        return currentSharedSessionIds;
+      }
+    });
+  }, [show]);
 
   return (
     <div className="chat-page">
       <aside className="chat-sessions-pane" aria-label="Conversation sessions">
         <div className="chat-sessions-pane__head">
-          <div className="chat-sessions-pane__title">
-            Sessions <span className="muted">{sessionItems.length}</span>
-          </div>
+          <div className="chat-sessions-pane__title">Chats</div>
           <button
             type="button"
             className="chat-pane-action"
@@ -755,32 +1053,78 @@ function ConversationPage() {
           </button>
         </div>
         <div className="chat-pane-tabs" role="tablist" aria-label="Session filters">
-          <button type="button" className="chat-pane-tab is-active">All</button>
-          <button type="button" className="chat-pane-tab">Mine</button>
-          <button type="button" className="chat-pane-tab">Pinned</button>
-          <button type="button" className="chat-pane-tab chat-pane-tab--sort">Recent</button>
+          <button
+            type="button"
+            className={`chat-pane-tab${sidebarFilter === 'all' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('all')}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`chat-pane-tab${sidebarFilter === 'mine' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('mine')}
+          >
+            Mine
+          </button>
+          <button
+            type="button"
+            className={`chat-pane-tab${sidebarFilter === 'shared' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('shared')}
+          >
+            Shared
+          </button>
+          <button
+            type="button"
+            className={`chat-pane-tab chat-pane-tab--sort${sidebarFilter === 'archived' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('archived')}
+          >
+            Archived
+          </button>
         </div>
         <div className="chat-sessions-pane__scroll">
-          <div className="chat-pane-group">
-            <div className="chat-pane-group__head">Conversations</div>
-            {sessionItems.map((item) => (
-              <article
-                key={item.id}
-                className={`chat-session-card${item.selected ? ' is-selected' : ''}`}
-              >
-                <div className="chat-session-card__title">{item.title}</div>
-                <div className="chat-session-card__meta">
-                  <span className="chat-session-card__age">{item.age}</span>
-                </div>
-                <div className="chat-session-card__preview">{item.preview}</div>
-                {Number.isFinite(item.tokenCount) && item.tokenCount > 0 && (
-                  <div className="chat-session-card__foot">
-                    <span>{new Intl.NumberFormat().format(item.tokenCount)} tokens</span>
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
+          {visibleSessionGroups.length === 0 ? (
+            <div className="chat-pane-empty">{sidebarEmptyMessage}</div>
+          ) : (
+            visibleSessionGroups.map((group) => (
+              <div className="chat-pane-group" key={group.key}>
+                <div className="chat-pane-group__head">{group.label}</div>
+                {group.items.map((item) => (
+                  <article
+                    key={item.id}
+                    className={`chat-session-card${item.selected ? ' is-selected' : ''}`}
+                  >
+                    <div className="chat-session-card__top">
+                      <div className="chat-session-card__title">{item.title}</div>
+                      <button
+                        type="button"
+                        className={`chat-session-card__pin${item.pinned ? ' is-active' : ''}`}
+                        aria-label={item.pinned ? `Unpin ${item.title}` : `Pin ${item.title}`}
+                        title={item.pinned ? 'Unpin chat' : 'Pin chat'}
+                        onClick={() => togglePinnedSession(item)}
+                      >
+                        {item.pinned ? (
+                          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                            <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="currentColor" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                            <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                    <div className="chat-session-card__meta">
+                      <span>{item.meta}</span>
+                      <span className="chat-session-card__dot">·</span>
+                      <span className="chat-session-card__state">{item.detail}</span>
+                    </div>
+                    <div className="chat-session-card__summary">{item.summary}</div>
+                  </article>
+                ))}
+              </div>
+            ))
+          )}
         </div>
       </aside>
 
@@ -788,18 +1132,48 @@ function ConversationPage() {
         <header className="chat-page-header">
           <div className="chat-page-header__inner">
             <div className="chat-page-header__title-row">
-              <h1 className="chat-page-header__title">{chatTitle}</h1>
-              <button type="button" className="chat-icon-button" title="Rename conversation">
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-                </svg>
+              {isEditingTitle ? (
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  className="chat-page-header__title-input"
+                  value={titleDraft}
+                  maxLength={120}
+                  aria-label="Conversation title"
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                  onBlur={cancelTitleEdit}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      saveTitleEdit();
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault();
+                      cancelTitleEdit();
+                    }
+                  }}
+                />
+              ) : (
+                <h1 className="chat-page-header__title">{chatTitle}</h1>
+              )}
+              <button
+                type="button"
+                className="chat-icon-button"
+                title={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
+                aria-label={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
+                onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
+                onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
+              >
+                {isEditingTitle ? (
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                    <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                    <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                  </svg>
+                )}
               </button>
               <span className="chat-page-header__spacer" />
-              <StreamFilterMenu
-                storageKey={config.storage.streamFilters}
-                filters={streamFilters}
-                onChange={updateStreamFilters}
-              />
               <div className="chat-options-menu" ref={chatMenuRef}>
                 <button
                   type="button"
@@ -820,13 +1194,40 @@ function ConversationPage() {
                     <button
                       type="button"
                       className="chat-options-item"
+                      role="menuitemcheckbox"
+                      aria-checked={currentSessionItem?.shared === true}
+                      onClick={() => {
+                        toggleSharedSession(currentSessionItem);
+                        setChatMenuOpen(false);
+                      }}
+                      disabled={isClearingSession || messages.length === 0}
+                    >
+                      <span className="chat-options-item__icon" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" width="13" height="13">
+                          <path d="M5.75 8.1 10.4 5.3M5.75 7.9l4.65 2.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                          <circle cx="4" cy="8" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                          <circle cx="12" cy="4.4" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                          <circle cx="12" cy="11.6" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                        </svg>
+                      </span>
+                      <span>Shared</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="chat-options-item"
                       role="menuitem"
                       onClick={() => startNewChatSession({
                         archive: true,
                       })}
                       disabled={isClearingSession || messages.length === 0}
                     >
-                      Archive
+                      <span className="chat-options-item__icon" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" width="13" height="13">
+                          <path d="M2.5 4h11v2.25h-11zM3.5 7.25h9v5.25h-9z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                          <path d="M8 8.5v2.25M6.5 9.5 8 11l1.5-1.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                      <span>Archive</span>
                     </button>
                     <button
                       type="button"
@@ -835,7 +1236,13 @@ function ConversationPage() {
                       onClick={() => startNewChatSession()}
                       disabled={isClearingSession}
                     >
-                      Delete
+                      <span className="chat-options-item__icon" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" width="13" height="13">
+                          <path d="M3.5 4.5h9M6.25 4.5V3.25h3.5V4.5M5 6.25v5.25M8 6.25v5.25M11 6.25v5.25" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                          <path d="M4.5 4.5l.6 8A1.75 1.75 0 0 0 6.85 14h2.3a1.75 1.75 0 0 0 1.75-1.5l.6-8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                      <span>Delete</span>
                     </button>
                   </div>
                 )}
@@ -846,23 +1253,28 @@ function ConversationPage() {
                 <span className="agent-dot agent-dot--purple" />
                 {CHAT_AGENT_NAME}
               </span>
-              <span className="chat-separator">|</span>
-              <span className="muted">Started {formatClockTime(firstMessageTime) || 'not started'}</span>
-              <span className="chat-separator">|</span>
+              <span className="chat-separator">·</span>
+              <span className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>
+              <span className="chat-separator">·</span>
+              <span className="muted">{messages.length} messages</span>
+              <span className="chat-separator">·</span>
+              <span className="muted">{totalToolCount} tools</span>
+              <span className="chat-separator">·</span>
               <span className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>
-              <span className="chat-separator">|</span>
-              <span className="muted">Events {visibleEventCount}</span>
-              <span className="chat-separator">|</span>
-              <span className="muted">Filters {activeFilterCount}/{STREAM_EVENT_CATEGORIES.length}</span>
               {sessionId && (
                 <>
-                  <span className="chat-separator">|</span>
+                  <span className="chat-separator">·</span>
                   <span className="chat-session-id">{sessionId}</span>
                 </>
               )}
             </div>
           </div>
         </header>
+        <StreamFilterMenu
+          storageKey={config.storage.streamFilters}
+          filters={streamFilters}
+          onChange={updateStreamFilters}
+        />
 
         <div className="chat-messages sess-detail__body chat-detail-body">
           <div className="chat-messages__inner">
@@ -882,9 +1294,6 @@ function ConversationPage() {
                     streamEventFilter={streamEventFilter}
                   />
                 ))}
-                {isGenerating && (
-                  <TypingIndicator state={typingState} tokenCount={tokenCount} />
-                )}
               </>
             )}
             <div ref={messagesEndRef} />

@@ -187,7 +187,7 @@ function StreamEvents({ events }) {
               <div className="message-stream-event-header entry__head">
                 <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
                 <span className="entry__role">{description.title}</span>
-                {description.detail && !tool && <span className="muted">{description.detail}</span>}
+                {description.metaDetail && !tool && <span className="muted">{description.metaDetail}</span>}
               </div>
               {description.bodyHtml && (
                 <div
@@ -195,8 +195,8 @@ function StreamEvents({ events }) {
                   dangerouslySetInnerHTML={{ __html: description.bodyHtml }}
                 />
               )}
-              {description.detail && !tool && !description.bodyHtml && (
-                <div className="message-stream-event-detail entry__content">{description.detail}</div>
+              {description.bodyDetail && !tool && !description.bodyHtml && (
+                <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
               )}
               {tool && (
                 <div className="tool chat-event-tool">
@@ -270,7 +270,8 @@ function describeStreamEvent(event) {
     return {
       badge: 'Step',
       title: prettifyLabel(nodeName),
-      detail: detailParts.join(' • ') || 'Node updated',
+      metaDetail: summarizeNodeKind(nodeName),
+      bodyDetail: detailParts.join(' • '),
     };
   }
 
@@ -280,7 +281,8 @@ function describeStreamEvent(event) {
     return {
       badge: 'Tool',
       title: `→ ${prettifyLabel(toolName)}`,
-      detail: args || 'invoking…',
+      metaDetail: args || 'invoking…',
+      bodyDetail: '',
     };
   }
 
@@ -296,7 +298,8 @@ function describeStreamEvent(event) {
     return {
       badge: 'Tool',
       title: `✓ ${prettifyLabel(toolName)}`,
-      detail: parts.join(' • ') || 'completed',
+      metaDetail: parts.join(' • ') || 'completed',
+      bodyDetail: '',
     };
   }
 
@@ -312,7 +315,8 @@ function describeStreamEvent(event) {
     return {
       badge: 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
-      detail: parts.join(' • ') || 'error',
+      metaDetail: parts.join(' • ') || 'error',
+      bodyDetail: '',
     };
   }
 
@@ -321,7 +325,8 @@ function describeStreamEvent(event) {
       badge: 'Reasoning',
       title: 'Reasoning',
       bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
-      detail: summarizeMetadata(metadata),
+      metaDetail: summarizeMetadata(metadata),
+      bodyDetail: '',
     };
   }
 
@@ -332,21 +337,25 @@ function describeStreamEvent(event) {
     metadata.node_name,
   ].find((value) => typeof value === 'string' && value.trim().length > 0);
 
-  const detailParts = [];
-  if (typeof event?.content === 'string' && event.content.trim()) {
-    detailParts.push(event.content.trim());
-  }
-
+  const contentDetail = typeof event?.content === 'string' ? event.content.trim() : '';
   const metadataSummary = summarizeMetadata(metadata);
-  if (metadataSummary) {
-    detailParts.push(metadataSummary);
-  }
 
   return {
     badge: badgeForEventType(eventType),
     title: explicitName ? prettifyLabel(explicitName) : prettifyLabel(eventType),
-    detail: detailParts.join(' • '),
+    metaDetail: metadataSummary,
+    bodyDetail: contentDetail && !detailsMatch(contentDetail, metadataSummary) ? contentDetail : '',
   };
+}
+
+function detailsMatch(left, right) {
+  return normalizeDetailText(left) === normalizeDetailText(right);
+}
+
+function normalizeDetailText(value) {
+  return typeof value === 'string'
+    ? value.replace(/\s+/g, ' ').trim().toLowerCase()
+    : '';
 }
 
 function formatArgsPreview(args) {
@@ -458,6 +467,17 @@ function prettifyLabel(value) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function summarizeNodeKind(nodeName) {
+  const normalized = typeof nodeName === 'string' ? nodeName.trim().toLowerCase() : '';
+  if (normalized.includes('tool')) {
+    return 'Tool';
+  }
+  if (normalized.includes('model') || normalized.includes('llm')) {
+    return 'Model';
+  }
+  return 'Step';
 }
 
 function formatMessage(content) {

@@ -1,7 +1,6 @@
 import Message from './Message';
-import TypingIndicator from './TypingIndicator';
 
-function ChatMessages({ messages, isGenerating, typingState, tokenCount }) {
+function ChatMessages({ messages }) {
   if (messages.length === 0) {
     return (
       <div className="chat-messages">
@@ -18,9 +17,6 @@ function ChatMessages({ messages, isGenerating, typingState, tokenCount }) {
       {messages.map((msg, index) => (
         <Message key={msg.id || index} message={msg} />
       ))}
-      {isGenerating && (
-        <TypingIndicator state={typingState} tokenCount={tokenCount} />
-      )}
     </div>
   );
 }

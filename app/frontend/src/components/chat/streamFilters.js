@@ -1,8 +1,8 @@
 export const STREAM_EVENT_CATEGORIES = [
-  { id: 'tools',  label: 'Tools',  description: 'tool_start / tool_result / tool_error' },
-  { id: 'steps',  label: 'Steps',  description: 'graph node updates' },
-  { id: 'reasoning', label: 'Reasoning', description: 'reasoning deltas / summaries' },
-  { id: 'debug',  label: 'Debug',  description: 'misc / unknown events' },
+  { id: 'tools', label: 'Tools', description: 'tool_start / tool_result / tool_error', color: 'var(--color-success)' },
+  { id: 'steps', label: 'Steps', description: 'graph node updates', color: 'var(--color-accent)' },
+  { id: 'reasoning', label: 'Reasoning', description: 'reasoning deltas / summaries', color: '#a78bfa' },
+  { id: 'debug', label: 'Debug', description: 'misc / unknown events', color: 'var(--color-text-muted)' },
 ];
 
 export const PERSISTED_CATEGORIES = new Set(['tools', 'steps', 'reasoning']);
