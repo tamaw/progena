@@ -175,7 +175,7 @@ export function useApi() {
 
   const getPrompts = useCallback(async (agent = null) => {
     const search = agent ? `?${new URLSearchParams({ agent }).toString()}` : '';
-    const response = await fetchWithRetry(`prompts${search}`);
+    const response = await fetchWithRetry(search ? `/api/ui/prompts${search}` : 'prompts');
     return response.json();
   }, [fetchWithRetry]);
 
@@ -189,6 +189,34 @@ export function useApi() {
     const response = await fetchWithRetry('/api/ui/prompts/content', {
       method: 'PUT',
       body: JSON.stringify({ path, content }),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getSkills = useCallback(async (agent = null) => {
+    const search = agent ? `?${new URLSearchParams({ agent }).toString()}` : '';
+    const response = await fetchWithRetry(search ? `/api/ui/skills${search}` : 'skills');
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getSkillContent = useCallback(async (path) => {
+    const search = new URLSearchParams({ path });
+    const response = await fetchWithRetry(`/api/ui/skills/content?${search.toString()}`);
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const updateSkillContent = useCallback(async (path, content) => {
+    const response = await fetchWithRetry('/api/ui/skills/content', {
+      method: 'PUT',
+      body: JSON.stringify({ path, content }),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const createSkill = useCallback(async ({ agent, name, content }) => {
+    const response = await fetchWithRetry('/api/ui/skills', {
+      method: 'POST',
+      body: JSON.stringify({ agent, name, content }),
     });
     return response.json();
   }, [fetchWithRetry]);
@@ -422,6 +450,10 @@ export function useApi() {
     getPrompts,
     getPromptContent,
     updatePromptContent,
+    getSkills,
+    getSkillContent,
+    updateSkillContent,
+    createSkill,
     updateWidget,
     deleteWidget,
     getSchedules,

@@ -41,6 +41,7 @@ const defaultConfig = {
       widgetSchemas: '/api/ui/widget-schemas',
       kanban: '/api/ui/kanban',
       prompts: '/api/ui/prompts',
+      skills: '/api/ui/skills',
       schedules: '/api/ui/schedules',
       logs: '/api/ui/logs',
       actionRun: '/api/ui/actions/run',
@@ -81,7 +82,8 @@ const defaultConfig = {
     settings: 'progenitor_settings',
     inputHistory: 'progenitor_input_history',
     sidebarCollapsed: 'progenitor_sidebar_collapsed',
-    streamFilters: 'progenitor_stream_filters'
+    streamFilters: 'progenitor_stream_filters',
+    quickChatHandoff: 'progenitor_quick_chat_handoff'
   }
 };
 

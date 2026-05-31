@@ -9,7 +9,6 @@ import {
   useState,
 } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useStatusSSE } from '../hooks/useSSE';
 
 const AlertCenterContext = createContext(null);
 
@@ -69,7 +68,7 @@ export function AlertCenterProvider({ children }) {
     };
   }, []);
 
-  const handleStatusEvent = useCallback((event) => {
+  const ingestStatusEvent = useCallback((event) => {
     if (event?.type === 'alerts' && event.data) {
       applyAlertPayload(event.data);
       setIsLoading(false);
@@ -83,24 +82,15 @@ export function AlertCenterProvider({ children }) {
     }
   }, [applyAlertPayload]);
 
-  const { isHealthy } = useStatusSSE(handleStatusEvent);
-
-  useEffect(() => {
-    if (!isHealthy) {
-      setIsLoading(false);
-    }
-  }, [isHealthy]);
-
-  const openPanel = useCallback(async () => {
-    setIsPanelOpen(true);
-    setSelectedAlertId(null);
-
+  const markAllViewed = useCallback(async () => {
     if (unreadCount <= 0 && !alerts.some((alert) => !alert.viewed)) {
       return;
     }
 
     try {
       await markAlertsViewed();
+      setAlerts((currentAlerts) => currentAlerts.map((alert) => ({ ...alert, viewed: true })));
+      setUnreadCount(0);
       setError('');
     } catch (markError) {
       if (mountedRef.current) {
@@ -108,6 +98,12 @@ export function AlertCenterProvider({ children }) {
       }
     }
   }, [alerts, markAlertsViewed, unreadCount]);
+
+  const openPanel = useCallback(async () => {
+    setIsPanelOpen(true);
+    setSelectedAlertId(null);
+    await markAllViewed();
+  }, [markAllViewed]);
 
   const closePanel = useCallback(() => {
     setIsPanelOpen(false);
@@ -139,6 +135,8 @@ export function AlertCenterProvider({ children }) {
     closePanel,
     openAlert,
     closeAlert,
+    markAllViewed,
+    ingestStatusEvent,
     refreshAlerts: loadAlerts,
   }), [
     alerts,
@@ -147,7 +145,9 @@ export function AlertCenterProvider({ children }) {
     error,
     isLoading,
     isPanelOpen,
+    ingestStatusEvent,
     loadAlerts,
+    markAllViewed,
     openAlert,
     openPanel,
     selectedAlert,
