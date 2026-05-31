@@ -457,13 +457,11 @@ export default function ToolsPage() {
                   type="button"
                   key={server.id}
                   className={`sess-row tools-server-row ${selectedServer.id === server.id ? 'is-selected' : ''} tools-server-row--${server.status}`}
+                  aria-label={`${server.name}, ${statusLabel(server.status)}, ${server.transport}`}
                   onClick={() => setSelectedId(server.id)}
                 >
-                  <span className="tools-server-row__avatar">{server.initials}</span>
                   <span className="sess-row__top">
                     <span className={`sess-row__dot tools-status-dot--${server.status}`} />
-                    <span className={`sess-row__agent tools-server-row__status tools-server-row__status--${server.status}`}>{statusLabel(server.status)}</span>
-                    <span className="sess-row__sep">·</span>
                     <span className="sess-row__project">{server.transport}</span>
                   </span>
                   <span className="sess-row__age">{server.latency}</span>
@@ -491,7 +489,6 @@ export default function ToolsPage() {
         <DetailHeader
           title={selectedServer.name}
           subtitle={`${selectedServer.packageName} · ${selectedServer.version}`}
-          avatar={<span className="tools-detail__avatar">{selectedServer.initials}</span>}
           actions={(
             <DetailHeaderActions>
               <DetailHeaderAction
