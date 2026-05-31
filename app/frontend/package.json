@@ -10,11 +10,13 @@
     "prod": "vite build && vite preview",
     "preview": "vite preview",
     "lint": "eslint .",
+    "smoke:routes": "node scripts/smoke-routes.mjs",
     "clean": "rimraf dist"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.1",
     "chart.js": "^4.5.1",
+    "highlight.js": "^11.11.1",
     "react": "^19.2.0",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.0",

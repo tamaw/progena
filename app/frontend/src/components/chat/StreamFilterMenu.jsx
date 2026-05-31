@@ -1,21 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { STREAM_EVENT_CATEGORIES } from './streamFilters';
 
 function StreamFilterMenu({ storageKey, filters, onChange }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const handler = (event) => {
-      if (containerRef.current && !containerRef.current.contains(event.target)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
   const updateFilters = useCallback(
     (next) => {
       onChange(next);
@@ -35,66 +21,41 @@ function StreamFilterMenu({ storageKey, filters, onChange }) {
     [filters, updateFilters],
   );
 
-  const applyPreset = useCallback(
-    (preset) => {
-      let next;
-      if (preset === 'all') {
-        next = STREAM_EVENT_CATEGORIES.reduce((acc, c) => ({ ...acc, [c.id]: true }), {});
-      } else if (preset === 'basic') {
-        next = STREAM_EVENT_CATEGORIES.reduce(
-          (acc, c) => ({ ...acc, [c.id]: c.id === 'tools' || c.id === 'steps' }),
-          {},
-        );
-      } else {
-        next = STREAM_EVENT_CATEGORIES.reduce((acc, c) => ({ ...acc, [c.id]: false }), {});
-      }
-      updateFilters(next);
-    },
-    [updateFilters],
-  );
-
   const activeCount = useMemo(
     () => STREAM_EVENT_CATEGORIES.filter((c) => filters[c.id]).length,
     [filters],
   );
+  const allActive = activeCount === STREAM_EVENT_CATEGORIES.length;
+
+  const enableAll = useCallback(() => {
+    updateFilters(STREAM_EVENT_CATEGORIES.reduce((acc, category) => ({ ...acc, [category.id]: true }), {}));
+  }, [updateFilters]);
 
   return (
-    <div className="stream-filter-menu" ref={containerRef}>
+    <div className="sess-filters chat-events-filters" role="toolbar" aria-label="Event filters">
       <button
         type="button"
-        className="stream-filter-toggle"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        title="Stream event visibility"
+        className={`sess-fchip ${allActive ? 'is-active' : ''}`}
+        aria-pressed={allActive}
+        onClick={enableAll}
+        title="Show every event category"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-        </svg>
-        <span>Events ({activeCount}/{STREAM_EVENT_CATEGORIES.length})</span>
+        All
+        <span className="count">{activeCount}/{STREAM_EVENT_CATEGORIES.length}</span>
       </button>
-      {open && (
-        <div className="stream-filter-dropdown" role="menu">
-          <div className="stream-filter-presets">
-            <button type="button" onClick={() => applyPreset('all')}>All</button>
-            <button type="button" onClick={() => applyPreset('basic')}>Basic</button>
-            <button type="button" onClick={() => applyPreset('none')}>None</button>
-          </div>
-          {STREAM_EVENT_CATEGORIES.map((c) => (
-            <label key={c.id} className="stream-filter-option">
-              <input
-                type="checkbox"
-                checked={Boolean(filters[c.id])}
-                onChange={() => toggleCategory(c.id)}
-              />
-              <span className="stream-filter-option-label">
-                <span className="stream-filter-option-title">{c.label}</span>
-                <span className="stream-filter-option-desc">{c.description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
+      {STREAM_EVENT_CATEGORIES.map((category) => (
+        <button
+          key={category.id}
+          type="button"
+          className={`sess-fchip ${filters[category.id] ? 'is-active' : ''}`}
+          aria-pressed={Boolean(filters[category.id])}
+          onClick={() => toggleCategory(category.id)}
+          title={category.description}
+        >
+          {category.color ? <span className="adot" style={{ background: category.color }} /> : null}
+          {category.label}
+        </button>
+      ))}
     </div>
   );
 }

@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 const SLASH_COMMANDS = [
   {
-    name: 'clear',
-    title: 'Clear conversation',
-    command: '/clear',
-    syntax: '/clear',
-    description: 'Clear the current chat and start a fresh web session.',
+    name: 'new',
+    title: 'New conversation',
+    command: '/new',
+    syntax: '/new',
+    description: 'Start a fresh chat session.',
     requiresArguments: false,
   },
 ];
@@ -29,11 +29,26 @@ function getSlashQuery(value) {
   return firstToken.slice(1).toLowerCase();
 }
 
-function ChatInput({ onSend, onStop, onCommand, isGenerating, disabled }) {
-  const [message, setMessage] = useState('');
+function ChatInput({
+  onSend,
+  onStop,
+  onCommand,
+  isGenerating,
+  disabled,
+  placeholder = 'Type your message here',
+  showHints = true,
+  enableSlashCommands = true,
+  allowStop = true,
+  autoFocus = false,
+  focusToken = null,
+  keepFocusAfterSend = false,
+  initialMessage = '',
+  className = '',
+}) {
+  const [message, setMessage] = useState(initialMessage);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const textareaRef = useRef(null);
-  const slashQuery = getSlashQuery(message);
+  const slashQuery = enableSlashCommands ? getSlashQuery(message) : null;
   const filteredSlashCommands = useMemo(() => {
     if (slashQuery === null) {
       return [];
@@ -53,6 +68,12 @@ function ChatInput({ onSend, onStop, onCommand, isGenerating, disabled }) {
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
     }
   }, [message]);
+
+  useEffect(() => {
+    if (autoFocus && !disabled) {
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  }, [autoFocus, disabled, focusToken, isGenerating]);
 
   const executeSlashCommand = (command) => {
     if (command.requiresArguments) {
@@ -88,7 +109,9 @@ function ChatInput({ onSend, onStop, onCommand, isGenerating, disabled }) {
       }
       handleSend();
     } else if (e.key === 'Escape' && isGenerating) {
-      onStop?.();
+      if (allowStop) {
+        onStop?.();
+      }
     }
   };
 
@@ -98,7 +121,9 @@ function ChatInput({ onSend, onStop, onCommand, isGenerating, disabled }) {
       return;
     }
 
-    const slashCommand = SLASH_COMMANDS.find((command) => command.command === trimmedMessage);
+    const slashCommand = enableSlashCommands
+      ? SLASH_COMMANDS.find((command) => command.command === trimmedMessage)
+      : null;
     if (slashCommand) {
       executeSlashCommand(slashCommand);
       return;
@@ -107,11 +132,14 @@ function ChatInput({ onSend, onStop, onCommand, isGenerating, disabled }) {
     if (trimmedMessage) {
       onSend(trimmedMessage);
       setMessage('');
+      if (keepFocusAfterSend) {
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
     }
   };
 
   return (
-    <div className="chat-input-container">
+    <div className={`chat-input-container ${className}`.trim()}>
       <div className="chat-input-stack">
         {isSlashMenuOpen && (
           <div className="slash-command-menu" role="listbox" aria-label="Slash commands">
@@ -139,7 +167,7 @@ function ChatInput({ onSend, onStop, onCommand, isGenerating, disabled }) {
           <textarea
             ref={textareaRef}
             className="chat-input"
-            placeholder="Type your message or / for commands..."
+            placeholder={placeholder}
             value={message}
             onChange={(e) => {
               setMessage(e.target.value);
@@ -150,29 +178,39 @@ function ChatInput({ onSend, onStop, onCommand, isGenerating, disabled }) {
             disabled={disabled}
           />
           <div className="input-actions">
-            {isGenerating ? (
+            {isGenerating && allowStop ? (
               <button className="btn-stop" title="Stop Generation (Esc)" onClick={onStop}>
-                ⏹
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
+                </svg>
               </button>
             ) : (
               <button
                 className="btn-send"
                 title="Send Message (Enter)"
                 onClick={handleSend}
-                disabled={!message.trim() || disabled}
+                disabled={!message.trim() || disabled || isGenerating}
               >
-                <span className="send-icon">➤</span>
+                {isGenerating ? (
+                  <span aria-hidden="true">...</span>
+                ) : (
+                  <svg className="send-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                    <path d="M2.5 8L13.5 3l-2 5 2 5z" fill="currentColor" />
+                  </svg>
+                )}
               </button>
             )}
           </div>
         </div>
       </div>
-      <div className="input-hints">
-        <span className="hint">Type <kbd>/</kbd> for commands</span>
-        <span className="hint">Press <kbd>Enter</kbd> to send</span>
-        <span className="hint">Press <kbd>Shift+Enter</kbd> for new line</span>
-        <span className="hint">Press <kbd>Esc</kbd> to stop generation</span>
-      </div>
+      {showHints ? (
+        <div className="input-hints">
+          <span className="hint">Type <kbd>/</kbd> for commands</span>
+          <span className="hint">Press <kbd>Enter</kbd> to send</span>
+          <span className="hint">Press <kbd>Shift+Enter</kbd> for new line</span>
+          <span className="hint">Press <kbd>Esc</kbd> to stop generation</span>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,17 +1,17 @@
 .prompts-page {
   display: flex;
-  height: calc(100vh - var(--header-height));
+  height: 100%;
+  min-height: 0;
   width: 100%;
   overflow: hidden;
 }
 
 .prompts-sidebar {
-  width: 320px;
-  min-width: 320px;
-  border-right: 1px solid var(--color-border);
-  background: var(--color-bg-secondary);
+  width: 300px;
+  min-width: 300px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .prompts-sidebar-header,
@@ -33,16 +33,16 @@
 .prompts-sidebar-body {
   flex: 1;
   overflow-y: auto;
-  padding: var(--spacing-sm);
+  padding: 6px 6px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 1px;
 }
 
 .prompts-tree-branch {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 1px;
 }
 
 .prompts-tree-toggle,
@@ -53,25 +53,30 @@
   color: var(--color-text-primary);
   text-align: left;
   cursor: pointer;
-  border-radius: var(--border-radius-sm);
-  padding: 6px 8px;
+  border-radius: 6px;
+  padding: 7px 10px 8px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
 .prompts-tree-toggle:hover,
 .prompts-tree-leaf:hover,
 .prompts-tree-leaf.active {
-  background: rgba(88, 166, 255, 0.08);
-  border-color: rgba(88, 166, 255, 0.28);
+  background: var(--color-bg-hover);
+}
+
+.prompts-tree-leaf.active {
+  background: var(--color-accent-soft);
+  border-color: color-mix(in oklab, var(--color-accent) 34%, var(--color-border));
 }
 
 .prompts-tree-toggle {
   flex-direction: row;
   align-items: center;
   gap: 6px;
-  font-size: var(--font-size-sm);
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -90,7 +95,7 @@
 .prompts-tree-children {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 1px;
 }
 
 .prompts-tree-toggle.depth-0,
@@ -114,16 +119,22 @@
 }
 
 .prompts-tree-file {
-  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: 12.5px;
   font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
 }
 
+.prompts-tree-label,
 .prompts-tree-file-path,
 .prompts-editor-path,
 .prompts-empty-state,
 .prompts-editor-footer {
-  font-size: var(--font-size-xs);
+  font-size: 10.5px;
   color: var(--color-text-muted);
+  line-height: 1.35;
 }
 
 .prompts-tree-file-path,
@@ -139,6 +150,8 @@
   display: flex;
   flex-direction: column;
   background: var(--color-bg-primary);
+  min-width: 0;
+  min-height: 0;
 }
 
 .prompts-editor-badges {
@@ -156,9 +169,101 @@
   color: #58a6ff;
 }
 
+.skills-tree-leaf {
+  gap: 4px;
+}
+
+.skills-editor-title {
+  min-width: 0;
+}
+
+.skills-create-form {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.skills-create-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.skills-create-form input {
+  width: 150px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  padding: 7px 9px;
+  outline: none;
+}
+
+.skills-create-form input:focus {
+  border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 16%, transparent);
+}
+
+.skills-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-border);
+}
+
+.skills-meta-grid > div {
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--color-bg-secondary);
+}
+
+.skills-meta-grid span {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.skills-meta-grid strong {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .prompts-editor-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--spacing-xs);
+}
+
+.prompts-editor-mode {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.prompts-editor-mode__button {
+  padding: 4px 9px;
+  font-size: 11.5px;
 }
 
 .prompts-editor-textarea {
@@ -175,10 +280,33 @@
   line-height: 1.6;
 }
 
+.prompts-markdown-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--spacing-md);
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  font-family: var(--font-family-mono);
+  font-size: 13px;
+  line-height: 1.68;
+  letter-spacing: 0;
+}
+
+.prompts-empty-state {
+  padding: 10px 12px;
+}
+
 .prompts-editor-footer {
   display: flex;
   justify-content: space-between;
   gap: var(--spacing-sm);
   padding: var(--spacing-sm) var(--spacing-md);
   border-top: 1px solid var(--color-border);
+}
+
+@media (max-width: 860px) {
+  .skills-meta-grid {
+    grid-template-columns: 1fr;
+  }
 }

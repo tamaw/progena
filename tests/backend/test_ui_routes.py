@@ -230,6 +230,50 @@ class TestUIRoutes:
         assert response.json()["content"] == "after"
         assert prompt_path.read_text(encoding="utf-8") == "after"
 
+    def test_skills_endpoint_lists_updates_and_creates_skills(self, client, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        prompts_dir = data_dir / "prompts"
+        skills_dir = data_dir / "skills"
+        existing_skill = skills_dir / "progenitor" / "runtime-inspection" / "SKILL.md"
+        prompts_dir.mkdir(parents=True)
+        existing_skill.parent.mkdir(parents=True)
+        existing_skill.write_text(
+            "---\nname: Runtime Inspection\ndescription: Inspect runtime state.\n---\n\nUse tools.",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(data_dir))
+
+        list_response = client.get("/api/ui/skills")
+
+        assert list_response.status_code == 200
+        list_data = list_response.json()
+        assert list_data["total"] == 1
+        assert list_data["skills"][0]["path"] == "progenitor/runtime-inspection/SKILL.md"
+        assert list_data["skills"][0]["title"] == "Runtime Inspection"
+
+        update_response = client.put(
+            "/api/ui/skills/content",
+            json={"path": "progenitor/runtime-inspection/SKILL.md", "content": "after"},
+        )
+
+        assert update_response.status_code == 200
+        assert update_response.json()["content"] == "after"
+        assert existing_skill.read_text(encoding="utf-8") == "after"
+
+        create_response = client.post(
+            "/api/ui/skills",
+            json={
+                "agent": "builder_agent",
+                "name": "repo-triage",
+                "content": "---\nname: Repo Triage\n---\n\nInspect repo state.",
+            },
+        )
+
+        assert create_response.status_code == 201
+        assert create_response.json()["path"] == "builder_agent/repo-triage/SKILL.md"
+        assert (skills_dir / "builder_agent" / "repo-triage" / "SKILL.md").is_file()
+
     def test_kanban_endpoint_returns_default_board(self, client, kanban_state_reader):
         response = client.get("/api/ui/kanban")
 
