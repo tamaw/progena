@@ -14,7 +14,6 @@ Features:
 
 import asyncio
 import contextlib
-import json
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -24,6 +23,8 @@ from typing import Any, cast
 import aiofiles
 import yaml
 from pydantic import BaseModel, Field
+
+from .document_store import BACKEND_STATE_PREFIX, BackendDocumentStore, get_default_document_store
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +120,13 @@ class SessionManager:
     - Multi-user isolation
     """
 
-    def __init__(self, config: SessionConfig | None = None):
+    def __init__(
+        self,
+        config: SessionConfig | None = None,
+        document_store: BackendDocumentStore | None = None,
+    ):
         self.config = config or SessionConfig()
+        self.document_store = document_store
         self._sessions: dict[str, SessionState] = {}
         self._user_sessions: dict[str, str] = {}  # user_id -> session_id
         self._cleanup_task: asyncio.Task | None = None
@@ -132,9 +138,7 @@ class SessionManager:
 
     async def start(self) -> None:
         """Start the session manager."""
-        # Load persisted sessions
-        if self.config.persist_dir:
-            await self._load_sessions()
+        await self._load_sessions()
 
         # Start cleanup task
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -148,9 +152,7 @@ class SessionManager:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
 
-        # Persist sessions
-        if self.config.persist_dir:
-            await self._save_sessions()
+        await self._save_sessions()
 
         logger.info("Session manager stopped")
 
@@ -186,6 +188,7 @@ class SessionManager:
             if user_id:
                 self._user_sessions[user_id] = session.session_id
 
+            await self._save_sessions()
             logger.debug("Created session: %s (user=%s)", session.session_id, user_id)
             return session
 
@@ -240,6 +243,7 @@ class SessionManager:
             current.touch()
             if message_increment:
                 current.message_count = max(0, current.message_count + message_increment)
+            await self._save_sessions()
             return current
 
     async def update_preferences(
@@ -258,6 +262,7 @@ class SessionManager:
             else:
                 session.preferences.custom[key] = value
 
+        await self._save_sessions()
         return session
 
     async def delete_session(self, session_id: str) -> bool:
@@ -267,6 +272,7 @@ class SessionManager:
             if session:
                 if session.user_id and session.user_id in self._user_sessions:
                     del self._user_sessions[session.user_id]
+                await self._save_sessions()
                 logger.debug("Deleted session: %s", session_id)
                 return True
             return False
@@ -317,6 +323,7 @@ class SessionManager:
                     self._user_sessions.pop(expired_session.user_id, "")
 
             if expired:
+                await self._save_sessions()
                 logger.debug("Cleaned up %d expired sessions", len(expired))
 
             return len(expired)
@@ -333,35 +340,25 @@ class SessionManager:
                 logger.error("Session cleanup error: %s", e)
 
     async def _save_sessions(self) -> None:
-        """Persist sessions to disk."""
-        if not self.config.persist_dir:
-            return
-
-        sessions_file = self.config.persist_dir / "sessions.json"
+        """Persist sessions to the backend document store."""
         data = {
             session_id: session.model_dump(mode="json")
             for session_id, session in self._sessions.items()
         }
 
         try:
-            async with aiofiles.open(sessions_file, "w") as f:
-                await f.write(json.dumps(data, indent=2, default=str))
+            self._store().save_document(BACKEND_STATE_PREFIX, "sessions", data)
             logger.debug("Saved %d sessions", len(data))
         except Exception as e:
             logger.error("Failed to save sessions: %s", e)
 
     async def _load_sessions(self) -> None:
-        """Load persisted sessions."""
-        if not self.config.persist_dir:
-            return
-
-        sessions_file = self.config.persist_dir / "sessions.json"
-        if not sessions_file.exists():
-            return
-
+        """Load persisted sessions from the backend document store."""
         try:
-            async with aiofiles.open(sessions_file) as f:
-                data = json.loads(await f.read())
+            document = self._store().get_document(BACKEND_STATE_PREFIX, "sessions", {})
+            data = document.payload if document is not None else {}
+            if not isinstance(data, dict):
+                return
 
             loaded = 0
             for session_id, session_data in data.items():
@@ -375,10 +372,13 @@ class SessionManager:
                 except Exception as e:
                     logger.warning("Failed to load session %s: %s", session_id, e)
 
-            logger.info("Loaded %d sessions from disk", loaded)
+            logger.info("Loaded %d sessions", loaded)
 
         except Exception as e:
             logger.error("Failed to load sessions: %s", e)
+
+    def _store(self) -> BackendDocumentStore:
+        return self.document_store or get_default_document_store()
 
     def get_stats(self) -> dict[str, Any]:
         """Get session statistics."""

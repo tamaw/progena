@@ -28,6 +28,8 @@ from urllib.parse import urlparse
 import aiofiles
 from pydantic import BaseModel, Field
 
+from .document_store import BACKEND_STATE_PREFIX, BackendDocumentStore, get_default_document_store
+
 logger = logging.getLogger(__name__)
 
 # Maximum file sizes
@@ -37,14 +39,29 @@ MAX_CONTENT_TOKENS = 8192
 
 class AttachmentConfig(BaseModel):
     """Configuration for attachment handling."""
+
     max_file_size_mb: float = MAX_FILE_SIZE_MB
     max_content_tokens: int = MAX_CONTENT_TOKENS
-    allowed_extensions: list[str] = Field(default_factory=lambda: [
-        ".txt", ".md", ".json", ".yaml", ".yml", ".xml",
-        ".py", ".js", ".ts", ".html", ".css",
-        ".pdf", ".docx", ".doc",
-        ".csv", ".log",
-    ])
+    allowed_extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".txt",
+            ".md",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".xml",
+            ".py",
+            ".js",
+            ".ts",
+            ".html",
+            ".css",
+            ".pdf",
+            ".docx",
+            ".doc",
+            ".csv",
+            ".log",
+        ]
+    )
     cache_dir: Path | None = None
     extract_text_from_pdf: bool = True
     extract_text_from_docx: bool = True
@@ -52,6 +69,7 @@ class AttachmentConfig(BaseModel):
 
 class AttachmentResult(BaseModel):
     """Result of processing an attachment."""
+
     id: str = Field(default_factory=lambda: f"att_{uuid.uuid4().hex[:8]}")
     name: str
     original_filename: str
@@ -80,8 +98,13 @@ class AttachmentManager:
     - Caching of processed attachments
     """
 
-    def __init__(self, config: AttachmentConfig | None = None):
+    def __init__(
+        self,
+        config: AttachmentConfig | None = None,
+        document_store: BackendDocumentStore | None = None,
+    ):
         self.config = config or AttachmentConfig()
+        self.document_store = document_store
         self._cache: dict[str, AttachmentResult] = {}
         self._executor = ThreadPoolExecutor(max_workers=4)
 
@@ -98,12 +121,18 @@ class AttachmentManager:
         # Check extension
         ext = Path(filename).suffix.lower()
         if ext not in self.config.allowed_extensions:
-            return False, f"File type '{ext}' not allowed. Allowed: {', '.join(self.config.allowed_extensions)}"
+            return (
+                False,
+                f"File type '{ext}' not allowed. Allowed: {', '.join(self.config.allowed_extensions)}",
+            )
 
         # Check size
         max_bytes = self.config.max_file_size_mb * 1024 * 1024
         if size_bytes > max_bytes:
-            return False, f"File too large ({size_bytes / 1024 / 1024:.1f}MB). Max: {self.config.max_file_size_mb}MB"
+            return (
+                False,
+                f"File too large ({size_bytes / 1024 / 1024:.1f}MB). Max: {self.config.max_file_size_mb}MB",
+            )
 
         return True, None
 
@@ -115,6 +144,7 @@ class AttachmentManager:
         """Extract text from PDF bytes."""
         try:
             import pypdf  # pyright: ignore[reportMissingImports]
+
             reader = pypdf.PdfReader(io.BytesIO(content))
             text_parts = []
             for page in reader.pages:
@@ -133,6 +163,7 @@ class AttachmentManager:
         """Extract text from DOCX bytes."""
         try:
             import docx  # pyright: ignore[reportMissingImports]
+
             doc = docx.Document(io.BytesIO(content))
             paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
             return "\n\n".join(paragraphs)
@@ -159,7 +190,11 @@ class AttachmentManager:
             return "[PDF content]"
 
         # DOCX extraction
-        if ext in (".docx",) or mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        if (
+            ext in (".docx",)
+            or mime_type
+            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ):
             if self.config.extract_text_from_docx:
                 return self._extract_text_from_docx(content)
             return "[DOCX content]"
@@ -203,7 +238,7 @@ class AttachmentManager:
         for sep in ["\n\n", "\n", ". ", " "]:
             last_sep = truncated.rfind(sep)
             if last_sep > max_chars * 0.8:  # Keep at least 80%
-                truncated = truncated[:last_sep + len(sep)]
+                truncated = truncated[: last_sep + len(sep)]
                 break
 
         truncated += "\n\n[... content truncated ...]"
@@ -254,6 +289,11 @@ class AttachmentManager:
         if checksum in self._cache:
             logger.debug("Returning cached attachment: %s", checksum[:8])
             return self._cache[checksum]
+        stored_attachment = self._get_stored_attachment(checksum)
+        if stored_attachment is not None:
+            self._cache[checksum] = stored_attachment
+            logger.debug("Returning stored attachment: %s", checksum[:8])
+            return stored_attachment
 
         # Determine MIME type
         mime_type, _ = mimetypes.guess_type(filename)
@@ -292,10 +332,14 @@ class AttachmentManager:
 
         # Cache result
         self._cache[checksum] = result
+        self._save_cache()
 
         logger.info(
             "Processed attachment: %s (%s, %d bytes, truncated=%s)",
-            filename, mime_type, len(content), was_truncated
+            filename,
+            mime_type,
+            len(content),
+            was_truncated,
         )
 
         return result
@@ -411,19 +455,17 @@ class AttachmentManager:
         files: list[tuple[str, bytes]],
     ) -> list[AttachmentResult]:
         """Process multiple files in parallel."""
-        tasks = [
-            self.process_file(filename, content)
-            for filename, content in files
-        ]
+        tasks = [self.process_file(filename, content) for filename, content in files]
         return await asyncio.gather(*tasks)
 
     def get_cached(self, checksum: str) -> AttachmentResult | None:
         """Get cached attachment by checksum."""
-        return self._cache.get(checksum)
+        return self._cache.get(checksum) or self._get_stored_attachment(checksum)
 
     def clear_cache(self) -> None:
         """Clear the attachment cache."""
         self._cache.clear()
+        self._save_cache()
 
     def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
@@ -433,8 +475,33 @@ class AttachmentManager:
             "total_content_chars": sum(len(a.content) for a in self._cache.values()),
         }
 
+    def _store(self) -> BackendDocumentStore:
+        return self.document_store or get_default_document_store()
+
+    def _load_cache_document(self) -> dict[str, Any]:
+        document = self._store().get_document(BACKEND_STATE_PREFIX, "attachments", {})
+        payload = document.payload if document is not None else {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _get_stored_attachment(self, checksum: str) -> AttachmentResult | None:
+        raw = self._load_cache_document().get(checksum)
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return AttachmentResult.model_validate(raw)
+        except Exception as exc:
+            logger.warning("Failed to load stored attachment %s: %s", checksum[:8], exc)
+            return None
+
+    def _save_cache(self) -> None:
+        data = self._load_cache_document()
+        for checksum, attachment in self._cache.items():
+            data[checksum] = attachment.model_dump(mode="json")
+        self._store().save_document(BACKEND_STATE_PREFIX, "attachments", data)
+
 
 # FastAPI integration helpers
+
 
 def format_attachments_for_context(
     attachments: list[AttachmentResult],
@@ -461,7 +528,7 @@ def format_attachments_for_context(
             header += f" (from: {att.source_url})"
         header += f"\n*Type: {att.mime_type}, Size: {att.size_bytes:,} bytes*\n\n"
 
-        content_tokens = (att.truncated_tokens or 0)
+        content_tokens = att.truncated_tokens or 0
         if total_tokens + content_tokens > max_total_tokens:
             parts.append(f"{header}[Content omitted - token limit reached]\n\n")
             continue
