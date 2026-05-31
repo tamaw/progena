@@ -1,462 +1,246 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useApi } from '../../hooks/useApi';
-import { useWorkspaceActions, useWorkspaceMeta } from '../../context/WorkspaceContext';
+import { memo, useMemo, useState } from 'react';
 
-const typeLabels = {
-  prompt: 'Prompt',
-  code: 'Code',
-  user: 'User',
-  webframe: 'Web Frame',
-  label: 'Label',
-  schedule: 'Schedule',
-  event: 'Event',
-  group: 'Group',
-  agent: 'Agent',
-  mcp: 'MCP',
-};
+const WORKSPACE_TYPES = ['All', 'Squad', 'Flow', 'Research', 'Automation'];
+const INITIAL_WORKSPACES = [
+  {
+    id: 'workspace-release',
+    name: 'Release prep board',
+    type: 'Squad',
+    updated: '2m',
+    summary: 'Ship readiness, blockers, and rollout notes.',
+    items: 8,
+  },
+  {
+    id: 'workspace-customer-journey',
+    name: 'Customer journey map',
+    type: 'Flow',
+    updated: '18m',
+    summary: 'UI states, edge cases, and next-step branches.',
+    items: 6,
+  },
+  {
+    id: 'workspace-agent-research',
+    name: 'Agent research lab',
+    type: 'Research',
+    updated: '1h',
+    summary: 'Experiments, findings, and prompt comparisons.',
+    items: 11,
+  },
+  {
+    id: 'workspace-ops-routines',
+    name: 'Ops routines',
+    type: 'Automation',
+    updated: 'Today',
+    summary: 'Scheduled jobs, alerts, and maintenance flows.',
+    items: 5,
+  },
+];
 
-function normalizeAgentName(value) {
-  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
-function formatLabel(value) {
-  return String(value || '')
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function formatFieldValue(value) {
-  if (Array.isArray(value)) {
-    return value.length > 0 ? value.join(', ') : 'None';
-  }
-
-  if (typeof value === 'boolean') {
-    return value ? 'Yes' : 'No';
-  }
-
-  return String(value || '');
-}
-
-function buildAgentAliases(value) {
-  const normalized = normalizeAgentName(value);
-  const aliases = new Set([normalized]);
-
-  if (normalized.endsWith('copilot')) {
-    aliases.add(`${normalized.slice(0, -'copilot'.length)}agent`);
-  }
-  if (normalized.endsWith('agent')) {
-    aliases.add(`${normalized.slice(0, -'agent'.length)}copilot`);
-  }
-  if (normalized === 'progenitor') {
-    aliases.add('builderprogenitor');
-  }
-  if (normalized === 'builderprogenitor') {
-    aliases.add('progenitor');
-  }
-
-  return aliases;
-}
-
-function getPromptAgentCandidates(prompt) {
-  return [
-    prompt?.primary_agent,
-    prompt?.category,
-    ...(prompt?.associated_agents || []),
-  ];
-}
-
-function matchesPromptToAliases(prompt, aliases) {
-  const promptAliases = new Set();
-  getPromptAgentCandidates(prompt).forEach((value) => {
-    buildAgentAliases(value).forEach((alias) => promptAliases.add(alias));
-  });
-  return [...promptAliases].some((alias) => aliases.has(alias));
-}
-
-function WorkspaceSidebar({
-  collapsed,
-  onToggle,
-  disabled = false,
-  selectedNode = null,
-  width = null,
-}) {
-  const { getPrompts } = useApi();
-  const { updateNodeData, connectPromptToAgent } = useWorkspaceActions();
-  const { agentOptions, getWidgetSchema } = useWorkspaceMeta();
-  const navigate = useNavigate();
-  const [prompts, setPrompts] = useState([]);
-  const [loadingPrompts, setLoadingPrompts] = useState(false);
-  const [promptError, setPromptError] = useState(null);
-  const [collapsedSections, setCollapsedSections] = useState({});
-  const [activeModalField, setActiveModalField] = useState(null);
-  const detailsScrollRef = useRef(null);
-  const selectedNodeIdRef = useRef(selectedNode?.id || null);
-  const lastPromptRequestKeyRef = useRef(null);
-
-  const activeSchema = selectedNode ? getWidgetSchema(selectedNode.type) || null : null;
-
-  useEffect(() => {
-    const nextSelectedId = selectedNode?.id || null;
-    if (selectedNodeIdRef.current !== nextSelectedId) {
-      selectedNodeIdRef.current = nextSelectedId;
-      if (detailsScrollRef.current) {
-        detailsScrollRef.current.scrollTop = 0;
-      }
-    }
-  }, [selectedNode?.id, selectedNode?.type]);
-
-  useEffect(() => {
-    setActiveModalField(null);
-  }, [selectedNode?.id]);
-
-  useEffect(() => {
-    if (!activeModalField) {
-      return undefined;
-    }
-
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setActiveModalField(null);
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeModalField]);
-
-  useEffect(() => {
-    if (!activeSchema) {
-      setCollapsedSections({});
-      return;
-    }
-
-    setCollapsedSections(
-      Object.fromEntries(
-        (activeSchema.sections || []).map((section) => [section.id, section.default_expanded === false])
-      )
-    );
-  }, [activeSchema, selectedNode?.id, selectedNode?.type]);
-
-  const selectedNodeType = selectedNode?.type || null;
-  const selectedNodeId = selectedNode?.id || null;
-  const selectedNodeAgentId = selectedNode?.data?.agentId || '';
-  const selectedNodeTitleValue = selectedNode?.data?.title || '';
-
-  const promptLookupNames = useMemo(() => {
-    if (selectedNodeType !== 'agent') {
-      return [];
-    }
-
-    const aliases = new Set();
-    [selectedNodeAgentId, selectedNodeTitleValue].forEach((value) => {
-      buildAgentAliases(value).forEach((alias) => aliases.add(alias));
-    });
-    return [...aliases].filter(Boolean);
-  }, [
-    selectedNodeAgentId,
-    selectedNodeTitleValue,
-    selectedNodeType,
-  ]);
-
-  const promptLookupKey = useMemo(
-    () => promptLookupNames.join('|'),
-    [promptLookupNames]
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+      <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M11 11l3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
   );
+}
 
-  useEffect(() => {
-    let active = true;
-    const requestKey = `${selectedNodeId || 'none'}::${selectedNodeType || 'none'}::${promptLookupKey}`;
-    const lookupNames = promptLookupKey ? promptLookupKey.split('|').filter(Boolean) : [];
+function WorkspaceSidebar({ collapsed, onToggle, width = null }) {
+  const [workspaces, setWorkspaces] = useState(INITIAL_WORKSPACES);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(INITIAL_WORKSPACES[0]?.id || null);
+  const [activeType, setActiveType] = useState('All');
+  const [query, setQuery] = useState('');
+  const [editingWorkspaceId, setEditingWorkspaceId] = useState(null);
+  const [draftName, setDraftName] = useState('');
 
-    async function loadPrompts() {
-      if (!selectedNodeId || selectedNodeType !== 'agent' || lookupNames.length === 0) {
-        lastPromptRequestKeyRef.current = null;
-        setPrompts([]);
-        setPromptError(null);
-        setLoadingPrompts(false);
-        return;
-      }
+  const filteredWorkspaces = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return workspaces.filter((workspace) => {
+      const matchesType = activeType === 'All' || workspace.type === activeType;
+      const matchesQuery = !normalizedQuery || `${workspace.name} ${workspace.summary}`.toLowerCase().includes(normalizedQuery);
+      return matchesType && matchesQuery;
+    });
+  }, [activeType, query, workspaces]);
 
-      if (lastPromptRequestKeyRef.current === requestKey) {
-        return;
-      }
+  const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId) || workspaces[0] || null;
 
-      lastPromptRequestKeyRef.current = requestKey;
-
-      setLoadingPrompts(true);
-      setPromptError(null);
-
-      try {
-        const response = await getPrompts();
-        if (!active) {
-          return;
-        }
-
-        const lookupAliases = new Set(lookupNames);
-        const allPrompts = response.prompts || [];
-        const matchedPrompts = allPrompts.filter((prompt) => matchesPromptToAliases(prompt, lookupAliases));
-        setPrompts(matchedPrompts);
-      } catch (error) {
-        if (active) {
-          lastPromptRequestKeyRef.current = null;
-          setPromptError(error);
-        }
-      } finally {
-        if (active) {
-          setLoadingPrompts(false);
-        }
-      }
-    }
-
-    loadPrompts();
-    return () => {
-      active = false;
-    };
-  }, [getPrompts, promptLookupKey, selectedNodeId, selectedNodeType]);
-
-  const onFieldChange = (fieldKey, nextValue) => {
-    if (!selectedNode) {
+  const startEditing = (workspace) => {
+    if (!workspace) {
       return;
     }
-
-    if (fieldKey === 'targetAgent') {
-      connectPromptToAgent(selectedNode.id, nextValue);
-      return;
-    }
-
-    updateNodeData(selectedNode.id, { [fieldKey]: nextValue });
+    setSelectedWorkspaceId(workspace.id);
+    setEditingWorkspaceId(workspace.id);
+    setDraftName(workspace.name);
   };
 
-  const selectedNodeTitle = formatLabel(selectedNode?.data?.title || selectedNode?.id || 'Untitled');
-  const isCompactField = (field) => field.control === 'textarea';
-
-  const renderFieldControl = (field) => {
-    const disabledField = disabled || !field.editable;
-
-    if (!field.editable) {
-      const value = selectedNode?.data?.[field.key];
-      return <div className="sidebar-property-value readonly">{formatFieldValue(value)}</div>;
+  const commitName = () => {
+    if (!editingWorkspaceId) {
+      return;
     }
 
-    if (field.control === 'textarea') {
-      return (
-        <div className="sidebar-modal-field compact">
-          <button
-            className="sidebar-property-modal-trigger"
-            type="button"
-            onClick={() => setActiveModalField(field)}
-            disabled={disabledField}
-          >
-            Edit
-          </button>
-        </div>
-      );
+    const trimmedName = draftName.trim();
+    if (trimmedName) {
+      setWorkspaces((current) => current.map((workspace) => (
+        workspace.id === editingWorkspaceId
+          ? { ...workspace, name: trimmedName }
+          : workspace
+      )));
     }
 
-    const value = selectedNode?.data?.[field.key];
+    setEditingWorkspaceId(null);
+    setDraftName('');
+  };
 
-    if (field.control === 'boolean') {
-      return (
-        <label className="sidebar-checkbox">
-          <input
-            type="checkbox"
-            checked={Boolean(value)}
-            onChange={(event) => onFieldChange(field.key, event.target.checked)}
-            disabled={disabledField}
-          />
-          <span>{value ? 'Enabled' : 'Disabled'}</span>
-        </label>
-      );
-    }
+  const createWorkspace = () => {
+    const preferredType = activeType === 'All' ? 'Squad' : activeType;
+    const id = `workspace-${Date.now()}`;
+    const nextWorkspace = {
+      id,
+      name: 'Untitled workspace',
+      type: preferredType,
+      updated: 'now',
+      summary: 'New canvas ready for notes, widgets, and layout experiments.',
+      items: 0,
+    };
 
-    if (field.control === 'select') {
-      const options = field.option_source === 'agents'
-        ? agentOptions.map((option) => ({ value: option, label: formatLabel(option) || option }))
-        : field.options || [];
-
-      return (
-        <select
-          className="sidebar-property-input"
-          value={value || ''}
-          onChange={(event) => onFieldChange(field.key, event.target.value)}
-          disabled={disabledField}
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    return (
-      <input
-        className="sidebar-property-input"
-        value={value || ''}
-        onChange={(event) => onFieldChange(field.key, event.target.value)}
-        disabled={disabledField}
-      />
-    );
+    setWorkspaces((current) => [nextWorkspace, ...current]);
+    setSelectedWorkspaceId(id);
+    setEditingWorkspaceId(id);
+    setDraftName(nextWorkspace.name);
   };
 
   return (
-    <>
-      <aside
-        className={`workspace-sidebar ${collapsed ? 'collapsed' : ''}`}
-        style={!collapsed && width ? { width: `${width}px`, minWidth: `${width}px` } : undefined}
-      >
-        <div className="sidebar-header">
-          <h3>Details</h3>
+    <aside
+      className={`workspace-sidebar sess-list ${collapsed ? 'collapsed' : ''}`}
+      style={!collapsed && width ? { width: `${width}px`, minWidth: `${width}px` } : undefined}
+    >
+      <div className="chat-sessions-pane__head sess-list__head">
+        <div className="chat-sessions-pane__title sess-list__title">Workspaces <span className="muted">{workspaces.length}</span></div>
+        <button
+          className="chat-pane-action new-task"
+          onClick={collapsed ? onToggle : createWorkspace}
+          title={collapsed ? 'Expand sidebar' : 'Create workspace'}
+          type="button"
+        >
+          {collapsed ? 'Open' : '+ New'}
+        </button>
+      </div>
+
+      {!collapsed ? (
+        <>
+          <div className="chat-pane-tabs sess-list__filters workspace-sidebar__filters">
+            {WORKSPACE_TYPES.map((type) => (
+              <button
+                key={type}
+                type="button"
+                className={`chat-pane-tab sess-filter ${activeType === type ? 'is-active' : ''}`}
+                onClick={() => setActiveType(type)}
+              >
+                {type}
+              </button>
+            ))}
+          </div>
+
+          <div className="sess-list__tools">
+            <label className="sess-search">
+              <SearchIcon />
+              <input
+                value={query}
+                type="text"
+                placeholder="Search workspaces"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="sess-sort"
+              onClick={() => startEditing(selectedWorkspace)}
+              disabled={!selectedWorkspace}
+            >
+              Rename
+            </button>
+          </div>
+
+          <div className="workspace-sidebar__scroll sess-list__scroll">
+            <div className="sess-group">
+              <div className="chat-pane-group__head sess-group__head">Workspace selector <span className="muted">· {filteredWorkspaces.length}</span></div>
+              {filteredWorkspaces.length ? filteredWorkspaces.map((workspace) => {
+                const isSelected = workspace.id === selectedWorkspaceId;
+                const isEditing = workspace.id === editingWorkspaceId;
+
+                return (
+                  <div
+                    key={workspace.id}
+                    className={`workspace-selector-row ${isSelected ? 'is-selected' : ''}`}
+                  >
+                    {isEditing ? (
+                      <div className="workspace-selector-row__edit">
+                        <input
+                          value={draftName}
+                          className="workspace-selector-row__input"
+                          onChange={(event) => setDraftName(event.target.value)}
+                          onBlur={commitName}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              commitName();
+                            } else if (event.key === 'Escape') {
+                              setEditingWorkspaceId(null);
+                              setDraftName('');
+                            }
+                          }}
+                          autoFocus
+                        />
+                        <div className="workspace-selector-row__meta pane-row-caption">
+                          <span className="pane-row-caption">{workspace.type}</span>
+                          <span className="pane-row-caption">{workspace.updated}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="workspace-selector-row__button"
+                        onClick={() => setSelectedWorkspaceId(workspace.id)}
+                        onDoubleClick={() => startEditing(workspace)}
+                      >
+                        <span className="workspace-selector-row__top">
+                          <span className="workspace-selector-row__type pane-row-caption">{workspace.type}</span>
+                          <span className="workspace-selector-row__updated pane-row-caption">{workspace.updated}</span>
+                        </span>
+                        <span className="workspace-selector-row__title pane-row-title">{workspace.name}</span>
+                        <span className="workspace-selector-row__bottom">
+                          <span className="workspace-selector-row__summary pane-row-caption">{workspace.summary}</span>
+                          <span className="workspace-selector-row__foot pane-row-caption">
+                            <span className="num">{workspace.items}</span> items
+                          </span>
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                );
+              }) : (
+                <div className="empty-state small">No workspaces match the current search.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="workspace-sidebar__footer sess-list__foot">
+            <span>{selectedWorkspace ? selectedWorkspace.type : 'No workspace'}</span>
+            <span>{selectedWorkspace ? selectedWorkspace.name : 'Create one'}</span>
+          </div>
+        </>
+      ) : (
+        <div className="workspace-sidebar__collapsed">
           <button
-            className="sidebar-toggle"
+          className="chat-pane-action new-task"
             onClick={onToggle}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title="Expand sidebar"
             type="button"
           >
-            {collapsed ? '\u25B6' : '\u25C0'}
+            Open
           </button>
         </div>
-
-        {!selectedNode ? (
-          <div className="sidebar-details sidebar-details-empty">
-            <div className="sidebar-details-section">
-              <div className="sidebar-details-title">No Selection</div>
-              <div className="sidebar-details-text">
-                Click a node to inspect and edit its properties. Drag new elements in from the dock at the bottom.
-              </div>
-            </div>
-          </div>
-        ) : (
-            <div
-              ref={detailsScrollRef}
-              className="sidebar-details"
-            >
-            <div className="sidebar-selection-summary">
-              <h2 className="sidebar-selection-title" title={selectedNodeTitle}>{selectedNodeTitle}</h2>
-              <span className="sidebar-selection-type">{typeLabels[selectedNode.type] || selectedNode.type}</span>
-            </div>
-            {(activeSchema?.sections || []).map((section) => {
-              const isCollapsed = collapsedSections[section.id] ?? false;
-
-              return (
-                <div key={section.id} className="sidebar-details-section sidebar-card">
-                  <button
-                    className="sidebar-section-toggle"
-                    type="button"
-                    onClick={() => setCollapsedSections((current) => ({ ...current, [section.id]: !isCollapsed }))}
-                  >
-                    <span className="sidebar-section-label">{section.label}</span>
-                    <span>{isCollapsed ? '\u25BC' : '\u25B2'}</span>
-                  </button>
-
-                  {!isCollapsed && (
-                    <div className="sidebar-properties">
-                      {section.fields.map((field) => (
-                        <div
-                          key={field.key}
-                          className={`sidebar-property-row ${isCompactField(field) ? 'compact' : ''}`}
-                        >
-                          <span className="sidebar-property-label">{field.label}</span>
-                          {renderFieldControl(field)}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {!!selectedNode.data?.summaryState && (
-              <div className="sidebar-details-section sidebar-card">
-                <button
-                  className="sidebar-section-toggle"
-                  type="button"
-                  onClick={() => setCollapsedSections((current) => ({ ...current, output: !current.output }))}
-                >
-                  <span className="sidebar-section-label">Latest Output</span>
-                  <span>{collapsedSections.output ? '\u25BC' : '\u25B2'}</span>
-                </button>
-                {!collapsedSections.output && (
-                  <div className="sidebar-details-text">{selectedNode.data.summaryState}</div>
-                )}
-              </div>
-            )}
-
-            {selectedNode.type === 'agent' && (
-              <div className="sidebar-details-section sidebar-card">
-                <button
-                  className="sidebar-section-toggle"
-                  type="button"
-                  onClick={() => setCollapsedSections((current) => ({ ...current, prompts: !current.prompts }))}
-                >
-                  <span className="sidebar-section-label">Related Prompts</span>
-                  <span>{collapsedSections.prompts ? '\u25BC' : '\u25B2'}</span>
-                </button>
-
-                {!collapsedSections.prompts && (
-                  <>
-                    {loadingPrompts && <div className="prompt-library-empty">Loading prompts...</div>}
-                    {promptError && !loadingPrompts && <div className="prompt-library-empty">Failed to load prompts.</div>}
-                    {!loadingPrompts && !promptError && prompts.length === 0 && (
-                      <div className="prompt-library-empty">No prompts found.</div>
-                    )}
-                    {!loadingPrompts && !promptError && prompts.length > 0 && (
-                      <div className="prompt-library-list">
-                        {prompts.map((prompt) => (
-                          <button
-                            key={prompt.path}
-                            className="prompt-library-list-item"
-                            disabled={disabled}
-                            onClick={() => navigate(`/prompts?path=${encodeURIComponent(prompt.path)}`)}
-                            type="button"
-                            title={prompt.path}
-                          >
-                            <span className="prompt-library-list-name">{prompt.filename}</span>
-                            <span className="prompt-library-list-action">Edit</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </aside>
-
-      {activeModalField && selectedNode && !collapsed && (
-        <div className="sidebar-modal-backdrop" onClick={() => setActiveModalField(null)} role="presentation">
-          <div className="sidebar-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
-            <div className="sidebar-modal-header">
-              <div>
-                <div className="sidebar-details-title">{activeModalField.label}</div>
-                <div className="sidebar-modal-title">{selectedNodeTitle}</div>
-              </div>
-              <button
-                className="sidebar-toggle"
-                type="button"
-                onClick={() => setActiveModalField(null)}
-                aria-label="Close content editor"
-              >
-                ×
-              </button>
-            </div>
-            <textarea
-              className="sidebar-modal-textarea"
-              value={selectedNode.data?.[activeModalField.key] || ''}
-              onChange={(event) => onFieldChange(activeModalField.key, event.target.value)}
-              disabled={disabled}
-              spellCheck={false}
-              autoFocus
-            />
-          </div>
-        </div>
       )}
-    </>
+    </aside>
   );
 }
 

@@ -50,6 +50,7 @@ from .alerts import (
     create_alert as store_alert,
 )
 from .prompt_service import PromptService
+from .skill_service import SkillService
 from .state_reader import StateReader, get_state_reader
 from .threads import (
     ThreadsResponse,
@@ -303,10 +304,48 @@ class PromptsResponse(BaseModel):
     total: int
 
 
+class SkillFileResponse(BaseModel):
+    """Workspace skill metadata."""
+
+    path: str
+    filename: str
+    directory: str
+    agent: str
+    name: str
+    title: str
+    description: str
+    size_bytes: int
+    updated_at: float
+    preview: str
+    content: str
+
+
+class SkillsResponse(BaseModel):
+    """Response containing discovered skills."""
+
+    skills: list[SkillFileResponse]
+    total: int
+
+
 class PromptUpdateRequest(BaseModel):
     """Prompt update payload."""
 
     path: str
+    content: str
+
+
+class SkillUpdateRequest(BaseModel):
+    """Skill update payload."""
+
+    path: str
+    content: str
+
+
+class SkillCreateRequest(BaseModel):
+    """Skill creation payload."""
+
+    agent: str
+    name: str
     content: str
 
 
@@ -3122,6 +3161,60 @@ async def update_prompt_content(request: PromptUpdateRequest):
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Prompt '{request.path}' not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/skills", response_model=SkillsResponse)
+async def get_skills(agent: str | None = None):
+    """Get available DeepAgent skills from the mounted skills directory."""
+    try:
+        skills = [
+            SkillFileResponse.model_validate(skill, from_attributes=True)
+            for skill in SkillService().list_skills(agent=agent)
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SkillsResponse(skills=skills, total=len(skills))
+
+
+@router.get("/skills/content", response_model=SkillFileResponse)
+async def get_skill_content(path: str = Query(..., min_length=1)):
+    """Get a single skill file from the mounted skills directory."""
+    try:
+        return SkillFileResponse.model_validate(
+            SkillService().get_skill(path), from_attributes=True
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Skill '{path}' not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/skills/content", response_model=SkillFileResponse)
+async def update_skill_content(request: SkillUpdateRequest):
+    """Persist edits to an existing skill file."""
+    try:
+        return SkillFileResponse.model_validate(
+            SkillService().save_skill(request.path, request.content),
+            from_attributes=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Skill '{request.path}' not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/skills", response_model=SkillFileResponse, status_code=201)
+async def create_skill(request: SkillCreateRequest):
+    """Create a new DeepAgent skill file."""
+    try:
+        return SkillFileResponse.model_validate(
+            SkillService().create_skill(request.agent, request.name, request.content),
+            from_attributes=True,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=f"Skill '{exc}' already exists") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

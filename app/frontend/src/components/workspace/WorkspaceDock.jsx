@@ -1,16 +1,5 @@
 import { memo } from 'react';
-
-const dockItems = [
-  { type: 'prompt', name: 'Prompt', icon: 'P' },
-  { type: 'code', name: 'Code', icon: '<>' },
-  { type: 'user', name: 'User', icon: 'U' },
-  { type: 'webframe', name: 'Web', icon: 'W' },
-  { type: 'label', name: 'Label', icon: 'T' },
-  { type: 'schedule', name: 'Schedule', icon: 'S' },
-  { type: 'event', name: 'Event', icon: 'E' },
-  { type: 'group', name: 'Group', icon: 'G' },
-  { type: 'agent', name: 'Agent', icon: 'A' },
-];
+import { workspaceInsertItems } from './workspaceInsertItems';
 
 function WorkspaceDock({ disabled = false }) {
   const onDragStart = (event, nodeType) => {
@@ -26,7 +15,7 @@ function WorkspaceDock({ disabled = false }) {
   return (
     <div className={`workspace-dock ${disabled ? 'disabled' : ''}`}>
       <div className="workspace-dock-shell">
-        {dockItems.map((item) => (
+        {workspaceInsertItems.map((item) => (
           <div
             key={item.type}
             className={`workspace-dock-item ${disabled ? 'disabled' : ''}`}

@@ -1,4 +1,5 @@
 import { Fragment, useMemo } from 'react';
+import { renderMarkdownToHtml } from '../../lib/markdown';
 
 function isReasoningEvent(event) {
   return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
@@ -8,11 +9,43 @@ function hasReasoningContent(event) {
   return typeof event?.content === 'string' && event.content.trim().length > 0;
 }
 
+function isTimelineStreamEvent(event) {
+  return event?.eventType !== 'message_delta';
+}
+
+function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCount, messageId) {
+  const timelineEvents = streamEvents.filter(isTimelineStreamEvent);
+  const hasReasoningEntry = timelineEvents.some((event) =>
+    isReasoningEvent(event) && hasReasoningContent(event)
+  );
+  const fallbackReasoningText = typeof reasoningText === 'string' ? reasoningText.trim() : '';
+
+  if (hasReasoningEntry || !fallbackReasoningText) {
+    return timelineEvents;
+  }
+
+  return [
+    {
+      id: `${messageId}-reasoning`,
+      eventType: 'reasoning_summary',
+      content: reasoningText,
+      metadata: {
+        source: 'message_reasoning',
+        ...(Number.isFinite(reasoningTokenCount) && reasoningTokenCount > 0
+          ? { reasoning_tokens: reasoningTokenCount }
+          : {}),
+      },
+    },
+    ...timelineEvents,
+  ];
+}
+
 function Message({ message, streamEventFilter }) {
   const {
     role,
     content,
     timestamp,
+    id: messageId = `message-${timestamp || 'unknown'}`,
     isStreaming,
     error,
     isScheduled,
@@ -23,19 +56,20 @@ function Message({ message, streamEventFilter }) {
   } = message;
 
   const visibleStreamEvents = useMemo(() => {
-    if (typeof streamEventFilter !== 'function') return streamEvents;
-    return streamEvents.filter(streamEventFilter);
-  }, [streamEvents, streamEventFilter]);
+    const timelineEvents = buildTimelineStreamEvents(
+      streamEvents,
+      reasoningText,
+      reasoningTokenCount,
+      messageId,
+    );
+    if (typeof streamEventFilter !== 'function') return timelineEvents;
+    return timelineEvents.filter(streamEventFilter);
+  }, [messageId, reasoningText, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
     return formatMessage(content);
   }, [content]);
-
-  const formattedReasoningText = useMemo(() => {
-    if (!reasoningText) return '';
-    return formatMessage(reasoningText);
-  }, [reasoningText]);
 
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
@@ -63,85 +97,125 @@ function Message({ message, streamEventFilter }) {
     return `${count} reasoning token${reasoningTokenCount === 1 ? '' : 's'}`;
   }, [isStreaming, reasoningTokenCount, role]);
 
-  const metaItems = [formattedTime, formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
-  const hasMessageMeta = metaItems.length > 0;
-  const hasVisibleReasoningEvent = visibleStreamEvents.some(
-    (event) => isReasoningEvent(event) && hasReasoningContent(event),
-  );
-  const shouldShowReasoningText = role === 'assistant'
-    && reasoningText.trim().length > 0
-    && (isStreaming || !hasVisibleReasoningEvent);
+  const tokenMetaItems = [formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
+  const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
+  const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
-  return (
-    <div className={`message-wrapper ${role}`}>
-      <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
-        {isScheduled && (
-          <div className="scheduled-badge">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-            Scheduled
-          </div>
-        )}
-        {role === 'assistant' && visibleStreamEvents.length > 0 && (
-          <StreamEvents events={visibleStreamEvents} />
-        )}
-        {shouldShowReasoningText && (
-          <div
-            className="message-reasoning-text"
-            dangerouslySetInnerHTML={{ __html: formattedReasoningText }}
-          />
-        )}
-        <div
-          className="message-content"
-          dangerouslySetInnerHTML={{ __html: formattedContent }}
-        />
-        {hasMessageMeta && (
-          <div className="message-meta">
-            {metaItems.map((item, index) => (
+  const messageEntry = (
+    <article className={`message-wrapper ${role} msg msg--${role} entry entry--${role === 'assistant' ? 'assistant' : 'user'} ${entryStateClass}`}>
+      <div className="entry__gutter" aria-hidden="true">
+        <span className={`entry__badge entry__badge--${role === 'assistant' ? 'assistant' : 'user'}`}>
+          {role === 'assistant' ? 'P' : 'U'}
+        </span>
+      </div>
+      <div className="entry__main msg__entry-main">
+        <div className="msg__head entry__head">
+          {role === 'assistant' ? (
+            <>
+              <span className="entry__tag">assistant</span>
+              <span className="msg__role">Progenitor</span>
+            </>
+          ) : (
+            <>
+              <span className="entry__tag entry__tag--in">user</span>
+              <span className="msg__role">You</span>
+            </>
+          )}
+          {isScheduled && (
+            <span className="scheduled-badge muted">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              Scheduled
+            </span>
+          )}
+          <span className="msg__head-trailing">
+            {tokenMetaItems.map((item, index) => (
               <Fragment key={`${item}-${index}`}>
-                {index > 0 && <span className="message-meta-separator" aria-hidden="true" />}
-                <span className={index === 0 ? 'message-timestamp' : 'message-token-count'}>
-                  {item}
-                </span>
+                {index > 0 && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
+                <span className="msg__stat message-token-count">{item}</span>
               </Fragment>
             ))}
-          </div>
-        )}
+            <MessageActions role={role} content={content} />
+            {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
+          </span>
+        </div>
+        <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
+          <div
+            className="message-content"
+            dangerouslySetInnerHTML={{ __html: formattedContent }}
+          />
+        </div>
       </div>
-      <MessageActions role={role} content={content} />
-    </div>
+    </article>
+  );
+
+  if (role === 'assistant') {
+    return (
+      <div className={`chat-entry-chain ${hasConnectedEvents ? 'chat-entry-chain--connected' : 'chat-entry-chain--single'}`}>
+        {hasConnectedEvents && <StreamEvents events={visibleStreamEvents} />}
+        {messageEntry}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {messageEntry}
+    </>
   );
 }
 
 function StreamEvents({ events }) {
   return (
-    <div className="message-stream-events">
+    <>
       {events.map((event) => {
         const description = describeStreamEvent(event);
+        const badge = badgeForEvent(event.eventType || 'stream_event');
+        const tool = toolDetailsForEvent(event, description);
         return (
-          <div
+          <article
             key={event.id}
-            className={`message-stream-event ${event.eventType || 'stream_event'}`}
+            className={`message-stream-event chat-event-entry entry entry--chain-item ${event.eventType || 'stream_event'}`}
+            role="listitem"
           >
-            <div className="message-stream-event-header">
-              <span className="message-stream-event-badge">{description.badge}</span>
-              <span className="message-stream-event-title">{description.title}</span>
+            <div className="entry__gutter" aria-hidden="true">
+              <span className={badge.className}>{badge.label}</span>
             </div>
-            {description.bodyHtml && (
-              <div
-                className="message-stream-event-body"
-                dangerouslySetInnerHTML={{ __html: description.bodyHtml }}
-              />
-            )}
-            {description.detail && (
-              <div className="message-stream-event-detail">{description.detail}</div>
-            )}
-          </div>
+            <div className="entry__main">
+              <div className="message-stream-event-header entry__head">
+                <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
+                <span className="entry__role">{description.title}</span>
+                {description.detail && !tool && <span className="muted">{description.detail}</span>}
+              </div>
+              {description.bodyHtml && (
+                <div
+                  className="message-stream-event-body entry__content"
+                  dangerouslySetInnerHTML={{ __html: description.bodyHtml }}
+                />
+              )}
+              {description.detail && !tool && !description.bodyHtml && (
+                <div className="message-stream-event-detail entry__content">{description.detail}</div>
+              )}
+              {tool && (
+                <div className="tool chat-event-tool">
+                  <div className="tool__head">
+                    <span className="tool__kind">{tool.kind}</span>
+                    <span className="tool__desc">{tool.desc}</span>
+                    <span className={`tool__status ${tool.statusTone === 'err' ? 'tool__status--err' : 'tool__status--ok'}`}>
+                      {tool.status}
+                    </span>
+                  </div>
+                  {tool.command && <div className="tool__cmd"><span className="prompt">$</span>{tool.command}</div>}
+                  {tool.body && <pre className="tool__body tool__body--out">{tool.body}</pre>}
+                </div>
+              )}
+            </div>
+          </article>
         );
       })}
-    </div>
+    </>
   );
 }
 
@@ -155,25 +229,23 @@ function MessageActions({ role, content }) {
   };
 
   return (
-    <div className="message-actions">
-      <button className="msg-action-btn copy-btn" onClick={handleCopy}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    <span className="message-actions msg__actions">
+      <button className="msg-action-btn copy-btn" onClick={handleCopy} title="Copy" aria-label="Copy message">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+          <rect x="4" y="4" width="9" height="9" rx="1.5"></rect>
+          <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"></path>
         </svg>
-        Copy
+        <span>Copy</span>
       </button>
       {role === 'assistant' && (
-        <button className="msg-action-btn regen-btn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="1 4 1 10 7 10"></polyline>
-            <polyline points="23 20 23 14 17 14"></polyline>
-            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
+        <button className="msg-action-btn regen-btn" title="Regenerate" aria-label="Regenerate response">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98M13.5 2.5v3h-3"></path>
           </svg>
-          Regenerate
+          <span>Regenerate</span>
         </button>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -241,17 +313,6 @@ function describeStreamEvent(event) {
       badge: 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
       detail: parts.join(' • ') || 'error',
-    };
-  }
-
-  if (eventType === 'message_delta') {
-    const text = typeof event?.content === 'string' ? event.content : '';
-    return {
-      badge: 'Token',
-      title: text || '·',
-      detail: typeof metadata.text_length === 'number'
-        ? `${metadata.text_length} chars`
-        : '',
     };
   }
 
@@ -340,6 +401,57 @@ function badgeForEventType(eventType) {
   return 'Event';
 }
 
+function badgeForEvent(eventType) {
+  if (eventType === 'tool_error') {
+    return { className: 'entry__badge entry__badge--err', label: '!' };
+  }
+  if (eventType.includes('tool')) {
+    return { className: 'entry__badge entry__badge--tool', label: '⌘' };
+  }
+  if (eventType.includes('reasoning')) {
+    return { className: 'entry__badge chat-event-badge--reason', label: '?' };
+  }
+  if (eventType.includes('node') || eventType.includes('agent')) {
+    return { className: 'entry__badge chat-event-badge--step', label: '◇' };
+  }
+  return { className: 'entry__badge entry__badge--tool', label: '•' };
+}
+
+function tagClassForEventType(eventType) {
+  if (eventType === 'tool_error') {
+    return 'entry__tag entry__tag--err';
+  }
+  if (eventType.includes('reasoning')) {
+    return 'entry__tag chat-event-tag--reason';
+  }
+  if (eventType.includes('node') || eventType.includes('agent')) {
+    return 'entry__tag entry__tag--in';
+  }
+  return 'entry__tag';
+}
+
+function toolDetailsForEvent(event, description) {
+  const eventType = typeof event?.eventType === 'string' ? event.eventType : '';
+  if (!eventType.includes('tool')) return null;
+
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
+  const args = formatArgsPreview(metadata.args_preview);
+  const isError = eventType === 'tool_error';
+  const result = typeof metadata.result_preview === 'string' ? metadata.result_preview : '';
+  const error = typeof metadata.error === 'string' ? metadata.error : '';
+  const duration = typeof metadata.duration_ms === 'number' ? formatDuration(metadata.duration_ms) : '';
+
+  return {
+    kind: toolName,
+    desc: description.title.replace(/^[→✓✗]\s*/, ''),
+    status: isError ? 'error' : eventType === 'tool_result' ? 'complete' : 'running',
+    statusTone: isError ? 'err' : 'ok',
+    command: args,
+    body: [duration, error || result].filter(Boolean).join('\n'),
+  };
+}
+
 function prettifyLabel(value) {
   return value
     .split(/[_-]/g)
@@ -349,146 +461,9 @@ function prettifyLabel(value) {
 }
 
 function formatMessage(content) {
-  if (!content) return '';
-
-  let formatted = escapeHtml(content);
-
-  // Code blocks with syntax highlighting
-  formatted = formatted.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    const langClass = lang ? ` language-${lang}` : '';
-    const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
-    return `<div class="code-block">${langLabel}<pre><code class="${langClass}">${code.trim()}</code></pre></div>`;
-  });
-
-  // Inline code
-  formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-
-  // Headers
-  formatted = formatted.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, text) => {
-    const level = hashes.length;
-    return `<h${level} class="md-heading">${text}</h${level}>`;
-  });
-
-  // Bold
-  formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  formatted = formatted.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-
-  // Italic
-  formatted = formatted.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  formatted = formatted.replace(/_([^_]+)_/g, '<em>$1</em>');
-
-  // Strikethrough
-  formatted = formatted.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-
-  // Links
-  formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-
-  // Horizontal rules
-  formatted = formatted.replace(/^---$/gm, '<hr class="md-hr">');
-  formatted = formatted.replace(/^\*\*\*$/gm, '<hr class="md-hr">');
-
-  // Blockquotes
-  formatted = formatted.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
-  formatted = formatted.replace(/<\/blockquote>\s*<blockquote>/g, '<br>');
-
-  // Unordered lists
-  formatted = formatted.replace(/^[-*+]\s+(.+)$/gm, '<li class="md-li">$1</li>');
-
-  // Ordered lists
-  formatted = formatted.replace(/^\d+\.\s+(.+)$/gm, '<li class="md-li-ordered">$1</li>');
-
-  // Task lists
-  formatted = formatted.replace(/\[ \]\s+(.+)/g, '<span class="task-item">☐ $1</span>');
-  formatted = formatted.replace(/\[x\]\s+(.+)/gi, '<span class="task-item completed">☑ $1</span>');
-
-  // Line breaks
-  formatted = formatted.replace(/\n\n/g, '</p><p>');
-  formatted = formatted.replace(/\n/g, '<br>');
-
-  if (!formatted.startsWith('<') || formatted.startsWith('<br>')) {
-    formatted = `<p>${formatted}</p>`;
-  }
-
-  return normalizeListMarkup(formatted);
+  return renderMarkdownToHtml(content);
 }
 
-function normalizeListMarkup(html) {
-  const container = document.createElement('div');
-  container.innerHTML = html;
-
-  if (!container.querySelector('li.md-li, li.md-li-ordered')) {
-    return html;
-  }
-
-  const children = Array.from(container.childNodes);
-  const fragment = document.createDocumentFragment();
-  let activeList = null;
-  let mutated = false;
-
-  const isListItem = (node) =>
-    node instanceof HTMLElement
-    && (node.matches('li.md-li') || node.matches('li.md-li-ordered'));
-
-  const isBreak = (node) =>
-    node instanceof HTMLElement && node.tagName === 'BR';
-
-  const trimTrailingBreaks = (node) => {
-    while (isBreak(node.lastChild)) {
-      node.lastChild.remove();
-      mutated = true;
-    }
-  };
-
-  children.forEach((node, index) => {
-    const previous = children[index - 1];
-    const next = children[index + 1];
-
-    if (node instanceof HTMLParagraphElement) {
-      trimTrailingBreaks(node);
-      if (!node.textContent?.trim() && (isListItem(previous) || isListItem(next))) {
-        mutated = true;
-        return;
-      }
-
-      activeList = null;
-      fragment.appendChild(node);
-      return;
-    }
-
-    if (isListItem(node)) {
-      const tagName = node.matches('li.md-li-ordered') ? 'ol' : 'ul';
-      if (!activeList || activeList.tagName.toLowerCase() !== tagName) {
-        activeList = document.createElement(tagName);
-        activeList.className = tagName === 'ol' ? 'md-ol' : 'md-ul';
-        fragment.appendChild(activeList);
-      }
-
-      activeList.appendChild(node);
-      mutated = true;
-      return;
-    }
-
-    if (isBreak(node) && (isListItem(previous) || isListItem(next))) {
-      mutated = true;
-      return;
-    }
-
-    activeList = null;
-    fragment.appendChild(node);
-  });
-
-  if (mutated) {
-    container.replaceChildren(fragment);
-  }
-
-  return container.innerHTML;
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
+export { Message };
 
 export default Message;

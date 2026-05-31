@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import Header from '../components/layout/Header';
 import { useApi } from '../hooks/useApi';
+import { renderMarkdownToHtml } from '../lib/markdown';
 
 function buildPromptTree(prompts) {
   const groups = {};
@@ -62,23 +62,26 @@ function PromptTreeBranch({
   branchKey,
   node,
   depth = 0,
+  hideLabel = false,
   selectedPath,
   expandedNodes,
   onToggle,
   onSelectPrompt,
 }) {
-  const isExpanded = expandedNodes[branchKey] ?? depth === 0;
+  const isExpanded = hideLabel ? true : (expandedNodes[branchKey] ?? depth === 0);
 
   return (
     <div className="prompts-tree-branch">
-      <button
-        className={`prompts-tree-toggle depth-${Math.min(depth, 3)} ${isExpanded ? 'expanded' : ''}`}
-        onClick={() => onToggle(branchKey)}
-        type="button"
-      >
-        <span className="prompts-tree-caret">{isExpanded ? '▾' : '▸'}</span>
-        <span className="prompts-tree-label">{label}</span>
-      </button>
+      {!hideLabel && (
+        <button
+          className={`prompts-tree-toggle depth-${Math.min(depth, 3)} ${isExpanded ? 'expanded' : ''}`}
+          onClick={() => onToggle(branchKey)}
+          type="button"
+        >
+          <span className="prompts-tree-caret">{isExpanded ? '▾' : '▸'}</span>
+          <span className="prompts-tree-label pane-row-caption">{label}</span>
+        </button>
+      )}
 
       {isExpanded && (
         <div className="prompts-tree-children">
@@ -89,6 +92,7 @@ function PromptTreeBranch({
               branchKey={`${branchKey}/${child.name}`}
               node={child}
               depth={depth + 1}
+              hideLabel={false}
               selectedPath={selectedPath}
               expandedNodes={expandedNodes}
               onToggle={onToggle}
@@ -104,8 +108,8 @@ function PromptTreeBranch({
               type="button"
               title={prompt.path}
             >
-              <span className="prompts-tree-file">{prompt.displayName}</span>
-              <span className="prompts-tree-file-path">{prompt.path}</span>
+              <span className="prompts-tree-file pane-row-title">{prompt.displayName}</span>
+              <span className="prompts-tree-file-path pane-row-caption">{prompt.path}</span>
             </button>
           ))}
         </div>
@@ -115,7 +119,7 @@ function PromptTreeBranch({
 }
 
 export default function PromptsPage() {
-  const { connectionState, getPrompts, updatePromptContent } = useApi();
+  const { getPrompts, updatePromptContent } = useApi();
   const [searchParams, setSearchParams] = useSearchParams();
   const [prompts, setPrompts] = useState([]);
   const [selectedPath, setSelectedPath] = useState('');
@@ -125,46 +129,48 @@ export default function PromptsPage() {
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [expandedNodes, setExpandedNodes] = useState({});
+  const [activeGroup, setActiveGroup] = useState('All');
+  const [query, setQuery] = useState('');
+  const [editorMode, setEditorMode] = useState('preview');
   const requestedPath = searchParams.get('path') || '';
+
+  const loadPrompts = useCallback(async (isActive = () => true) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await getPrompts();
+      if (!isActive()) {
+        return;
+      }
+      const items = response.prompts || [];
+      setPrompts(items);
+      setSelectedPath((currentSelected) => {
+        const nextSelected = items.find((prompt) => prompt.path === requestedPath)?.path
+          || items.find((prompt) => prompt.path === currentSelected)?.path
+          || items[0]?.path
+          || '';
+        const nextPrompt = items.find((prompt) => prompt.path === nextSelected);
+        setDraftContent(nextPrompt?.content || '');
+        return nextSelected;
+      });
+    } catch (loadError) {
+      if (isActive()) {
+        setError(loadError);
+      }
+    } finally {
+      if (isActive()) {
+        setLoading(false);
+      }
+    }
+  }, [getPrompts, requestedPath]);
 
   useEffect(() => {
     let active = true;
-
-    async function loadPrompts() {
-      setLoading(true);
-      setError(null);
-      try {
-        const response = await getPrompts();
-        if (!active) {
-          return;
-        }
-        const items = response.prompts || [];
-        setPrompts(items);
-        setSelectedPath((currentSelected) => {
-          const nextSelected = items.find((prompt) => prompt.path === requestedPath)?.path
-            || items.find((prompt) => prompt.path === currentSelected)?.path
-            || items[0]?.path
-            || '';
-          const nextPrompt = items.find((prompt) => prompt.path === nextSelected);
-          setDraftContent(nextPrompt?.content || '');
-          return nextSelected;
-        });
-      } catch (loadError) {
-        if (active) {
-          setError(loadError);
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    loadPrompts();
+    loadPrompts(() => active);
     return () => {
       active = false;
     };
-  }, [getPrompts, requestedPath]);
+  }, [loadPrompts]);
 
   useEffect(() => {
     const currentPath = searchParams.get('path') || '';
@@ -177,15 +183,37 @@ export default function PromptsPage() {
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, selectedPath, setSearchParams]);
 
+  const groupFilters = useMemo(
+    () => ['All', ...Array.from(new Set(prompts.map((prompt) => prompt.primary_agent || prompt.category || 'unassigned'))).sort((left, right) => left.localeCompare(right))],
+    [prompts],
+  );
+  const visiblePrompts = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return prompts.filter((prompt) => {
+      const group = prompt.primary_agent || prompt.category || 'unassigned';
+      const matchesGroup = activeGroup === 'All' || group === activeGroup;
+      const matchesQuery = !normalizedQuery
+        || `${prompt.filename} ${prompt.path} ${group}`.toLowerCase().includes(normalizedQuery);
+      return matchesGroup && matchesQuery;
+    });
+  }, [activeGroup, prompts, query]);
   const promptTree = useMemo(
-    () => buildPromptTree(prompts).map((group) => ({ ...group, ...sortTreeNode(group) })),
-    [prompts]
+    () => buildPromptTree(visiblePrompts).map((group) => ({ ...group, ...sortTreeNode(group) })),
+    [visiblePrompts]
+  );
+  const groupCounts = useMemo(
+    () => visiblePrompts.reduce((counts, prompt) => {
+      const group = prompt.primary_agent || prompt.category || 'unassigned';
+      return { ...counts, [group]: (counts[group] || 0) + 1 };
+    }, {}),
+    [visiblePrompts],
   );
   const selectedPrompt = useMemo(
     () => prompts.find((prompt) => prompt.path === selectedPath) || null,
     [prompts, selectedPath]
   );
   const hasUnsavedChanges = selectedPrompt ? draftContent !== (selectedPrompt.content || '') : false;
+  const renderedDraftContent = useMemo(() => renderMarkdownToHtml(draftContent), [draftContent]);
 
   const toggleBranch = (branchKey) => {
     setExpandedNodes((current) => ({
@@ -231,82 +259,147 @@ export default function PromptsPage() {
     }
   };
 
+  const handleRefreshList = async () => {
+    await loadPrompts();
+  };
+
   return (
-    <>
-      <Header connectionState={connectionState} />
-      <div className="prompts-page">
-        <aside className="prompts-sidebar">
-          <div className="prompts-sidebar-header">
-            <h2>Prompt Editor</h2>
-            <span>{prompts.length}</span>
+    <div className="prompts-page">
+      <aside className="prompts-sidebar sess-list">
+        <div className="chat-sessions-pane__head sess-list__head">
+          <div className="chat-sessions-pane__title sess-list__title">
+            Prompts <span className="muted">{prompts.length}</span>
           </div>
-          <div className="prompts-sidebar-body">
-            {loading && <div className="prompts-empty-state">Loading prompts...</div>}
-            {error && !loading && prompts.length === 0 && <div className="prompts-empty-state">Failed to load prompts.</div>}
-            {!loading && prompts.length === 0 && (
-              <div className="prompts-empty-state">No prompts found.</div>
-            )}
-            {!loading && promptTree.map((group) => (
+          <button type="button" className="chat-pane-action new-task" onClick={handleRefreshList}>
+            + New
+          </button>
+        </div>
+
+        <div className="chat-pane-tabs sess-list__filters" role="tablist" aria-label="Prompt groups">
+          {groupFilters.map((group) => (
+            <button
+              key={group}
+              type="button"
+              className={`chat-pane-tab sess-filter ${activeGroup === group ? 'is-active' : ''}`}
+              onClick={() => setActiveGroup(group)}
+            >
+              {group}
+            </button>
+          ))}
+        </div>
+
+        <div className="sess-list__tools">
+          <label className="sess-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              value={query}
+              type="text"
+              placeholder="Search prompts"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <button type="button" className="sess-sort" onClick={() => setExpandedNodes({})}>
+            Reset
+          </button>
+        </div>
+
+        <div className="prompts-sidebar-body sess-list__scroll">
+          {loading && <div className="prompts-empty-state">Loading prompts...</div>}
+          {error && !loading && prompts.length === 0 && <div className="prompts-empty-state">Failed to load prompts.</div>}
+          {!loading && prompts.length === 0 && (
+            <div className="prompts-empty-state">No prompts found.</div>
+          )}
+          {!loading && visiblePrompts.length === 0 && prompts.length > 0 && (
+            <div className="prompts-empty-state">No prompts match the current filters.</div>
+          )}
+          {!loading && promptTree.map((group) => (
+            <div key={group.name} className="sess-group">
+              <div className="chat-pane-group__head sess-group__head">
+                {group.name} <span className="muted">· {groupCounts[group.name] || 0}</span>
+              </div>
               <PromptTreeBranch
-                key={group.name}
                 label={group.name}
                 branchKey={group.name}
                 node={group}
+                hideLabel
                 selectedPath={selectedPath}
                 expandedNodes={expandedNodes}
                 onToggle={toggleBranch}
                 onSelectPrompt={handleSelectPrompt}
               />
-            ))}
-          </div>
-        </aside>
+            </div>
+          ))}
+        </div>
+      </aside>
 
-        <main className="prompts-editor">
-          {!selectedPrompt && !loading && (
-            <div className="prompts-empty-state">Select a prompt to edit.</div>
-          )}
+      <main className="prompts-editor">
+        {!selectedPrompt && !loading && (
+          <div className="prompts-empty-state">Select a prompt to edit.</div>
+        )}
 
-          {selectedPrompt && (
-            <>
-              <div className="prompts-editor-header">
-                <div>
-                  <h2>{selectedPrompt.filename}</h2>
-                  <div className="prompts-editor-path">{selectedPrompt.path}</div>
-                  {selectedPrompt.associated_agents?.length > 0 && (
-                    <div className="prompts-editor-badges">
-                      {selectedPrompt.associated_agents.map((agent) => (
-                        <span key={`${selectedPrompt.path}:${agent}`} className="prompts-editor-badge">
-                          {agent}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="prompts-editor-actions">
-                  <button className="node-action-btn" onClick={handleReload} disabled={!hasUnsavedChanges || saving}>
-                    Revert
-                  </button>
-                  <button className="node-action-btn primary" onClick={handleSave} disabled={!hasUnsavedChanges || saving}>
-                    {saving ? 'Saving...' : 'Save'}
-                  </button>
-                </div>
+        {selectedPrompt && (
+          <>
+            <div className="prompts-editor-header">
+              <div>
+                <h2>{selectedPrompt.filename}</h2>
+                <div className="prompts-editor-path">{selectedPrompt.path}</div>
+                {selectedPrompt.associated_agents?.length > 0 && (
+                  <div className="prompts-editor-badges">
+                    {selectedPrompt.associated_agents.map((agent) => (
+                      <span key={`${selectedPrompt.path}:${agent}`} className="prompts-editor-badge">
+                        {agent}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
+              <div className="prompts-editor-actions">
+                <div className="prompts-editor-mode" role="tablist" aria-label="Prompt display mode">
+                  <button
+                    type="button"
+                    className={`chat-pane-tab prompts-editor-mode__button ${editorMode === 'preview' ? 'is-active' : ''}`}
+                    onClick={() => setEditorMode('preview')}
+                  >
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    className={`chat-pane-tab prompts-editor-mode__button ${editorMode === 'edit' ? 'is-active' : ''}`}
+                    onClick={() => setEditorMode('edit')}
+                  >
+                    Edit
+                  </button>
+                </div>
+                <button className="node-action-btn" onClick={handleReload} disabled={!hasUnsavedChanges || saving}>
+                  Revert
+                </button>
+                <button className="node-action-btn primary" onClick={handleSave} disabled={!hasUnsavedChanges || saving}>
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
 
+            {editorMode === 'preview' ? (
+              <div
+                className="prompts-markdown-preview message-content"
+                dangerouslySetInnerHTML={{ __html: renderedDraftContent }}
+              />
+            ) : (
               <textarea
                 className="prompts-editor-textarea"
                 value={draftContent}
                 onChange={(event) => setDraftContent(event.target.value)}
                 spellCheck={false}
               />
+            )}
 
-              <div className="prompts-editor-footer">
-                <span>{hasUnsavedChanges ? 'Unsaved changes' : 'Saved'}</span>
-                <span>{statusMessage || error?.message || ''}</span>
-              </div>
-            </>
-          )}
-        </main>
-      </div>
-    </>
+            <div className="prompts-editor-footer">
+              <span>{hasUnsavedChanges ? 'Unsaved changes' : 'Saved'}</span>
+              <span>{statusMessage || error?.message || ''}</span>
+            </div>
+          </>
+        )}
+      </main>
+    </div>
   );
 }
