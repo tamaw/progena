@@ -271,7 +271,7 @@ export default function PromptsPage() {
             Prompts <span className="muted">{prompts.length}</span>
           </div>
           <button type="button" className="chat-pane-action new-task" onClick={handleRefreshList}>
-            + New
+            Refresh
           </button>
         </div>
 

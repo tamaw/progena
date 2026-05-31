@@ -175,7 +175,7 @@ export function useApi() {
 
   const getPrompts = useCallback(async (agent = null) => {
     const search = agent ? `?${new URLSearchParams({ agent }).toString()}` : '';
-    const response = await fetchWithRetry(`prompts${search}`);
+    const response = await fetchWithRetry(search ? `/api/ui/prompts${search}` : 'prompts');
     return response.json();
   }, [fetchWithRetry]);
 
@@ -195,7 +195,7 @@ export function useApi() {
 
   const getSkills = useCallback(async (agent = null) => {
     const search = agent ? `?${new URLSearchParams({ agent }).toString()}` : '';
-    const response = await fetchWithRetry(`skills${search}`);
+    const response = await fetchWithRetry(search ? `/api/ui/skills${search}` : 'skills');
     return response.json();
   }, [fetchWithRetry]);
 
