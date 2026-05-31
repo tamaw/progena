@@ -233,6 +233,11 @@
     color: var(--color-text-secondary);
 }
 
+.detail-tab:not(.is-active):hover,
+.dtab.detail-tab:not(.is-active):hover {
+    border-bottom-color: #fff;
+}
+
 .detail-tab.is-active,
 .dtab.detail-tab.is-active {
     color: var(--color-text-primary);
