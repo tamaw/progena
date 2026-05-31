@@ -266,7 +266,6 @@ function ScheduleRow({ schedule, selected, onSelect }) {
       className={`sess-row schedule-row schedule-row--${schedule.status} ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(schedule.id)}
     >
-      <span className={`schedule-row__icon schedule-row__icon--${schedule.status}`}>sc</span>
       <span className="sess-row__top">
         <span className={`sess-row__dot schedule-row__status schedule-row__status--${schedule.status}`} />
         <span className="sess-row__agent schedule-row__name">{schedule.name}</span>
@@ -274,11 +273,6 @@ function ScheduleRow({ schedule, selected, onSelect }) {
       </span>
       <span className="sess-row__age">{schedule.nextRun}</span>
       <span className="sess-row__title">{schedule.cadence}</span>
-      <span className="sess-row__msgs">
-        <span><span className="num">{schedule.tools.length}</span> tools</span>
-        <span><span className="num">{schedule.repositories.length}</span> repos</span>
-        <span><span className="num">{schedule.tasks.length}</span> tasks</span>
-      </span>
     </button>
   );
 }

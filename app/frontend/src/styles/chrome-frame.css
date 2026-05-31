@@ -4815,44 +4815,19 @@ body,
 }
 
 .schedule-row {
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.schedule-row__icon {
-  display: inline-flex;
-  grid-row: 1 / span 2;
+.schedule-row .sess-row__top {
   grid-column: 1;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin-top: 1px;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  font-family: var(--font-family-mono);
-  font-size: 9px;
-  font-weight: 850;
-  letter-spacing: -0.04em;
 }
 
-.schedule-row__icon--active {
-  color: var(--color-success);
-  background: color-mix(in oklab, var(--color-success) 12%, var(--color-bg-secondary));
-  border-color: color-mix(in oklab, var(--color-success) 30%, var(--color-border));
+.schedule-row .sess-row__age {
+  grid-column: 2;
 }
 
-.schedule-row__icon--paused {
-  color: var(--color-warning);
-  background: color-mix(in oklab, var(--color-warning) 12%, var(--color-bg-secondary));
-  border-color: color-mix(in oklab, var(--color-warning) 30%, var(--color-border));
-}
-
-.schedule-row__icon--failed {
-  color: var(--color-error);
-  background: color-mix(in oklab, var(--color-error) 12%, var(--color-bg-secondary));
-  border-color: color-mix(in oklab, var(--color-error) 30%, var(--color-border));
+.schedule-row .sess-row__title {
+  grid-column: 1 / span 2;
 }
 
 .schedule-row__status {
