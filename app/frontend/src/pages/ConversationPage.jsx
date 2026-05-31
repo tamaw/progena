@@ -30,6 +30,20 @@ const CUSTOM_CHAT_TITLE_KEY = 'progenitor:chat-custom-title';
 const PINNED_CHAT_SESSIONS_KEY = 'progenitor:pinned-chat-sessions';
 const SHARED_CHAT_SESSIONS_KEY = 'progenitor:shared-chat-sessions';
 
+const WEEKDAY_WELCOME_MESSAGES = [
+  'Sunday reset 🌿',
+  'Monday kickoff ☕',
+  'Tuesday tune-up 🔧',
+  'Wednesday momentum ⚡',
+  'Thursday deep dive 🤿',
+  'Friday finish line 🏁',
+  'Saturday side quest ✨',
+];
+
+function getDailyWelcomeMessage(date = new Date()) {
+  return WEEKDAY_WELCOME_MESSAGES[date.getDay()] ?? 'Let\'s get started ✨';
+}
+
 function loadStoredArchivedChatSessions() {
   const saved = localStorage.getItem(ARCHIVED_CHAT_SESSIONS_KEY);
   if (!saved) {
@@ -896,7 +910,7 @@ function ConversationPage() {
 
     await startNewChatSession();
   }, [startNewChatSession]);
-
+  const welcomeMessage = useMemo(() => getDailyWelcomeMessage(), []);
   const totalTokenCount = useMemo(
     () => messages.reduce((total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0), 0),
     [messages],
@@ -1283,9 +1297,7 @@ function ConversationPage() {
           <div className="chat-messages__inner">
             {messages.length === 0 ? (
               <div className="welcome-message">
-                <h2>Welcome to Progenitor Chat</h2>
-                <p>Start a conversation with the Progenitor AI agent.</p>
-                {sessionId && <p>Session: {sessionId}</p>}
+                <h2>{welcomeMessage}</h2>
                 <QuickActions onAction={handleQuickAction} />
               </div>
             ) : (
